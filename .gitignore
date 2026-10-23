@@ -10,6 +10,9 @@ local.properties
 *.jks
 key.properties
 
+# 例外：内部测试阶段统一使用的固定 debug 签名 keystore（必须入库，保证本机/CI 签名一致）
+!app/bridge-debug.keystore
+
 # Android Studio / IDEA
 .idea/
 *.iml
@@ -39,3 +42,4 @@ references/
 # ===================== 本地发布产物 / GitHub 鉴权 =====================
 releases/
 github.env
+gh_token.txt

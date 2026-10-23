@@ -31,8 +31,8 @@ AI 全自动：
 ## 三、一键发布（日常使用）
 
 ```bash
-python tools/release/release.py          # 自动建仓库(若没有) + 打 v0.1.0
-python tools/release/release.py v0.1.1   # 指定版本号
+python tools/release/release.py          # 自动递增版本号并打包（如 0.1.0 -> v0.1.1）
+python tools/release/release.py v0.2.0   # 指定版本号
 ```
 
 脚本自动完成：检查/创建仓库 → 配置 remote → push → 打 tag → 轮询等打包 → 下载 APK 到 `releases/`。
@@ -74,19 +74,27 @@ python tools/release/release.py v0.1.1   # 指定版本号
 
 | 阶段 | 签名方案 | 说明 |
 |---|---|---|
-| **内部测试（当前）** | debug 签名 | 零配置，APK 直接可装；不能上架商店 |
+| **内部测试（当前）** | 固定 debug 签名（keystore 入库） | 本机与 CI 共用同一份 `app/bridge-debug.keystore`，保证覆盖安装不报「签名冲突」 |
 | 正式发布（未来） | 正式 keystore / Play App Signing | 需配置签名 |
 
-## 七、未来上架（需要时再启用）
+> **为什么要固定签名**：Android 覆盖安装要求前后签名一致。早期本机 `~/.android/debug.keystore` 与 GitHub CI runner 自动生成的 debug keystore 不同，导致「签名冲突」无法覆盖安装。现在固定一份 `app/bridge-debug.keystore`（别名 `androiddebugkey` / 密码 `android`，PKCS12 格式）入库，本机与 CI 都用它。
+
+## 七、版本号管理（单一来源）
+
+- **版本号只在 `app/build.gradle.kts` 的 `versionName` 维护**（当前 `0.1.0`）。
+- `release.py` 不传 tag 时自动递增 patch 号（`0.1.0` → 打 `v0.1.1`），并**把新版本号写回 build.gradle.kts** 后一并提交，保证 tag 与 APK 版本号始终一致、下次递增起点正确。
+- 手动指定 tag 时（`python tools/release/release.py v0.2.0`），需自行同步修改 `versionName`。
+
+## 八、未来上架（需要时再启用）
 
 参考 `references/aurelay-main` 的做法：
 
 1. **仅 GitHub Release 放正式 APK**：生成 keystore → `app/build.gradle.kts` 加 `signingConfigs.release` → GitHub Secrets 存 `KEYSTORE_BASE64`。
 2. **上架 Google Play（aurelay 同款）**：Play App Signing + fastlane，只需一个服务账号 JSON，之后全自动。
 
-## 八、安全注意事项
+## 九、安全注意事项
 
 1. `references/`（32MB 第三方源码）不入库，仅本地保留。
-2. `github.env`、`key.properties`、`*.keystore`、`*.jks` 均被 `.gitignore` 排除，绝不提交。
+2. `github.env`、`key.properties`、`*.jks` 均被 `.gitignore` 排除，绝不提交；**例外**：`app/bridge-debug.keystore`（内部测试固定签名）允许入库。
 3. `releases/` 下载产物不入库。
 4. CI 版本：JDK 17 + Gradle 8.13，与项目 `compileOptions/JVM 17`、AGP 8.13.1 严格匹配。

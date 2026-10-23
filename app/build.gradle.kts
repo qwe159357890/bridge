@@ -6,6 +6,10 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// 内部测试阶段统一签名配置：本机与 CI 共用同一份 keystore，
+// 避免「签名冲突」导致无法覆盖安装。keystore 入库（PKCS12 格式）。
+val keystoreFile = rootProject.file("app/bridge-debug.keystore")
+
 android {
     namespace = "my.bridge.com"
     compileSdk = 36
@@ -14,10 +18,22 @@ android {
         applicationId = "my.bridge.com"
         minSdk = 24
         targetSdk = 36
+        // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("debug") {
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
@@ -31,6 +47,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {

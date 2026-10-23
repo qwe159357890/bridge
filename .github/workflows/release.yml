@@ -29,7 +29,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 4. 构建 debug APK（使用 Android 自带 debug keystore，无需任何密钥）
+      # 4. 构建 debug APK（使用入库的固定 keystore，本机/CI 签名一致）
       #    注意：gradlew 在 Windows 提交时可能丢失可执行权限，先 chmod +x 保证能跑
       - name: Build Debug APK
         run: |

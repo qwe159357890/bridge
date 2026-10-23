@@ -23,6 +23,7 @@ Bridge 一键发布脚本：自动建仓库 → push 代码 → 触发 GitHub Ac
 import os
 import sys
 import json
+import re
 import time
 import subprocess
 import urllib.request
@@ -33,6 +34,42 @@ ENV_FILE = ROOT / "github.env"
 RELEASE_DIR = ROOT / "releases"
 
 GITHUB_API = "https://api.github.com"
+
+
+def read_current_version():
+    """从 app/build.gradle.kts 读取当前 versionName（如 "0.1.0"）。"""
+    gradle_file = ROOT / "app" / "build.gradle.kts"
+    try:
+        text = gradle_file.read_text(encoding="utf-8")
+        m = re.search(r'versionName\s*=\s*[^"]*"([^"]+)"', text)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def bump_version(new_version):
+    """把 versionName 写回 app/build.gradle.kts，保持本地与 CI 一致。"""
+    gradle_file = ROOT / "app" / "build.gradle.kts"
+    text = gradle_file.read_text(encoding="utf-8")
+    text = re.sub(r'(versionName\s*=\s*[^"]*")[^"]*(")', r'\g<1>' + new_version + r'\g<2>', text, count=1)
+    gradle_file.write_text(text, encoding="utf-8")
+
+
+def auto_next_tag():
+    """读取当前 versionName，递增 patch 号生成下一个 tag。
+
+    例如 "0.1.0" -> "v0.1.1"。同时把 versionName 写回 build.gradle.kts，
+    保证下次递增的起点正确、tag 与 APK 版本号始终一致。
+    """
+    cur = read_current_version()
+    if not cur:
+        return None
+    parts = cur.split(".")
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+    except ValueError:
+        return None
+    return "v" + ".".join(parts)
 
 # 内置 gh-proxy 加速代理列表（按优先级顺序，公开仓库时生效）。
 # 私有仓库这些代理会 404，脚本会自动回退到 token 直连 API。
@@ -257,19 +294,27 @@ def main():
             run(["git", "remote", "set-url", "origin", remote_url])
     print(f"  remote -> {remote_url}")
 
-    # 2. 提交并 push
+    # 3. 打 tag 触发打包（先确定 tag 并写回版本号，再提交，保证版本号与 tag 一致）
+    if not tag:
+        tag = auto_next_tag()
+        # 自动生成 tag 时，同步把 versionName 写回 build.gradle.kts，
+        # 保证下次打包的版本号起点正确（versionName == tag 去掉 v 前缀）。
+        if tag:
+            bump_version(tag.lstrip("v"))
+    if not tag:
+        print("[错误] 无法确定版本号，请在命令行指定 tag，如 v0.1.1")
+        sys.exit(1)
+
+    # 2. 提交并 push（包含上面写回的版本号改动）
     print(f"\n[2] 提交改动并 push ...")
     r = run(["git", "status", "--porcelain"], check=False)
     if r.stdout.strip():
         run(["git", "add", "-A"])
-        run(["git", "commit", "-m", "chore: auto release"])
+        run(["git", "commit", "-m", f"chore: release {tag}"])
     # 用 token 鉴权 push（避免交互式输入密码）
     auth_url = remote_url.replace("https://", f"https://{env['GITHUB_TOKEN']}@")
     run(["git", "push", auth_url, "main"])
 
-    # 3. 打 tag 触发打包
-    if not tag:
-        tag = "v0.1.0"
     print(f"\n[3] 打 tag {tag} 并 push（触发打包）...")
     r = run(["git", "tag", "-f", tag], check=False)
     run(["git", "push", auth_url, tag, "-f"])
