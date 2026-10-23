@@ -33,6 +33,13 @@
 - 版本目录统一管理依赖：gradle/libs.versions.toml。
 - 图标源图：`assets/icons/沟通记录.png`（229×200 非正方形），生成脚本 `tools/icon/generate_icon.py`。
 
+## 构建发布链路（2026-10-23）
+
+- **结论**：当前为**内部测试阶段**，用 **debug 签名**打包（零密钥配置）。链路：写代码 → git push → 打 tag v* → GitHub Actions 自动打包出 APK。gradlew wrapper 为 Gradle 8.13（与 AGP 8.13.1 匹配）。
+- **待办（需用户手动）**：仅 ① GitHub 建空仓库并 `git remote add` 推送（无需任何密钥/Secrets 配置）。
+- **权威文档**：完整步骤见 `docs/dev/release-pipeline.md`。
+- **约定**：`references/`（32MB 第三方源码）不入库仅本地；未来上架 Play 时再启用正式签名（参考 aurelay 的 fastlane + Play App Signing，仅需一个服务账号 JSON）。
+
 ## 保活模块（2026-10-23）
 
 - **结论**：借鉴 `references/` 下 Aurelay（自研多层）与 SmsForwarder（轻量框架）两方案，取「两者结合」——吸收 Aurelay 分层架构 + SmsForwarder 电池白名单引导，去掉第三方 Cactus 依赖与激进权限，产出**自研轻量保活模块**。

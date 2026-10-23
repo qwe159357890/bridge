@@ -1,6 +1,3 @@
-import java.util.Properties
-import java.io.FileInputStream
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -23,34 +20,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // 签名配置：优先读根目录 key.properties（本地），其次读 CI 注入的临时 keystore 文件。
-    // 参照 aurelay 的做法，签名信息不硬编码进仓库。
-    signingConfigs {
-        create("release") {
-            val props = Properties()
-            val propsFile = rootProject.file("key.properties")
-            if (propsFile.exists()) {
-                props.load(FileInputStream(propsFile))
-                storeFile = props["storeFile"]?.let { rootProject.file(it.toString()) }
-                storePassword = props["storePassword"]?.toString()
-                keyAlias = props["keyAlias"]?.toString()
-                keyPassword = props["keyPassword"]?.toString()
-            } else {
-                // CI 场景：由 workflow 从 Secrets 解码出 release.keystore 与相关参数
-                val ciStoreFile = rootProject.file("release.keystore")
-                val ciStorePassword = System.getenv("KEYSTORE_PASSWORD")
-                val ciKeyAlias = System.getenv("KEY_ALIAS")
-                val ciKeyPassword = System.getenv("KEY_PASSWORD")
-                if (ciStoreFile.exists() && !ciStorePassword.isNullOrBlank()) {
-                    storeFile = ciStoreFile
-                    storePassword = ciStorePassword
-                    keyAlias = ciKeyAlias
-                    keyPassword = ciKeyPassword
-                }
-            }
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -59,10 +28,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // 有可用签名才设置；否则 release 无签名（仅用于本地验证构建链路）
-            signingConfigs.getByName("release").let { sc ->
-                if (sc.storeFile != null) signingConfig = sc
-            }
         }
         debug {
             isMinifyEnabled = false
