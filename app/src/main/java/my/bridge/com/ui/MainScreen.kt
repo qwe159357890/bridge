@@ -1,8 +1,12 @@
 package my.bridge.com.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
@@ -33,11 +37,22 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var homeTab by rememberSaveable { mutableIntStateOf(0) }
     var settingsTab by rememberSaveable { mutableIntStateOf(0) }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        // 内容区：根据底部导航显示对应页面
-        when (selectedBottom) {
-            0 -> HomePage(currentTab = homeTab, onTabChange = { homeTab = it })
-            1 -> SettingsPage(currentTab = settingsTab, onTabChange = { settingsTab = it })
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        // 内容区：根据底部导航显示对应页面（占据剩余全部空间）
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
+            when (selectedBottom) {
+                0 -> HomePage(currentTab = homeTab, onTabChange = { homeTab = it })
+                1 -> SettingsPage(currentTab = settingsTab, onTabChange = { settingsTab = it })
+            }
         }
         // 底部导航
         BridgeBottomBar(
@@ -79,6 +94,7 @@ fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
         ScrollableTabRow(
             selectedTabIndex = currentTab,
             edgePadding = 0.dp,
+            modifier = Modifier.fillMaxWidth(),
         ) {
             listOf("会话", "通讯录", "发现").forEachIndexed { index, title ->
                 Tab(
@@ -103,6 +119,7 @@ fun SettingsPage(currentTab: Int, onTabChange: (Int) -> Unit) {
         ScrollableTabRow(
             selectedTabIndex = currentTab,
             edgePadding = 0.dp,
+            modifier = Modifier.fillMaxWidth(),
         ) {
             listOf("通用", "通知", "关于").forEachIndexed { index, title ->
                 Tab(
