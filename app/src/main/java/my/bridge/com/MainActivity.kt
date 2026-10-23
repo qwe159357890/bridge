@@ -7,7 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.core.app.ActivityCompat
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import my.bridge.com.core.ui.theme.BridgeTheme
@@ -19,7 +19,7 @@ import timber.log.Timber
  * 应用主入口。
  *
  * 首次进入时：
- * 1. 批量申请保活用到的危险权限（通知/定位/相机/蓝牙/后台定位）——借鉴 Aurelay，
+ * 1. 批量申请保活用到的危险权限（通知/定位/相机/蓝牙）——借鉴 Aurelay，
  *    但收敛为「保活实际需要」的项，不照搬其 30+ 项全量测试申请。
  * 2. 引导关闭电池优化（保活最有效手段，一次性，用户取消后不再打扰）。
  */
@@ -27,36 +27,26 @@ import timber.log.Timber
 class MainActivity : ComponentActivity() {
 
     companion object {
-        private const val REQ_CODE_PERMISSIONS = 1001
-
         /**
-         * 保活实际用到的危险权限。
-         * - POST_NOTIFICATIONS：前台服务通知可见（Android 13+）
-         * - ACCESS_FINE/COARSE_LOCATION：资源锚点·位置监听
-         * - ACCESS_BACKGROUND_LOCATION：后台定位（单独申请，避免与前台同批被拒）
-         * - CAMERA：资源锚点·相机持有
-         * - BLUETOOTH_SCAN/CONNECT：资源锚点·蓝牙扫描（Android 12+）
+         * 保活实际用到的危险权限（单一事实来源：与 KeepAliveUtils.runtimePermissions 一致）。
          */
-        val RUNTIME_PERMISSIONS = buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            add(Manifest.permission.CAMERA)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
+        val RUNTIME_PERMISSIONS: List<String> = KeepAliveUtils.runtimePermissions()
+    }
+
+    /** 批量申请危险权限（返回 Map<权限, 是否授予>）。 */
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            val granted = results.values.count { it }
+            Timber.i("保活权限申请结果：已授予 $granted / ${results.size}")
+            // 二次单独申请后台定位（与前台权限同批会被系统直接拒绝）
+            requestBackgroundLocation()
         }
 
-        // 需「二次单独申请」：与前台权限同批会被系统直接拒绝
-        val SECOND_ROUND_PERMISSIONS = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-            }
+    /** 后台定位需二次单独申请。 */
+    private val backgroundLocationLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Timber.i("后台定位权限申请结果：$granted")
         }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,10 +74,25 @@ class MainActivity : ComponentActivity() {
             return
         }
         try {
-            ActivityCompat.requestPermissions(this, pending.toTypedArray(), REQ_CODE_PERMISSIONS)
+            permissionLauncher.launch(pending.toTypedArray())
             Timber.i("已发起保活权限申请：${pending.size} 项")
         } catch (e: Exception) {
             Timber.e(e, "批量权限申请失败")
+        }
+    }
+
+    /** 二次单独申请后台定位。 */
+    private fun requestBackgroundLocation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        try {
+            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } catch (e: Exception) {
+            Timber.e(e, "后台定位权限申请失败")
         }
     }
 
@@ -95,32 +100,6 @@ class MainActivity : ComponentActivity() {
     private fun guideBatteryOptimization() {
         if (!KeepAliveUtils.isIgnoreBatteryOptimization(this)) {
             KeepAliveUtils.requestIgnoreBatteryOptimization(this)
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray,
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_CODE_PERMISSIONS) {
-            val granted = grantResults.count { it == PackageManager.PERMISSION_GRANTED }
-            Timber.i("保活权限申请结果：已授予 $granted / ${permissions.size}")
-            // 二次单独申请后台定位
-            val secondRound = SECOND_ROUND_PERMISSIONS.filter {
-                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-            }
-            if (secondRound.isNotEmpty()) {
-                try {
-                    ActivityCompat.requestPermissions(this, secondRound.toTypedArray(), 1002)
-                } catch (e: Exception) {
-                    Timber.e(e, "二次权限申请失败")
-                }
-            }
-        } else if (requestCode == 1002) {
-            val granted = grantResults.count { it == PackageManager.PERMISSION_GRANTED }
-            Timber.i("二次权限申请结果：已授予 $granted / ${permissions.size}")
         }
     }
 }
