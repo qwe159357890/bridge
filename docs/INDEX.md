@@ -20,6 +20,7 @@
 ### 开发规范（dev/）
 | 文档 | 说明 |
 |---|---|
+| release-pipeline.md | 构建与发布链路（git 推送 + GitHub Actions 打包 + 签名密钥管理） |
 | coding-style.md | 代码规范（待补充） |
 | git-workflow.md | Git 协作规范（待补充） |
 | commit-convention.md | 提交信息规范（待补充） |
