@@ -1,63 +1,54 @@
 # 构建与发布链路
 
 > 本文档描述 Bridge 从「写代码 → 推 GitHub → GitHub 打包 → 下载 APK 到本地」的**全自动闭环**。
+> **你只需提供一个 GitHub token，其余（建仓库、push、打包、下载）全由 AI 自动完成。**
 > 当前阶段为**内部测试**，APK 用 debug 签名（无需应用签名密钥）。
 
 ## 一、链路总览
 
 ```
-写代码 ──► AI 自动 git push（用 GitHub token 鉴权）
-         ──► 打 tag v* ──► GitHub Actions 自动打包（debug 签名）
-         ──► AI 用代理下载 APK 到本地 releases/
+你提供 1 个 GitHub token（PAT）
+        ↓
+AI 全自动：
+  ① 用 GitHub API 自动创建仓库（你无需手动建）
+  ② git push 代码（token 鉴权，无需密码）
+  ③ 打 tag 触发 GitHub Actions 打包（debug 签名）
+  ④ 轮询等待打包完成
+  ⑤ 用代理下载 APK 到本地 releases/
 ```
 
-**你只需提供一个 GitHub token**，之后收到指令/有必要时，AI 就能一条命令完成全流程。
+## 二、你唯一需要做的（一次）
 
-## 二、一次性配置（只需做一次）
-
-### 1. 建 GitHub 空仓库
-
-在 GitHub 网页新建空仓库（不要勾选 README/.gitignore）。
-
-### 2. 生成 GitHub Token（PAT）
+生成一个 GitHub token：
 
 1. 打开 <https://github.com/settings/tokens> → **Generate new token (classic)**；
-2. 勾选权限：`repo`（完整读写）、`workflow`（触发 Actions）；
-3. 生成后复制 `ghp_...` 开头的 token。
+2. 勾选权限：`repo`（完整读写，含建仓库）、`workflow`（触发 Actions）；
+3. 生成后复制 `ghp_...` 开头的 token；
+4. 把 token（和你的 GitHub 用户名）告诉 AI，AI 会写入本地配置并完成后续全部操作。
 
-### 3. 填写本地配置
-
-```bash
-cp github.env.example github.env
-```
-
-编辑 `github.env` 填入真实值：
-
-| 字段 | 值 |
-|---|---|
-| `GITHUB_USER` | 你的 GitHub 用户名 |
-| `GITHUB_REPO` | 仓库名（不含用户名前缀） |
-| `GITHUB_TOKEN` | 上一步生成的 `ghp_...` token |
-
-> 安全：`github.env` 已被 `.gitignore` 排除，**绝不提交到仓库**。
+> 仓库由 AI 用 token 自动创建，你**无需在 GitHub 网页手动建仓库**。
 
 ## 三、一键发布（日常使用）
 
 ```bash
-python tools/release/release.py          # 自动打 v0.1.0
+python tools/release/release.py          # 自动建仓库(若没有) + 打 v0.1.0
 python tools/release/release.py v0.1.1   # 指定版本号
 ```
 
-脚本自动完成：配置 remote → 提交 push → 打 tag → 轮询等待打包 → 下载 APK 到 `releases/`。
+脚本自动完成：检查/创建仓库 → 配置 remote → push → 打 tag → 轮询等打包 → 下载 APK 到 `releases/`。
 
-## 四、手动触发（备用）
+## 四、配置文件说明（本地，不入库）
 
-```bash
-git tag -a v0.1.0 -m "内部测试 v0.1.0"
-git push origin v0.1.0
-```
+`github.env`（从 `github.env.example` 复制）：
 
-或到 GitHub **Actions → Build Internal Test APK → Run workflow** 手动触发。
+| 字段 | 值 |
+|---|---|
+| `GITHUB_USER` | GitHub 用户名 |
+| `GITHUB_REPO` | 仓库名（默认 `bridge`，AI 自动创建） |
+| `GITHUB_PRIVATE` | `true` 私有 / `false` 公开 |
+| `GITHUB_TOKEN` | 你的 `ghp_...` token |
+
+> `github.env` 已被 `.gitignore` 排除，绝不提交。
 
 ## 五、APK 产物
 

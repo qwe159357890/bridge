@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bridge 一键发布脚本：push 代码 → 触发 GitHub Actions 打包 → 下载 APK 到本地 releases/。
+Bridge 一键发布脚本：自动建仓库 → push 代码 → 触发 GitHub Actions 打包 → 下载 APK 到本地 releases/。
 
 用法：
     python tools/release/release.py [tag]
@@ -11,10 +11,10 @@ Bridge 一键发布脚本：push 代码 → 触发 GitHub Actions 打包 → 下
     - 项目根目录存在 github.env（从 github.env.example 复制并填写真实值）
     - 系统已设置代理（http_proxy/https_proxy），或可直连 GitHub
 
-流程：
+流程（你只需提供 token，其余全自动）：
     1. 读取 github.env 获取 GITHUB_USER / GITHUB_REPO / GITHUB_TOKEN
-    2. 配置 git remote（若未配置）
-    3. 提交所有改动并 push 到 main
+    2. 若仓库不存在，用 GitHub API 自动创建（无需手动建）
+    3. 配置 git remote 并 push 代码到 main
     4. 打 tag 并 push（触发 GitHub Actions）
     5. 轮询等待 workflow 完成
     6. 从 GitHub Release / Artifact 下载 APK 到 releases/
@@ -53,6 +53,36 @@ def load_env() -> dict:
             print(f"[错误] github.env 缺少 {key}")
             sys.exit(1)
     return env
+
+
+def ensure_repo(env):
+    """确保 GitHub 仓库存在，不存在则用 API 自动创建。"""
+    repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
+    print(f"\n[0] 检查仓库 {repo} 是否存在 ...")
+    status, data = api_request(env, f"/repos/{repo}", env["GITHUB_TOKEN"])
+    if status == 200:
+        print(f"  已存在，跳过创建。")
+        return
+    if status == 404:
+        print(f"  不存在，自动创建（private={env.get('GITHUB_PRIVATE', 'true')}）...")
+        body = json.dumps({
+            "name": env["GITHUB_REPO"],
+            "private": env.get("GITHUB_PRIVATE", "true").lower() == "true",
+            "auto_init": False,
+        }).encode()
+        url = f"{GITHUB_API}/user/repos"
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Authorization", f"Bearer {env['GITHUB_TOKEN']}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                print(f"  [成功] 仓库 {repo} 已创建")
+        except urllib.error.HTTPError as e:
+            print(f"  [失败] 创建仓库失败: {e.code} {e.read().decode()}")
+            sys.exit(1)
+        return
+    print(f"  [失败] 查询仓库失败: {data.get('message')}")
+    sys.exit(1)
 
 
 def run(cmd: list, cwd=ROOT, check=True):
@@ -165,6 +195,9 @@ def main():
 
     repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
     remote_url = f"https://github.com/{repo}.git"
+
+    # 0. 确保仓库存在（不存在则自动创建）
+    ensure_repo(env)
 
     # 1. 配置 remote（若未配置）
     print(f"[1] 配置 git remote ...")
