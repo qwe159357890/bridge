@@ -1,0 +1,36 @@
+# Bridge Server 配置
+#
+# 加载优先级（低 -> 高）：
+#   内置默认值 < 本文件 < BRIDGE_CONFIG 指定的文件 < BRIDGE_* 环境变量
+# 环境变量示例：BRIDGE_HEARTBEAT_INTERVAL=30 覆盖 heartbeat.interval。
+
+server:
+  host: "0.0.0.0"
+  port: 15160
+  max_message_size: 65536        # 单条消息最大字节数
+
+heartbeat:
+  interval: 20                   # 客户端心跳发送周期（秒）
+  client_pong_timeout: 10        # 客户端 ping 后等 pong 超时（秒）
+  server_read_timeout: 45        # 服务端读超时（秒），须 > interval（建议 > 2 倍）
+
+reconnect:
+  base_delay: 1                  # 重连基础退避（秒）
+  max_delay: 60                  # 重连最大退避（秒）
+  jitter: 0.2                    # 随机抖动比例（±20%）
+
+connection:
+  unique_per_device: true        # 同一 device_id 全局只保留一条活跃连接
+  max_connections: 10000         # 全局最大并发连接数（0 = 不限）
+
+auth:
+  enabled: false                 # 是否启用设备鉴权（false = 接受任意连接，便于联调）
+  token_ttl: 0                   # token 有效期（秒），0 = 永久
+
+admin:
+  username: "admin"              # 管理后台登录账号
+  password: "admin123"           # 管理后台登录密码（生产环境务必用环境变量覆盖）
+  token_ttl: 86400               # 管理员 token 有效期（秒），默认 24 小时
+
+logging:
+  level: "INFO"                  # DEBUG / INFO / WARNING / ERROR / CRITICAL
