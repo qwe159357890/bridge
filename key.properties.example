@@ -1,0 +1,7 @@
+# 签名配置模板 —— 复制为 key.properties 并填入真实值
+# 注意：key.properties 与 *.keystore / *.jks 均被 .gitignore 排除，绝不提交到仓库
+
+storeFile=release.keystore
+storePassword=你的store密码
+keyAlias=你的别名
+keyPassword=你的key密码

@@ -1,0 +1,157 @@
+package my.bridge.com.keepalive
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+
+/**
+ * 常驻保活前台服务。
+ *
+ * 核心设计（借鉴 Aurelay）：把「保活」与「业务」彻底解耦。
+ * 本服务无条件启动，只负责：常驻前台通知 + 保活资源 + 心跳上报。
+ * 业务服务独立成另一个 Service，由业务开关控制。
+ */
+class KeepAliveService : Service() {
+
+    companion object {
+        const val NOTIFICATION_ID = 2001
+        const val CHANNEL_KEEP_ALIVE = "keep_alive_channel"
+        const val ACTION_REFRESH = "my.bridge.com.keepalive.action.REFRESH"
+
+        @Volatile
+        var startedAt: Long = 0L
+            private set
+
+        fun start(context: Context) {
+            val intent = Intent(context, KeepAliveService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "启动保活服务失败：${e.message}")
+            }
+        }
+
+        private const val TAG = "KeepAliveService"
+    }
+
+    private lateinit var notificationManager: NotificationManager
+
+    override fun onCreate() {
+        super.onCreate()
+        startedAt = System.currentTimeMillis()
+        notificationManager = getSystemService(NotificationManager::class.java)
+        createNotificationChannel()
+        promoteToForeground()
+        applyKeepAlive()
+        Log.i(TAG, "常驻保活服务已启动")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_REFRESH) {
+            promoteToForeground()
+            applyKeepAlive()
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { ResourceHolder.releaseAll(this) } catch (e: Exception) { Log.w(TAG, "释放资源失败：${e.message}") }
+        try { OnePixelOverlay.hide(this) } catch (e: Exception) { Log.w(TAG, "隐藏一像素失败：${e.message}") }
+        try { SilentPlayer.setScenarioAllowed(this, false) } catch (e: Exception) { Log.w(TAG, "停止无声播放失败：${e.message}") }
+        Log.i(TAG, "常驻保活服务已销毁")
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun applyKeepAlive() {
+        if (KeepAlivePrefs.getBoolean(this, KeepAlivePrefs.KEY_KEEP_ALIVE_ALWAYS)) {
+            ResourceHolder.acquireAll(this)
+        } else {
+            ResourceHolder.releaseAll(this)
+        }
+        if (KeepAlivePrefs.getBoolean(this, KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL)) {
+            OnePixelOverlay.show(this)
+        } else {
+            OnePixelOverlay.hide(this)
+        }
+        SilentPlayer.applyEnabled(this)
+    }
+
+    private fun promoteToForeground() {
+        try {
+            val notification = buildNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "挂前台通知失败：${e.message}")
+        }
+    }
+
+    private fun buildNotification(): Notification {
+        val openApp = Intent(this, KeepAliveEntryActivityHolder.entryActivityClass)
+            .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP) }
+        val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+        val pendingIntent = PendingIntent.getActivity(this, 0, openApp, piFlags)
+
+        return NotificationCompat.Builder(this, CHANNEL_KEEP_ALIVE)
+            .setContentTitle("Bridge 后台服务")
+            .setContentText("服务运行中 · 点此管理")
+            .setSmallIcon(android.R.drawable.ic_menu_info_details)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setContentIntent(pendingIntent)
+            .build()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_KEEP_ALIVE,
+                "常驻保活",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "应用运行期间保持后台常驻"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+}
+
+/**
+ * 入口 Activity 持有器：由 app 壳工程在启动时注册自己的 MainActivity，
+ * 避免保活模块反向依赖业务包名。
+ */
+object KeepAliveEntryActivityHolder {
+    @Volatile
+    var entryActivityClass: Class<*> = Class.forName("my.bridge.com.MainActivity")
+}
