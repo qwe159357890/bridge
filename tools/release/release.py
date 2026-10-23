@@ -142,14 +142,14 @@ def download_apk(env, tag, run_id):
     repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
     RELEASE_DIR.mkdir(exist_ok=True)
 
-    # 方式1：GitHub Release 资产
+    # 方式1：GitHub Release 资产（私有仓库需用 API 的 asset URL 下载，browser_download_url 会 404）
     status, release = api_request(env, f"/repos/{repo}/releases/tags/{tag}", env["GITHUB_TOKEN"])
     if status == 200:
         assets = release.get("assets", [])
         for a in assets:
             if a["name"].endswith(".apk"):
                 print(f"\n[4] 从 Release 下载 {a['name']} ...")
-                _download(a["browser_download_url"], RELEASE_DIR / a["name"], env)
+                _download(a["url"], RELEASE_DIR / a["name"], env, is_api=True)
                 return
 
     # 方式2：workflow artifact
@@ -166,9 +166,12 @@ def download_apk(env, tag, run_id):
     print("  [警告] 未找到可下载的 APK")
 
 
-def _download(url, dest, env):
+def _download(url, dest, env, is_api=False):
+    """下载文件。is_api=True 时 url 是 api.github.com 的 asset URL，需加 Accept 头才能拿到二进制。"""
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {env['GITHUB_TOKEN']}")
+    if is_api:
+        req.add_header("Accept", "application/octet-stream")
     try:
         with urllib.request.urlopen(req, timeout=300) as resp, open(dest, "wb") as f:
             f.write(resp.read())
