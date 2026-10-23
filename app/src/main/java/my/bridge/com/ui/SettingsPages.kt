@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -72,6 +73,28 @@ fun GeneralSettings() {
 }
 
 // ============ 保活设置 ============
+
+/** 「后台资源占用」的一类细分资源。core=true 表示核心保活手段，关闭需二次确认。 */
+private data class ResourceOption(
+    val key: String,
+    val icon: String,
+    val name: String,
+    val desc: String,
+    val core: Boolean = false,
+)
+
+/** 8 类可细化管理的后台资源，与 KeepAlivePrefs 的 KEY_RES_* 一一对应。 */
+private val resourceOptions = listOf(
+    ResourceOption(KeepAlivePrefs.KEY_RES_WAKELOCK, "⚡", "CPU 唤醒锁", "WakeLock，阻止 CPU 进入深睡", core = true),
+    ResourceOption(KeepAlivePrefs.KEY_RES_WIFILOCK, "📡", "WiFi 高性能锁", "WifiLock，保持 WiFi 高吞吐"),
+    ResourceOption(KeepAlivePrefs.KEY_RES_NETWORK, "🌐", "网络监听", "NetworkCallback，注册网络状态回调"),
+    ResourceOption(KeepAlivePrefs.KEY_RES_LOCATION, "📍", "定位", "持续监听 GPS/网络定位"),
+    ResourceOption(KeepAlivePrefs.KEY_RES_SENSOR, "🧭", "传感器", "监听加速度计 / 陀螺仪"),
+    ResourceOption(KeepAlivePrefs.KEY_RES_BLUETOOTH, "📶", "蓝牙扫描", "低功耗 BLE 扫描，需蓝牙扫描权限"),
+    ResourceOption(KeepAlivePrefs.KEY_RES_CAMERA, "📷", "相机", "后台短暂持有相机设备，需相机权限"),
+    ResourceOption(KeepAlivePrefs.KEY_RES_AUDIO, "🔇", "无声播放", "独立音轨循环播放近静音 PCM"),
+)
+
 @Composable
 fun KeepAliveSettings() {
     val context = LocalContext.current
@@ -81,8 +104,12 @@ fun KeepAliveSettings() {
     var boot by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_BOOT)) }
     var fallback by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_FALLBACK)) }
     var resource by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE)) }
-    var silentPlay by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_SILENT_PLAY)) }
     var onePixel by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL)) }
+
+    // 细化弹窗状态
+    var showResourceSheet by remember { mutableStateOf(false) }
+    // 核心项二次确认：非空时表示「用户正试图关闭某核心项」
+    var pendingCoreOff by remember { mutableStateOf<ResourceOption?>(null) }
 
     fun update(key: String, value: Boolean) {
         KeepAlivePrefs.setBoolean(context, key, value)
@@ -128,25 +155,15 @@ fun KeepAliveSettings() {
                         Timber.d("切换：双兜底唤醒 -> ${if (it) "开" else "关"}")
                     },
                 )
-                SettingSwitchRow(
-                    icon = "📡",
-                    title = "后台资源占用",
+                // 后台资源占用：总开关 + 「细化」按钮弹出子选项
+                ResourceRow(
                     checked = resource,
                     onCheckedChange = {
                         resource = it
                         update(KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE, it)
                         Timber.d("切换：后台资源占用 -> ${if (it) "开" else "关"}")
                     },
-                )
-                SettingSwitchRow(
-                    icon = "🔇",
-                    title = "无声播放",
-                    checked = silentPlay,
-                    onCheckedChange = {
-                        silentPlay = it
-                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_SILENT_PLAY, it)
-                        Timber.d("切换：无声播放 -> ${if (it) "开" else "关"}")
-                    },
+                    onRefine = { showResourceSheet = true },
                 )
                 SettingSwitchRow(
                     icon = "👁️",
@@ -195,13 +212,164 @@ fun KeepAliveSettings() {
         }
         item {
             Text(
-                text = "保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md。\n「后台资源占用」= 持续监听定位/传感器/蓝牙/相机以抬高进程优先级；「一像素」需悬浮窗权限默认关闭。",
+                text = "保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md。\n「后台资源占用」= 持续持有各类系统资源以抬高进程优先级；CPU 唤醒锁为核心手段，关闭会明显降低保活效果。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
         }
     }
+
+    // 资源细化弹窗
+    if (showResourceSheet) {
+        ResourceSheet(
+            options = resourceOptions,
+            onToggle = { opt ->
+                if (opt.core && KeepAlivePrefs.getBoolean(context, opt.key)) {
+                    // 核心项当前为开，本次是「关闭」→ 需要二次确认
+                    pendingCoreOff = opt
+                } else {
+                    val next = !KeepAlivePrefs.getBoolean(context, opt.key)
+                    update(opt.key, next)
+                    Timber.d("后台资源占用 · ${opt.name} -> ${if (next) "开" else "关"}")
+                }
+            },
+            onDismiss = { showResourceSheet = false },
+        )
+    }
+
+    // 核心项关闭二次确认
+    pendingCoreOff?.let { coreOpt ->
+        CoreConfirmDialog(
+            option = coreOpt,
+            onCancel = { pendingCoreOff = null },
+            onConfirm = {
+                update(coreOpt.key, false)
+                Timber.d("核心项「${coreOpt.name}」已二次确认关闭")
+                pendingCoreOff = null
+            },
+        )
+    }
+}
+
+/** 「后台资源占用」行：总开关 + 「细化」按钮。 */
+@Composable
+private fun ResourceRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onRefine: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("📡", style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.width(12.dp))
+        Text("后台资源占用", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Text(
+            "细化",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                .clickable { onRefine() }
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/** 资源细化底部弹窗：列出 8 类资源，逐项勾选。 */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ResourceSheet(
+    options: List<ResourceOption>,
+    onToggle: (ResourceOption) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text("后台资源占用 · 细化", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "勾选要持续占用的资源。占用越少越省电，但保活效果相应减弱。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+            )
+            options.forEach { opt ->
+                val checked = KeepAlivePrefs.getBoolean(context, opt.key)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggle(opt) }
+                        .padding(vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(opt.icon, style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(opt.name, style = MaterialTheme.typography.bodyLarge)
+                            if (opt.core) {
+                                Text(
+                                    "核心",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = androidx.compose.ui.graphics.Color(0xFFE5484D),
+                                    modifier = Modifier
+                                        .padding(start = 6.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(androidx.compose.ui.graphics.Color(0xFFFDECEC).copy(alpha = 1f))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            opt.desc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = checked, onCheckedChange = { onToggle(opt) })
+                }
+            }
+        }
+    }
+}
+
+/** 核心项关闭二次确认对话框。 */
+@Composable
+private fun CoreConfirmDialog(
+    option: ResourceOption,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        icon = { Text("⚠️", style = MaterialTheme.typography.headlineMedium) },
+        title = { Text("关闭「${option.name}」？") },
+        text = {
+            Text("${option.name} 是核心保活手段，关闭后将明显降低后台存活率，进程可能被系统更频繁回收。确定要关闭吗？")
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onConfirm) {
+                Text("确认关闭", color = androidx.compose.ui.graphics.Color(0xFFE5484D))
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
 }
 
 // ============ 关于 ============

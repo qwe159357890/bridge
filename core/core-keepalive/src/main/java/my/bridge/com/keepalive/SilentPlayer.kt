@@ -40,13 +40,13 @@ object SilentPlayer {
     private var counter = 0L
 
     fun applyEnabled(context: Context) {
-        val enabled = KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_SILENT_PLAY)
+        val enabled = KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_RES_AUDIO)
         if (enabled) start(context, "开关打开") else stop("开关关闭")
     }
 
     fun setScenarioAllowed(context: Context, allowed: Boolean) {
         scenarioAllowed = allowed
-        val enabled = KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_SILENT_PLAY)
+        val enabled = KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_RES_AUDIO)
         if (!enabled) {
             stop("开关关闭")
             return

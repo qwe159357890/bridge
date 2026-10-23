@@ -20,6 +20,16 @@ object KeepAlivePrefs {
     const val KEY_KEEP_ALIVE_RESOURCE = "keep_alive_resource"
     const val KEY_KEEP_ALIVE_BOOT = "keep_alive_boot"
 
+    // 「后台资源占用」的 8 类细分资源开关（受总开关 KEY_KEEP_ALIVE_RESOURCE 约束）
+    const val KEY_RES_WAKELOCK = "keep_alive_res_wakelock"
+    const val KEY_RES_WIFILOCK = "keep_alive_res_wifilock"
+    const val KEY_RES_NETWORK = "keep_alive_res_network"
+    const val KEY_RES_LOCATION = "keep_alive_res_location"
+    const val KEY_RES_SENSOR = "keep_alive_res_sensor"
+    const val KEY_RES_BLUETOOTH = "keep_alive_res_bluetooth"
+    const val KEY_RES_CAMERA = "keep_alive_res_camera"
+    const val KEY_RES_AUDIO = "keep_alive_res_audio"
+
     /** 默认配置：一像素默认关闭（避免系统悬浮窗提示），其余核心手段默认开启 */
     private val defaults = mapOf(
         KEY_KEEP_ALIVE_ALWAYS to true,
@@ -28,6 +38,15 @@ object KeepAlivePrefs {
         KEY_KEEP_ALIVE_FALLBACK to true,
         KEY_KEEP_ALIVE_RESOURCE to true,
         KEY_KEEP_ALIVE_BOOT to true,
+        // 8 类细分资源默认全开
+        KEY_RES_WAKELOCK to true,
+        KEY_RES_WIFILOCK to true,
+        KEY_RES_NETWORK to true,
+        KEY_RES_LOCATION to true,
+        KEY_RES_SENSOR to true,
+        KEY_RES_BLUETOOTH to true,
+        KEY_RES_CAMERA to true,
+        KEY_RES_AUDIO to true,
     )
 
     private fun sp(context: Context): SharedPreferences =

@@ -62,18 +62,20 @@ object ResourceHolder {
         val app = context.applicationContext
         Log.i(TAG, "开始持有保活资源")
 
-        acquireWakeLock(app)
-        acquireWifiLock(app)
+        if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_WAKELOCK)) acquireWakeLock(app)
+        if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_WIFILOCK)) acquireWifiLock(app)
         if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_KEEP_ALIVE_FALLBACK)) {
             registerAlarm(app)
             registerJob(app)
         }
-        registerNetworkCallback(app)
+        if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_NETWORK)) {
+            registerNetworkCallback(app)
+        }
         if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE)) {
-            registerLocation(app)
-            registerSensor(app)
-            startBluetoothScan(app)
-            openCamera(app)
+            if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_LOCATION)) registerLocation(app)
+            if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_SENSOR)) registerSensor(app)
+            if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_BLUETOOTH)) startBluetoothScan(app)
+            if (KeepAlivePrefs.getBoolean(app, KeepAlivePrefs.KEY_RES_CAMERA)) openCamera(app)
         }
     }
 

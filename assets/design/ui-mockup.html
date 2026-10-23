@@ -169,6 +169,84 @@
   /* 空状态 */
   .empty { text-align: center; color: var(--text-sub); font-size: 13px; padding: 40px 0; }
 
+  /* 细化按钮（附在主开关右侧的小字入口） */
+  .sub-toggle {
+    font-size: 12px;
+    color: var(--active);
+    background: var(--brand-light);
+    border-radius: 6px;
+    padding: 3px 8px;
+    flex-shrink: 0;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  /* 遮罩 + 底部弹窗 */
+  .mask {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,.35);
+    z-index: 20;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .sheet {
+    width: 100%;
+    background: #fff;
+    border-radius: 16px 16px 0 0;
+    padding: 16px 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    box-shadow: 0 -8px 30px rgba(0,0,0,.15);
+    animation: sheetUp .2s ease;
+  }
+  @keyframes sheetUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .sheet-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .sheet-sub { font-size: 12px; color: var(--text-sub); margin: -2px 0 10px; line-height: 1.5; }
+  .sheet-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--border);
+    font-size: 15px;
+    color: var(--text);
+  }
+  .sheet-item:last-child { border-bottom: none; }
+  .sheet-item .info { flex: 1; }
+  .sheet-item .name { font-size: 15px; }
+  .core-badge {
+    display: inline-block;
+    font-size: 10px;
+    color: #e5484d;
+    background: #fdecec;
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+  .sheet-item .desc { font-size: 11px; color: var(--text-sub); margin-top: 2px; }
+  .sheet-footer {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .sheet-btn {
+    flex: 1;
+    height: 42px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .sheet-btn.cancel { background: #f1f3f6; color: var(--text); }
+  .sheet-btn.confirm { background: var(--active); color: #fff; }
+
   /* 日志浮层 */
   .logbar {
     position: absolute;
@@ -332,8 +410,7 @@
       <div class="setting-group" onclick="log('切换：保活总开关')"><span class="ico">🛡️</span>保活总开关 <span class="switch on" id="sw-always" onclick="event.stopPropagation();toggleSwitch('sw-always','保活总开关')"></span></div>
       <div class="setting-group" onclick="log('切换：开机自启')"><span class="ico">🔌</span>开机自启 <span class="switch on" id="sw-boot" onclick="event.stopPropagation();toggleSwitch('sw-boot','开机自启')"></span></div>
       <div class="setting-group" onclick="log('切换：双兜底唤醒')"><span class="ico">🔄</span>双兜底唤醒 <span class="switch on" id="sw-fallback" onclick="event.stopPropagation();toggleSwitch('sw-fallback','双兜底唤醒')"></span></div>
-      <div class="setting-group" onclick="log('切换：资源锚点')"><span class="ico">📡</span>资源锚点 <span class="switch on" id="sw-resource" onclick="event.stopPropagation();toggleSwitch('sw-resource','资源锚点')"></span></div>
-      <div class="setting-group" onclick="log('切换：无声播放')"><span class="ico">🔇</span>无声播放 <span class="switch on" id="sw-silent" onclick="event.stopPropagation();toggleSwitch('sw-silent','无声播放')"></span></div>
+      <div class="setting-group" onclick="log('切换：后台资源占用')"><span class="ico">📡</span>后台资源占用 <span class="sub-toggle" onclick="event.stopPropagation();openResourceSheet()">细化</span> <span class="switch on" id="sw-resource" onclick="event.stopPropagation();toggleSwitch('sw-resource','后台资源占用')"></span></div>
       <div class="setting-group" onclick="log('切换：一像素锚点')"><span class="ico">👁️</span>一像素锚点 <span class="switch" id="sw-onepixel" onclick="event.stopPropagation();toggleSwitch('sw-onepixel','一像素锚点')"></span></div>
     </div>
     <div class="card">
@@ -353,6 +430,21 @@
 
   // ============ 状态 ============
   let state = { bottom: 'home', sub: { home: 'chat', settings: 'general' } };
+
+  // 「后台资源占用」子选项（细化开关）。默认全开，用户可逐项勾选。
+  // 对应保活模块实际持有的资源：ResourceHolder 7 类 + 音频 1 类。
+  // core=true 表示「核心保活手段」，关闭时需二次确认。
+  const RESOURCE_OPTIONS = [
+    { key: 'wakelock',    ico: '⚡', name: 'CPU 唤醒锁',   desc: 'WakeLock，阻止 CPU 进入深睡', core: true },
+    { key: 'wifilock',    ico: '📡', name: 'WiFi 高性能锁', desc: 'WifiLock，保持 WiFi 高吞吐', core: false },
+    { key: 'network',     ico: '🌐', name: '网络监听',      desc: 'NetworkCallback，注册网络状态回调', core: false },
+    { key: 'location',    ico: '📍', name: '定位',         desc: '持续监听 GPS/网络定位', core: false },
+    { key: 'sensor',      ico: '🧭', name: '传感器',        desc: '监听加速度计 / 陀螺仪', core: false },
+    { key: 'bluetooth',   ico: '📶', name: '蓝牙扫描',      desc: '低功耗 BLE 扫描，需蓝牙扫描权限', core: false },
+    { key: 'camera',      ico: '📷', name: '相机',          desc: '后台短暂持有相机设备，需相机权限', core: false },
+    { key: 'audio',       ico: '🔇', name: '无声播放',      desc: '独立音轨循环播放近静音 PCM', core: false },
+  ];
+  let resourceOpts = { wakelock: true, wifilock: true, network: true, location: true, sensor: true, bluetooth: true, camera: true, audio: true };
 
   // ============ 图标 ============
   const ICONS = {
@@ -400,6 +492,68 @@
     const el = document.getElementById(id);
     const on = el.classList.toggle('on');
     log(`设置：${name} → ${on ? '开' : '关'}`);
+  }
+  function openResourceSheet() {
+    renderResourceSheet();
+  }
+  function closeResourceSheet() {
+    document.getElementById('mask')?.remove();
+  }
+  function toggleResourceOpt(key, name) {
+    const opt = RESOURCE_OPTIONS.find(o => o.key === key);
+    const turningOff = resourceOpts[key]; // 当前为开，本次是「关闭」
+    if (turningOff && opt && opt.core) {
+      // 核心项关闭需二次确认
+      confirmCloseCore(key, name);
+      return;
+    }
+    resourceOpts[key] = !resourceOpts[key];
+    log(`后台资源占用 · ${name} → ${resourceOpts[key] ? '开' : '关'}`);
+    renderResourceSheet();
+  }
+  function confirmCloseCore(key, name) {
+    closeResourceSheet();
+    const mask = document.createElement('div');
+    mask.className = 'mask';
+    mask.id = 'mask';
+    mask.onclick = (e) => { if (e.target === mask) closeResourceSheet(); };
+    mask.innerHTML = `<div class="sheet" style="align-items:center;text-align:center;padding-top:24px">
+      <div style="font-size:40px;line-height:1">⚠️</div>
+      <div class="sheet-title" style="margin-top:12px">关闭「${name}」？</div>
+      <div class="sheet-sub" style="margin-top:6px">${name} 是核心保活手段，关闭后将明显降低后台存活率，进程可能被系统更频繁回收。确定要关闭吗？</div>
+      <div class="sheet-footer" style="width:100%">
+        <div class="sheet-btn cancel" onclick="log('核心项「${name}」取消关闭');openResourceSheet()">取消</div>
+        <div class="sheet-btn confirm" style="background:#e5484d" onclick="resourceOpts['${key}']=false;log('核心项「${name}」已二次确认关闭');openResourceSheet()">确认关闭</div>
+      </div>
+    </div>`;
+    document.getElementById('phone').appendChild(mask);
+  }
+  function confirmResourceSheet() {
+    const onCount = Object.values(resourceOpts).filter(Boolean).length;
+    log(`后台资源占用 · 细化已确认（开启 ${onCount}/${RESOURCE_OPTIONS.length} 项）`);
+    closeResourceSheet();
+  }
+  function renderResourceSheet() {
+    closeResourceSheet();
+    const mask = document.createElement('div');
+    mask.className = 'mask';
+    mask.id = 'mask';
+    mask.onclick = (e) => { if (e.target === mask) closeResourceSheet(); };
+    mask.innerHTML = `<div class="sheet">
+      <div class="sheet-title">后台资源占用 · 细化</div>
+      <div class="sheet-sub">勾选要持续占用的资源。占用越少越省电，但保活效果相应减弱。</div>
+      ${RESOURCE_OPTIONS.map(o => `
+        <div class="sheet-item" onclick="toggleResourceOpt('${o.key}','${o.name}')">
+          <span class="ico">${o.ico}</span>
+          <div class="info"><div class="name">${o.name}${o.core ? '<span class="core-badge">核心</span>' : ''}</div><div class="desc">${o.desc}</div></div>
+          <span class="switch ${resourceOpts[o.key] ? 'on' : ''}"></span>
+        </div>`).join('')}
+      <div class="sheet-footer">
+        <div class="sheet-btn cancel" onclick="closeResourceSheet()">取消</div>
+        <div class="sheet-btn confirm" onclick="confirmResourceSheet()">确定</div>
+      </div>
+    </div>`;
+    document.getElementById('phone').appendChild(mask);
   }
   function log(msg) {
     const bar = document.getElementById('logbar');
