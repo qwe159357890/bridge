@@ -12,10 +12,12 @@
 ## 一、顶层目录总览
 
 ```
-Bridge/                             仓库根目录
-├── app/                            应用壳工程（代码）
+Bridge/                             仓库根目录（monorepo：客户端 + 服务端）
+├── app/                            应用壳工程（代码，Android 客户端）
 ├── core/                           核心基础层（代码，6 个子模块）
 ├── feature/                        业务特性层（未来，按功能分模块）
+├── server/                         🐍 Python 后端服务（独立服务，一等公民，见下）
+├── admin/                          🖥️ 管理后台（Web 前端，独立服务，见下）
 ├── docs/                           📄 项目文档（总领 + 分文档）
 ├── assets/                         🎨 静态资源源文件（图标/设计稿/图片/音频等原始素材）
 ├── data/                           🗄️ 数据类文件（数据库/配置/样本数据等）
@@ -126,6 +128,80 @@ tools/
 
 - 只放构建需要的最终资源；图标等由 `tools/` 从 `assets/icons/` 生成。
 
+### 7. `server/` —— Python 后端服务（独立服务，一等公民）
+
+**原则：后端是独立服务，与 Android 客户端同仓库管理（monorepo），但代码、依赖、部署完全隔离。分层清晰、可扩展、可测试。**
+
+```
+server/
+├── main.py                        ★ 唯一启动入口（uv run main.py）
+├── README.md                     服务说明（定位、启动方式、协议入口）
+├── pyproject.toml                Python 项目元数据与依赖声明（uv 管理）
+├── uv.lock                       依赖锁文件（uv 生成，入库）
+├── .python-version               固定 Python 版本（3.13）
+├── config.yaml                   默认配置（YAML，心跳/端口/鉴权等参数）
+├── app/                          应用代码（分层）
+│   ├── main.py                   FastAPI 应用工厂（create_app，不直接启动）
+│   ├── config.py                 配置加载（config.yaml + 环境变量，Pydantic 校验）
+│   ├── api/                      路由包（专门的路由目录，按功能拆模块 + 子路由包）
+│   │   ├── router.py             根路由聚合器（统一挂载 ws + v1）
+│   │   ├── ws.py                 WebSocket 路由（/ws，握手/鉴权/心跳/读超时）
+│   │   └── v1/                   REST v1 子路由包（按功能拆分）
+│   │       ├── router.py         v1 版本根路由（/api 前缀）
+│   │       ├── devices.py        设备注册/统计
+│   │       ├── push.py           消息推送
+│   │       ├── connections.py    连接管理（查询/踢下线）
+│   │       └── logs.py           日志上传/读取/清除
+│   ├── core/                     核心层：连接管理、设备注册（不依赖框架）
+│   │   ├── connection_manager.py 连接管理器（唯一连接 + 顶旧 + 映射表 + 推送）
+│   │   ├── device_registry.py    设备注册表（token 生成/鉴权，内存实现可替换）
+│   │   └── log_store.py          日志存储（内存实现，接口可替换）
+│   ├── models/                   领域模型（Connection 等）
+│   ├── schemas/                  Pydantic 校验模型（消息信封 + REST 请求/响应）
+│   └── services/                 业务逻辑（未来扩展：消息分发等）
+├── examples/                     客户端示例（本地联调）
+├── tests/                        测试（pytest）
+└── docs/                         服务端专属文档（如需，主文档在 docs/server/）
+```
+
+**规则：**
+- `server/` 与 `app/`（Android）**互不依赖、互不 import**，通过 WebSocket 协议通信。
+- 服务端依赖用 **uv** 管理（`pyproject.toml` + `uv.lock`），不污染 Android 的 Gradle 构建。
+- **唯一启动方式**：`server/main.py`（`uv run main.py`），内部调 `app.main:create_app()` + uvicorn；host/port 读 `config.yaml` 的 `server` 组；不要在别处直接 uvicorn。
+- 配置一律走 `config.yaml`（YAML）+ 环境变量覆盖，经 `config.py` 的 Pydantic 校验；禁止在业务代码里硬编码心跳周期/端口/超时等参数。
+- 路由层集中在 `app/api/`，按功能拆模块、可再拆子路由包；`app/main.py` 仅 `include_router(api_router)` 一行，新增路由无需改 main.py。
+- 连接管理、心跳、设备注册等核心逻辑放 `core/`，**不依赖 FastAPI**，便于单独测试。
+- 服务端文档：总体设计放 `docs/server/`（仓库文档体系内），`server/README.md` 只做快速上手入口。
+
+### 8. `admin/` —— 管理后台（Web 前端，独立服务）
+
+**原则：管理后台是独立的 Web 前端项目，只消费 `server/` 的 REST 接口，不触碰客户端与服务端代码。技术栈 Vue 3 + Vite + Element Plus + TypeScript + Pinia。**
+
+```
+admin/
+├── package.json                    npm/pnpm 依赖声明
+├── vite.config.ts                  构建配置（含 dev 代理到 server）
+├── tsconfig.json
+├── .env.development                本地环境变量（VITE_API_BASE=http://localhost:15160）
+├── .env.production                 生产环境变量
+├── index.html
+├── src/
+│   ├── main.ts                     入口
+│   ├── App.vue
+│   ├── router/                     路由（含登录守卫）
+│   ├── stores/                     Pinia 状态（登录态、设备数据）
+│   ├── api/                        对接服务端 REST（request 封装 + 各模块接口）
+│   ├── layout/                     整体布局（侧边栏 + 顶栏）
+│   ├── views/                      页面（login/dashboard/device/command/log/push/connection）
+│   └── components/                 通用组件
+```
+
+**规则：**
+- 与 `server/`、`app/` 平级，同仓库 monorepo 管理，代码/依赖/部署完全隔离。
+- 不新增后端语言——复用现有 FastAPI 服务的 REST 接口（`/api/*`）。
+- 管理后台鉴权用「简单管理员密钥」方案（服务端配置管理员账号密码，登录换 token，请求带 token）。
+- 权威设计文档：`docs/admin/design.md`。
+
 ---
 
 ## 三、命名约定
@@ -142,4 +218,4 @@ tools/
 
 ## 四、一句话总纲（供智能体快速理解）
 
-> 代码进 `app`/`core`/`feature`，文档进 `docs`（INDEX 总领分文档），原始素材进 `assets`，外部数据进 `data`，参考源码进 `references`，工具脚本进 `tools`；README 只做入口，不在 README 堆内容。
+> 代码进 `app`/`core`/`feature`（客户端）与 `server/`（服务端），文档进 `docs`（INDEX 总领分文档），原始素材进 `assets`，外部数据进 `data`，参考源码进 `references`，工具脚本进 `tools`；README 只做入口，不在 README 堆内容。

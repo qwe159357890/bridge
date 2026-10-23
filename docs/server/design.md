@@ -1,0 +1,583 @@
+# Bridge 后端服务设计
+
+> Bridge 的 Python 服务端。承载客户端（Android App）的 WebSocket 长连接，负责连接管理。
+>
+> 本文档是后端服务的**权威设计文档**，所有后端实现必须遵循。
+
+---
+
+## 一、定位与边界
+
+- **角色**：服务端（Server），对应客户端（Android App，即「用户端 / 前端」）。
+- **通信**：WebSocket 长连接（`/ws`）+ REST 管理接口（`/api/*`）。
+- **已实现范围**：
+  1. **连接管理**（建立、心跳、断线、重连、唯一连接）——核心
+  2. **消息推送**（服务端主动向设备推送）
+  3. **设备鉴权 + 注册**（token 验证，可开关）
+  4. **REST 管理接口**（连接列表、踢下线、推送、设备注册、统计）
+- **后续扩展**：用户系统、业务数据、持久化存储、水平扩展（本文档预留，不展开）。
+
+## 二、技术选型
+
+| 项 | 选型 | 理由 |
+|---|---|---|
+| 语言 | Python 3.11+ | 用户指定 |
+| Web 框架 | **FastAPI** | 异步原生、WebSocket 支持好、自动文档、后续扩展 REST/鉴权方便 |
+| ASGI 服务器 | Uvicorn | FastAPI 标准搭配 |
+| 依赖管理 | **uv**（`pyproject.toml` + `uv.lock`） | 快速、可复现、锁版本 |
+| 配置管理 | **YAML** 配置文件（`config.yaml`）+ 环境变量覆盖 | 结构化、可读、可版本化；敏感项走环境变量 |
+| 异步模型 | `asyncio` 单进程 + 多 worker（进程级扩展） | 连接管理是 IO 密集，异步最优 |
+
+## 三、连接管理的核心难题（设计依据）
+
+> 这一节是本文档的**理论基础**，所有机制设计都围绕下面 5 个难题展开。
+
+### 3.1 五个核心难题
+
+1. **半开连接（Half-Open）**：TCP 连接的一端已经"死掉"（进程崩溃、网线拔了、App 被强杀），但对端完全不知情——因为它没收到 FIN/RST。对端会一直以为连接还活着。**这是长连接最大的坑。**
+2. **静默断网**：App 切后台、手机息屏、网络切换（WiFi↔4G），连接可能"假死"但不报错。
+3. **重连风暴（Reconnect Storm）**：大量客户端同时断线重连，服务端瞬间被压垮；或单个客户端疯狂重连形成抖动。
+4. **重复连接**：同一设备因重连不及时，产生新旧两个连接并存（旧连接还没被服务端判定死亡，新连接又进来了）。
+5. **连接泄漏**：服务端若不能及时回收死连接，内存/文件描述符被耗尽，最终拖垮整个服务。
+
+### 3.2 解决思路总纲
+
+| 难题 | 手段 |
+|---|---|
+| 半开连接 | 心跳 + 读超时：定期互探活性，超时未响应即判死 |
+| 静默断网 | 心跳周期内未收到任何消息 → 判定断线并主动回收 |
+| 重连风暴 | 客户端指数退避 + 随机抖动；服务端限流/去重 |
+| 重复连接 | **设备唯一标识 + 服务端顶旧连接**（新连接建立时主动关闭旧连接） |
+| 连接泄漏 | 读超时兜底回收 + 显式关闭清理 + 连接数监控 |
+
+---
+
+## 四、心跳机制（核心设计）
+
+### 4.1 角色分工（已定：客户端主导 + 服务端读超时兜底）
+
+- **客户端主导**：客户端周期性发送 `ping`，服务端收到后回 `pong`。
+  - 客户端在「发送 ping 后的一段时间内」未收到 `pong`，判定服务端不可达，触发重连。
+- **服务端读超时兜底**：服务端记录「最后一次收到该连接任意消息的时间」，若超过阈值（如 2 个心跳周期）未收到任何数据，判定连接死亡，主动关闭并回收。
+  - 这一步弥补「客户端主导」的短板：当客户端静默崩溃时，服务端也能主动发现半开连接。
+
+### 4.2 参数设计（心跳硬编码，两端一致）
+
+> **关键决策**：心跳参数必须客户端 ≤ 服务端读超时，否则服务端必判客户端离线。
+> 若两端都可自由改，极易配置不一致导致误判。故**心跳/重连参数客户端与服务端都硬编码，不提供配置入口**。
+
+| 参数 | 值（硬编码，两端一致） | 说明 |
+|---|---|---|
+| `heartbeat.interval` | 20s | 客户端心跳发送周期 |
+| `heartbeat.client_pong_timeout` | 10s | 客户端发出 ping 后等待 pong 的超时 |
+| `heartbeat.server_read_timeout` | 45s | 服务端读超时：超过此时间未收到任何消息判死（> 2 倍心跳周期） |
+| `reconnect.base_delay` | 1s | 重连基础退避时间 |
+| `reconnect.max_delay` | 60s | 重连最大退避时间（封顶） |
+| `reconnect.jitter` | 0.2（±20%） | 重连随机抖动，避免风暴 |
+
+> 服务端 `config.yaml` 中这些值作为「约定值」写入（实际代码仍读 config，但客户端与之硬编码一致，不暴露给终端用户改）。
+> 协议约定以本文档为准，两端写死，避免误配。
+
+### 4.3 心跳消息协议
+
+心跳消息用 JSON 文本帧，统一信封结构（见「消息协议」一节）：
+
+```json
+// 客户端 → 服务端
+{"type": "ping", "ts": 1730000000000}
+
+// 服务端 → 客户端
+{"type": "pong", "ts": 1730000000000}
+```
+
+> 约定：心跳 `ping`/`pong` 是**纯应用层消息**（走 WebSocket 数据帧），
+> 不依赖 WebSocket 协议层的 Ping/Pong 帧。
+> 理由：应用层心跳跨语言/跨框架语义一致，且能顺带携带业务数据；协议层帧由底层库维护，作为补充。
+
+### 4.4 心跳时序图
+
+```
+客户端                          服务端
+   |──── ping ───────────────────>|   (t=0)
+   |<────────────── pong ─────────|   (t<10s 正常)
+   |                              |
+   |        ... 20s 后 ...        |
+   |──── ping ───────────────────>|   (t=20)
+   |        (pong 超时未回)        |
+   |  [判定服务端不可达 → 重连]     |
+   |                              |
+   |  (服务端侧：45s 未收任何消息)   |
+   |  [判定连接死亡 → 主动关闭回收]  |
+```
+
+---
+
+## 五、断线检测
+
+### 5.1 客户端侧检测
+
+客户端在以下任一情况判定「连接已断」，触发重连：
+
+1. 发出 `ping` 后 `CLIENT_PONG_TIMEOUT` 内未收到 `pong`；
+2. WebSocket 收到 `close` 帧；
+3. 底层连接报错（网络异常、异常关闭）。
+
+### 5.2 服务端侧检测
+
+服务端在以下情况判定「连接已死」，主动清理：
+
+1. **读超时**：`SERVER_READ_TIMEOUT` 内未收到该连接任何消息（含心跳）；
+2. 收到客户端 `close` 帧；
+3. 底层发送/接收抛异常。
+
+> 服务端检测的触发点：用 asyncio 的 `asyncio.wait_for(ws.receive_text(), timeout=...)` 实现读超时。
+
+---
+
+## 六、自动重连
+
+### 6.1 重连流程（客户端）
+
+1. 检测到断线 → 进入「重连状态」；
+2. 按**指数退避 + 随机抖动**计算等待时间：
+   `delay = min(BASE * 2^attempt, MAX) * (1 ± jitter)`；
+3. 等待后重新发起 WebSocket 握手（携带设备标识）；
+4. 成功 → 重置 attempt=0；失败 → attempt+1 继续退避；
+5. 达最大重试次数/长时间仍失败 → 降级（可选：提示用户、改用轮询）。
+
+### 6.2 为什么指数退避 + 抖动
+
+- **指数退避**：避免在服务端故障时所有客户端以固定频率疯狂重连，把服务端打死。
+- **随机抖动**：打散重连时间点，避免"同时断线 → 同时重连"的雪崩。
+
+### 6.3 重连与「顶旧连接」的配合
+
+- 客户端重连时，**必须携带同一个设备标识**。
+- 服务端收到新连接，发现该标识已有旧连接 → **主动关闭旧连接，接纳新连接**（见「唯一连接」）。
+- 这样即使旧连接因半开未及时回收，新连接也能保证"全局只有一条活跃连接"。
+
+---
+
+## 七、设备唯一标识与「唯一连接」
+
+### 7.1 设备标识（已定：系统 ANDROID_ID）
+
+- 客户端用系统 **`Settings.Secure.ANDROID_ID`** 作为 `device_id`，**重装 APK 不变**（区别于自生成 UUID），无需权限。
+- 特性：同一台设备 + 同一个 App 安装，`device_id` 恒定；恢复出厂设置会变（可接受）。
+- 昵称 `device_name` 由用户自定义，随握手/注册上报，服务端仅作展示名（`GET /api/devices` 返回），不参与唯一性判断。
+
+### 7.2 唯一连接约束（核心业务规则）
+
+> **同一个 `device_id`，服务端全局只保留一条活跃连接。新连接顶掉旧连接。**
+
+实现要点：
+
+1. 服务端维护 `device_id -> Connection` 的映射表（内存字典）。
+2. 新连接建立（完成握手、拿到 `device_id`）时：
+   - 若映射表中已有该 `device_id` 的活跃连接 → **先关闭旧连接**（发 close 帧并清理），再登记新连接；
+   - 否则直接登记。
+3. 连接关闭时，从映射表移除（仅当映射表里该 `device_id` 指向的正是这条连接时才移除，避免误删新连接）。
+
+### 7.3 并发安全（顶旧连接的竞态）
+
+> 企业级必须处理并发：两个连接几乎同时握手同一个 `device_id`。
+
+- 用 `asyncio.Lock` 保护映射表的「顶旧 + 登记」操作，保证原子性。
+- 或：映射表存 `Connection` 对象，顶旧时通过「比对对象引用」判断，避免关错。
+
+---
+
+## 八、连接状态机
+
+每个连接在服务端经历以下状态：
+
+```
+        ┌──────────────┐
+  握手   │  CONNECTING   │  客户端发起 WS 握手
+────────>│              │
+        └──────┬───────┘
+               │ 握手完成，拿到 device_id（顶旧 + 登记）
+               ▼
+        ┌──────────────┐
+        │   ACTIVE      │  正常通信（心跳周期交互）
+        │              │
+        └──┬────────┬──┘
+   超时/close│        │ 顶旧（被新连接顶掉）
+             ▼        ▼
+        ┌──────────────────┐
+        │    CLOSED         │  清理资源、从映射表移除
+        └──────────────────┘
+```
+
+| 状态 | 说明 |
+|---|---|
+| CONNECTING | 握手进行中 |
+| ACTIVE | 活跃，收发消息 + 心跳 |
+| CLOSED | 已关闭（主动关闭 / 读超时 / 被顶旧 / 客户端断开） |
+
+---
+
+## 九、消息协议
+
+统一 JSON 信封，字段预留扩展：
+
+```json
+{
+  "type": "ping | pong | close | message | ...",
+  "ts": 1730000000000,
+  "data": { }
+}
+```
+
+| type | 方向 | 说明 |
+|---|---|---|
+| `hello` | C→S | 握手（携带 device_id + 可选 token + 可选 device_name 昵称） |
+| `ping` | C→S | 心跳请求 |
+| `pong` | S→C | 心跳响应 |
+| `close` | 双向 | 主动通知关闭（顶旧/踢下线时服务端发，`reason`=replaced/server_kick） |
+| `message` | 双向 | 业务消息（服务端推送、客户端上报） |
+| `command` | S→C | 命令下发（data 含 command/command_id/params） |
+| `command_result` | C→S | 命令执行回执（data 含 command_id/success/message） |
+
+> 顶旧连接时，服务端先给旧连接发一条 `{"type":"close","data":{"reason":"replaced"}}`，再关闭，让客户端知道自己被顶掉了（而非误判为网络故障反复重连）。
+
+### 9.1 多客户端对应关系（核心原则）
+
+> 本项目是「一服务端对多客户端」，**所有通信必须区分对应关系**，`device_id` 是全局唯一键。
+
+- 服务端下发通知/命令 → 精确到 `device_id`（命令接口一次一个设备；广播用 push）。
+- 客户端上报（日志/回执）→ 请求体携带 `device_id`；命令回执带 `command_id` 关联原命令。
+- 设备昵称 `device_name` 仅作展示名（`GET /api/devices` 返回，含在线状态），不参与唯一性判断。
+
+---
+
+## 十、异常与边界场景清单（实现时必须覆盖）
+
+1. 客户端握手后立刻断开（没发任何心跳）→ 服务端读超时回收。
+2. 同一设备两条连接并发握手 → 顶旧连接原子性。
+3. 顶旧连接时旧连接正在发消息 → 关闭操作容错（捕获异常）。
+4. 服务端重启 → 所有连接断开，客户端重连重建映射表。
+5. 时钟偏移 → 心跳只做「活性判断」，不依赖对端时间戳精确一致。
+6. 消息乱序/粘连 → 每条消息独立 JSON，按帧边界解析（FastAPI 的 `receive_text` 天然按消息边界）。
+7. 大消息/慢客户端 → 设置单条消息大小上限，防止内存被打爆。
+
+---
+
+## 十一、目录结构（详见 directory-convention.md）
+
+后端代码位于仓库顶层 `server/`，分层结构：
+
+```
+server/
+├── main.py                # ★ 唯一启动入口（uv run main.py）
+├── README.md
+├── pyproject.toml
+├── uv.lock
+├── .python-version
+├── app/
+│   ├── main.py            # FastAPI 应用工厂 + 依赖注入（不直接启动）
+│   ├── config.py          # 配置加载（读 config.yaml + 环境变量覆盖）
+│   ├── api/               # 路由包（专门的路由目录，按功能拆模块 + 子路由包）
+│   │   ├── router.py      #   根路由聚合器（统一挂载 ws + v1）
+│   │   ├── ws.py          #   WebSocket 路由（握手/鉴权/心跳/读超时）
+│   │   └── v1/            #   REST v1 子路由包（按功能拆分）
+│   │       ├── router.py  #     v1 版本根路由（/api 前缀）
+│   │       ├── devices.py #     设备注册/统计
+│   │       ├── push.py    #     消息推送
+│   │       └── connections.py # 连接管理（查询/踢下线）
+│   ├── core/              # 核心：连接管理器、设备注册表、状态机
+│   ├── models/            # 数据模型（Connection、消息信封）
+│   ├── schemas/           # Pydantic 校验模型
+│   └── services/          # 业务逻辑（未来）
+├── examples/              # 客户端示例（本地联调）
+├── tests/
+├── config.yaml            # 默认配置
+└── docs/
+```
+
+### 启动方式（唯一入口）
+
+后端**唯一**启动方式是 `server/main.py`（在 `server/` 目录下执行 `uv run main.py`）。
+它内部调用 `app.main:create_app()` 构建应用，再用 uvicorn 启动，host/port 由
+`config.yaml` 的 `server` 配置组决定。不要在别处直接 `uvicorn` 拉起服务。
+
+### 路由包组织原则
+
+路由层集中在 `app/api/`（专门的路由目录），按「功能」拆分为独立模块，并可进一步
+拆成「子功能路由包」：
+
+- 每个路由模块只做「协议适配」（解析请求 → 调核心层 → 返回响应），**不写业务逻辑**。
+- 同类接口聚合成子路由包（如 `v1/` 版本包下按 devices/push/connections 拆模块）。
+- 新增版本时平行建 `v2/` 包；新增功能时在对应子包加模块，并在 `router.py` 登记。
+- `app/main.py` 只需 `app.include_router(api_router)` 一行，新增路由无需改 main.py。
+
+---
+
+## 十三、配置管理（YAML）
+
+### 13.1 选型理由
+
+配置用 **YAML** 而非纯环境变量 / JSON / Python 代码，理由：
+
+1. **结构化**：心跳、重连、连接上限等参数天然分组，比扁平的 `FOO_BAR` 环境变量清晰。
+2. **可读可注释**：运维人员可直接读、直接改，YAML 支持注释，便于说明每个参数的语义。
+3. **可版本化**：`config.yaml` 进 Git，配置变更可审计、可回滚。
+4. **多环境**：`config.yaml`（默认）+ `config.prod.yaml`（生产覆盖）+ 环境变量（最敏感项），分层叠加。
+
+### 13.2 配置加载优先级（从低到高）
+
+1. 代码内置默认值（`config.py` 里的 fallback）
+2. `config.yaml`（仓库内默认配置）
+3. 环境变量 `BRIDGE_CONFIG` 指定的额外 YAML 文件（如生产配置）
+4. 环境变量（`BRIDGE_*` 前缀，覆盖单个参数，用于密钥等敏感项）
+
+> 高优先级覆盖低优先级；环境变量仅用于少数敏感项（如 `BRIDGE_SECRET_KEY`），避免污染 YAML。
+
+### 13.3 配置结构示例（`config.yaml`）
+
+```yaml
+# Bridge Server 配置
+
+server:
+  host: "0.0.0.0"
+  port: 15160
+  # 单条消息最大字节数，防止慢客户端/大消息打爆内存
+  max_message_size: 65536
+
+heartbeat:
+  interval: 20               # 客户端心跳发送周期（秒）
+  client_pong_timeout: 10    # 客户端 ping 后等 pong 超时（秒）
+  server_read_timeout: 45    # 服务端读超时（秒），须 > 2 倍 interval
+
+reconnect:
+  base_delay: 1              # 重连基础退避（秒）
+  max_delay: 60              # 重连最大退避（秒）
+  jitter: 0.2                # 随机抖动比例（±20%）
+
+connection:
+  # 同一 device_id 全局只保留一条活跃连接（新连接顶旧连接）
+  unique_per_device: true
+  # 全局最大并发连接数（0 = 不限）
+  max_connections: 10000
+
+auth:
+  enabled: false             # 是否启用设备鉴权（false = 接受任意连接，便于联调）
+  token_ttl: 0               # token 有效期（秒），0 = 永久
+
+logging:
+  level: "INFO"              # DEBUG / INFO / WARNING / ERROR / CRITICAL
+```
+
+### 13.4 加载实现要点
+
+- 用 `pyyaml` 解析 YAML + `pydantic`（`BaseModel`）做类型与取值校验，未引入 `pydantic-settings`。
+- 所有配置项经 **Pydantic 校验**：类型、取值范围（如 `server_read_timeout > 2 * interval` 的约束）。
+- 校验失败即启动报错（fail-fast），不静默用错误配置运行。
+- 配置对象在进程启动时加载一次（`lru_cache` 单例），全局只读共享，避免运行期热更新的复杂度（热更新列为后续扩展）。
+
+---
+
+## 十四、消息推送（服务端主动下发）
+
+### 14.1 目标
+
+业务侧（管理后台 / 其他服务）通过 REST 接口，向一个或多个在线的设备主动推送消息。
+
+### 14.2 实现机制
+
+- `Connection` 模型注入 ``send`` 回调（端点层绑定到 ``ws.send_text``），核心层与 WebSocket 对象解耦。
+- `ConnectionManager.send_to_device(device_id, raw_json)` 向单设备推送；`broadcast(raw_json)` 向全量广播。
+- 推送消息类型为 ``message``，载荷放在 ``data`` 字段。
+
+### 14.3 推送接口
+
+```
+POST /api/push
+{"device_ids": ["dev-1", "dev-2"], "payload": {"msg": "..."}}
+→ {"total": 2, "delivered": 1, "failed": ["dev-2"]}
+```
+
+- ``delivered``：成功送达的连接数；``failed``：无活跃连接或发送失败的 device_id 列表。
+- 仅推送当前在线设备，离线设备不排队（排队/离线存储列为后续扩展）。
+
+---
+
+## 十五、设备鉴权与注册
+
+### 15.1 鉴权模型
+
+- 客户端首次启动时调用 ``POST /api/devices/register`` 注册，获得 ``device_id + token``。
+- 之后 WebSocket 握手时，``hello`` 消息携带 ``token``，服务端校验通过才允许建立连接。
+- token 用 ``secrets.token_hex(32)`` 生成（64 位十六进制），不可猜测。
+
+### 15.2 配置开关
+
+```yaml
+auth:
+  enabled: false   # false = 接受任意连接（便于联调）；true = 强制鉴权
+  token_ttl: 0     # token 有效期（秒），0 = 永久
+```
+
+### 15.3 握手消息（含 token）
+
+```json
+{"type": "hello", "ts": ..., "data": {"device_id": "dev-1", "token": "xxx"}}
+```
+
+- 鉴权失败：服务端关闭连接，close code ``4004``（reason=unauthorized）。
+
+### 15.4 存储
+
+当前用内存字典实现（`DeviceRegistry`），接口与存储解耦，后续可替换为数据库/Redis 而无需改动调用方。
+
+---
+
+## 十五·补充：管理后台鉴权（Admin Auth）
+
+设备鉴权只管「设备连接」，**管理接口**需要独立的「管理员鉴权」，二者解耦。
+
+### 鉴权模型
+
+- `config.yaml` 新增 `admin` 组：`username` / `password` / `token_ttl`（静态配置，不引入数据库）。
+- `POST /api/admin/login`：校验账号密码，返回 admin token（`secrets.token_hex` 生成）。
+- 管理接口统一通过 `require_admin` 依赖校验 `Authorization: Bearer <token>`，失败返回 401。
+- 密码用 `secrets.compare_digest` 常量时间比较，避免时序攻击。
+
+```yaml
+admin:
+  username: "admin"        # 登录账号
+  password: "admin123"     # 登录密码（生产环境用环境变量覆盖）
+  token_ttl: 86400         # token 有效期（秒），0 = 永久
+```
+
+### 鉴权边界（关键）
+
+| 接口 | 是否要求管理鉴权 |
+|---|---|
+| `POST /api/devices/register`（设备注册） | ❌ 否（客户端调用） |
+| `POST /api/logs`（日志上传） | ❌ 否（客户端调用） |
+| 其余 `/api/devices` `/api/commands` `/api/logs`(读/删) `/api/push` `/api/connections` | ✅ 是 |
+
+### 管理侧实时推送（WebSocket）
+
+命令回执除写入 CommandStore 外，还通过 **WebSocket** 实时推送给管理后台：
+
+- `core/admin_event_bus.py`：内存事件总线（连接登记/广播/断开）。
+- `WS /api/admin/ws`：管理侧实时事件通道，token 优先取 `Authorization: Bearer`，也兼容 `?token=` query 参数。
+- `ws.py` 收到 `command_result` 时同步 `publish` 事件。
+
+选用 WebSocket 而非 SSE，是为后续复杂功能与双向交互预留能力。
+
+---
+
+## 十六、REST 管理接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/devices/register` | 注册设备，返回 device_id + token（含昵称） |
+| GET | `/api/devices` | 列出所有已注册设备（含昵称 + 在线状态，供管理侧挑设备） |
+| POST | `/api/push` | 向设备推送消息 |
+| POST | `/api/commands` | 向指定设备下发命令（如 upload_log） |
+| GET | `/api/commands` | 列出全部命令记录（含回执状态） |
+| GET | `/api/commands/{command_id}` | 查询单条命令状态（pending/success/failed） |
+| GET | `/api/connections` | 活跃连接列表 + 数量 |
+| POST | `/api/devices/{id}/disconnect` | 强制断开指定设备（服务端踢下线） |
+| GET | `/api/devices/count` | 已注册设备总数 |
+| POST | `/api/logs` | 上传日志（客户端上报诊断日志） |
+| GET | `/api/logs/{device_id}` | 读取某设备日志列表 |
+| GET | `/api/logs` | 列出有日志的设备 + 日志总数 |
+| DELETE | `/api/logs/{device_id}` | 清除某设备日志 |
+| GET | `/health` | 健康检查 + 运行统计（连接数/注册数/运行时长） |
+
+---
+
+## 十七、命令下发（服务端主动下发 → 客户端执行）
+
+### 17.1 目标
+
+管理侧通过 REST 接口向**指定设备**下发一条命令，客户端收到后执行并回执，实现「服务端 → 客户端」的主动控制（如远程触发日志上传）。
+
+### 17.2 接口
+
+```
+POST /api/commands
+{"device_id": "dev-1", "command": "upload_log", "params": {}}
+→ {"command_id": "<uuid>", "device_id": "dev-1", "command": "upload_log", "delivered": true}
+```
+
+- `command` 必须在白名单 `ALLOWED_COMMANDS = {"upload_log"}` 内，否则 400。
+- 设备必须在线（有活跃连接），否则 404。
+- 下发成功后返回 `command_id`，供管理侧关联客户端回执（`command_result` 消息）。
+
+### 17.3 命令白名单
+
+| 命令 | 说明 |
+|---|---|
+| `upload_log` | 客户端采集诊断日志并上传到后端 |
+
+### 17.4 消息流
+
+```
+管理侧 ──POST /api/commands──▶ 服务端 ──command 帧──▶ 客户端（执行 upload_log）
+                                      ◀──command_result 帧── 客户端（回执）
+```
+
+- 命令精确下发到**一个** device_id（不在此接口做广播，广播用 push）。
+- 每条命令带唯一 `command_id`，客户端回执原样带回，便于关联。
+
+### 17.5 命令回执持久化
+
+> 服务端收到 `command_result` 回执后**持久化**（而非仅记日志），供管理侧查询命令执行结果。
+
+- 存储：`CommandStore`（内存实现，接口可替换），`command_id → CommandRecord`。
+- 生命周期：下发即登记 `pending` → 回执到达更新为 `success` / `failed`（含 result_message / result_at）。
+- **限制最大数量**：默认 `max_records=200`，超限丢弃最旧记录（防内存无限堆积）。
+- 查询接口：
+  - `GET /api/commands` 列出全部命令记录（由旧到新）。
+  - `GET /api/commands/{command_id}` 查询单条命令状态（pending/success/failed + 结果说明），不存在 404。
+
+---
+
+## 十八、日志上传与读取（借鉴 aurelay）
+
+### 18.1 定位
+
+借鉴 `references/aurelay-main` 的「诊断日志上传/读取」能力：客户端把诊断日志文本
+上报到服务端，管理侧可读取/列出/清除，用于远程排查问题（无需依赖微信/邮件等外部通道）。
+
+> 注意：aurelay 的 `DiagLog`/`DiagUploader` 是**客户端侧**实现（采集 + 上传），其服务端
+> 仅约定协议（`X-API-Key` + `Authorization` 双写、HTTP 恒 200 + body code）。本后端按自身
+> 架构风格重新设计服务端接口（路径用 `/api/logs`，鉴权沿用现有设备 token 机制）。
+
+### 18.2 接口语义
+
+- **上传** `POST /api/logs`：客户端提交 `device_id` + `content`（日志文本）+ 可选
+  `device_name` / `app_version`。服务端追加一条日志，返回 `code=0`。
+- **读取** `GET /api/logs/{device_id}`：返回该设备日志列表（由旧到新）。
+- **列出** `GET /api/logs`：返回有日志的设备 id 列表 + 日志总数（管理侧排查入口）。
+- **清除** `DELETE /api/logs/{device_id}`：清除该设备全部日志。
+
+### 18.3 存储
+
+- 核心层 `LogStore`（内存实现，接口可替换），`device_id -> 日志条目列表`。
+- 单设备保留最近 `max_entries_per_device`（默认 50）条，防止无限堆积。
+- 单条内容超长截断尾部（默认 200_000 字符），防止请求体过大。
+- 后续可替换为文件落盘 / 数据库 / 对象存储。
+
+---
+
+## 十九、交付清单
+
+1. 连接管理器（唯一连接 + 顶旧连接 + 状态机）
+2. 心跳（客户端 ping/pong 服务端响应 + 读超时兜底）
+3. 消息协议信封 + 校验
+4. 配置（**YAML 加载 + Pydantic 校验**，心跳/重连/连接上限/鉴权可配）
+5. **消息推送**（单播 + 广播，REST 推送接口）
+6. **设备鉴权 + 注册**（token 验证，可开关，含昵称）
+7. **REST 管理接口**（连接列表、设备列表、踢下线、统计、健康检查）
+8. **命令下发**（REST 命令接口 + command 帧 + command_result 回执）
+9. **日志上传与读取**（借鉴 aurelay，REST 日志接口 + LogStore 存储）
+10. 单元测试（顶旧、超时回收、并发握手、鉴权、推送、日志、命令、设备列表）
+11. 客户端示例（Python 脚本，含鉴权/心跳/重连/接收推送）
+
+> 客户端的真实 WebSocket 实现（Android 端）属客户端工程，另立文档；本文档定义的是**协议与约束**，客户端必须遵循。

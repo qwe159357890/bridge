@@ -26,7 +26,19 @@
 | commit-convention.md | 提交信息规范（待补充） |
 
 ### 接口文档（api/）
-（待补充）
+| 文档 | 说明 |
+|---|---|
+| [ws-client.md](api/ws-client.md) | **客户端 WebSocket 对接设计**（握手/心跳/重连/唯一连接 + ANDROID_ID 设备标识 + 设备昵称 + 命令下发执行 + 诊断日志上传） |
+
+### 后端服务（server/）
+| 文档 | 说明 |
+|---|---|
+| [design.md](server/design.md) | **后端服务设计**（WebSocket 连接管理：心跳/断线/重连/唯一连接/顶旧连接 + 消息推送 + 设备鉴权/昵称 + 命令下发 + 日志上传读取 + REST 管理接口 + 路由包组织） |
+
+### 管理后台（admin/）
+| 文档 | 说明 |
+|---|---|
+| [design.md](admin/design.md) | **管理后台设计**（Vue3 + Element Plus Web 前端：设备管理/命令下发/日志查看/消息推送/连接监控/仪表盘 + 简单管理员鉴权 + 对接服务端 REST 接口） |
 
 ---
 
@@ -34,7 +46,9 @@
 
 | 目录 | 用途 |
 |---|---|
-| `app/` `core/` `feature/` | 代码（应用模块架构） |
+| `app/` `core/` `feature/` | 代码（应用模块架构，Android 客户端） |
+| `server/` | Python 后端服务（FastAPI + WebSocket，独立服务） |
+| `admin/` | 管理后台（Vue3 + Element Plus Web 前端，独立服务） |
 | `docs/` | 项目文档 |
 | `assets/` | 静态资源源文件 |
 | `data/` | 数据类文件 |
