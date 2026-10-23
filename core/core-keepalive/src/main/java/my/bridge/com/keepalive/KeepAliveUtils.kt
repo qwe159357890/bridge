@@ -63,18 +63,52 @@ object KeepAliveUtils {
     }
 
     /**
-     * 保活用到的危险权限清单（与 MainActivity 保持一致，作为单一事实来源）。
+     * 全量可申请的危险权限（仿 Aurelay，申请权限=资格不耗电，故全量申请）。
+     * 供 MainActivity 首次批量申请 + 设置页权限管理展示。与 AndroidManifest 声明一一对应。
      */
     fun runtimePermissions(): List<String> = buildList {
+        // 位置
         add(Manifest.permission.ACCESS_FINE_LOCATION)
         add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        // 相机 / 麦克风
         add(Manifest.permission.CAMERA)
+        add(Manifest.permission.RECORD_AUDIO)
+        // 蓝牙（Android 12+）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_CONNECT)
+            add(Manifest.permission.BLUETOOTH_ADVERTISE)
         }
+        // 通知（Android 13+）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // 电话
+        add(Manifest.permission.READ_PHONE_STATE)
+        add(Manifest.permission.CALL_PHONE)
+        add(Manifest.permission.READ_CALL_LOG)
+        add(Manifest.permission.WRITE_CALL_LOG)
+        // 通讯录 / 账号
+        add(Manifest.permission.READ_CONTACTS)
+        add(Manifest.permission.WRITE_CONTACTS)
+        add(Manifest.permission.GET_ACCOUNTS)
+        // 日历
+        add(Manifest.permission.READ_CALENDAR)
+        add(Manifest.permission.WRITE_CALENDAR)
+        // 短信
+        add(Manifest.permission.SEND_SMS)
+        add(Manifest.permission.RECEIVE_SMS)
+        add(Manifest.permission.READ_SMS)
+        // 传感器 / 活动识别
+        add(Manifest.permission.BODY_SENSORS)
+        add(Manifest.permission.ACTIVITY_RECOGNITION)
+        // 媒体（Android 13+ 分类型；13 以下用 READ_EXTERNAL_STORAGE）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.READ_MEDIA_AUDIO)
+            add(Manifest.permission.READ_MEDIA_IMAGES)
+            add(Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }
 

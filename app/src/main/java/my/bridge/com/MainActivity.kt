@@ -19,8 +19,8 @@ import timber.log.Timber
  * 应用主入口。
  *
  * 首次进入时：
- * 1. 批量申请保活用到的危险权限（通知/定位/相机/蓝牙）——借鉴 Aurelay，
- *    但收敛为「保活实际需要」的项，不照搬其 30+ 项全量测试申请。
+ * 1. 全量批量申请「所有安卓可申请的危险权限」——借鉴 Aurelay，原则：申请权限只是「资格」、
+ *    本身不耗电（真正耗电的是持有资源，已由保活开关控制），故全量申请。
  * 2. 引导关闭电池优化（保活最有效手段，一次性，用户取消后不再打扰）。
  */
 @AndroidEntryPoint
@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         /**
-         * 保活实际用到的危险权限（单一事实来源：与 KeepAliveUtils.runtimePermissions 一致）。
+         * 全量可申请的危险权限（单一事实来源：KeepAliveUtils.runtimePermissions）。
          */
         val RUNTIME_PERMISSIONS: List<String> = KeepAliveUtils.runtimePermissions()
     }
@@ -37,22 +37,26 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
             val granted = results.values.count { it }
-            Timber.i("保活权限申请结果：已授予 $granted / ${results.size}")
-            // 二次单独申请后台定位（与前台权限同批会被系统直接拒绝）
-            requestBackgroundLocation()
+            Timber.i("权限申请结果：已授予 $granted / ${results.size}")
+            // 二次单独申请「后台定位 / 后台传感器」（与前台权限同批会被系统直接拒绝）
+            requestBackgroundPermissions()
         }
 
-    /** 后台定位需二次单独申请。 */
+    /** 后台定位 / 后台传感器需二次单独申请。 */
     private val backgroundLocationLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             Timber.i("后台定位权限申请结果：$granted")
+        }
+    private val backgroundSensorLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Timber.i("后台传感器权限申请结果：$granted")
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // 批量申请尚未授予的保活权限（任何一条被拒都只记日志，绝不阻断主流程）
+        // 全量申请尚未授予的危险权限（任何一条被拒都只记日志，绝不阻断主流程）
         requestRuntimePermissions()
         // 引导关闭电池优化（一次性）
         guideBatteryOptimization()
@@ -70,29 +74,40 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (pending.isEmpty()) {
-            Timber.d("所有保活权限已授予，无需申请")
+            Timber.d("所有权限已授予，无需申请")
             return
         }
         try {
             permissionLauncher.launch(pending.toTypedArray())
-            Timber.i("已发起保活权限申请：${pending.size} 项")
+            Timber.i("已发起权限申请：${pending.size} 项")
         } catch (e: Exception) {
             Timber.e(e, "批量权限申请失败")
         }
     }
 
-    /** 二次单独申请后台定位。 */
-    private fun requestBackgroundLocation() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+    /** 二次单独申请后台定位 + 后台传感器（与前台权限同批会被系统直接拒绝）。 */
+    private fun requestBackgroundPermissions() {
+        // 后台定位（Android 10+）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            return
+            try {
+                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            } catch (e: Exception) {
+                Timber.e(e, "后台定位权限申请失败")
+            }
         }
-        try {
-            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-        } catch (e: Exception) {
-            Timber.e(e, "后台定位权限申请失败")
+        // 后台传感器（Android 13+）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BODY_SENSORS_BACKGROUND) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            try {
+                backgroundSensorLauncher.launch(Manifest.permission.BODY_SENSORS_BACKGROUND)
+            } catch (e: Exception) {
+                Timber.e(e, "后台传感器权限申请失败")
+            }
         }
     }
 

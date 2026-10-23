@@ -32,6 +32,9 @@ class KeepAliveService : Service() {
         var startedAt: Long = 0L
             private set
 
+        /** 取本次启动时刻（毫秒时间戳）；服务未启动时返回 0。用于「运行时长」展示。 */
+        fun startedAtMillis(): Long = startedAt
+
         fun start(context: Context) {
             val intent = Intent(context, KeepAliveService::class.java)
             try {

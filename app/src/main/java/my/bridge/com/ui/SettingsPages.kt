@@ -21,7 +21,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -128,12 +130,12 @@ fun KeepAliveSettings() {
                 )
                 SettingSwitchRow(
                     icon = "📡",
-                    title = "资源锚点",
+                    title = "后台资源占用",
                     checked = resource,
                     onCheckedChange = {
                         resource = it
                         update(KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE, it)
-                        Timber.d("切换：资源锚点 -> ${if (it) "开" else "关"}")
+                        Timber.d("切换：后台资源占用 -> ${if (it) "开" else "关"}")
                     },
                 )
                 SettingSwitchRow(
@@ -193,7 +195,7 @@ fun KeepAliveSettings() {
         }
         item {
             Text(
-                text = "保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md。\n默认已开启最有效的几项；一像素因需悬浮窗权限默认关闭。",
+                text = "保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md。\n「后台资源占用」= 持续监听定位/传感器/蓝牙/相机以抬高进程优先级；「一像素」需悬浮窗权限默认关闭。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
@@ -205,6 +207,19 @@ fun KeepAliveSettings() {
 // ============ 关于 ============
 @Composable
 fun AboutPage() {
+    val context = LocalContext.current
+
+    // 运行时长：自保活服务启动起累计，每秒刷新一次，用于确认保活是否持续。
+    // 保活失效时这个数字会停住或随进程重启归零，正是最直接的证据。
+    val startedAt = remember { KeepAliveService.startedAtMillis() }
+    var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowTick = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -248,6 +263,57 @@ fun AboutPage() {
                 )
             }
         }
+
+        // 运行时长卡片
+        Spacer(Modifier.padding(top = 12.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp, horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "保活运行时长",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = if (startedAt > 0L) {
+                        formatUptime(nowTick - startedAt)
+                    } else {
+                        "服务未启动"
+                    },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                Text(
+                    text = "数字持续增长即代表保活成功；若停住或归零，说明进程被系统回收",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+/** 把运行时长毫秒数格式化成「X 小时 Y 分 Z 秒」（不足 1 小时只显示分与秒）。 */
+private fun formatUptime(millis: Long): String {
+    val totalSeconds = (millis / 1000).coerceAtLeast(0)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d 小时 %d 分 %d 秒".format(hours, minutes, seconds)
+    } else {
+        "%d 分 %d 秒".format(minutes, seconds)
     }
 }
 
