@@ -34,6 +34,17 @@ RELEASE_DIR = ROOT / "releases"
 
 GITHUB_API = "https://api.github.com"
 
+# 内置 gh-proxy 加速代理列表（按优先级顺序，公开仓库时生效）。
+# 私有仓库这些代理会 404，脚本会自动回退到 token 直连 API。
+# 代理前缀 + 原始 GitHub URL 即完整加速地址。
+BUILTIN_PROXIES = [
+    "https://v4.gh-proxy.org",
+    "https://v6.gh-proxy.org",
+    "https://gh-proxy.org",
+    "https://cdn.gh-proxy.org",
+    "https://axisnow.gh-proxy.org",
+]
+
 
 def load_env() -> dict:
     """从 github.env 读取配置。"""
@@ -142,13 +153,18 @@ def download_apk(env, tag, run_id):
     repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
     RELEASE_DIR.mkdir(exist_ok=True)
 
-    # 方式1：GitHub Release 资产（私有仓库需用 API 的 asset URL 下载，browser_download_url 会 404）
+    # 方式1：GitHub Release 资产
     status, release = api_request(env, f"/repos/{repo}/releases/tags/{tag}", env["GITHUB_TOKEN"])
     if status == 200:
         assets = release.get("assets", [])
         for a in assets:
             if a["name"].endswith(".apk"):
                 print(f"\n[4] 从 Release 下载 {a['name']} ...")
+                # 公开仓库：走 gh-proxy 代理加速；私有仓库：回退 token 直连 API
+                raw_url = a["browser_download_url"]
+                if _download_via_proxies(raw_url, RELEASE_DIR / a["name"], env):
+                    return
+                # 代理都失败，回退 token 直连 API
                 _download(a["url"], RELEASE_DIR / a["name"], env, is_api=True)
                 return
 
@@ -164,6 +180,35 @@ def download_apk(env, tag, run_id):
                 _download_artifact(env, url, RELEASE_DIR / f"{art['name']}.zip")
                 return
     print("  [警告] 未找到可下载的 APK")
+
+
+def _download_via_proxies(raw_url, dest, env):
+    """按内置代理优先级逐个尝试下载公开资源；全部失败返回 False。"""
+    for proxy in BUILTIN_PROXIES:
+        proxy_url = f"{proxy}/{raw_url}"
+        print(f"  尝试代理 {proxy} ...")
+        if _download_simple(proxy_url, dest):
+            return True
+    print("  [提示] 所有代理失败，回退直连")
+    return False
+
+
+def _download_simple(url, dest):
+    """简单下载（不带 token，用于代理/公开资源）。成功返回 True。"""
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Bridge-Release")
+        with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as f:
+            data = resp.read()
+            if len(data) > 1024:  # 大于 1KB 才算有效（排除 404 的 9 字节"Not Found"）
+                f.write(data)
+                print(f"  [成功] 通过代理下载完成，保存到 {dest}（{len(data)} 字节）")
+                return True
+        print(f"  [失败] 代理返回无效内容（{len(data)} 字节）")
+        return False
+    except Exception as e:
+        print(f"  [失败] 代理 {url} 错误: {e}")
+        return False
 
 
 def _download(url, dest, env, is_api=False):

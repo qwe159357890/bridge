@@ -50,13 +50,25 @@ python tools/release/release.py v0.1.1   # 指定版本号
 
 > `github.env` 已被 `.gitignore` 排除，绝不提交。
 
-## 五、APK 产物
+## 五、APK 产物与下载加速（代理）
 
 | 位置 | 说明 |
 |---|---|
 | 本地 `releases/` | 脚本自动下载到这里 |
 | GitHub Release | tag 触发时自动创建，附 APK |
 | Actions Artifact | `bridge-debug-apk` |
+
+**下载加速机制**：脚本内置 gh-proxy 代理列表（按优先级逐个尝试，失败自动回退 token 直连）：
+
+| 优先级 | 代理 | 状态 |
+|---|---|---|
+| 1 | `https://v4.gh-proxy.org` | ✅ 可用 |
+| 2 | `https://v6.gh-proxy.org` | ✅ 可用 |
+| 3 | `https://gh-proxy.org` | ✅ 可用 |
+| 4 | `https://cdn.gh-proxy.org` | ⚠️ 不稳定 |
+| 5 | `https://axisnow.gh-proxy.org` | ✅ 可用 |
+
+> **重要**：gh-proxy 代理只对**公开仓库**生效（代理无法携带 token 访问私有仓库）。因此 Bridge 仓库设为**公开**（内部测试 APK 不含敏感信息）。若改为私有，脚本会自动回退到 token 直连 API（能用但可能较慢）。
 
 ## 六、签名说明（内部测试阶段）
 
