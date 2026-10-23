@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""
+Bridge 一键发布脚本：push 代码 → 触发 GitHub Actions 打包 → 下载 APK 到本地 releases/。
+
+用法：
+    python tools/release/release.py [tag]
+
+    tag  可选，不传则自动生成 v0.1.0 形式；传了则用指定 tag（如 v0.1.1）
+
+依赖：
+    - 项目根目录存在 github.env（从 github.env.example 复制并填写真实值）
+    - 系统已设置代理（http_proxy/https_proxy），或可直连 GitHub
+
+流程：
+    1. 读取 github.env 获取 GITHUB_USER / GITHUB_REPO / GITHUB_TOKEN
+    2. 配置 git remote（若未配置）
+    3. 提交所有改动并 push 到 main
+    4. 打 tag 并 push（触发 GitHub Actions）
+    5. 轮询等待 workflow 完成
+    6. 从 GitHub Release / Artifact 下载 APK 到 releases/
+"""
+
+import os
+import sys
+import json
+import time
+import subprocess
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+ENV_FILE = ROOT / "github.env"
+RELEASE_DIR = ROOT / "releases"
+
+GITHUB_API = "https://api.github.com"
+
+
+def load_env() -> dict:
+    """从 github.env 读取配置。"""
+    if not ENV_FILE.exists():
+        print(f"[错误] 未找到 {ENV_FILE}")
+        print(f"       请先复制 github.env.example 为 github.env 并填写真实值。")
+        sys.exit(1)
+    env = {}
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        env[k.strip()] = v.strip().strip('"').strip("'")
+    for key in ("GITHUB_USER", "GITHUB_REPO", "GITHUB_TOKEN"):
+        if not env.get(key):
+            print(f"[错误] github.env 缺少 {key}")
+            sys.exit(1)
+    return env
+
+
+def run(cmd: list, cwd=ROOT, check=True):
+    print(f"  $ {' '.join(cmd)}")
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if r.returncode != 0 and check:
+        print(r.stderr)
+        sys.exit(r.returncode)
+    return r
+
+
+def api_request(env, path, token=None):
+    """调用 GitHub API，返回 (status, json)。"""
+    url = f"{GITHUB_API}{path}"
+    req = urllib.request.Request(url)
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
+
+
+def wait_workflow(env, tag):
+    """轮询等待 tag 触发的 workflow 完成。"""
+    repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
+    print(f"\n[3] 等待 GitHub Actions 打包完成（tag: {tag}）...")
+    # 等几秒让 workflow 先被创建
+    time.sleep(8)
+    for _ in range(120):  # 最多等 20 分钟
+        status, data = api_request(env, f"/repos/{repo}/actions/runs", env["GITHUB_TOKEN"])
+        if status != 200:
+            print(f"  [错误] 查询 workflow 失败: {data.get('message')}")
+            return None
+        for run in data.get("workflow_runs", []):
+            if run.get("head_branch") == tag or run.get("head_branch", "").startswith("v"):
+                status2 = run["status"]
+                conclusion = run.get("conclusion")
+                print(f"  workflow: {run['name']} status={status2} conclusion={conclusion}")
+                if status2 == "completed":
+                    if conclusion == "success":
+                        print("  [完成] 打包成功")
+                        return run["id"]
+                    else:
+                        print(f"  [失败] 打包结论为 {conclusion}")
+                        return None
+        time.sleep(15)
+    print("  [超时] 等待打包超时")
+    return None
+
+
+def download_apk(env, tag, run_id):
+    """下载 APK 到 releases/。优先 Release 资产，其次 Artifact。"""
+    repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
+    RELEASE_DIR.mkdir(exist_ok=True)
+
+    # 方式1：GitHub Release 资产
+    status, release = api_request(env, f"/repos/{repo}/releases/tags/{tag}", env["GITHUB_TOKEN"])
+    if status == 200:
+        assets = release.get("assets", [])
+        for a in assets:
+            if a["name"].endswith(".apk"):
+                print(f"\n[4] 从 Release 下载 {a['name']} ...")
+                _download(a["browser_download_url"], RELEASE_DIR / a["name"], env)
+                return
+
+    # 方式2：workflow artifact
+    print("\n[4] Release 无 APK，改从 Artifact 下载 ...")
+    status, artifacts = api_request(env, f"/repos/{repo}/actions/artifacts", env["GITHUB_TOKEN"])
+    if status == 200:
+        for art in artifacts.get("artifacts", []):
+            if art["name"].startswith("bridge") and ".apk" in art["name"].lower() or ".apk" in art["name"].lower():
+                # 下载 artifact 是 zip，需用 API
+                url = f"/repos/{repo}/actions/artifacts/{art['id']}/zip"
+                print(f"  下载 artifact {art['name']} (zip)")
+                _download_artifact(env, url, RELEASE_DIR / f"{art['name']}.zip")
+                return
+    print("  [警告] 未找到可下载的 APK")
+
+
+def _download(url, dest, env):
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {env['GITHUB_TOKEN']}")
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp, open(dest, "wb") as f:
+            f.write(resp.read())
+        print(f"  [成功] 已保存到 {dest}")
+    except Exception as e:
+        print(f"  [失败] 下载失败: {e}")
+
+
+def _download_artifact(env, path, dest):
+    url = f"{GITHUB_API}{path}"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {env['GITHUB_TOKEN']}")
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp, open(dest, "wb") as f:
+            f.write(resp.read())
+        print(f"  [成功] 已保存到 {dest}（解压后是 APK）")
+    except Exception as e:
+        print(f"  [失败] 下载失败: {e}")
+
+
+def main():
+    env = load_env()
+    tag = sys.argv[1] if len(sys.argv) > 1 else None
+
+    repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
+    remote_url = f"https://github.com/{repo}.git"
+
+    # 1. 配置 remote（若未配置）
+    print(f"[1] 配置 git remote ...")
+    r = run(["git", "remote", "get-url", "origin"], check=False)
+    if r.returncode != 0:
+        run(["git", "remote", "add", "origin", remote_url])
+    else:
+        if r.stdout.strip() != remote_url:
+            run(["git", "remote", "set-url", "origin", remote_url])
+    print(f"  remote -> {remote_url}")
+
+    # 2. 提交并 push
+    print(f"\n[2] 提交改动并 push ...")
+    r = run(["git", "status", "--porcelain"], check=False)
+    if r.stdout.strip():
+        run(["git", "add", "-A"])
+        run(["git", "commit", "-m", "chore: auto release"])
+    # 用 token 鉴权 push（避免交互式输入密码）
+    auth_url = remote_url.replace("https://", f"https://{env['GITHUB_TOKEN']}@")
+    run(["git", "push", auth_url, "main"])
+
+    # 3. 打 tag 触发打包
+    if not tag:
+        tag = "v0.1.0"
+    print(f"\n[3] 打 tag {tag} 并 push（触发打包）...")
+    r = run(["git", "tag", "-f", tag], check=False)
+    run(["git", "push", auth_url, tag, "-f"])
+
+    # 4. 等待并下载
+    run_id = wait_workflow(env, tag)
+    if run_id:
+        download_apk(env, tag, run_id)
+
+    print("\n全部完成。APK 已下载到 releases/ 目录。")
+
+
+if __name__ == "__main__":
+    main()

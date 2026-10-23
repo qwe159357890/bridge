@@ -35,10 +35,12 @@
 
 ## 构建发布链路（2026-10-23）
 
-- **结论**：当前为**内部测试阶段**，用 **debug 签名**打包（零密钥配置）。链路：写代码 → git push → 打 tag v* → GitHub Actions 自动打包出 APK。gradlew wrapper 为 Gradle 8.13（与 AGP 8.13.1 匹配）。
-- **待办（需用户手动）**：仅 ① GitHub 建空仓库并 `git remote add` 推送（无需任何密钥/Secrets 配置）。
+- **结论**：当前为**内部测试阶段**，用 **debug 签名**打包。全自动闭环：写代码 → AI 用 GitHub token（PAT）鉴权 `git push` → 打 tag v* → GitHub Actions 打包 → AI 代理下载 APK 到本地 `releases/`。
+- **你只需提供一个 GitHub PAT**（存在 `github.env`，已被 .gitignore 排除），之后 AI 用脚本一键完成全流程。
+- **脚本**：`tools/release/release.py`（push → 触发打包 → 轮询等待 → 下载 APK）；`github.env.example` 为配置模板。
+- **待办（需用户手动，一次性）**：① GitHub 建空仓库；② 生成 PAT（勾选 repo+workflow）；③ `cp github.env.example github.env` 填真实值。
 - **权威文档**：完整步骤见 `docs/dev/release-pipeline.md`。
-- **约定**：`references/`（32MB 第三方源码）不入库仅本地；未来上架 Play 时再启用正式签名（参考 aurelay 的 fastlane + Play App Signing，仅需一个服务账号 JSON）。
+- **约定**：`references/`（32MB 第三方源码）不入库；`github.env`/`releases/` 不入库；gradlew 为 Gradle 8.13（与 AGP 8.13.1 匹配）；未来上架 Play 再启用正式签名（参考 aurelay 的 fastlane + Play App Signing）。
 
 ## 保活模块（2026-10-23）
 
