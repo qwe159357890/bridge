@@ -172,6 +172,26 @@ fun KeepAliveSettings() {
             }
         }
         item {
+            SectionTitle("权限管理")
+        }
+        item {
+            SettingCard {
+                val activity = context as? Activity
+                KeepAliveUtils.runtimePermissions().forEach { permission ->
+                    val granted = KeepAliveUtils.hasPermission(context, permission)
+                    SettingValueRow(
+                        icon = if (granted) "✅" else "⚠️",
+                        title = permissionLabel(permission),
+                        value = if (granted) "已授权" else "去授权",
+                        onClick = {
+                            Timber.d("手动申请权限：$permission")
+                            activity?.let { KeepAliveUtils.requestRuntimePermissions(it) }
+                        },
+                    )
+                }
+            }
+        }
+        item {
             Text(
                 text = "保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md。\n默认已开启最有效的几项；一像素因需悬浮窗权限默认关闭。",
                 style = MaterialTheme.typography.bodySmall,
@@ -289,4 +309,15 @@ private fun SettingValueRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/** 把权限名转成友好中文标签（未知权限显示原名）。 */
+private fun permissionLabel(permission: String): String = when (permission) {
+    "android.permission.ACCESS_FINE_LOCATION" -> "精确定位"
+    "android.permission.ACCESS_COARSE_LOCATION" -> "大致定位"
+    "android.permission.CAMERA" -> "相机"
+    "android.permission.BLUETOOTH_SCAN" -> "蓝牙扫描"
+    "android.permission.BLUETOOTH_CONNECT" -> "蓝牙连接"
+    "android.permission.POST_NOTIFICATIONS" -> "通知"
+    else -> permission.substringAfterLast('.')
 }
