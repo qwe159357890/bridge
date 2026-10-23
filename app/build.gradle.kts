@@ -75,6 +75,8 @@ dependencies {
     // ---- AndroidX / Compose ----
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -88,6 +90,11 @@ dependencies {
 
     // ---- 日志 ----
     implementation(libs.timber)
+
+    // ---- 网络（NetworkModule 装配 Retrofit/Gson） ----
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.gson)
+    implementation(libs.gson)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

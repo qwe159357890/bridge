@@ -21,6 +21,8 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
+    implementation(libs.gson)
     implementation(libs.coroutines.android)
+    implementation(libs.timber)
     testImplementation(libs.junit)
 }

@@ -17,5 +17,6 @@ android {
 dependencies {
     implementation(project(":core:core-common"))
     implementation(libs.datastore.preferences)
+    implementation(libs.coroutines.android)
     testImplementation(libs.junit)
 }

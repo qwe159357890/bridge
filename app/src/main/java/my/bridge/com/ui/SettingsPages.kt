@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import my.bridge.com.BuildConfig
 import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveService
@@ -554,4 +556,224 @@ private fun permissionLabel(permission: String): String = when (permission) {
     "android.permission.BLUETOOTH_CONNECT" -> "蓝牙连接"
     "android.permission.POST_NOTIFICATIONS" -> "通知"
     else -> permission.substringAfterLast('.')
+}
+
+// ============ 后端连接设置 ============
+
+/** 连接状态的中文文案 + 颜色。 */
+private fun connectionStateText(state: my.bridge.com.core.network.ws.WsConnectionState): String =
+    when (state) {
+        my.bridge.com.core.network.ws.WsConnectionState.DISCONNECTED -> "未连接"
+        my.bridge.com.core.network.ws.WsConnectionState.CONNECTING -> "连接中…"
+        my.bridge.com.core.network.ws.WsConnectionState.CONNECTED -> "已连接"
+        my.bridge.com.core.network.ws.WsConnectionState.RECONNECTING -> "重连中…"
+        my.bridge.com.core.network.ws.WsConnectionState.STOPPED -> "已停止"
+    }
+
+private fun connectionStateColor(state: my.bridge.com.core.network.ws.WsConnectionState): androidx.compose.ui.graphics.Color =
+    when (state) {
+        my.bridge.com.core.network.ws.WsConnectionState.CONNECTED -> androidx.compose.ui.graphics.Color(0xFF2E9E5B)
+        my.bridge.com.core.network.ws.WsConnectionState.STOPPED -> androidx.compose.ui.graphics.Color(0xFFE5484D)
+        else -> androidx.compose.ui.graphics.Color(0xFFE8862E)
+    }
+
+@Composable
+fun ConnectionSettings() {
+    val viewModel: ConnectionViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
+    val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val serverHost by viewModel.serverHost.collectAsStateWithLifecycle()
+    val serverPort by viewModel.serverPort.collectAsStateWithLifecycle()
+    val uploadResult by viewModel.uploadResult.collectAsStateWithLifecycle()
+
+    var showNameDialog by remember { mutableStateOf(false) }
+    var showAddressDialog by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        item { SectionTitle("后端连接") }
+        item {
+            SettingCard {
+                // 连接状态（实时）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("🔌", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.width(12.dp))
+                    Text("连接状态", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    Text(
+                        connectionStateText(connectionState),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = connectionStateColor(connectionState),
+                    )
+                }
+                // 设备 ID（只读）
+                SettingValueRow(icon = "🆔", title = "设备标识", value = deviceId.ifBlank { "读取中…" }) {
+                    Timber.d("设备标识：$deviceId")
+                }
+                // 设备昵称（可编辑）
+                SettingValueRow(icon = "🏷️", title = "设备昵称", value = deviceName.ifBlank { "未设置" }) {
+                    showNameDialog = true
+                }
+                // 服务地址（可编辑，改后重连）
+                SettingValueRow(
+                    icon = "🌐",
+                    title = "服务地址",
+                    value = "${serverHost.ifBlank { "读取中…" }}:${serverPort}",
+                ) {
+                    showAddressDialog = true
+                }
+                // 手动上传日志
+                SettingValueRow(icon = "📤", title = "上传诊断日志", value = "上传") {
+                    viewModel.uploadLog()
+                }
+            }
+        }
+        // 上传结果提示
+        uploadResult?.let { result ->
+            item {
+                Text(
+                    text = result,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                )
+            }
+        }
+        item {
+            Text(
+                text = "设备标识来自系统 ANDROID_ID，重装应用不变。昵称仅作展示名，用于服务端识别设备；不设置时默认显示设备标识。服务地址修改后会自动重连；心跳/重连参数由客户端与服务端硬编码，无需配置。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            )
+        }
+    }
+
+    // 昵称编辑弹窗
+    if (showNameDialog) {
+        NameEditDialog(
+            initial = deviceName,
+            onCancel = { showNameDialog = false },
+            onConfirm = { newName ->
+                viewModel.saveDeviceName(newName)
+                showNameDialog = false
+            },
+        )
+    }
+
+    // 服务地址编辑弹窗
+    if (showAddressDialog) {
+        AddressEditDialog(
+            initialHost = serverHost,
+            initialPort = serverPort,
+            onCancel = { showAddressDialog = false },
+            onConfirm = { host, port ->
+                viewModel.saveServerAddress(host, port)
+                showAddressDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun AddressEditDialog(
+    initialHost: String,
+    initialPort: String,
+    onCancel: () -> Unit,
+    onConfirm: (host: String, port: String) -> Unit,
+) {
+    var host by remember { mutableStateOf(initialHost) }
+    var port by remember { mutableStateOf(initialPort) }
+    var error by remember { mutableStateOf<String?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("设置服务地址") },
+        text = {
+            Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = host,
+                    onValueChange = {
+                        host = it
+                        error = null
+                    },
+                    label = { Text("服务器地址") },
+                    singleLine = true,
+                    isError = error != null,
+                    placeholder = { Text("如 10.0.2.2 或 example.com") },
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = port,
+                    onValueChange = {
+                        port = it
+                        error = null
+                    },
+                    label = { Text("端口") },
+                    singleLine = true,
+                    isError = error != null,
+                    placeholder = { Text("如 15160") },
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = error!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    val err = my.bridge.com.core.network.ws.ServerAddress.validate(host, port)
+                    if (err != null) {
+                        error = err
+                    } else {
+                        onConfirm(host.trim(), port.trim())
+                    }
+                }
+            ) { Text("保存并重连") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+@Composable
+private fun NameEditDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("设置设备昵称") },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text("昵称") },
+                singleLine = true,
+                placeholder = { Text("留空则使用设备标识") },
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onConfirm(text) }) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
 }

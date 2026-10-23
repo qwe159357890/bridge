@@ -138,19 +138,20 @@ fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
     }
 }
 
-// ============ 设置页（三个二级 Tab） ============
+// ============ 设置页（四个二级 Tab） ============
 @Composable
 fun SettingsPage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         BridgeTabRow(
-            titles = listOf("通用", "保活", "关于"),
+            titles = listOf("通用", "连接", "保活", "关于"),
             currentTab = currentTab,
             onTabChange = onTabChange,
         )
         when (currentTab) {
             0 -> GeneralSettings()
-            1 -> KeepAliveSettings()
-            2 -> AboutPage()
+            1 -> ConnectionSettings()
+            2 -> KeepAliveSettings()
+            3 -> AboutPage()
         }
     }
 }
