@@ -26,7 +26,9 @@ android {
     }
 
     signingConfigs {
-        create("debug") {
+        // AGP 已内置名为 "debug" 的 signingConfig，用 getByName 覆盖其 keystore，
+        // 指向入库的固定 keystore，保证本机与 CI 签名一致（不能用 create 重复建）。
+        getByName("debug") {
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
                 storePassword = "android"
