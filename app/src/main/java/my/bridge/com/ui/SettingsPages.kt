@@ -1,5 +1,6 @@
 package my.bridge.com.ui
 
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,8 +27,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import my.bridge.com.BuildConfig
+import my.bridge.com.keepalive.KeepAlivePrefs
+import my.bridge.com.keepalive.KeepAliveService
+import my.bridge.com.keepalive.KeepAliveUtils
 import timber.log.Timber
 
 // ============ 通用设置 ============
@@ -63,40 +69,115 @@ fun GeneralSettings() {
     }
 }
 
-// ============ 通知设置 ============
+// ============ 保活设置 ============
 @Composable
-fun NotificationSettings() {
-    var newMsg by remember { mutableStateOf(true) }
-    var sound by remember { mutableStateOf(true) }
-    var vibrate by remember { mutableStateOf(false) }
+fun KeepAliveSettings() {
+    val context = LocalContext.current
+
+    // 从 KeepAlivePrefs 读取各层开关当前值
+    var always by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_ALWAYS)) }
+    var boot by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_BOOT)) }
+    var fallback by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_FALLBACK)) }
+    var resource by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE)) }
+    var silentPlay by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_SILENT_PLAY)) }
+    var onePixel by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL)) }
+
+    fun update(key: String, value: Boolean) {
+        KeepAlivePrefs.setBoolean(context, key, value)
+        // 让改动即时生效：刷新正在运行的服务，重新应用各层开关
+        KeepAliveService.refresh(context)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        item { SectionTitle("通知设置") }
+        item { SectionTitle("保活设置") }
         item {
             SettingCard {
                 SettingSwitchRow(
-                    icon = "🔔",
-                    title = "接收新消息通知",
-                    checked = newMsg,
-                    onCheckedChange = { newMsg = it; Timber.d("切换：接收新消息通知 -> ${if (it) "开" else "关"}") },
+                    icon = "🛡️",
+                    title = "保活总开关",
+                    checked = always,
+                    onCheckedChange = {
+                        always = it
+                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_ALWAYS, it)
+                        Timber.d("切换：保活总开关 -> ${if (it) "开" else "关"}")
+                    },
                 )
                 SettingSwitchRow(
-                    icon = "🔊",
-                    title = "声音",
-                    checked = sound,
-                    onCheckedChange = { sound = it; Timber.d("切换：声音 -> ${if (it) "开" else "关"}") },
+                    icon = "🔌",
+                    title = "开机自启",
+                    checked = boot,
+                    onCheckedChange = {
+                        boot = it
+                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_BOOT, it)
+                        Timber.d("切换：开机自启 -> ${if (it) "开" else "关"}")
+                    },
                 )
                 SettingSwitchRow(
-                    icon = "📳",
-                    title = "震动",
-                    checked = vibrate,
-                    onCheckedChange = { vibrate = it; Timber.d("切换：震动 -> ${if (it) "开" else "关"}") },
+                    icon = "🔄",
+                    title = "双兜底唤醒",
+                    checked = fallback,
+                    onCheckedChange = {
+                        fallback = it
+                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_FALLBACK, it)
+                        Timber.d("切换：双兜底唤醒 -> ${if (it) "开" else "关"}")
+                    },
+                )
+                SettingSwitchRow(
+                    icon = "📡",
+                    title = "资源锚点",
+                    checked = resource,
+                    onCheckedChange = {
+                        resource = it
+                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE, it)
+                        Timber.d("切换：资源锚点 -> ${if (it) "开" else "关"}")
+                    },
+                )
+                SettingSwitchRow(
+                    icon = "🔇",
+                    title = "无声播放",
+                    checked = silentPlay,
+                    onCheckedChange = {
+                        silentPlay = it
+                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_SILENT_PLAY, it)
+                        Timber.d("切换：无声播放 -> ${if (it) "开" else "关"}")
+                    },
+                )
+                SettingSwitchRow(
+                    icon = "👁️",
+                    title = "一像素锚点",
+                    checked = onePixel,
+                    onCheckedChange = {
+                        onePixel = it
+                        update(KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL, it)
+                        Timber.d("切换：一像素锚点 -> ${if (it) "开" else "关"}")
+                    },
                 )
             }
+        }
+        item {
+            SettingCard {
+                SettingValueRow(
+                    icon = "🔋",
+                    title = "电池优化白名单",
+                    value = if (KeepAliveUtils.isIgnoreBatteryOptimization(context)) "已加入" else "去设置",
+                    onClick = {
+                        Timber.d("引导加入电池优化白名单")
+                        (context as? Activity)?.let { KeepAliveUtils.requestIgnoreBatteryOptimization(it) }
+                    },
+                )
+            }
+        }
+        item {
+            Text(
+                text = "保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md。\n默认已开启最有效的几项；一像素因需悬浮窗权限默认关闭。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            )
         }
     }
 }
@@ -140,7 +221,7 @@ fun AboutPage() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "版本 v0.1.1 · 内部测试",
+                    "版本 v${BuildConfig.VERSION_NAME} · 内部测试",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 12.dp),

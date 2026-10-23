@@ -45,6 +45,24 @@ class KeepAliveService : Service() {
             }
         }
 
+        /**
+         * 刷新保活配置：发送 ACTION_REFRESH，让正在运行的服务重新应用各层开关。
+         * 用于设置页切换开关后即时生效。服务未运行时等同于 start。
+         */
+        fun refresh(context: Context) {
+            val intent = Intent(context, KeepAliveService::class.java)
+                .setAction(ACTION_REFRESH)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "刷新保活配置失败：${e.message}")
+            }
+        }
+
         private const val TAG = "KeepAliveService"
     }
 
@@ -79,10 +97,11 @@ class KeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun applyKeepAlive() {
+        // 先统一释放，再按当前开关重新持有，确保任意开关切换都能即时生效
+        try { ResourceHolder.releaseAll(this) } catch (e: Exception) { Log.w(TAG, "释放资源失败：${e.message}") }
+
         if (KeepAlivePrefs.getBoolean(this, KeepAlivePrefs.KEY_KEEP_ALIVE_ALWAYS)) {
             ResourceHolder.acquireAll(this)
-        } else {
-            ResourceHolder.releaseAll(this)
         }
         if (KeepAlivePrefs.getBoolean(this, KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL)) {
             OnePixelOverlay.show(this)

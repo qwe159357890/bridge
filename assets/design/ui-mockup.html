@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge 界面框架原型</title>
+<style>
+  :root {
+    --brand: #1a6ee8;
+    --brand-light: #e8f1fd;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1f2329;
+    --text-sub: #8a919f;
+    --border: #eef0f3;
+    --tabbar: #ffffff;
+    --active: #1a6ee8;
+    --inactive: #8a919f;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #e0e3e8;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+    gap: 16px;
+  }
+
+  /* 说明栏 */
+  .meta {
+    width: 390px;
+    background: #fff;
+    border-radius: 12px;
+    padding: 14px 18px;
+    font-size: 13px;
+    color: #4a5568;
+    line-height: 1.6;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .meta b { color: var(--brand); }
+  .meta .log-line {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    color: #6b7280;
+    background: #f7f8fa;
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-top: 8px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* 手机壳 */
+  .phone {
+    width: 390px;
+    height: 780px;
+    background: var(--bg);
+    border-radius: 36px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0,0,0,.18);
+    position: relative;
+    border: 6px solid #1f2329;
+  }
+  /* 二级 Tab 栏 */
+  .subtabs {
+    height: 44px;
+    background: var(--card);
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+  }
+  .subtab {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    color: var(--inactive);
+    cursor: pointer;
+    position: relative;
+    user-select: none;
+  }
+  .subtab.active {
+    color: var(--active);
+    font-weight: 600;
+  }
+  .subtab.active::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 3px;
+    background: var(--active);
+    border-radius: 2px;
+  }
+
+  /* 内容区 */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .content::-webkit-scrollbar { width: 0; }
+
+  /* 通用卡片 */
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  .card-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+
+  /* 列表项 */
+  .list-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .list-item:last-child { border-bottom: none; }
+  .avatar {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: var(--brand-light);
+    color: var(--brand);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .list-item .info { flex: 1; min-width: 0; }
+  .list-item .name { font-size: 15px; color: var(--text); }
+  .list-item .desc { font-size: 12px; color: var(--text-sub); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-item .time { font-size: 11px; color: var(--text-sub); flex-shrink: 0; }
+
+  /* 设置分组 */
+  .setting-group {
+    display: flex; align-items: center;
+    gap: 12px; padding: 13px 2px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 15px; color: var(--text);
+  }
+  .setting-group:last-child { border-bottom: none; }
+  .setting-group .ico { width: 26px; text-align: center; font-size: 17px; }
+  .setting-group .val { margin-left: auto; color: var(--text-sub); font-size: 13px; }
+
+  /* 开关 */
+  .switch { position: relative; width: 42px; height: 24px; border-radius: 12px; background: #d0d3da; transition: .2s; flex-shrink: 0; }
+  .switch.on { background: var(--active); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: .2s; }
+  .switch.on::after { left: 20px; }
+
+  /* 空状态 */
+  .empty { text-align: center; color: var(--text-sub); font-size: 13px; padding: 40px 0; }
+
+  /* 日志浮层 */
+  .logbar {
+    position: absolute;
+    bottom: 70px; left: 12px; right: 12px;
+    background: rgba(20,24,30,.88);
+    color: #7ee787;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 10.5px;
+    border-radius: 10px;
+    padding: 10px 12px;
+    line-height: 1.5;
+    max-height: 90px;
+    overflow-y: auto;
+    pointer-events: none;
+    transition: opacity .3s;
+  }
+  .logbar .t { color: #aab2bf; }
+
+  /* 底部导航 */
+  .tabbar {
+    height: 56px;
+    background: var(--tabbar);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-shrink: 0;
+  }
+  .tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    cursor: pointer;
+    user-select: none;
+    color: var(--inactive);
+  }
+  .tab svg { width: 22px; height: 22px; }
+  .tab span { font-size: 10px; line-height: 1; }
+  .tab.active { color: var(--active); }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="meta">
+  <b>Bridge 界面框架原型</b> · 双层级导航
+  <br>底部导航：<b>主页</b> / <b>设置</b>（类微信） → 点击切换
+  <br>主页二级 Tab：会话 / 通讯录 / 发现　·　设置二级 Tab：通用 / 保活 / 关于
+  <br><span style="color:#8a919f">所有功能均为假数据，操作仅打印日志，仅展示界面结构。</span>
+  <div class="log-line" id="metaLog">[Bridge] 界面原型已就绪，等待交互…</div>
+</div>
+
+<div class="phone" id="phone">
+  <!-- 二级 Tab 栏 -->
+  <div class="subtabs" id="subtabs"></div>
+
+  <!-- 内容区 -->
+  <div class="content" id="content"></div>
+
+  <!-- 日志浮层 -->
+  <div class="logbar" id="logbar"><span class="t">LOG</span> 就绪</div>
+
+  <!-- 底部导航 -->
+  <div class="tabbar" id="tabbar"></div>
+</div>
+
+<script>
+  // ============ 数据模型（假数据） ============
+  const APP = {
+    // 底部导航
+    bottomTabs: [
+      { id: 'home', label: '主页', icon: 'home' },
+      { id: 'settings', label: '设置', icon: 'gear' },
+    ],
+    // 每个底部页的二级 Tab 及标题
+    pages: {
+      home: {
+        title: '主页',
+        side: '＋',
+        tabs: [
+          { id: 'chat', label: '会话', render: renderChat },
+          { id: 'contacts', label: '通讯录', render: renderContacts },
+          { id: 'discover', label: '发现', render: renderDiscover },
+        ]
+      },
+      settings: {
+        title: '设置',
+        side: '',
+        tabs: [
+          { id: 'general', label: '通用', render: renderGeneral },
+          { id: 'keepalive', label: '保活', render: renderKeepAlive },
+          { id: 'about', label: '关于', render: renderAbout },
+        ]
+      }
+    }
+  };
+
+  // ============ 假数据 ============
+  const CHATS = [
+    { name: '产品研发群', desc: '张三：新版界面框架评审', time: '10:24', icon: '产' },
+    { name: '李四', desc: '保活模块集成进度同步', time: '09:58', icon: '李' },
+    { name: '王五', desc: '[文件] release-pipeline.md', time: '昨天', icon: '王' },
+    { name: '系统通知', desc: '构建发布 v0.1.1 已完成', time: '昨天', icon: '系' },
+    { name: '赵六', desc: '好的，收到', time: '周二', icon: '赵' },
+    { name: 'Bridge 团队', desc: '孙七：明天评审记得参加', time: '周一', icon: 'B' },
+  ];
+  const CONTACTS = [
+    { name: '张三', desc: '产品经理', icon: '张' },
+    { name: '李四', desc: 'Android 开发', icon: '李' },
+    { name: '王五', desc: '测试工程师', icon: '王' },
+    { name: '赵六', desc: 'UI 设计师', icon: '赵' },
+    { name: '孙七', desc: '后端开发', icon: '孙' },
+  ];
+  const DISCOVER_ITEMS = ['朋友圈', '小程序', '视频号', '直播', '看一看', '搜一搜'];
+
+  function renderChat() {
+    return `<div class="card">
+      <div class="card-title">消息</div>
+      ${CHATS.map(c => `
+        <div class="list-item" onclick="log('打开会话：${c.name}')">
+          <div class="avatar">${c.icon}</div>
+          <div class="info"><div class="name">${c.name}</div><div class="desc">${c.desc}</div></div>
+          <div class="time">${c.time}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+  function renderContacts() {
+    return `<div class="card">
+      <div class="card-title">联系人</div>
+      ${CONTACTS.map(c => `
+        <div class="list-item" onclick="log('查看联系人：${c.name}（${c.desc}）')">
+          <div class="avatar">${c.icon}</div>
+          <div class="info"><div class="name">${c.name}</div><div class="desc">${c.desc}</div></div>
+        </div>`).join('')}
+    </div>`;
+  }
+  function renderDiscover() {
+    return `<div class="card">
+      <div class="card-title">发现</div>
+      ${DISCOVER_ITEMS.map(d => `
+        <div class="list-item" onclick="log('进入发现：${d}')">
+          <div class="avatar" style="background:#fef3e8;color:#e8862e">${d[0]}</div>
+          <div class="info"><div class="name">${d}</div></div>
+        </div>`).join('')}
+    </div>`;
+  }
+  function renderGeneral() {
+    return `<div class="card">
+      <div class="card-title">通用设置</div>
+      <div class="setting-group" onclick="log('切换：深色模式')"><span class="ico">🌙</span>深色模式 <span class="switch" id="sw-dark" onclick="event.stopPropagation();toggleSwitch('sw-dark','深色模式')"></span></div>
+      <div class="setting-group" onclick="log('切换：消息免打扰')"><span class="ico">🔕</span>消息免打扰 <span class="switch on" id="sw-dnd" onclick="event.stopPropagation();toggleSwitch('sw-dnd','消息免打扰')"></span></div>
+      <div class="setting-group" onclick="log('选择语言')"><span class="ico">🌐</span>语言 <span class="val">简体中文</span></div>
+      <div class="setting-group" onclick="log('清理缓存')"><span class="ico">🧹</span>清理缓存 <span class="val">12.4 MB</span></div>
+    </div>`;
+  }
+  function renderKeepAlive() {
+    return `<div class="card">
+      <div class="card-title">保活设置</div>
+      <div class="setting-group" onclick="log('切换：保活总开关')"><span class="ico">🛡️</span>保活总开关 <span class="switch on" id="sw-always" onclick="event.stopPropagation();toggleSwitch('sw-always','保活总开关')"></span></div>
+      <div class="setting-group" onclick="log('切换：开机自启')"><span class="ico">🔌</span>开机自启 <span class="switch on" id="sw-boot" onclick="event.stopPropagation();toggleSwitch('sw-boot','开机自启')"></span></div>
+      <div class="setting-group" onclick="log('切换：双兜底唤醒')"><span class="ico">🔄</span>双兜底唤醒 <span class="switch on" id="sw-fallback" onclick="event.stopPropagation();toggleSwitch('sw-fallback','双兜底唤醒')"></span></div>
+      <div class="setting-group" onclick="log('切换：资源锚点')"><span class="ico">📡</span>资源锚点 <span class="switch on" id="sw-resource" onclick="event.stopPropagation();toggleSwitch('sw-resource','资源锚点')"></span></div>
+      <div class="setting-group" onclick="log('切换：无声播放')"><span class="ico">🔇</span>无声播放 <span class="switch on" id="sw-silent" onclick="event.stopPropagation();toggleSwitch('sw-silent','无声播放')"></span></div>
+      <div class="setting-group" onclick="log('切换：一像素锚点')"><span class="ico">👁️</span>一像素锚点 <span class="switch" id="sw-onepixel" onclick="event.stopPropagation();toggleSwitch('sw-onepixel','一像素锚点')"></span></div>
+    </div>
+    <div class="card">
+      <div class="setting-group" onclick="log('引导加入电池优化白名单')"><span class="ico">🔋</span>电池优化白名单 <span class="val">去设置</span></div>
+    </div>
+    <div class="empty">保活策略借鉴 Aurelay + SmsForwarder，详见 docs/keepalive/design.md</div>`;
+  }
+  function renderAbout() {
+    return `<div class="card" style="text-align:center;padding:28px 16px">
+      <div style="font-size:40px;width:64px;height:64px;line-height:64px;border-radius:16px;background:var(--brand);color:#fff;margin:0 auto 12px">B</div>
+      <div style="font-size:17px;font-weight:600;color:var(--text)">Bridge</div>
+      <div style="font-size:12px;color:var(--text-sub);margin-top:4px">企业级多模块 Android 应用</div>
+      <div style="font-size:12px;color:var(--text-sub);margin-top:12px">版本 v{version} · 内部测试（随 app 版本号联动）</div>
+      <div class="setting-group" style="margin-top:16px;justify-content:center" onclick="log('检查更新')"><span class="ico">🔄</span>检查更新</div>
+    </div>`;
+  }
+
+  // ============ 状态 ============
+  let state = { bottom: 'home', sub: { home: 'chat', settings: 'general' } };
+
+  // ============ 图标 ============
+  const ICONS = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><rect x="10" y="14" width="4" height="7"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  };
+
+  // ============ 渲染 ============
+  function render() {
+    // 底部导航
+    const tabbar = document.getElementById('tabbar');
+    tabbar.innerHTML = APP.bottomTabs.map(t => `
+      <div class="tab ${state.bottom === t.id ? 'active' : ''}" onclick="switchBottom('${t.id}')">
+        ${ICONS[t.icon]}<span>${t.label}</span>
+      </div>`).join('');
+
+    const page = APP.pages[state.bottom];
+
+    // 二级 Tab
+    const subtabs = document.getElementById('subtabs');
+    const cur = state.sub[state.bottom];
+    subtabs.innerHTML = page.tabs.map(t => `
+      <div class="subtab ${cur === t.id ? 'active' : ''}" onclick="switchSub('${t.id}')">${t.label}</div>`).join('');
+
+    // 内容
+    const content = document.getElementById('content');
+    const tab = page.tabs.find(t => t.id === cur);
+    content.innerHTML = tab.render();
+  }
+
+  function switchBottom(id) {
+    if (state.bottom === id) return;
+    state.bottom = id;
+    log(`底部导航 → 切换到「${APP.bottomTabs.find(t => t.id === id).label}」`);
+    render();
+  }
+  function switchSub(id) {
+    const page = APP.pages[state.bottom];
+    const tab = page.tabs.find(t => t.id === id);
+    state.sub[state.bottom] = id;
+    log(`${page.title} → 二级 Tab「${tab.label}」`);
+    render();
+  }
+  function toggleSwitch(id, name) {
+    const el = document.getElementById(id);
+    const on = el.classList.toggle('on');
+    log(`设置：${name} → ${on ? '开' : '关'}`);
+  }
+  function log(msg) {
+    const bar = document.getElementById('logbar');
+    bar.innerHTML = `<span class="t">LOG</span> ${msg}`;
+    document.getElementById('metaLog').textContent = '[Bridge] ' + msg;
+  }
+
+  render();
+</script>
+</body>
+</html>

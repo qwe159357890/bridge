@@ -85,6 +85,7 @@ python tools/release/release.py v0.2.0   # 指定版本号
 - `release.py` 不传 tag 时自动递增 patch 号（`0.1.5` → 打 `v0.1.6`），并**把新版本号写回 build.gradle.kts** 后一并提交，保证 tag 与 APK 版本号始终一致、下次递增起点正确。
 - 手动指定 tag 时（`python tools/release/release.py v0.2.0`），需自行同步修改 `versionName`。
 - **历史教训**：早期 `versionName` 写死 `"0.1.0"` 从不更新，导致手机显示的版本号永远停在 0.1.0（v0.1.x 只是 APK 文件名的后缀）。现已改为「单一来源 + 自动递增」。
+- **界面联动**：设置页「关于」里显示的版本号，直接读 `BuildConfig.VERSION_NAME`（`app/build.gradle.kts` 的 `versionName` 会自动注入 BuildConfig，需 `buildFeatures.buildConfig = true`），**不要硬编码版本字符串**，否则又会与真实版本脱节。
 
 ## 八、未来上架（需要时再启用）
 

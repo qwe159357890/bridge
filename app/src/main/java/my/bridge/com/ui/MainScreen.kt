@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -91,7 +90,7 @@ private fun BridgeBottomBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(60.dp)
+            .height(56.dp)
             .background(MaterialTheme.colorScheme.surface),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -101,7 +100,7 @@ private fun BridgeBottomBar(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .height(60.dp)
+                    .height(56.dp)
                     .clickable { onSelect(index) },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -110,13 +109,12 @@ private fun BridgeBottomBar(
                     imageVector = tab.icon,
                     contentDescription = tab.label,
                     tint = color,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(22.dp),
                 )
-                Spacer(Modifier.height(3.dp))
                 Text(
                     text = tab.label,
                     color = color,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                 )
             }
         }
@@ -145,13 +143,13 @@ fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
 fun SettingsPage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         BridgeTabRow(
-            titles = listOf("通用", "通知", "关于"),
+            titles = listOf("通用", "保活", "关于"),
             currentTab = currentTab,
             onTabChange = onTabChange,
         )
         when (currentTab) {
             0 -> GeneralSettings()
-            1 -> NotificationSettings()
+            1 -> KeepAliveSettings()
             2 -> AboutPage()
         }
     }
