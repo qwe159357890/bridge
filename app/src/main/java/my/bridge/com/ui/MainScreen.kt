@@ -19,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 
 /**
  * 应用主界面：底部导航（主页 / 设置）+ 各页二级 Tab。
@@ -77,7 +78,7 @@ fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         ScrollableTabRow(
             selectedTabIndex = currentTab,
-            edgePadding = androidx.compose.ui.unit.dp.Zero,
+            edgePadding = 0.dp,
         ) {
             listOf("会话", "通讯录", "发现").forEachIndexed { index, title ->
                 Tab(
@@ -101,7 +102,7 @@ fun SettingsPage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         ScrollableTabRow(
             selectedTabIndex = currentTab,
-            edgePadding = androidx.compose.ui.unit.dp.Zero,
+            edgePadding = 0.dp,
         ) {
             listOf("通用", "通知", "关于").forEachIndexed { index, title ->
                 Tab(
