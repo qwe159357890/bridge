@@ -60,10 +60,17 @@ async def get_device_logs(device_id: str, request: Request) -> LogListResponse:
 
 @router.get("", dependencies=[Depends(require_admin)])
 async def list_devices(request: Request) -> dict:
-    """列出有日志的设备 id（管理侧排查用）。"""
+    """列出有日志的设备摘要（含昵称 + 日志条数 + 最新时间 + 在线状态）。"""
     store = _get_store(request)
+    summaries = store.device_summaries()
+
+    # 合并在线状态
+    manager = request.app.state.connection_manager
+    for item in summaries:
+        item["online"] = manager.get(item["device_id"]) is not None
+
     return {
-        "devices": store.devices(),
+        "devices": summaries,
         "total_logs": store.count(),
     }
 

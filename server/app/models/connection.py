@@ -39,6 +39,8 @@ class Connection:
     last_active_at: float = field(default_factory=time.time)
     # 被新连接顶掉的时间（用于诊断）
     replaced_at: Optional[float] = None
+    # 客户端进程运行时长（秒），握手 hello 时上报，用于展示「APP 已运行 XX」
+    uptime_seconds: Optional[float] = None
     # 发送回调（由端点层注入，用于服务端主动推送/顶旧通知）
     send_handler: Optional[SendHandler] = field(default=None, repr=False)
 

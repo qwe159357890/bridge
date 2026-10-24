@@ -74,6 +74,9 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     if hello.device_name:
         ws.app.state.device_registry.update_name(device_id, hello.device_name)
 
+    # 2.2 记录客户端进程运行时长（供管理后台展示「APP 已运行 XX」）
+    conn.uptime_seconds = hello.uptime_seconds
+
     # 3. 登记连接（顶旧）
     try:
         replaced = await manager.register(device_id, conn)
@@ -82,11 +85,20 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
         await ws.close(code=4003, reason="connection limit reached")
         return
 
+    # 3.1 记录上线事件
+    try:
+        ws.app.state.connection_event_store.record(device_id, "online", "")
+    except Exception:
+        logger.exception("记录上线事件失败（忽略）")
+
     # 4. 若顶掉了旧连接，先通知旧连接（发 close 帧 + 关 socket）
     if replaced is not None:
         await manager.notify_replaced(replaced, "replaced")
 
     logger.info("device %s 连接建立成功", device_id)
+
+    # 离线原因追踪：主循环里区分各种断开原因，供上下线记录用
+    offline_reason = "closed"
 
     try:
         # 5. 主循环：读消息 + 心跳响应 + 读超时回收
@@ -99,6 +111,7 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
             except asyncio.TimeoutError:
                 logger.info("device %s 读超时（%.0fs 无消息），判定死亡，回收",
                             device_id, conn.idle_seconds)
+                offline_reason = "read_timeout"
                 break
 
             conn.touch()
@@ -115,6 +128,7 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 pass
             elif envelope.type == "close":
                 logger.info("device %s 主动请求关闭", device_id)
+                offline_reason = "closed"
                 break
             elif envelope.type == "message":
                 # 业务消息：预留，当前仅记录（后续可接入 services 层处理）
@@ -143,9 +157,17 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
 
     except WebSocketDisconnect:
         logger.info("device %s 断开连接", device_id)
+        offline_reason = "disconnected"
     except Exception:
         logger.exception("device %s 连接处理异常", device_id)
+        offline_reason = "error"
     finally:
+        # 5.1 记录下线事件（仅当本连接确实登记过 device_id 时）
+        if conn.device_id:
+            try:
+                ws.app.state.connection_event_store.record(device_id, "offline", offline_reason)
+            except Exception:
+                logger.exception("记录下线事件失败（忽略）")
         # 6. 清理：从映射表移除（仅当映射仍指向本连接时）
         await manager.unregister(device_id, conn)
 

@@ -87,6 +87,7 @@ class ConnectionManager:
                 "connected_at": conn.connected_at,
                 "last_active_at": conn.last_active_at,
                 "idle_seconds": round(conn.idle_seconds, 2),
+                "uptime_seconds": conn.uptime_seconds,
             })
         return result
 

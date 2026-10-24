@@ -18,6 +18,7 @@ from app.core.admin_auth import AdminAuth
 from app.core.admin_event_bus import AdminEventBus
 from app.core.command_store import CommandStore
 from app.core.connection_manager import ConnectionManager
+from app.core.connection_event_store import ConnectionEventStore
 from app.core.device_registry import DeviceRegistry
 from app.core.log_store import LogStore
 from app.models.connection import Connection
@@ -68,6 +69,8 @@ def create_app() -> FastAPI:
 
     command_store = CommandStore()
 
+    connection_event_store = ConnectionEventStore()
+
     admin_auth = AdminAuth(
         username=settings.admin.username,
         password=settings.admin.password,
@@ -82,6 +85,7 @@ def create_app() -> FastAPI:
     app.state.device_registry = registry
     app.state.log_store = log_store
     app.state.command_store = command_store
+    app.state.connection_event_store = connection_event_store
     app.state.admin_auth = admin_auth
     app.state.admin_event_bus = admin_event_bus
 

@@ -94,6 +94,24 @@ class LogStore:
         """列出有日志的设备 id。"""
         return sorted(self._logs.keys())
 
+    def device_summaries(self) -> list[dict]:
+        """列出有日志设备的摘要（设备 id + 日志条数 + 最新日志时间 + 昵称）。
+
+        供管理后台日志页左侧设备列表展示。
+        """
+        result = []
+        for device_id, entries in self._logs.items():
+            latest = entries[-1] if entries else None
+            result.append({
+                "device_id": device_id,
+                "log_count": len(entries),
+                "last_log_at": latest.created_at if latest else None,
+                "device_name": latest.device_name if latest else "",
+            })
+        # 按最新日志时间倒序
+        result.sort(key=lambda x: x["last_log_at"] or 0, reverse=True)
+        return result
+
     def count(self, device_id: Optional[str] = None) -> int:
         """日志条数统计（不传 device_id 时返回全部条目总数）。"""
         if device_id is not None:

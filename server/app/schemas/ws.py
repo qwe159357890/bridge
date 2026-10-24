@@ -38,6 +38,7 @@ class HelloData(BaseModel):
     device_id: str = Field(min_length=1, max_length=128)
     token: Optional[str] = Field(default=None, description="鉴权 token（启用鉴权时必填）")
     device_name: Optional[str] = Field(default=None, max_length=128, description="设备昵称（可选，缺省用 device_id）")
+    uptime_seconds: Optional[float] = Field(default=None, ge=0, description="客户端进程运行时长（秒），可选")
 
 
 class CloseData(BaseModel):

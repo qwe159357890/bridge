@@ -9,12 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.v1.admin import require_admin
 from app.core.connection_manager import ConnectionManager
+from app.core.connection_event_store import ConnectionEventStore
 
 router = APIRouter(tags=["connections"])
 
 
 def _get_manager(request: Request) -> ConnectionManager:
     return request.app.state.connection_manager
+
+
+def _get_event_store(request: Request) -> ConnectionEventStore:
+    return request.app.state.connection_event_store
 
 
 @router.get("/connections", dependencies=[Depends(require_admin)])
@@ -25,6 +30,23 @@ async def list_connections(request: Request) -> dict:
         "active_connections": manager.active_count,
         "connections": manager.list_connections(),
     }
+
+
+@router.get("/connections/log", dependencies=[Depends(require_admin)])
+async def list_connection_log(
+    request: Request,
+    device_id: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """列出设备上下线记录（时间倒序，最新在前）。
+
+    - ``device_id`` 可选，传了则只看某设备，不传看全部设备。
+    - ``limit`` 最多返回条数（默认 100，服务端有上限保护）。
+    """
+    store = _get_event_store(request)
+    limit = max(1, min(limit, 500))
+    events = store.list(device_id=device_id, limit=limit)
+    return {"total": len(events), "events": events}
 
 
 @router.post("/devices/{device_id}/disconnect", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_admin)])
