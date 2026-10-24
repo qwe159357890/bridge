@@ -2,6 +2,7 @@ import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import router from '@/router'
+import { apiBase } from '@/utils/base'
 
 const TOKEN_KEY = 'bridge_admin_token'
 
@@ -19,7 +20,7 @@ export function clearToken() {
 }
 
 // baseURL：优先环境变量，否则空（走 vite 代理）
-const baseURL = import.meta.env.VITE_API_BASE || ''
+const baseURL = apiBase()
 
 const instance: AxiosInstance = axios.create({
   baseURL,

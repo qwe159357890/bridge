@@ -78,6 +78,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { listDevices } from '@/api/devices'
 import { listCommands, sendCommand } from '@/api/commands'
 import { getToken } from '@/api/request'
+import { wsUrl } from '@/utils/base'
 import DevicePicker from '@/components/DevicePicker.vue'
 import type { CommandRecord, Device } from '@/types'
 
@@ -152,21 +153,10 @@ function connectWS() {
   const token = getToken()
   if (!token) return
 
-  // 拼接 WebSocket 地址：支持 VITE_API_BASE 代理或绝对地址
-  const base = import.meta.env.VITE_API_BASE || ''
-  let url: string
-  try {
-    const u = new URL(base, window.location.origin)
-    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-    u.pathname = `${u.pathname.replace(/\/$/, '')}/api/admin/ws`
-    u.search = ''
-    url = u.toString()
-  } catch {
-    // base 非法时退化为相对路径
-    url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/admin/ws`
-  }
+  // WebSocket 地址：开发态走代理（相对当前 origin），生产态用 VITE_API_BASE 直连后端
+  let url = wsUrl('/api/admin/ws')
   // token 通过 query 参数传递（浏览器 WebSocket 无法自定义 header，后端兼容）
-  url += `?token=${encodeURIComponent(token)}`
+  url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
 
   ws = new WebSocket(url)
 
