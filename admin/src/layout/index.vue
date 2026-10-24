@@ -1,7 +1,10 @@
 <template>
   <el-container class="layout">
     <el-aside width="220px" class="aside">
-      <div class="logo">Bridge 管理后台</div>
+      <div class="logo">
+        <el-icon class="logo-icon"><Connection /></el-icon>
+        <span>Bridge 管理后台</span>
+      </div>
       <el-menu
         :default-active="$route.path"
         router
@@ -38,9 +41,16 @@
 
     <el-container>
       <el-header class="header">
-        <span class="page-title">{{ $route.meta.title }}</span>
+        <el-breadcrumb separator="/">
+          <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
+          <el-breadcrumb-item>{{ $route.meta.title }}</el-breadcrumb-item>
+        </el-breadcrumb>
         <el-dropdown @command="handleCommand">
-          <span class="user">管理员<el-icon><ArrowDown /></el-icon></span>
+          <span class="user">
+            <el-avatar :size="28" class="avatar">管</el-avatar>
+            <span>管理员</span>
+            <el-icon><ArrowDown /></el-icon>
+          </span>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="logout">退出登录</el-dropdown-item>
@@ -79,14 +89,24 @@ function handleCommand(command: string) {
 }
 .logo {
   height: 60px;
-  line-height: 60px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   color: #fff;
   font-size: 17px;
   font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.logo-icon {
+  font-size: 20px;
+  color: var(--brand);
 }
 .aside :deep(.el-menu) {
   border-right: none;
+}
+.aside :deep(.el-menu-item.is-active) {
+  background: var(--brand) !important;
 }
 .header {
   display: flex;
@@ -95,18 +115,19 @@ function handleCommand(command: string) {
   border-bottom: 1px solid #eee;
   background: #fff;
 }
-.page-title {
-  font-size: 16px;
-  font-weight: 600;
-}
 .user {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  font-size: 14px;
+}
+.avatar {
+  background: var(--brand);
   font-size: 14px;
 }
 .main {
   background: #f5f7fa;
+  padding: 20px;
 }
 </style>

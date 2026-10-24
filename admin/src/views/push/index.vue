@@ -1,23 +1,33 @@
 <template>
   <div>
-    <el-card>
-      <template #header>消息推送</template>
-      <el-form label-width="100px">
+    <el-card shadow="never" class="page-card">
+      <template #header>
+        <div class="card-header">
+          <span class="title">消息推送</span>
+        </div>
+      </template>
+      <el-form label-width="100px" label-position="left">
         <el-form-item label="目标设备">
           <el-select
             v-model="form.deviceIds"
             multiple
             filterable
+            collapse-tags
+            collapse-tags-tooltip
             placeholder="选择设备（可多选）"
             style="width: 100%"
           >
             <el-option
               v-for="d in devices"
               :key="d.device_id"
-              :label="`${d.device_name}（${d.device_id}）${d.online ? '' : ' · 离线'}`"
+              :label="`${d.device_name}（${d.device_id}）`"
               :value="d.device_id"
               :disabled="!d.online"
-            />
+            >
+              <span class="dot" :class="d.online ? 'dot-online' : 'dot-offline'" />
+              <span>{{ d.device_name }}</span>
+              <span class="opt-id">（{{ d.device_id }}）</span>
+            </el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="消息内容">
@@ -29,7 +39,7 @@
           />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="sending" @click="handlePush">
+          <el-button type="primary" :icon="Promotion" :loading="sending" @click="handlePush">
             推送消息
           </el-button>
           <el-button @click="form.deviceIds = []">清空选择</el-button>
@@ -42,16 +52,26 @@
       />
     </el-card>
 
-    <el-card class="result-card" v-if="result">
-      <template #header>推送结果</template>
+    <el-card shadow="never" v-if="result">
+      <template #header>
+        <div class="card-header">
+          <span class="title">推送结果</span>
+        </div>
+      </template>
       <el-descriptions :column="3" border>
-        <el-descriptions-item label="目标数">{{ result.total }}</el-descriptions-item>
-        <el-descriptions-item label="送达">{{ result.delivered }}</el-descriptions-item>
-        <el-descriptions-item label="失败">{{ result.failed.length }}</el-descriptions-item>
+        <el-descriptions-item label="目标数">
+          <span class="stat-number">{{ result.total }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="送达">
+          <span class="stat-number success-num">{{ result.delivered }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="失败">
+          <span class="stat-number fail-num">{{ result.failed.length }}</span>
+        </el-descriptions-item>
       </el-descriptions>
       <div v-if="result.failed.length" class="failed-list">
         <div class="section-title">失败设备：</div>
-        <el-tag v-for="id in result.failed" :key="id" class="failed-tag" type="danger">
+        <el-tag v-for="id in result.failed" :key="id" class="failed-tag" type="danger" effect="plain">
           {{ id }}
         </el-tag>
       </div>
@@ -62,6 +82,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Promotion } from '@element-plus/icons-vue'
 import { listDevices } from '@/api/devices'
 import { pushMessage, type PushResult } from '@/api/push'
 import type { Device } from '@/types'
@@ -106,8 +127,14 @@ onMounted(load)
 </script>
 
 <style scoped>
-.result-card {
-  margin-top: 16px;
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.opt-id {
+  color: #909399;
+  font-size: 12px;
 }
 .failed-list {
   margin-top: 16px;
@@ -118,5 +145,11 @@ onMounted(load)
 }
 .failed-tag {
   margin-right: 8px;
+}
+.success-num {
+  color: var(--success);
+}
+.fail-num {
+  color: var(--danger);
 }
 </style>

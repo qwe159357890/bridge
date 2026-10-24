@@ -1,7 +1,11 @@
 <template>
   <div>
     <el-card>
-      <template #header>下发命令</template>
+      <template #header>
+        <div class="card-header">
+          <span class="title">下发命令</span>
+        </div>
+      </template>
       <el-form inline>
         <el-form-item label="目标设备">
           <DevicePicker
@@ -33,7 +37,7 @@
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
-          <span>命令历史</span>
+          <span class="title">命令历史</span>
           <div>
             <span class="ws-status">
               <span class="dot" :class="wsDotClass" />
@@ -81,6 +85,7 @@ import { listDevices } from '@/api/devices'
 import { listCommands, sendCommand } from '@/api/commands'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
+import { formatTime } from '@/utils/format'
 import DevicePicker from '@/components/DevicePicker.vue'
 import type { CommandRecord, Device } from '@/types'
 
@@ -138,11 +143,6 @@ function statusText(s: string) {
   if (s === 'success') return '成功'
   if (s === 'failed') return '失败'
   return '待回执'
-}
-
-function formatTime(ts: number) {
-  if (!ts) return '-'
-  return new Date(ts * 1000).toLocaleString('zh-CN')
 }
 
 async function load() {

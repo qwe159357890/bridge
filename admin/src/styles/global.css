@@ -57,3 +57,21 @@
   border-radius: 2px;
   background: var(--brand);
 }
+
+/* 统一卡片风格：圆角 + 柔和阴影 + 底部间距 */
+.el-card {
+  border-radius: 8px;
+  border: 1px solid #ebeef5;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+.page-card {
+  margin-bottom: 16px;
+}
+
+/* 统计数字 */
+.stat-number {
+  font-size: 26px;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
+}
