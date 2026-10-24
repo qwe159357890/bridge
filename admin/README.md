@@ -10,6 +10,19 @@ Vue 3 + Vite + Element Plus + TypeScript + Pinia
 
 管理后台是纯前端项目，不新增后端，只消费 `server/` 的接口。因此需要**先启动后端，再启动前端**。
 
+### 0. 环境准备（npm）
+
+项目用 npm 构建。若在终端执行 `npm` 报 `command not found`，通常是**终端窗口是旧的、未加载到最新 PATH**：
+
+- **首选**：关掉当前终端，重开一个新终端即可（Node/npm 已装在 PATH 里）。
+- **临时补救**（仅当前窗口生效，关窗失效）：手动加载 Node 路径后再执行：
+
+```bash
+export PATH="/c/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-6:$PATH"
+```
+
+> 路径含具体版本号 `22.22.2-6`，Node 升级后需相应更新。
+
 ### 1. 启动后端服务（server/）
 
 ```bash
@@ -24,6 +37,8 @@ cd admin
 npm install        # 首次需要安装依赖
 npm run dev        # 启动 Vite dev server，/api 代理到 http://localhost:15160
 ```
+
+`dev` 脚本已带 `--host`，Vite 会监听 `0.0.0.0`，因此 `localhost`、`127.0.0.1` 以及**同一局域网**内其他设备（如手机）都可通过 `http://<本机IP>:5173` 访问。注意：这只是局域网可达，**公网外网仍需端口映射/内网穿透/公网部署**。
 
 ### 3. 打开并登录
 

@@ -8,9 +8,9 @@
       <el-menu
         :default-active="$route.path"
         router
-        background-color="#001529"
-        text-color="#a6adb4"
-        active-text-color="#ffffff"
+        background-color="#ffffff"
+        text-color="#606266"
+        active-text-color="#409eff"
       >
         <el-menu-item index="/dashboard">
           <el-icon><Odometer /></el-icon>
@@ -85,7 +85,8 @@ function handleCommand(command: string) {
   height: 100%;
 }
 .aside {
-  background-color: #001529;
+  background-color: #ffffff;
+  border-right: 1px solid #ebeef5;
 }
 .logo {
   height: 60px;
@@ -93,10 +94,10 @@ function handleCommand(command: string) {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: #fff;
+  color: #303133;
   font-size: 17px;
   font-weight: 600;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid #f0f2f5;
 }
 .logo-icon {
   font-size: 20px;
@@ -105,8 +106,18 @@ function handleCommand(command: string) {
 .aside :deep(.el-menu) {
   border-right: none;
 }
+.aside :deep(.el-menu-item) {
+  height: 48px;
+  line-height: 48px;
+  margin: 4px 8px;
+  border-radius: 6px;
+}
 .aside :deep(.el-menu-item.is-active) {
-  background: var(--brand) !important;
+  background: rgba(64, 158, 255, 0.1) !important;
+  font-weight: 600;
+}
+.aside :deep(.el-menu-item:hover) {
+  background: #f5f7fa !important;
 }
 .header {
   display: flex;

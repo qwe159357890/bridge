@@ -12,6 +12,7 @@ import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import my.bridge.com.core.network.ws.CommandExecutor
 import my.bridge.com.core.network.ws.ServerAddress
 import my.bridge.com.core.storage.DeviceStore
+import my.bridge.com.keepalive.KeepAliveService
 import okhttp3.OkHttpClient
 import javax.inject.Singleton
 
@@ -53,6 +54,15 @@ object NetworkModule {
             deviceIdProvider = { identity.deviceId },
             tokenProvider = { identity.token },
             deviceNameProvider = { identity.deviceName },
+            // 上报「保活服务运行时长」，与 App「关于」页的保活运行时长口径一致
+            uptimeSecondsProvider = {
+                val startedAt = KeepAliveService.startedAtMillis()
+                if (startedAt > 0L) {
+                    (System.currentTimeMillis() - startedAt) / 1000
+                } else {
+                    0L
+                }
+            },
             listener = null,
             commandExecutors = commandExecutors,
         )

@@ -46,6 +46,7 @@ export interface LogDeviceSummary {
 // 连接信息
 export interface ConnectionInfo {
   device_id: string
+  device_name?: string
   state: string
   connected_at: number
   last_active_at: number

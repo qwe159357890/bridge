@@ -4,7 +4,16 @@
       <template #header>
         <div class="card-header">
           <span class="title">活跃连接（{{ activeCount }} 条）</span>
-          <div>
+          <div class="header-tools">
+            <el-select
+              v-model="autoInterval"
+              size="small"
+              style="width: 90px"
+              :disabled="autoRefresh"
+              @change="onIntervalChange"
+            >
+              <el-option v-for="o in intervalOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
             <el-button
               :type="autoRefresh ? 'primary' : 'default'"
               :icon="autoRefresh ? VideoPause : VideoPlay"
@@ -21,14 +30,19 @@
       </template>
 
       <el-table :data="connections" v-loading="loading" stripe>
-        <el-table-column prop="device_id" label="设备 ID" min-width="200" show-overflow-tooltip />
-        <el-table-column label="状态" width="110">
+        <el-table-column label="设备" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="device-name">{{ row.device_name || row.device_id }}</span>
+            <span class="device-id-sub">{{ row.device_name && row.device_name !== row.device_id ? row.device_id : '' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <span class="dot" :class="stateDot(row.state)" />
             <span class="state-text">{{ stateText(row.state) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="已运行" width="130">
+        <el-table-column label="保活时长" width="130">
           <template #default="{ row }">
             {{ formatDuration(row.uptime_seconds) }}
           </template>
@@ -39,8 +53,10 @@
         <el-table-column label="最后活跃" width="180">
           <template #default="{ row }">{{ formatTime(row.last_active_at) }}</template>
         </el-table-column>
-        <el-table-column label="空闲" width="110">
-          <template #default="{ row }">{{ formatDuration(row.idle_seconds) }}</template>
+        <el-table-column label="静默时长" width="130">
+          <template #default="{ row }">
+            <span :class="idleClass(row.idle_seconds)">{{ formatDuration(row.idle_seconds) }}</span>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
@@ -122,10 +138,19 @@ const eventDeviceFilter = ref('')
 const deviceNameMap = ref<Record<string, string>>({})
 
 const autoRefresh = ref(false)
-const autoInterval = 3000 // 自动刷新间隔（毫秒）
-const countdown = ref(autoInterval / 1000) // 倒计时显示（秒）
+const autoInterval = ref(3000) // 自动刷新间隔（毫秒），可设置
+const countdown = ref(3) // 倒计时显示（秒）
 let timer: number | null = null
 let countdownTimer: number | null = null
+
+const intervalOptions = [
+  { label: '1s', value: 1000 },
+  { label: '3s', value: 3000 },
+  { label: '5s', value: 5000 },
+  { label: '10s', value: 10000 },
+  { label: '30s', value: 30000 },
+  { label: '60s', value: 60000 },
+]
 
 const deviceOptions = computed(() =>
   Object.entries(deviceNameMap.value).map(([id, name]) => ({
@@ -151,6 +176,11 @@ function stateDot(state: string) {
   if (s === 'ACTIVE') return 'dot-online'
   if (s === 'CONNECTING') return 'dot-connecting'
   return 'dot-offline'
+}
+
+// 心跳周期 20s，超过 30s 视为心跳异常（疑似离线）
+function idleClass(idle: number) {
+  return idle > 30 ? 'idle-warn' : 'idle-ok'
 }
 
 function reasonText(reason: string) {
@@ -196,24 +226,29 @@ function toggleAutoRefresh() {
   autoRefresh.value = !autoRefresh.value
   if (autoRefresh.value) {
     startAutoRefresh()
-    ElMessage.success(`已开启自动刷新（每 ${autoInterval / 1000} 秒）`)
+    ElMessage.success(`已开启自动刷新（每 ${autoInterval.value / 1000} 秒）`)
   } else {
     stopAutoRefresh()
     ElMessage.info('已关闭自动刷新')
   }
 }
 
+function onIntervalChange() {
+  // 未开启时仅更新倒计时显示；开启状态下间隔选择被禁用
+  countdown.value = autoInterval.value / 1000
+}
+
 function startAutoRefresh() {
-  countdown.value = autoInterval / 1000
+  countdown.value = autoInterval.value / 1000
   // 每秒倒计时
   countdownTimer = window.setInterval(() => {
     countdown.value -= 1
     if (countdown.value <= 0) {
-      countdown.value = autoInterval / 1000
+      countdown.value = autoInterval.value / 1000
     }
   }, 1000)
   // 按间隔刷新数据
-  timer = window.setInterval(load, autoInterval)
+  timer = window.setInterval(load, autoInterval.value)
 }
 
 function stopAutoRefresh() {
@@ -254,8 +289,29 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
 }
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.device-name {
+  font-weight: 600;
+  color: #303133;
+}
+.device-id-sub {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #c0c4cc;
+}
 .state-text {
   font-size: 13px;
+}
+.idle-ok {
+  color: #67c23a;
+}
+.idle-warn {
+  color: #e6a23c;
+  font-weight: 600;
 }
 .event-card {
   margin-top: 16px;

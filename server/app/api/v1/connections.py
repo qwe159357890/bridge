@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.api.v1.admin import require_admin
 from app.core.connection_manager import ConnectionManager
 from app.core.connection_event_store import ConnectionEventStore
+from app.core.device_registry import DeviceRegistry
 
 router = APIRouter(tags=["connections"])
 
@@ -22,13 +23,23 @@ def _get_event_store(request: Request) -> ConnectionEventStore:
     return request.app.state.connection_event_store
 
 
+def _get_registry(request: Request) -> DeviceRegistry:
+    return request.app.state.device_registry
+
+
 @router.get("/connections", dependencies=[Depends(require_admin)])
 async def list_connections(request: Request) -> dict:
-    """列出当前所有活跃连接。"""
+    """列出当前所有活跃连接（含设备昵称）。"""
     manager = _get_manager(request)
+    registry = _get_registry(request)
+    connections = manager.list_connections()
+    # 合并昵称：优先展示用户自定义昵称，缺省回退 device_id
+    for conn in connections:
+        device = registry.get(conn["device_id"])
+        conn["device_name"] = (device.device_name if device else None) or conn["device_id"]
     return {
         "active_connections": manager.active_count,
-        "connections": manager.list_connections(),
+        "connections": connections,
     }
 
 
