@@ -1,5 +1,5 @@
 import { request } from './request'
-import type { CommandRecord } from '@/types'
+import type { CommandCatalog, CommandRecord } from '@/types'
 
 export interface SendCommandResult {
   command_id: string
@@ -26,4 +26,9 @@ export function listCommands(): Promise<CommandRecord[]> {
 
 export function getCommand(commandId: string): Promise<CommandRecord> {
   return request<CommandRecord>({ url: `/api/commands/${commandId}`, method: 'get' })
+}
+
+// 拉取命令目录（类别 + 命令 + 参数 schema），供命令下发页动态渲染
+export function getCommandCatalog(): Promise<CommandCatalog> {
+  return request<CommandCatalog>({ url: '/api/commands/meta', method: 'get' })
 }
