@@ -58,7 +58,7 @@ python tools/release/release.py v0.2.0   # 指定版本号
 | GitHub Release | tag 触发时自动创建，附 APK |
 | Actions Artifact | `bridge-debug-apk` |
 
-**下载加速机制**：脚本内置 gh-proxy 代理列表（按优先级逐个尝试，失败自动回退 token 直连）：
+**下载加速机制**：脚本内置 gh-proxy 代理列表（按优先级逐个尝试）：
 
 | 优先级 | 代理 | 状态 |
 |---|---|---|
@@ -68,7 +68,9 @@ python tools/release/release.py v0.2.0   # 指定版本号
 | 4 | `https://cdn.gh-proxy.org` | ⚠️ 不稳定 |
 | 5 | `https://axisnow.gh-proxy.org` | ✅ 可用 |
 
-> **重要**：gh-proxy 代理只对**公开仓库**生效（代理无法携带 token 访问私有仓库）。因此 Bridge 仓库设为**公开**（内部测试 APK 不含敏感信息）。若改为私有，脚本会自动回退到 token 直连 API（能用但可能较慢）。
+> **★ 铁律：下载 APK 必须走 gh-proxy 代理，绝不用 API 直连**（`GET /releases/assets/{id}` 下载大文件会 SIGTERM 超时中断，已多次踩坑）。
+> 手动下载固定命令：`curl -L -o releases/app-debug-v<版本>.apk "https://v4.gh-proxy.org/https://github.com/qwe159357890/bridge/releases/download/v<版本>/app-debug.apk"`，下载后 `stat -c%s` 比对 Release asset 的 `size` 校验完整性。
+> 若某代理失败，换下一个代理（v6 / gh-proxy.org），**不要回退 API 直连**。
 
 ## 六、签名说明（内部测试阶段）
 

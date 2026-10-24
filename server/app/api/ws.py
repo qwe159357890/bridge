@@ -122,6 +122,12 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 continue
 
             if envelope.type == "ping":
+                # 心跳携带保活时长（秒），实时刷新连接的「保活时长」，避免握手快照冻结
+                if envelope.data is not None and "uptime_seconds" in envelope.data:
+                    try:
+                        conn.uptime_seconds = float(envelope.data["uptime_seconds"])
+                    except (TypeError, ValueError):
+                        pass
                 await ws.send_text(Envelope.make("pong").to_json())
             elif envelope.type == "pong":
                 # 客户端主导模式下服务端一般不主动 ping，收到 pong 仅刷新活跃时间

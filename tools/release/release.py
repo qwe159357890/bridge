@@ -201,8 +201,9 @@ def download_apk(env, tag, run_id):
                 raw_url = a["browser_download_url"]
                 if _download_via_proxies(raw_url, RELEASE_DIR / a["name"], env):
                     return
-                # 代理都失败，回退 token 直连 API
-                _download(a["url"], RELEASE_DIR / a["name"], env, is_api=True)
+                # 代理全部失败：不要回退 API 直连（大文件会 SIGTERM），明确报错让用户换代理/重试
+                print(f"  [错误] 所有 gh-proxy 代理下载失败，请勿改用 API 直连（会超时）。")
+                print(f"         可手动执行：curl -L -o {RELEASE_DIR / a['name']} \"https://v4.gh-proxy.org/{raw_url}\"")
                 return
 
     # 方式2：workflow artifact

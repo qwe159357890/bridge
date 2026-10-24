@@ -222,7 +222,12 @@ class BridgeWebSocketClient(
 
                 val deferred = CompletableDeferred<Unit>()
                 pongSignal.set(deferred)
-                webSocket.send(WsEnvelope.make(WsEnvelope.TYPE_PING).toJson(gson))
+                // 心跳携带当前保活时长，供服务端实时刷新「保活时长」（握手快照会冻结，故心跳同步上报）
+                val pingData = JsonObject().apply {
+                    val uptime = uptimeSecondsProvider() ?: defaultUptimeSeconds()
+                    addProperty("uptime_seconds", uptime)
+                }
+                webSocket.send(WsEnvelope.make(WsEnvelope.TYPE_PING, pingData).toJson(gson))
 
                 val gotPong = withTimeoutOrNull(WsConfig.PONG_TIMEOUT_MS) {
                     deferred.await()
