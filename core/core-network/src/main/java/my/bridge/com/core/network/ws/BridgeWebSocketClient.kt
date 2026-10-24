@@ -44,6 +44,8 @@ import kotlin.random.Random
  * @param tokenProvider token 提供者（可为空，auth.enabled=false 时允许无 token）
  * @param deviceNameProvider 设备昵称提供者（可为空，缺省用 device_id）
  * @param uptimeSecondsProvider 进程运行时长提供者（秒，可为空，缺省用系统计算）
+ * @param onBeforeHello 每次连接成功、发送 hello 之前调用的钩子（挂起）。用于「注册设备」
+ *   确保服务端注册表与连接同步——服务端重启后注册表清空，重连时借此自动补注册。
  * @param listener 推送回调（可选）
  * @param commandExecutors 命令执行器表（command 名 -> 执行器）
  */
@@ -54,6 +56,7 @@ class BridgeWebSocketClient(
     private val tokenProvider: () -> String?,
     private val deviceNameProvider: () -> String? = { null },
     private val uptimeSecondsProvider: () -> Long? = { null },
+    private val onBeforeHello: (suspend () -> Unit)? = null,
     private val listener: WsMessageListener? = null,
     private val commandExecutors: Map<String, CommandExecutor> = emptyMap(),
 ) {
@@ -151,8 +154,17 @@ class BridgeWebSocketClient(
                 this@BridgeWebSocketClient.webSocket = webSocket
                 _state.value = WsConnectionState.CONNECTED
                 reconnectAttempt = 0
-                sendHello(webSocket)
-                launchHeartbeat(webSocket)
+                // 连接成功：先执行「注册设备」钩子（幂等），确保服务端注册表与本连接同步，
+                // 再发送 hello 握手。注册失败不阻断连接（auth 关闭时允许无 token）。
+                scope.launch {
+                    try {
+                        onBeforeHello?.invoke()
+                    } catch (e: Exception) {
+                        Timber.w(e, "连接前注册钩子失败（继续握手）")
+                    }
+                    sendHello(webSocket)
+                    launchHeartbeat(webSocket)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

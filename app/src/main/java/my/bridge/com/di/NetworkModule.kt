@@ -46,6 +46,8 @@ object NetworkModule {
         client: OkHttpClient,
         gson: Gson,
         identity: DeviceIdentityProvider,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
         commandExecutors: Map<String, @JvmSuppressWildcards CommandExecutor>,
     ): BridgeWebSocketClient =
         BridgeWebSocketClient(
@@ -63,6 +65,21 @@ object NetworkModule {
                     0L
                 }
             },
+            // 每次连接成功、发 hello 前先注册设备（幂等）：服务端重启后注册表清空，
+            // 重连时借此自动补注册，保证「在线」与「已注册」一致。
+            // 直接读 deviceStore（而非 identity），避免 provider 惰性初始化时序问题。
+            onBeforeHello = {
+                try {
+                    val deviceId = deviceStore.deviceId().also { identity.deviceId = it }
+                    val deviceName = deviceStore.deviceName().also { identity.deviceName = it }
+                    val token = apiClient.registerDevice(deviceId, deviceName)
+                    deviceStore.saveToken(token)
+                    identity.token = token
+                } catch (e: Exception) {
+                    // 注册失败不阻断连接（auth 关闭时允许无 token；重连会再次尝试）
+                    android.util.Log.w("NetworkModule", "注册设备失败（继续握手）：${e.message}")
+                }
+            },
             listener = null,
             commandExecutors = commandExecutors,
         )
@@ -72,25 +89,12 @@ object NetworkModule {
     fun provideBridgeConnectionManager(
         webSocketClient: BridgeWebSocketClient,
         deviceStore: DeviceStore,
-        apiClient: BridgeApiClient,
         identity: DeviceIdentityProvider,
     ): BridgeConnectionManager =
         BridgeConnectionManager(
             webSocketClient = webSocketClient,
             deviceIdProvider = {
                 deviceStore.deviceId().also { identity.deviceId = it }
-            },
-            tokenProvider = {
-                deviceStore.token().also { identity.token = it }
-            },
-            deviceNameProvider = {
-                deviceStore.deviceName().also { identity.deviceName = it }
-            },
-            register = { deviceId, deviceName ->
-                val token = apiClient.registerDevice(deviceId, deviceName)
-                deviceStore.saveToken(token)
-                identity.token = token
-                token
             },
             loadServerAddress = {
                 val host = deviceStore.serverHost()

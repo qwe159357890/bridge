@@ -24,7 +24,7 @@ connection:
   max_connections: 10000         # 全局最大并发连接数（0 = 不限）
 
 auth:
-  enabled: false                 # 是否启用设备鉴权（false = 接受任意连接，便于联调）
+  enabled: true                  # 是否启用设备鉴权（true = 必须注册拿 token 才能连接）
   token_ttl: 0                   # token 有效期（秒），0 = 永久
 
 admin:
