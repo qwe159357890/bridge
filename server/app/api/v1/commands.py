@@ -19,6 +19,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.v1.admin import require_admin
+from app.core.command_catalog import ALLOWED_COMMANDS, catalog_payload
 from app.core.command_store import CommandStore
 from app.core.connection_manager import ConnectionManager
 from app.schemas.ws import (
@@ -32,9 +33,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/commands", tags=["commands"])
 
-# 服务端允许下发的命令白名单（防止下发任意命令）
-ALLOWED_COMMANDS = {"upload_log"}
-
 
 def _get_manager(request: Request) -> ConnectionManager:
     return request.app.state.connection_manager
@@ -42,6 +40,16 @@ def _get_manager(request: Request) -> ConnectionManager:
 
 def _get_store(request: Request) -> CommandStore:
     return request.app.state.command_store
+
+
+@router.get("/meta", status_code=status.HTTP_200_OK, dependencies=[Depends(require_admin)])
+async def command_meta() -> dict:
+    """返回命令目录（类别 + 命令 + 参数 schema），供管理后台动态渲染命令选择器。
+
+    这是「可下发命令」的单一事实来源，管理后台据此构建分类树 + 卡片墙，
+    无需前端写死命令清单。
+    """
+    return catalog_payload()
 
 
 @router.post("", response_model=CommandResponse, status_code=status.HTTP_200_OK, dependencies=[Depends(require_admin)])

@@ -18,6 +18,45 @@ export interface CommandRecord {
   result_at?: number
 }
 
+// 命令参数控件类型
+export type ParamType = 'text' | 'number' | 'switch' | 'select' | 'textarea'
+
+// 命令参数定义（来自 /api/commands/meta）
+export interface CommandParamDef {
+  name: string
+  label: string
+  type: ParamType
+  required: boolean
+  default?: any
+  placeholder?: string
+  options?: { label: string; value: string }[]
+  description?: string
+}
+
+// 命令类别
+export interface CommandCategory {
+  key: string
+  label: string
+  icon: string
+  description?: string
+}
+
+// 命令定义（来自 /api/commands/meta）
+export interface CommandDef {
+  name: string
+  label: string
+  category: string
+  icon: string
+  description: string
+  params: CommandParamDef[]
+}
+
+// 命令目录响应（/api/commands/meta）
+export interface CommandCatalog {
+  categories: CommandCategory[]
+  commands: CommandDef[]
+}
+
 // 日志条目
 export interface LogEntry {
   device_id: string

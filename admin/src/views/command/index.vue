@@ -1,37 +1,149 @@
 <template>
   <div>
-    <el-card>
+    <el-card class="command-card-root">
       <template #header>
-        <div class="card-header">
+        <div class="top-bar">
           <span class="title">下发命令</span>
+          <div class="top-bar-right">
+            <span class="device-label">目标设备</span>
+            <DevicePicker
+              v-model="form.deviceId"
+              :devices="devices"
+              only-online
+              placeholder="选择在线设备"
+              style="width: 240px"
+            />
+          </div>
         </div>
       </template>
-      <el-form inline>
-        <el-form-item label="目标设备">
-          <DevicePicker
-            v-model="form.deviceId"
-            :devices="devices"
-            only-online
-            placeholder="选择在线设备"
-            style="width: 320px"
-          />
-        </el-form-item>
-        <el-form-item label="命令类型">
-          <el-select v-model="form.command" style="width: 180px">
-            <el-option label="上传日志（upload_log）" value="upload_log" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="sending" @click="handleSend">
-            下发命令
-          </el-button>
-        </el-form-item>
-      </el-form>
-      <el-alert
-        type="info"
-        :closable="false"
-        title="当前支持 upload_log：让设备自动上传诊断日志。回执结果会实时推送显示在下方列表。"
-      />
+
+      <!-- 主体：左分类导航 + 右命令卡片墙 -->
+      <div class="command-picker">
+        <!-- 左：分类导航（占满左列高度） -->
+        <div class="category-pane">
+          <div class="category-title">命令分类</div>
+          <div
+            v-for="cat in categories"
+            :key="cat.key"
+            class="category-item"
+            :class="{ active: activeCategory === cat.key }"
+            @click="selectCategory(cat.key)"
+          >
+            <span class="cat-icon">{{ cat.icon }}</span>
+            <span class="cat-label">{{ cat.label }}</span>
+            <span class="cat-count">{{ countOf(cat.key) }}</span>
+          </div>
+        </div>
+
+        <!-- 右：命令卡片墙（主角） -->
+        <div class="command-pane">
+          <div class="command-toolbar">
+            <el-input
+              v-model="keyword"
+              placeholder="搜索命令名称 / 说明…"
+              :prefix-icon="Search"
+              clearable
+              style="width: 280px"
+            />
+            <span class="pane-title">{{ activeCategoryLabel }} · {{ filteredCommands.length }} 个命令</span>
+          </div>
+
+          <div v-if="filteredCommands.length === 0" class="empty-commands">
+            该分类下暂无命令
+          </div>
+          <div v-else class="command-grid">
+            <div
+              v-for="cmd in filteredCommands"
+              :key="cmd.name"
+              class="command-card"
+              :class="{ active: selectedCommand?.name === cmd.name }"
+              @click="selectCommand(cmd)"
+            >
+              <div class="command-icon">{{ cmd.icon }}</div>
+              <div class="command-name">{{ cmd.label }}</div>
+              <div class="command-desc">{{ cmd.description }}</div>
+            </div>
+          </div>
+
+          <!-- 参数 + 下发按钮（右区底部） -->
+          <div v-if="selectedCommand" class="param-area">
+            <div class="param-header">
+              <span class="selected-command-hint">
+                {{ selectedCommand.icon }} {{ selectedCommand.label }}
+                <span class="command-key">({{ selectedCommand.name }})</span>
+              </span>
+            </div>
+
+            <div v-if="selectedCommand.params.length === 0" class="no-params">
+              该命令无需参数，可直接下发。
+            </div>
+            <el-form v-else label-width="110px" class="param-form">
+              <el-form-item
+                v-for="p in selectedCommand.params"
+                :key="p.name"
+                :label="p.label"
+                :required="p.required"
+              >
+                <el-input
+                  v-if="p.type === 'text'"
+                  v-model="params[p.name]"
+                  :placeholder="p.placeholder || ''"
+                  style="width: 320px"
+                />
+                <el-input-number
+                  v-else-if="p.type === 'number'"
+                  v-model="params[p.name]"
+                  :placeholder="p.placeholder || ''"
+                  style="width: 320px"
+                />
+                <el-switch
+                  v-else-if="p.type === 'switch'"
+                  v-model="params[p.name]"
+                />
+                <el-select
+                  v-else-if="p.type === 'select'"
+                  v-model="params[p.name]"
+                  :placeholder="p.placeholder || '请选择'"
+                  style="width: 320px"
+                >
+                  <el-option
+                    v-for="o in p.options || []"
+                    :key="o.value"
+                    :label="o.label"
+                    :value="o.value"
+                  />
+                </el-select>
+                <el-input
+                  v-else-if="p.type === 'textarea'"
+                  v-model="params[p.name]"
+                  type="textarea"
+                  :rows="2"
+                  :placeholder="p.placeholder || ''"
+                  style="width: 320px"
+                />
+                <div v-if="p.description" class="param-desc">{{ p.description }}</div>
+              </el-form-item>
+            </el-form>
+
+            <div class="send-bar">
+              <el-button
+                type="primary"
+                size="large"
+                :loading="sending"
+                :disabled="!canSend"
+                @click="handleSend"
+              >
+                下发命令
+              </el-button>
+              <span v-if="!form.deviceId" class="send-hint">请先选择在线设备</span>
+            </div>
+          </div>
+
+          <div v-else class="param-placeholder">
+            选择一张命令卡片，查看参数并下发
+          </div>
+        </div>
+      </div>
     </el-card>
 
     <el-card class="list-card">
@@ -57,7 +169,11 @@
             {{ deviceNameOf(row.device_id) }}
           </template>
         </el-table-column>
-        <el-table-column prop="command" label="命令" width="140" />
+        <el-table-column label="命令" width="160">
+          <template #default="{ row }">
+            {{ commandLabelOf(row.command) }}
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" size="small">
@@ -80,20 +196,37 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { listDevices } from '@/api/devices'
-import { listCommands, sendCommand } from '@/api/commands'
+import { listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
 import { formatTime } from '@/utils/format'
 import DevicePicker from '@/components/DevicePicker.vue'
-import type { CommandRecord, Device } from '@/types'
+import type {
+  CommandCategory,
+  CommandDef,
+  CommandRecord,
+  Device,
+} from '@/types'
 
 const route = useRoute()
 const devices = ref<Device[]>([])
 const commands = ref<CommandRecord[]>([])
 const loading = ref(false)
 const sending = ref(false)
+
+// 命令目录（从后端动态拉取）
+const categories = ref<CommandCategory[]>([])
+const commandDefs = ref<CommandDef[]>([])
+const catalogLoading = ref(false)
+
+// 选中状态
+const activeCategory = ref('')
+const keyword = ref('')
+const selectedCommand = ref<CommandDef | null>(null)
+const params = reactive<Record<string, any>>({})
+
 // WS 连接状态：connecting / connected / disconnected / reconnecting
 const wsState = ref<'connecting' | 'connected' | 'disconnected' | 'reconnecting'>('connecting')
 let ws: WebSocket | null = null
@@ -125,8 +258,71 @@ const wsDotClass = computed(() => {
 
 const form = reactive({
   deviceId: (route.query.deviceId as string) || '',
-  command: 'upload_log',
 })
+
+// 当前分类下的命令（未搜索时）
+const categoryCommands = computed(() => {
+  if (!activeCategory.value) return commandDefs.value
+  return commandDefs.value.filter((c) => c.category === activeCategory.value)
+})
+
+// 搜索过滤后的命令
+const filteredCommands = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  if (!kw) return categoryCommands.value
+  return categoryCommands.value.filter(
+    (c) =>
+      c.label.toLowerCase().includes(kw) ||
+      c.name.toLowerCase().includes(kw) ||
+      c.description.toLowerCase().includes(kw),
+  )
+})
+
+const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
+
+const activeCategoryLabel = computed(() => {
+  const cat = categories.value.find((c) => c.key === activeCategory.value)
+  return cat ? cat.label : '全部'
+})
+
+function countOf(catKey: string) {
+  return commandDefs.value.filter((c) => c.category === catKey).length
+}
+
+function commandLabelOf(name: string) {
+  const def = commandDefs.value.find((c) => c.name === name)
+  return def ? `${def.icon} ${def.label}` : name
+}
+
+function selectCategory(key: string) {
+  activeCategory.value = key
+  keyword.value = ''
+  // 切换分类时若已选命令不属于该分类，则保留原选中（用户可能只是想浏览）
+}
+
+function selectCommand(cmd: CommandDef) {
+  selectedCommand.value = cmd
+  // 重置参数：按 default 或类型给初值
+  for (const p of cmd.params) {
+    if (p.default !== undefined && p.default !== null) {
+      params[p.name] = p.default
+    } else {
+      params[p.name] = p.type === 'switch' ? false : ''
+    }
+  }
+}
+
+function collectParams(): Record<string, any> {
+  if (!selectedCommand.value) return {}
+  const out: Record<string, any> = {}
+  for (const p of selectedCommand.value.params) {
+    const v = params[p.name]
+    if (v !== undefined && v !== null && v !== '') {
+      out[p.name] = v
+    }
+  }
+  return out
+}
 
 function deviceNameOf(id: string) {
   const d = devices.value.find((x) => x.device_id === id)
@@ -158,14 +354,37 @@ async function loadDevices() {
   devices.value = await listDevices()
 }
 
+async function loadCatalog() {
+  catalogLoading.value = true
+  try {
+    const catalog = await getCommandCatalog()
+    categories.value = catalog.categories
+    commandDefs.value = catalog.commands
+    // 默认选中第一个分类
+    if (categories.value.length > 0) {
+      activeCategory.value = categories.value[0].key
+    }
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
 async function handleSend() {
   if (!form.deviceId) {
     ElMessage.warning('请选择目标设备')
     return
   }
+  if (!selectedCommand.value) {
+    ElMessage.warning('请选择命令')
+    return
+  }
   sending.value = true
   try {
-    const r = await sendCommand(form.deviceId, form.command)
+    const r = await sendCommand(
+      form.deviceId,
+      selectedCommand.value.name,
+      collectParams(),
+    )
     ElMessage.success(`命令已下发（${r.command_id.slice(0, 8)}…）`)
     load()
   } catch {
@@ -180,9 +399,7 @@ function connectWS() {
   const token = getToken()
   if (!token) return
 
-  // WebSocket 地址：开发态走代理（相对当前 origin），生产态用 VITE_API_BASE 直连后端
   let url = wsUrl('/api/admin/ws')
-  // token 通过 query 参数传递（浏览器 WebSocket 无法自定义 header，后端兼容）
   url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
 
   wsState.value = 'connecting'
@@ -195,7 +412,6 @@ function connectWS() {
     try {
       const msg = JSON.parse(event.data)
       if (msg.type === 'command_result') {
-        // 收到回执，刷新命令列表
         load()
         const text = msg.data.success ? '命令执行成功' : '命令执行失败'
         ElMessage.success(`${msg.data.device_id}：${text}`)
@@ -226,6 +442,7 @@ function scheduleReconnect() {
 onMounted(() => {
   loadDevices()
   load()
+  loadCatalog()
   connectWS()
 })
 
@@ -251,5 +468,187 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: #606266;
   margin-right: 12px;
+}
+
+/* 顶栏：标题 + 设备选择 */
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.device-label {
+  font-size: 13px;
+  color: #606266;
+}
+
+/* 命令选择器：左分类导航 + 右卡片墙（命令主导） */
+.command-picker {
+  display: flex;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 480px;
+}
+.category-pane {
+  width: 190px;
+  flex-shrink: 0;
+  background: #f5f7fa;
+  border-right: 1px solid #e4e7ed;
+  padding: 12px 0;
+}
+.category-title {
+  font-size: 12px;
+  color: #909399;
+  padding: 4px 16px 10px;
+}
+.category-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #606266;
+  transition: background 0.15s;
+}
+.category-item:hover {
+  background: #eef1f6;
+}
+.category-item.active {
+  background: #fff;
+  color: #409eff;
+  font-weight: 600;
+  border-right: 3px solid #409eff;
+  margin-right: -1px;
+}
+.cat-icon {
+  margin-right: 8px;
+  font-size: 16px;
+}
+.cat-label {
+  flex: 1;
+}
+.cat-count {
+  font-size: 12px;
+  color: #c0c4cc;
+}
+
+.command-pane {
+  flex: 1;
+  padding: 16px 20px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.command-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.pane-title {
+  font-size: 13px;
+  color: #909399;
+}
+.command-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+.command-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  padding: 18px 14px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
+}
+.command-card:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 10px rgba(64, 158, 255, 0.15);
+  transform: translateY(-2px);
+}
+.command-card.active {
+  border-color: #409eff;
+  background: #ecf5ff;
+}
+.command-icon {
+  font-size: 30px;
+  margin-bottom: 8px;
+}
+.command-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+.command-desc {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
+}
+.empty-commands {
+  text-align: center;
+  color: #c0c4cc;
+  padding: 60px 0;
+  font-size: 14px;
+}
+
+/* 参数区（右区底部） */
+.param-area {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f2f5;
+}
+.param-header {
+  margin-bottom: 12px;
+}
+.selected-command-hint {
+  font-size: 14px;
+  font-weight: 500;
+  color: #409eff;
+}
+.command-key {
+  color: #909399;
+  font-size: 12px;
+  font-weight: 400;
+}
+.no-params {
+  color: #909399;
+  font-size: 13px;
+  padding: 4px 0 8px;
+}
+.param-form {
+  max-width: 520px;
+}
+.param-desc {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
+}
+.param-placeholder {
+  margin-top: 20px;
+  padding: 20px;
+  text-align: center;
+  color: #c0c4cc;
+  font-size: 13px;
+  border: 1px dashed #e4e7ed;
+  border-radius: 8px;
+}
+
+.send-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+}
+.send-hint {
+  font-size: 13px;
+  color: #909399;
 }
 </style>
