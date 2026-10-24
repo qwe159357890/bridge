@@ -35,8 +35,10 @@
         <div class="card-header">
           <span>命令历史</span>
           <div>
-            <span v-if="sseConnected" class="sse-on">实时连接中</span>
-            <span v-else class="sse-off">实时已断开</span>
+            <span class="ws-status">
+              <span class="dot" :class="wsDotClass" />
+              {{ wsStatusText }}
+            </span>
             <el-button type="primary" :icon="Refresh" size="small" @click="load">
               刷新
             </el-button>
@@ -71,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
@@ -87,9 +89,34 @@ const devices = ref<Device[]>([])
 const commands = ref<CommandRecord[]>([])
 const loading = ref(false)
 const sending = ref(false)
-const sseConnected = ref(false)
+// WS 连接状态：connecting / connected / disconnected / reconnecting
+const wsState = ref<'connecting' | 'connected' | 'disconnected' | 'reconnecting'>('connecting')
 let ws: WebSocket | null = null
 let reconnectTimer: number | null = null
+
+const wsStatusText = computed(() => {
+  switch (wsState.value) {
+    case 'connecting':
+      return '连接中'
+    case 'connected':
+      return '实时连接中'
+    case 'reconnecting':
+      return '重连中'
+    default:
+      return '实时已断开'
+  }
+})
+const wsDotClass = computed(() => {
+  switch (wsState.value) {
+    case 'connected':
+      return 'dot-online'
+    case 'connecting':
+    case 'reconnecting':
+      return 'dot-connecting'
+    default:
+      return 'dot-disconnected'
+  }
+})
 
 const form = reactive({
   deviceId: (route.query.deviceId as string) || '',
@@ -158,10 +185,11 @@ function connectWS() {
   // token 通过 query 参数传递（浏览器 WebSocket 无法自定义 header，后端兼容）
   url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
 
+  wsState.value = 'connecting'
   ws = new WebSocket(url)
 
   ws.onopen = () => {
-    sseConnected.value = true
+    wsState.value = 'connected'
   }
   ws.onmessage = (event) => {
     try {
@@ -177,17 +205,18 @@ function connectWS() {
     }
   }
   ws.onclose = () => {
-    sseConnected.value = false
+    wsState.value = 'disconnected'
     scheduleReconnect()
   }
   ws.onerror = () => {
-    sseConnected.value = false
+    wsState.value = 'disconnected'
     ws?.close()
   }
 }
 
 function scheduleReconnect() {
   if (reconnectTimer) return
+  wsState.value = 'reconnecting'
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null
     connectWS()
@@ -216,14 +245,11 @@ onBeforeUnmount(() => {
 .list-card {
   margin-top: 16px;
 }
-.sse-on {
-  color: #67c23a;
-  font-size: 12px;
-  margin-right: 12px;
-}
-.sse-off {
-  color: #909399;
-  font-size: 12px;
+.ws-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  color: #606266;
   margin-right: 12px;
 }
 </style>

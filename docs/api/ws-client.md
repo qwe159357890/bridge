@@ -75,12 +75,13 @@
 连接建立后首条消息必须是 `hello`：
 
 ```json
-{"type":"hello","ts":…,"data":{"device_id":"<android_id>","token":"<可选>","device_name":"<可选>"}}
+{"type":"hello","ts":…,"data":{"device_id":"<android_id>","token":"<可选>","device_name":"<可选>","uptime_seconds":3600}}
 ```
 
 - `device_id` 来自 `DeviceStore.deviceId()`（ANDROID_ID）。
 - `token` 来自设备注册接口返回；后端 `auth.enabled=false` 时 token 可为空，但仍先尝试注册拿 token（幂等）。
 - `device_name` 昵称（可选，缺省用 device_id），服务端据此更新设备列表展示名。
+- `uptime_seconds` 客户端进程运行时长（秒，可选）：默认用 `SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()` 计算，供管理后台展示「APP 已运行 XX」。
 
 ### 4.4 心跳（客户端主导 + 硬编码）
 

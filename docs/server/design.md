@@ -231,7 +231,7 @@
 
 | type | 方向 | 说明 |
 |---|---|---|
-| `hello` | C→S | 握手（携带 device_id + 可选 token + 可选 device_name 昵称） |
+| `hello` | C→S | 握手（携带 device_id + 可选 token + 可选 device_name 昵称 + 可选 uptime_seconds 进程运行时长） |
 | `ping` | C→S | 心跳请求 |
 | `pong` | S→C | 心跳响应 |
 | `close` | 双向 | 主动通知关闭（顶旧/踢下线时服务端发，`reason`=replaced/server_kick） |
@@ -480,14 +480,24 @@ admin:
 | POST | `/api/commands` | 向指定设备下发命令（如 upload_log） |
 | GET | `/api/commands` | 列出全部命令记录（含回执状态） |
 | GET | `/api/commands/{command_id}` | 查询单条命令状态（pending/success/failed） |
-| GET | `/api/connections` | 活跃连接列表 + 数量 |
+| GET | `/api/connections` | 活跃连接列表 + 数量（含 uptime_seconds 进程运行时长） |
+| GET | `/api/connections/log` | 设备上下线记录（时间倒序，可按 device_id 过滤） |
 | POST | `/api/devices/{id}/disconnect` | 强制断开指定设备（服务端踢下线） |
 | GET | `/api/devices/count` | 已注册设备总数 |
 | POST | `/api/logs` | 上传日志（客户端上报诊断日志） |
 | GET | `/api/logs/{device_id}` | 读取某设备日志列表 |
-| GET | `/api/logs` | 列出有日志的设备 + 日志总数 |
+| GET | `/api/logs` | 列出有日志的设备摘要（昵称 + 日志数 + 最新时间 + 在线状态） |
 | DELETE | `/api/logs/{device_id}` | 清除某设备日志 |
 | GET | `/health` | 健康检查 + 运行统计（连接数/注册数/运行时长） |
+
+### 16.1 设备上下线记录
+
+为支持管理后台展示「设备上下线时间轴」（如 1 点上线 → 跑半小时断网掉线 → 2 点再上线 → 3 点下线），服务端新增 `core/connection_event_store.py`：
+
+- 内存环形存储（默认保留 500 条，超限丢最旧），与日志/命令存储一致，重启清空（当前阶段可接受）。
+- 记录时机：**上线**（`register` 成功）记 `online`；**下线**（读超时/主动关闭/被顶替/服务端踢/客户端断开/异常）记 `offline` + 原因。
+- 下线原因枚举：`closed`（主动）、`read_timeout`（读超时）、`replaced`（被顶替）、`server_kick`（服务端踢）、`disconnected`（客户端断开）、`error`（异常）。
+- 查询接口：`GET /api/connections/log?device_id=&limit=`，时间倒序返回。
 
 ---
 

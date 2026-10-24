@@ -1,0 +1,59 @@
+/* 全局统一风格：状态圆点、卡片头装饰、主题色 */
+:root {
+  --brand: #409eff;
+  --success: #67c23a;
+  --warning: #e6a23c;
+  --danger: #f56c6c;
+  --info: #909399;
+}
+
+/* 状态圆点（彩色） */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.dot-online {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(103, 194, 58, 0.18);
+}
+.dot-offline {
+  background: var(--info);
+}
+.dot-connecting {
+  background: var(--brand);
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
+}
+.dot-disconnected {
+  background: var(--danger);
+}
+.dot-warning {
+  background: var(--warning);
+}
+
+/* 卡片头：标题左侧主题色竖条 */
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.card-header .title {
+  position: relative;
+  padding-left: 12px;
+  font-weight: 600;
+  font-size: 15px;
+}
+.card-header .title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--brand);
+}

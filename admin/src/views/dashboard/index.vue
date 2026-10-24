@@ -2,41 +2,42 @@
   <div>
     <el-row :gutter="16">
       <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-value">{{ health.active_connections }}</div>
+        <el-card class="stat-card" shadow="hover">
+          <div class="stat-value" style="color: #409eff">{{ health.active_connections }}</div>
           <div class="stat-label">在线设备数</div>
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-value">{{ health.registered_devices }}</div>
+        <el-card class="stat-card" shadow="hover">
+          <div class="stat-value" style="color: #67c23a">{{ health.registered_devices }}</div>
           <div class="stat-label">已注册设备</div>
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-value">{{ onlineRate }}%</div>
+        <el-card class="stat-card" shadow="hover">
+          <div class="stat-value" style="color: #e6a23c">{{ onlineRate }}%</div>
           <div class="stat-label">在线率</div>
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card class="stat-card">
-          <div class="stat-value">{{ uptimeText }}</div>
+        <el-card class="stat-card" shadow="hover">
+          <div class="stat-value" style="color: #7c6ff0">{{ uptimeText }}</div>
           <div class="stat-label">服务运行时长</div>
         </el-card>
       </el-col>
     </el-row>
 
-    <el-card class="detail-card">
-      <template #header>系统状态</template>
+    <el-card class="detail-card" shadow="never">
+      <template #header>
+        <div class="card-header"><span class="title">系统状态</span></div>
+      </template>
       <el-descriptions :column="2" border>
         <el-descriptions-item label="服务状态">
-          <el-tag :type="health.status === 'ok' ? 'success' : 'danger'" size="small">
-            {{ health.status }}
-          </el-tag>
+          <span class="dot" :class="health.status === 'ok' ? 'dot-online' : 'dot-disconnected'" />
+          {{ health.status === 'ok' ? '正常' : health.status }}
         </el-descriptions-item>
-        <el-descriptions-item label="运行时长（秒）">
-          {{ health.uptime_seconds }}
+        <el-descriptions-item label="运行时长">
+          {{ uptimeText }}
         </el-descriptions-item>
         <el-descriptions-item label="在线设备数">
           {{ health.active_connections }}
@@ -52,6 +53,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { getHealth } from '@/api/health'
+import { formatDuration } from '@/utils/format'
 import type { HealthInfo } from '@/types'
 
 const health = ref<HealthInfo>({
@@ -68,12 +70,7 @@ const onlineRate = computed(() => {
   )
 })
 
-const uptimeText = computed(() => {
-  const s = health.value.uptime_seconds
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  return h > 0 ? `${h}时${m}分` : `${m}分${Math.floor(s % 60)}秒`
-})
+const uptimeText = computed(() => formatDuration(health.value.uptime_seconds))
 
 async function load() {
   health.value = await getHealth()
@@ -85,11 +82,12 @@ onMounted(load)
 <style scoped>
 .stat-card {
   text-align: center;
+  border-radius: 8px;
 }
 .stat-value {
-  font-size: 32px;
+  font-size: 30px;
   font-weight: 600;
-  color: #1f3a8a;
+  line-height: 1.2;
 }
 .stat-label {
   margin-top: 8px;
@@ -98,5 +96,6 @@ onMounted(load)
 }
 .detail-card {
   margin-top: 16px;
+  border-radius: 8px;
 }
 </style>

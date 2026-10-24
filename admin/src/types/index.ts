@@ -34,6 +34,15 @@ export interface LogListResponse {
   logs: LogEntry[]
 }
 
+// 有日志设备的摘要（日志页左侧列表）
+export interface LogDeviceSummary {
+  device_id: string
+  log_count: number
+  last_log_at: number | null
+  device_name: string
+  online: boolean
+}
+
 // 连接信息
 export interface ConnectionInfo {
   device_id: string
@@ -41,6 +50,15 @@ export interface ConnectionInfo {
   connected_at: number
   last_active_at: number
   idle_seconds: number
+  uptime_seconds?: number | null
+}
+
+// 上下线事件
+export interface ConnectionEvent {
+  device_id: string
+  event: 'online' | 'offline'
+  reason: string
+  ts: number
 }
 
 // 健康检查

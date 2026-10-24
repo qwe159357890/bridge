@@ -19,6 +19,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.os.Process
+import android.os.SystemClock
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.pow
@@ -41,6 +43,7 @@ import kotlin.random.Random
  * @param deviceIdProvider 设备标识提供者（ANDROID_ID，惰性读取避免初始化时序耦合）
  * @param tokenProvider token 提供者（可为空，auth.enabled=false 时允许无 token）
  * @param deviceNameProvider 设备昵称提供者（可为空，缺省用 device_id）
+ * @param uptimeSecondsProvider 进程运行时长提供者（秒，可为空，缺省用系统计算）
  * @param listener 推送回调（可选）
  * @param commandExecutors 命令执行器表（command 名 -> 执行器）
  */
@@ -50,6 +53,7 @@ class BridgeWebSocketClient(
     private val deviceIdProvider: () -> String,
     private val tokenProvider: () -> String?,
     private val deviceNameProvider: () -> String? = { null },
+    private val uptimeSecondsProvider: () -> Long? = { null },
     private val listener: WsMessageListener? = null,
     private val commandExecutors: Map<String, CommandExecutor> = emptyMap(),
 ) {
@@ -182,10 +186,19 @@ class BridgeWebSocketClient(
             addProperty("device_id", deviceIdProvider())
             tokenProvider()?.let { addProperty("token", it) }
             deviceNameProvider()?.let { addProperty("device_name", it) }
+            // 上报进程运行时长（秒），供管理后台展示「APP 已运行 XX」
+            val uptime = uptimeSecondsProvider() ?: defaultUptimeSeconds()
+            addProperty("uptime_seconds", uptime)
         }
         val envelope = WsEnvelope.make(WsEnvelope.TYPE_HELLO, data)
         webSocket.send(envelope.toJson(gson))
         Timber.i("已发送 hello（device=${data["device_id"]}）")
+    }
+
+    /** 默认的进程运行时长：基于进程启动到现在的耗时（秒）。 */
+    private fun defaultUptimeSeconds(): Long {
+        // Process.getStartElapsedRealtime() 返回进程启动时刻的 elapsedRealtime（API 24+）
+        return (SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()) / 1000
     }
 
     /** 心跳循环：周期发 ping，超时未收 pong 则主动断开触发重连。 */
