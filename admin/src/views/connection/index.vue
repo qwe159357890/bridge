@@ -11,7 +11,7 @@
               size="small"
               @click="toggleAutoRefresh"
             >
-              {{ autoRefresh ? `自动刷新中（${autoInterval / 1000}s）` : '自动刷新' }}
+              {{ autoRefresh ? `自动刷新中（${countdown}s）` : '自动刷新' }}
             </el-button>
             <el-button type="primary" :icon="Refresh" size="small" @click="load">
               刷新
@@ -122,8 +122,10 @@ const eventDeviceFilter = ref('')
 const deviceNameMap = ref<Record<string, string>>({})
 
 const autoRefresh = ref(false)
-const autoInterval = 3000
+const autoInterval = 3000 // 自动刷新间隔（毫秒）
+const countdown = ref(autoInterval / 1000) // 倒计时显示（秒）
 let timer: number | null = null
+let countdownTimer: number | null = null
 
 const deviceOptions = computed(() =>
   Object.entries(deviceNameMap.value).map(([id, name]) => ({
@@ -193,13 +195,32 @@ async function loadDeviceNames() {
 function toggleAutoRefresh() {
   autoRefresh.value = !autoRefresh.value
   if (autoRefresh.value) {
-    timer = window.setInterval(load, autoInterval)
+    startAutoRefresh()
     ElMessage.success(`已开启自动刷新（每 ${autoInterval / 1000} 秒）`)
   } else {
-    if (timer) window.clearInterval(timer)
-    timer = null
+    stopAutoRefresh()
     ElMessage.info('已关闭自动刷新')
   }
+}
+
+function startAutoRefresh() {
+  countdown.value = autoInterval / 1000
+  // 每秒倒计时
+  countdownTimer = window.setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) {
+      countdown.value = autoInterval / 1000
+    }
+  }, 1000)
+  // 按间隔刷新数据
+  timer = window.setInterval(load, autoInterval)
+}
+
+function stopAutoRefresh() {
+  if (timer) window.clearInterval(timer)
+  if (countdownTimer) window.clearInterval(countdownTimer)
+  timer = null
+  countdownTimer = null
 }
 
 async function handleDisconnect(row: ConnectionInfo) {
@@ -223,10 +244,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (timer) {
-    window.clearInterval(timer)
-    timer = null
-  }
+  stopAutoRefresh()
 })
 </script>
 

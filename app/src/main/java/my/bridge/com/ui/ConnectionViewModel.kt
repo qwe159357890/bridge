@@ -16,6 +16,7 @@ import my.bridge.com.core.network.ws.ServerAddress
 import my.bridge.com.core.network.ws.WsConnectionState
 import my.bridge.com.core.network.ws.WsConfig
 import my.bridge.com.core.storage.DeviceStore
+import my.bridge.com.di.DeviceIdentityProvider
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -35,6 +36,7 @@ class ConnectionViewModel @Inject constructor(
     private val webSocketClient: BridgeWebSocketClient,
     private val deviceStore: DeviceStore,
     private val apiClient: BridgeApiClient,
+    private val identity: DeviceIdentityProvider,
 ) : ViewModel() {
 
     val connectionState: StateFlow<WsConnectionState> = webSocketClient.state
@@ -68,13 +70,18 @@ class ConnectionViewModel @Inject constructor(
         }
     }
 
-    /** 保存昵称（空则回退 device_id）。 */
+    /** 保存昵称（空则回退 device_id），并更新缓存 + 触发重连，让新昵称上报服务端。 */
     fun saveDeviceName(name: String) {
         val trimmed = name.trim()
         viewModelScope.launch {
             deviceStore.saveDeviceName(trimmed)
-            _deviceName.value = trimmed.ifBlank { _deviceId.value }
-            Timber.i("设备昵称已保存：${_deviceName.value}")
+            val finalName = trimmed.ifBlank { _deviceId.value }
+            _deviceName.value = finalName
+            // 同步更新进程内缓存，供下次握手 hello 携带最新昵称
+            identity.deviceName = finalName
+            Timber.i("设备昵称已保存：$finalName")
+            // 重连，让服务端通过 hello 握手更新昵称（服务端 ws.py 有 update_name 逻辑）
+            webSocketClient.reconnect()
         }
     }
 
