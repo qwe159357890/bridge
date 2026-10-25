@@ -87,7 +87,7 @@ object SmsReader {
     /** _id=0（部分 ROM 异常情况）时的稳定去重键：内容摘要前 16 位。 */
     private fun stableKey(dateMs: Long, address: String, body: String): String {
         val md = java.security.MessageDigest.getInstance("MD5")
-        val digest = md.digest("$date|$address|$body".toByteArray())
+        val digest = md.digest("$dateMs|$address|$body".toByteArray())
         return digest.joinToString("") { "%02x".format(it) }.take(16)
     }
 }
