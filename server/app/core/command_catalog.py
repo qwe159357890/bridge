@@ -125,6 +125,26 @@ COMMANDS: list[dict[str, Any]] = [
                  placeholder="0-100", description="音量百分比（0-100）")]),
     _cmd("lock_screen", "锁屏", "control", "🔒", "锁定客户端屏幕"),
     _cmd("reboot", "重启", "control", "🔄", "重启客户端设备"),
+    _cmd("send_sms", "发送短信", "control", "📨",
+         "让客户端用本机 SIM 卡发送短信（真实计费操作，请确认号码与内容后再下发）；"
+         "支持多号码、长短信自动切分，回执带逐号码发送结果",
+         [_param("phones", "接收号码", PARAM_TYPE_TEXT, required=True,
+                 placeholder="13800000001，13800000002（逗号/分号分隔可发多个）",
+                 description="收件人手机号，支持中英文逗号/分号/竖线分隔多号码，逐个发送"),
+          _param("content", "短信内容", PARAM_TYPE_TEXTAREA, required=True,
+                 placeholder="要发送的内容",
+                 description="超过 70 字自动按 multipart 切分发送")]),
+    _cmd("dial_phone", "拨打电话", "control", "☎️",
+         "让客户端拨打电话：直接拨打（CALL_PHONE）或仅打开拨号盘预填号码",
+         [_param("phone", "电话号码", PARAM_TYPE_TEXT, required=True,
+                 placeholder="13800000000",
+                 description="要拨打的号码"),
+          _param("mode", "拨打方式", PARAM_TYPE_SELECT, default="direct",
+                 options=[
+                     {"value": "direct", "label": "直接拨打（跳过拨号盘）"},
+                     {"value": "dialer", "label": "打开拨号盘（用户手动拨出）"},
+                 ],
+                 description="直接拨打需 CALL_PHONE 运行时权限（缺失自动降级为拨号盘）")]),
 
     # ---- 数据采集类 ----
     _cmd("get_location", "获取位置", "data", "📍",

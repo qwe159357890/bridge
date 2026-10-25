@@ -18,6 +18,8 @@
 | `set_volume` | 调节音量 | — |
 | `lock_screen` | 锁屏 | — |
 | `reboot` | 重启 | — |
+| `send_sms` | 发送短信 | [control.md#send_sms-发送短信](control.md#send_sms-发送短信) |
+| `dial_phone` | 拨打电话 | [control.md#dial_phone-拨打电话](control.md#dial_phone-拨打电话) |
 
 ## 📡 data（数据采集）→ [data.md](data.md)
 
@@ -25,7 +27,9 @@
 |---|---|---|
 | `get_location` | 获取位置 | [data.md#get_location](data.md#get_location-获取位置) |
 | `get_current_page` | 获取当前页面 | — |
-| `get_sms` | 获取短信 | — |
+| `get_contacts` | 获取通讯录 | [data.md#get_contacts-获取通讯录](data.md#get_contacts-获取通讯录) |
+| `get_sms` | 获取短信 | [data.md#get_sms-获取短信](data.md#get_sms-获取短信) |
+| `get_call_log` | 获取通话记录 | [data.md#get_call_log-获取通话记录](data.md#get_call_log-获取通话记录) |
 | `get_network` | 获取网络状态 | — |
 | `get_battery` | 获取电量 | — |
 

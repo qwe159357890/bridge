@@ -24,6 +24,8 @@ data class Command(
         const val GET_CONTACTS = "get_contacts"
         const val GET_SMS = "get_sms"
         const val GET_CALL_LOG = "get_call_log"
+        const val SEND_SMS = "send_sms"
+        const val DIAL_PHONE = "dial_phone"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

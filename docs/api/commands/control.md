@@ -159,6 +159,66 @@ http:// 或 https:// 开头 → ①
 
 ---
 
+## send_sms 发送短信
+
+客户端用**本机 SIM 卡**真实发送短信（会计费），实现核心
+`app/.../data/SmsSender.kt`，借鉴 SmsForwarder `PhoneUtils.sendSms` +
+autoxClient `sms.js`，并补上两者缺失的**发送结果确认**。
+
+### 发送流程
+
+```
+下发 params {phones, content}
+→ 客户端校验 SEND_SMS 运行时权限
+→ 拆分号码（中英文逗号/分号/竖线均可，去空去重，上限 20 个）
+→ 逐号码串行发送：
+    divideMessage 切分（>70 字走 sendMultipartTextMessage）
+    挂 sent PendingIntent + 动态 BroadcastReceiver
+    await 系统 sent 回执（15 秒超时）
+→ 汇总逐号码明细回执（任一成功即命令成功，全部失败回执失败）
+```
+
+### 关键实现点
+
+- **结果确认**：`sendTextMessage` 同步不抛异常 ≠ 发送成功（无 SIM/射频关闭
+  是异步 RESULT_ERROR）。每个号码的 sent PendingIntent 配对
+  `RECEIVER_NOT_EXPORTED` 动态接收器（intent `setPackage` 自己），等待
+  `RESULT_OK / RESULT_ERROR_NO_SERVICE / RADIO_OFF / NULL_PDU / GENERIC_FAILURE`，
+  15 秒无回执计「发送超时」。
+- **requestCode 计数器**：PendingIntent requestCode 进程内自增唯一，避免多号码
+  broadcast 串扰；flag `FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE`。
+- **号码前置校验**：`^\+?[0-9]{3,20}$`，不合法号码不发起发送、明细回执注明
+  （系统侧只有链路失败才报错，本地先挡掉明显错号）。
+- **双卡**：v1 走默认卡（`getSystemService(SmsManager)`），未做 subId 参数。
+- 写操作语义：客户端只机械执行 + 如实回执，下发前确认责任在后台操作者
+  （catalog 描述已注明计费风险）。
+
+---
+
+## dial_phone 拨打电话
+
+实现核心 `app/.../data/PhoneDialer.kt`，借鉴 autoxClient `phone.js` 的双模式：
+
+| mode | 行为 | 权限 |
+|---|---|---|
+| `direct`（默认） | `ACTION_CALL` 直接拨打，跳过拨号盘 | CALL_PHONE（运行时） |
+| `dialer` | `ACTION_DIAL` 打开拨号盘并预填号码，设备持有者手动拨出 | 无需权限（天然人工确认层） |
+
+### 降级策略
+
+`direct` 但 CALL_PHONE 未授权时**自动降级**为 `dialer`，回执注明
+「无直接拨打权限，已降级为拨号盘」。CALL_PHONE 已在 App 启动批量权限申请中。
+
+### 已知限制：后台启动 Activity
+
+Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，息屏/后台时
+`startActivity` 可能被系统静默拦截（不抛异常，仅 logcat），**已授予
+「显示在其他应用上层」（SYSTEM_ALERT_WINDOW）权限后不受限**。回执文案带
+此提示；`dialer` 模式被拦截时拨号盘未打开但回执仍为成功——这是系统限制，
+非客户端可检测，真机排障看 logcat `ActivityManager` 拦截日志。
+
+---
+
 ## 未收录命令
 
 `set_volume`、`lock_screen`、`reboot` 尚未实现/落地，实现时在本文补
