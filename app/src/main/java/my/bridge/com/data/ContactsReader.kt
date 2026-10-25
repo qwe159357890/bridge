@@ -51,7 +51,7 @@ object ContactsReader {
                 ContactsContract.Contacts.HAS_PHONE_NUMBER,
             ),
             null, null,
-            ContactsContract.Contacts.DISPLAY_NAME_ASC,
+            "display_name ASC",
         )?.use { c ->
             while (c.moveToNext() && bases.size < limit) {
                 bases.add(
