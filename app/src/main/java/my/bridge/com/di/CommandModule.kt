@@ -1,6 +1,14 @@
 package my.bridge.com.di
 
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -14,12 +22,14 @@ import my.bridge.com.core.network.ws.Command
 import my.bridge.com.core.network.ws.CommandExecutor
 import my.bridge.com.core.network.ws.CommandResult
 import my.bridge.com.core.storage.DeviceStore
+import my.bridge.com.admin.BridgeAdminReceiver
 import my.bridge.com.data.CallLogReader
 import my.bridge.com.data.ContactsReader
 import my.bridge.com.data.PhoneDialer
 import my.bridge.com.data.SimHelper
 import my.bridge.com.data.SmsReader
 import my.bridge.com.data.SmsSender
+import my.bridge.com.data.VolumeController
 import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MusicPlayer
 import retrofit2.HttpException
@@ -114,6 +124,15 @@ object CommandModule {
         },
         Command.DIAL_PHONE to CommandExecutor { command ->
             executeDialPhone(context, command)
+        },
+        Command.SET_VOLUME to CommandExecutor { command ->
+            executeSetVolume(context, command)
+        },
+        Command.LOCK_SCREEN to CommandExecutor { command ->
+            executeLockScreen(context, command)
+        },
+        Command.RESTART_APP to CommandExecutor { command ->
+            executeRestartApp(context, command)
         },
     )
 
@@ -634,6 +653,126 @@ object CommandModule {
             CommandResult(id, name, false, "拨号失败：${e.message}")
         }
     }
+
+    /**
+     * 执行 set_volume：调节系统音量（媒体/铃声/闹钟）。
+     *
+     * @param params.level  音量百分比 0-100（换算到设备实际档位）
+     * @param params.stream media（默认）/ ring / alarm
+     *
+     * 设置后回读验证 + 三段兜底（见 [VolumeController]），
+     * 回执带设备实际档位（如「媒体 音量已设为 12/15（80%）」）。
+     */
+    private fun executeSetVolume(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val level = command.params.get("level")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.toDoubleOrNull()
+            ?: return CommandResult(id, name, false, "缺少音量参数 level")
+        if (level < 0 || level > 100) {
+            return CommandResult(id, name, false, "音量百分比须在 0-100，收到：$level")
+        }
+        val streamParam = command.params.get("stream")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim() ?: "media"
+        return try {
+            val message = VolumeController.set(context, VolumeController.streamFor(streamParam), level.toInt())
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 set_volume 执行失败")
+            CommandResult(id, name, false, e.message ?: "音量设置失败")
+        }
+    }
+
+    /**
+     * 执行 lock_screen：锁屏（熄屏并上锁）。
+     *
+     * 依赖设备管理员激活（force-lock 策略，见 [my.bridge.com.admin.BridgeAdminReceiver]）：
+     * 未激活时尝试在设备上弹出系统激活页（Android 10+ 后台启动可能被拦），
+     * 回执失败并附激活步骤；已激活直接 lockNow。
+     */
+    private fun executeLockScreen(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        val admin = ComponentName(context, BridgeAdminReceiver::class.java)
+        if (dpm == null || !dpm.isAdminActive(admin)) {
+            var launched = false
+            try {
+                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+                    putExtra(
+                        DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                        "Bridge 需要设备管理员权限以支持远程锁屏（仅使用「锁定屏幕」能力，" +
+                            "可在设置中随时停用）",
+                    )
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                launched = true
+            } catch (e: Exception) {
+                Timber.w(e, "弹出设备管理员激活页失败（可能被后台启动限制拦截）")
+            }
+            val guide = if (launched) {
+                "已在设备上弹出激活页，请在设备上点击「激活」，完成后重新下发本命令"
+            } else {
+                "请在设备上激活：设置 → 安全性 → 设备管理应用 → Bridge（仅锁屏能力），完成后重新下发本命令"
+            }
+            return CommandResult(id, name, false, "尚未激活设备管理员，无法锁屏。$guide")
+        }
+        return try {
+            dpm.lockNow()
+            Timber.i("命令 lock_screen：已锁屏")
+            CommandResult(id, name, true, "已锁屏")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 lock_screen 执行失败")
+            CommandResult(id, name, false, "锁屏失败：${e.message}")
+        }
+    }
+
+    /**
+     * 执行 restart_app：重启客户端应用进程。
+     *
+     * 顺序敏感：先预约「1 秒后由系统闹钟拉起启动页」（进程被杀仍生效），
+     * 再回执，回执发出后延迟杀进程（给 WebSocket 发送留时间）——
+     * 若先杀进程，回执就永远发不出去。
+     */
+    private fun executeRestartApp(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: return CommandResult(id, name, false, "无法获取启动 Intent，重启取消")
+
+        // ① 预约重启拉起：AlarmManager 1 秒后启动 MainActivity（进程被杀仍触发）
+        val pi = PendingIntent.getActivity(
+            context,
+            RESTART_APP_REQUEST_CODE,
+            launch.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val am = context.getSystemService(AlarmManager::class.java)
+        val triggerAt = SystemClock.elapsedRealtime() + 1000
+        try {
+            am?.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+        } catch (e: SecurityException) {
+            am?.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+        }
+
+        // ② 回执发出后（主线程延迟）杀进程；前台服务为 sticky，系统也会自动重拉
+        Handler(Looper.getMainLooper()).postDelayed({
+            Timber.i("restart_app：预约已就绪，杀进程完成重启")
+            Runtime.getRuntime().exit(0)
+        }, RESTART_APP_KILL_DELAY_MS)
+
+        Timber.i("命令 restart_app：已预约 1 秒后重启")
+        return CommandResult(
+            id, name, true,
+            "已预约重启：客户端进程即将退出并自动拉起（WebSocket 约 2-3 秒后重连）",
+        )
+    }
+
+    private const val RESTART_APP_REQUEST_CODE = 2001
+    private const val RESTART_APP_KILL_DELAY_MS = 1200L
 
     /** 按音源形态分三路解析（见 [executePlayMusic] 注释），返回可直接交给 MediaPlayer 的地址。 */
     private suspend fun resolveSource(

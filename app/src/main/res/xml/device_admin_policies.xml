@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设备管理员策略：仅申请「锁定屏幕」能力（force-lock），供 lock_screen 命令使用。
+  只申请最小策略集，激活页向用户展示的权限面最小化。
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

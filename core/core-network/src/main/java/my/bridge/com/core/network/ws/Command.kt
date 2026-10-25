@@ -27,6 +27,9 @@ data class Command(
         const val GET_SIM_INFO = "get_sim_info"
         const val SEND_SMS = "send_sms"
         const val DIAL_PHONE = "dial_phone"
+        const val SET_VOLUME = "set_volume"
+        const val LOCK_SCREEN = "lock_screen"
+        const val RESTART_APP = "restart_app"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

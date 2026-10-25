@@ -120,11 +120,24 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("stop_music", "停止音乐", "control", "⏹️",
          "停止播放并释放播放器（播放中/暂停中有效，空闲回执失败）"),
     _cmd("set_volume", "调节音量", "control", "🔊",
-         "调节客户端媒体音量",
+         "调节客户端指定音频流的音量（媒体/铃声/闹钟），按百分比换算设备实际档位，"
+         "设置后回读验证；免打扰模式开启时铃声/闹钟流可能被系统拒绝，回执如实说明",
          [_param("level", "音量值", PARAM_TYPE_NUMBER, required=True, default=50,
-                 placeholder="0-100", description="音量百分比（0-100）")]),
-    _cmd("lock_screen", "锁屏", "control", "🔒", "锁定客户端屏幕"),
-    _cmd("reboot", "重启", "control", "🔄", "重启客户端设备"),
+                 placeholder="0-100", description="音量百分比（0-100）"),
+          _param("stream", "音量类型", PARAM_TYPE_SELECT, default="media",
+                 options=[
+                     {"value": "media", "label": "媒体音量（音乐/视频）"},
+                     {"value": "ring", "label": "铃声（来电/通知）"},
+                     {"value": "alarm", "label": "闹钟"},
+                 ],
+                 description="调节哪一类音量")]),
+    _cmd("lock_screen", "锁屏", "control", "🔒",
+         "让客户端立即锁屏（熄屏并上锁）。首次使用需在设备上激活一次「设备管理员」"
+         "（命令回执会附激活步骤；激活后应用须先停用管理员才能卸载）",
+         []),
+    _cmd("restart_app", "重启客户端", "control", "♻️",
+         "重启 Bridge 客户端应用进程（约 1 秒后自动重连）。"
+         "设备整机重启需 root 权限，未实现", []),
     _cmd("send_sms", "发送短信", "control", "📨",
          "让客户端用本机 SIM 卡发送短信（真实计费操作，请确认号码与内容后再下发）；"
          "支持多号码、长短信自动切分、指定发送卡，回执带逐号码发送结果",

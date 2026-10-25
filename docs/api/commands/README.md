@@ -15,9 +15,9 @@
 | `pause_music` | 暂停音乐 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
 | `resume_music` | 继续播放 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
 | `stop_music` | 停止音乐 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
-| `set_volume` | 调节音量 | — |
-| `lock_screen` | 锁屏 | — |
-| `reboot` | 重启 | — |
+| `set_volume` | 调节音量 | [control.md#set_volume-调节音量](control.md#set_volume-调节音量) |
+| `lock_screen` | 锁屏 | [control.md#lock_screen-锁屏](control.md#lock_screen-锁屏) |
+| `restart_app` | 重启客户端 | [control.md#restart_app-重启客户端](control.md#restart_app-重启客户端) |
 | `send_sms` | 发送短信 | [control.md#send_sms-发送短信](control.md#send_sms-发送短信) |
 | `dial_phone` | 拨打电话 | [control.md#dial_phone-拨打电话](control.md#dial_phone-拨打电话) |
 

@@ -235,7 +235,48 @@ Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，�
 
 ---
 
-## 未收录命令
+## set_volume 调节音量
 
-`set_volume`、`lock_screen`、`reboot` 尚未实现/落地，实现时在本文补
-`## 命令名` 章节（写实现语义，参数细节以 catalog 为准）。
+实现核心 `app/.../data/VolumeController.kt`，借鉴 autoxClient `sys.js` 的三段兜底：
+
+- **参数**：`level`（0-100 百分比）+ `stream`（media 媒体 / ring 铃声 / alarm 闹钟，默认 media）。
+- **权限**：无需任何运行时权限（MODIFY_AUDIO_SETTINGS 已在 Manifest，声明即可）。
+- **换算**：百分比 → 设备实际档位 `target = max × level / 100`（不同设备各流 max 不同）。
+- **三段兜底 + 回读验证**：① `setStreamVolume(stream, target, 0)` → 回读；② 不生效
+  带 `FLAG_SHOW_UI` 重试 → 回读；③ 仍不生效用 `adjustStreamVolume` 逐步逼近
+  （步数封顶 40 防死循环）→ 回读。三段后仍未达目标**如实回执失败**，不虚报成功。
+- **免打扰限制**：DND 开启时系统拒绝修改铃声流（SecurityException），转译为
+  可操作的失败说明（先关免打扰再重试）；媒体/闹钟流不受影响。
+- 回执带实际档位，如「媒体 音量已设为 12/15（80%）」。
+
+---
+
+## lock_screen 锁屏
+
+普通应用无直接锁屏 API，实现采用**设备管理员（Device Admin）**方案：
+
+- **授权载体**：`app/.../admin/BridgeAdminReceiver.kt` +
+  `res/xml/device_admin_policies.xml`（**只申请 force-lock 锁屏策略**，最小权限面），
+  Manifest 注册时挂 `BIND_DEVICE_ADMIN` 权限守卫。
+- **首次使用**：下发时客户端检查 `isAdminActive`，未激活则尝试在设备上弹出
+  系统激活页（`ACTION_ADD_DEVICE_ADMIN`，带解释文案），回执失败并附激活步骤；
+  Android 10+ 后台启动限制可能拦掉激活页弹出，回执附手动激活路径
+  （设置 → 安全性 → 设备管理应用 → Bridge）。**设备上点一次激活，永久可用**。
+- **执行**：已激活直接 `DevicePolicyManager.lockNow()`，回执「已锁屏」。
+- **注意**：激活管理员后应用受保护，**须先停用管理员才能卸载 App**
+  （对自控设备是防误卸的优点）；停用后本命令回执失败并重新引导激活。
+
+---
+
+## restart_app 重启客户端
+
+重启 Bridge 客户端应用进程（设备整机重启需 root，未实现——REBOOT 权限为
+签名级，普通应用无法获取，`DevicePolicyManager.reboot` 需 device owner）。
+
+- **顺序敏感**：① 先用 `AlarmManager.setExactAndAllowWhileIdle` 预约
+  **1 秒后拉起启动页**（进程被杀仍触发；`SCHEDULE_EXACT_ALARM` 被收回时降级
+  `set`）；② 回执；③ 回执发出后主线程延迟 1.2 秒 `Runtime.exit(0)` 杀进程
+  ——先杀进程回执就发不出去了。前台服务为 sticky，系统也会自动重拉服务。
+- **效果**：进程退出 → 闹钟触发 MainActivity 冷启动 → BridgeApplication
+  重新初始化 → WebSocket 自动重连（约 2-3 秒）。
+- 用途：改配置后自恢复、连接异常自愈、长期运行进程状态重置。
