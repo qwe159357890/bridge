@@ -94,6 +94,26 @@
               该命令无需参数，可直接下发。
             </div>
             <el-form v-else label-width="110px" class="param-form">
+              <div
+                v-if="selectedCommand.params.some((p) => p.name === 'sim')"
+                class="sim-hint"
+                :class="{ 'sim-hint-empty': deviceSims.length === 0 }"
+              >
+                <template v-if="deviceSims.length > 0">
+                  当前设备 {{ deviceSims.length }} 张卡：{{
+                    deviceSims
+                      .map((s) => {
+                        const slot = `卡${s.slot_index + 1}`
+                        const parts = [s.number || '号码未知', s.carrier].filter(Boolean)
+                        return `${slot}（${parts.join(' · ')}）`
+                      })
+                      .join('、')
+                  }}{{ simSyncTime ? `，采集于 ${simSyncTime}` : '' }}
+                </template>
+                <template v-else>
+                  尚未获取该设备的卡信息，下方选卡为通用选项；可先下发「📱 获取SIM卡信息」命令获取实际卡列表
+                </template>
+              </div>
               <el-form-item
                 v-for="p in selectedCommand.params"
                 :key="p.name"
@@ -123,7 +143,7 @@
                   style="width: 320px"
                 >
                   <el-option
-                    v-for="o in p.options || []"
+                    v-for="o in p.name === 'sim' ? simOptions : p.options || []"
                     :key="o.value"
                     :label="o.label"
                     :value="o.value"
@@ -227,6 +247,8 @@ import { Refresh, Search } from '@element-plus/icons-vue'
 import { getMusicState, listDevices } from '@/api/devices'
 import type { MusicState } from '@/api/devices'
 import { listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
+import { getDeviceSims } from '@/api/data'
+import type { DeviceSim } from '@/api/data'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
 import { formatTime } from '@/utils/format'
@@ -314,6 +336,47 @@ const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
 // ---------------------------------------------------------------------------
 
 const musicState = ref<MusicState | null>(null)
+
+// 目标设备的 SIM 卡信息（get_sim_info 上报的快照）：选卡下拉按它动态渲染
+const deviceSims = ref<DeviceSim[]>([])
+const simSyncTime = ref('')
+
+/** sim 参数动态选项：有设备卡信息按实际卡（号码/运营商），否则退化通用选项。 */
+const simOptions = computed<{ value: string; label: string }[]>(() => {
+  const base = [{ value: 'auto', label: '自动（系统默认卡）' }]
+  if (deviceSims.value.length === 0) {
+    return [
+      ...base,
+      { value: 'sim1', label: '卡 1' },
+      { value: 'sim2', label: '卡 2' },
+      { value: 'sim3', label: '卡 3' },
+    ]
+  }
+  return [
+    ...base,
+    ...deviceSims.value.map((s) => {
+      const slot = `卡${s.slot_index + 1}`
+      const parts = [s.number || '号码未知', s.carrier].filter(Boolean)
+      return { value: `sim${s.slot_index + 1}`, label: `${slot}（${parts.join(' · ')}）` }
+    }),
+  ]
+})
+
+async function loadDeviceSims() {
+  if (!form.deviceId) {
+    deviceSims.value = []
+    simSyncTime.value = ''
+    return
+  }
+  try {
+    const r = await getDeviceSims(form.deviceId)
+    deviceSims.value = r.items
+    simSyncTime.value = r.sync_time || ''
+  } catch {
+    deviceSims.value = []
+    simSyncTime.value = ''
+  }
+}
 
 // 定位结果卡片：下发 get_location 后记录 command_id，回执推送按 ID 匹配触发地图展示
 const locationCard = ref<any>(null)
@@ -419,6 +482,7 @@ watch(
     pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
     locationCard.value?.hide()
     loadMusicState()
+    loadDeviceSims() // 选卡下拉按新设备的实际卡动态渲染
   },
 )
 
@@ -573,6 +637,14 @@ function connectWS() {
         }
         const text = msg.data.success ? '命令执行成功' : '命令执行失败'
         ElMessage.success(`${msg.data.device_id}：${text}`)
+        // get_sim_info 回执成功：刷新当前设备卡信息（选卡下拉动态更新）
+        if (
+          msg.data.command === 'get_sim_info' &&
+          msg.data.success &&
+          msg.data.device_id === form.deviceId
+        ) {
+          loadDeviceSims()
+        }
       } else if (msg.type === 'music_state') {
         // 实时音乐状态推送：仅更新当前目标设备
         if (msg.data.device_id === form.deviceId) {
@@ -785,6 +857,22 @@ onBeforeUnmount(() => {
   color: #909399;
   font-size: 13px;
   padding: 4px 0 8px;
+}
+.sim-hint {
+  font-size: 12px;
+  color: #67c23a;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+  max-width: 520px;
+}
+.sim-hint-empty {
+  color: #909399;
+  background: #f4f4f5;
+  border-color: #e9e9eb;
 }
 .param-form {
   max-width: 520px;

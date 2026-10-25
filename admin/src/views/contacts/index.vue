@@ -8,7 +8,7 @@
             v-model="keyword"
             placeholder="搜索姓名 / 号码 / 邮箱"
             clearable
-            style="width: 280px"
+            style="width: 340px"
             @keyup.enter="load(0)"
             @clear="load(0)"
           />

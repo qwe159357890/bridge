@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Telephony
 import androidx.core.content.ContextCompat
+import timber.log.Timber
 
 /**
  * 短信读取器（get_sms 命令的数据源，只读不写不删）。
@@ -50,7 +51,10 @@ object SmsReader {
      *
      * 卡来源：短信库的 ``sub_id`` 列（Android 5.1+ 双卡设备记录收/发经手的
      * subscription id）→ 经 [SimHelper] 映射为卡槽序号 + 本机号码。
-     * 部分 ROM 无此列或无 READ_PHONE_STATE 时按未知（-1/""）处理。
+     * ROM 兼容：个别 ROM（实测一加 ColorOS）对未知列投影直接抛
+     * IllegalArgumentException 而非返回 -1 索引——先带 sub_id 查询，失败后
+     * 去掉该列降级重查（卡来源按未知处理）。
+     * 无 READ_PHONE_STATE 时卡来源同样按未知（-1/""）。
      *
      * @param typeParam catalog 的 sms_type：all/inbox/sent/draft/outbox/failed
      * @param limit 最多返回条数（5–1000）
@@ -60,18 +64,32 @@ object SmsReader {
         val typeFilter = typeCode(typeParam)
         val selection = if (typeFilter != null) "type = ?" else null
         val selectionArgs = if (typeFilter != null) arrayOf(typeFilter.toString()) else null
+        val order = "date DESC"
 
         // sub_id → 卡信息映射（一次性构建；无权限/无卡时为空 map）
         val subToSim = SimHelper.listSims(context).associateBy { it.subscriptionId }
 
+        val baseProjection = arrayOf("_id", "address", "body", "date", "read", "type")
+        // 带 sub_id 查询；ROM 不认该列时降级重查（见方法注释）
+        val cursor = try {
+            cr.query(
+                Telephony.Sms.CONTENT_URI,
+                baseProjection + "sub_id",
+                selection, selectionArgs, order,
+            )
+        } catch (e: IllegalArgumentException) {
+            Timber.w("短信库无 sub_id 列，降级为不含卡来源查询：%s", e.message)
+            try {
+                cr.query(Telephony.Sms.CONTENT_URI, baseProjection, selection, selectionArgs, order)
+            } catch (e2: Exception) {
+                Timber.e(e2, "短信查询失败（降级路径）")
+                null
+            }
+        }
+
         val result = mutableListOf<SmsEntry>()
-        cr.query(
-            Telephony.Sms.CONTENT_URI,
-            arrayOf("_id", "address", "body", "date", "read", "type", "sub_id"),
-            selection, selectionArgs,
-            "date DESC",
-        )?.use { c ->
-            val subIdx = c.getColumnIndex("sub_id") // 个别 ROM 无此列返回 -1
+        cursor?.use { c ->
+            val subIdx = c.getColumnIndex("sub_id") // 降级路径下返回 -1
             while (c.moveToNext() && result.size < limit) {
                 val id = c.getString(0) ?: "0"
                 val address = c.getString(1) ?: ""

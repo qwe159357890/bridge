@@ -18,8 +18,9 @@ import timber.log.Timber
  * - simSlotIndex：0 基卡槽序号（后台显示「卡1/卡2」的依据）
  * - number：本机号码（运营商未写入时为空，显示层降级为只显示卡序号）
  *
- * 注意：catalog 的 sim 参数是静态选项（sim1/sim2/sim3），后台不知道设备实际
- * 卡数——选了不存在的卡由客户端回执失败；「auto」永远可用（走系统默认卡）。
+ * 注意：后台「发送短信/拨打电话」的 sim 选项按 get_sim_info 上报的结果动态
+ * 显示（卡数/号码/运营商）；设备从未上报过卡信息时后台退化为静态选项，
+ * 选了不存在的卡由客户端回执失败；「auto」永远可用（走系统默认卡）。
  */
 object SimHelper {
 
@@ -28,6 +29,7 @@ object SimHelper {
         val subscriptionId: Int,
         val slotIndex: Int,   // 0 基卡槽序号
         val number: String,   // 本机号码（可能为空）
+        val carrier: String = "", // 运营商名称（如「中国移动」，ROM 未提供时为空）
     ) {
         val slotLabel: String get() = "卡${slotIndex + 1}"
         val displayLabel: String
@@ -38,12 +40,11 @@ object SimHelper {
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** catalog 的 sim 参数 → 0 基卡槽序号（auto → null）。 */
-    fun slotParam(param: String): Int? = when (param) {
-        "sim1" -> 0
-        "sim2" -> 1
-        "sim3" -> 2
-        else -> null // auto
+    /** catalog 的 sim 参数 → 0 基卡槽序号（auto → null；simN 通用解析，N≥1）。 */
+    fun slotParam(param: String): Int? {
+        if (param == "auto") return null
+        val m = Regex("^sim([1-9])$").find(param) ?: return null
+        return m.groupValues[1].toInt() - 1
     }
 
     /** 列出全部激活的 SIM 卡（无权限 / 无卡 / 系统异常时返回空列表）。 */
@@ -59,6 +60,7 @@ object SimHelper {
                     subscriptionId = it.subscriptionId,
                     slotIndex = it.simSlotIndex,
                     number = normalizeNumber(it.number),
+                    carrier = it.carrierName?.toString()?.trim().orEmpty(),
                 )
             }.sortedBy { it.slotIndex }
         } catch (e: Exception) {

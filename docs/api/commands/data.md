@@ -111,8 +111,29 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
 - **卡来源**（v0.1.27+）：两层解析——通话库 `sub_id` 列（AOSP 隐藏列，多数 ROM
   存在）映射激活卡；拿不到时用 `PHONE_ACCOUNT_ID` 与
   `callCapablePhoneAccounts` 扁平化字符串比对兜底；都没有按未知（-1/''）。
+  **ROM 兼容**（v0.1.28+）：个别 ROM（实测一加 9 Plus / ColorOS）对未知列
+  投影直接抛 `IllegalArgumentException`（「Invalid column sub_id」）而非返回
+  -1 索引——客户端先带 `sub_id` 查询，失败后去掉该列降级重查（仅丢卡来源，
+  记录本身完整上报）。`get_sms` 的 `SmsReader` 同款防御。
 - **后台**：「通话记录」页——类型筛选 + 号码/联系人搜索 + 所属卡列 +
   时长/归属地展示 + 清空快照。
+
+## get_sim_info 获取SIM卡信息
+
+读取设备 SIM 卡列表并上报（v0.1.28）。为「发送短信/拨打电话」的选卡提供数据源。
+
+- **参数**：无。
+- **链路**：命令 → 客户端 `SimHelper`（READ_PHONE_STATE，查
+  `SubscriptionManager.activeSubscriptionInfoList`）→ `POST /api/sims` →
+  MySQL `device_sim_info` 表（(device_id, slot_index) 主键，按设备覆盖快照）。
+- **上报字段**：卡槽序号（0 基）、subscription_id、本机号码（运营商未写入为空）、
+  运营商名称（如「中国移动」，ROM 未提供为空）。
+- **回执**：卡片摘要直接可读（如「共 2 张卡：卡1（138xxx · 中国移动）；
+  卡2（号码未知 · 中国电信）」）。
+- **用途**：管理后台命令下发页 `send_sms` / `dial_phone` 的 sim 选项**按此结果
+  动态渲染**（选卡下拉显示实际卡数/号码/运营商，参数区顶部有卡信息提示条）；
+  设备从未上报过时退化为通用选项（自动/卡1/卡2/卡3）。
+- **权限**：READ_PHONE_STATE（启动批量申请清单内）；未授权回执失败并提示。
 
 ### 数据采集类通用设计（v0.1.25）
 

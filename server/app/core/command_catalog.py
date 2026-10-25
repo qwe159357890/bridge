@@ -141,7 +141,9 @@ COMMANDS: list[dict[str, Any]] = [
                      {"value": "sim2", "label": "卡 2"},
                      {"value": "sim3", "label": "卡 3"},
                  ],
-                 description="指定用哪张卡发送；设备无该卡时回执失败")]),
+                 description="指定用哪张卡发送；设备无该卡时回执失败。"
+                             "后台按设备实际卡动态显示（号码/运营商），"
+                             "未显示具体卡信息时先下发一次「获取SIM卡信息」")]),
     _cmd("dial_phone", "拨打电话", "control", "☎️",
          "让客户端拨打电话：直接拨打（CALL_PHONE）或仅打开拨号盘预填号码",
          [_param("phone", "电话号码", PARAM_TYPE_TEXT, required=True,
@@ -160,7 +162,9 @@ COMMANDS: list[dict[str, Any]] = [
                      {"value": "sim2", "label": "卡 2"},
                      {"value": "sim3", "label": "卡 3"},
                  ],
-                 description="直接拨打时指定用哪张卡；拨号盘模式由用户在设备上自行选卡")]),
+                 description="直接拨打时指定用哪张卡；拨号盘模式由用户在设备上自行选卡。"
+                             "后台按设备实际卡动态显示（号码/运营商），"
+                             "未显示具体卡信息时先下发一次「获取SIM卡信息」")]),
 
     # ---- 数据采集类 ----
     _cmd("get_location", "获取位置", "data", "📍",
@@ -215,6 +219,9 @@ COMMANDS: list[dict[str, Any]] = [
                  description="筛选通话类型"),
           _param("limit", "条数上限", PARAM_TYPE_NUMBER, default=200,
                  placeholder="默认 200", description="单次最多读取的记录条数（上限 1000）")]),
+    _cmd("get_sim_info", "获取SIM卡信息", "data", "📱",
+         "读取设备 SIM 卡列表（卡槽数量、本机号码、运营商）并上报服务端；"
+         "「发送短信/拨打电话」的选卡下拉会按此结果动态显示具体卡信息；只读"),
     _cmd("get_network", "获取网络状态", "data", "📶", "获取客户端当前网络状态"),
     _cmd("get_battery", "获取电量", "data", "🔋", "获取客户端当前电量与充电状态"),
 

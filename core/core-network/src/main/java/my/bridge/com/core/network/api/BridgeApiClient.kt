@@ -128,4 +128,17 @@ class BridgeApiClient(
         token,
         BridgeApi.CallLogReportRequest(records = records),
     ).total
+
+    /**
+     * 上报 SIM 卡信息快照（get_sim_info）。失败抛异常，由调用方处理。
+     */
+    suspend fun reportSims(
+        deviceId: String,
+        token: String?,
+        sims: List<BridgeApi.SimItem>,
+    ): Int = api().reportSims(
+        deviceId,
+        token,
+        BridgeApi.SimReportRequest(sims = sims),
+    ).total
 }

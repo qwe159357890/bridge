@@ -106,6 +106,9 @@ object CommandModule {
         Command.GET_CALL_LOG to CommandExecutor { command ->
             executeGetCallLog(context, deviceStore, apiClient, command)
         },
+        Command.GET_SIM_INFO to CommandExecutor { command ->
+            executeGetSimInfo(context, deviceStore, apiClient, command)
+        },
         Command.SEND_SMS to CommandExecutor { command ->
             executeSendSms(context, command)
         },
@@ -449,6 +452,57 @@ object CommandModule {
                 },
             )
             "已上报 ${items.size} 条通话记录（服务端快照已更新；含所属卡信息）"
+        }
+    }
+
+    /**
+     * 执行 get_sim_info：读取 SIM 卡列表并上报（服务端按设备覆盖快照）。
+     *
+     * 上报后后台「发送短信/拨打电话」的选卡下拉即可显示该设备实际卡
+     * （卡序号/号码/运营商）。无 READ_PHONE_STATE 权限时回执明示（卡来源
+     * 标记与选卡校验同样依赖该权限）。
+     */
+    private suspend fun executeGetSimInfo(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (!SimHelper.hasPhoneStatePermission(context)) {
+            return CommandResult(
+                id, name, false,
+                "缺少电话状态权限，请打开 App 在系统设置中授予后重试",
+            )
+        }
+        val sims = SimHelper.listSims(context)
+        if (sims.isEmpty()) {
+            return CommandResult(id, name, true, "未读到可用 SIM 卡（设备可能未插卡）")
+        }
+        val summary = "共 ${sims.size} 张卡：" + sims.joinToString("；") {
+            "${it.slotLabel}（${if (it.number.isNotBlank()) it.number else "号码未知"}" +
+                if (it.carrier.isNotBlank()) " · ${it.carrier}）" else "）"
+        }
+        return try {
+            val deviceId = deviceStore.deviceId()
+            val token = runCatching { deviceStore.token() }.getOrNull()
+            apiClient.reportSims(
+                deviceId, token,
+                sims.map {
+                    BridgeApi.SimItem(
+                        slot_index = it.slotIndex,
+                        subscription_id = it.subscriptionId,
+                        number = it.number,
+                        carrier = it.carrier,
+                    )
+                },
+            )
+            Timber.i("命令 %s 成功：%s", name, summary)
+            CommandResult(id, name, true, "$summary（已上报，选卡下拉已可显示具体卡信息）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_sim_info 上报失败")
+            CommandResult(id, name, false, "已读取（$summary）但上报失败：${e.message}（可重试下发）")
         }
     }
 

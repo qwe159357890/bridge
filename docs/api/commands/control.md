@@ -180,11 +180,14 @@ autoxClient `sms.js`，并补上两者缺失的**发送结果确认**。
 
 ### 关键实现点
 
-- **指定发送卡**（`sim` 参数，v0.1.27+）：`auto` 走系统默认卡；`sim1/sim2/sim3`
+- **指定发送卡**（`sim` 参数，v0.1.27+）：`auto` 走系统默认卡；`sim1/sim2/sim3…`
   按卡槽序号经 `SubscriptionManager`（READ_PHONE_STATE）解析 subscriptionId，
   `SmsManager.getSmsManagerForSubscriptionId` 指定卡发送；**指定的卡不存在时
   回执失败**（附当前卡列表），不静默退默认卡。回执带实际使用卡
   （如 `用[卡1（138xxx）]发送完成：成功 2/2`）。
+  后台选卡下拉**动态渲染**（v0.1.28+）：按 `get_sim_info` 上报结果显示
+  实际卡数/号码/运营商（见 [data.md](data.md#get_sim_info-获取sim卡信息)），
+  未上报过时退化通用选项。
 - **结果确认**：`sendTextMessage` 同步不抛异常 ≠ 发送成功（无 SIM/射频关闭
   是异步 RESULT_ERROR）。每个号码的 sent PendingIntent 配对
   `RECEIVER_NOT_EXPORTED` 动态接收器（intent `setPackage` 自己），等待
@@ -210,7 +213,7 @@ autoxClient `sms.js`，并补上两者缺失的**发送结果确认**。
 
 ### 指定使用卡（sim 参数，v0.1.27+）
 
-- `direct` 模式：`sim1/sim2/sim3` 按卡槽序号取
+- `direct` 模式：`sim1/sim2/sim3…` 按卡槽序号取
   `TelecomManager.callCapablePhoneAccounts[slot]`，经
   `PHONE_ACCOUNT_HANDLE` extra 指定拨号卡（对应关系 AOSP 约定 ≈ 卡槽顺序，
   个别 ROM 不一致时自动退回默认卡并在回执注明）；**指定的卡不存在时回执失败**

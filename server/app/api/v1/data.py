@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from app.api.v1.admin import require_admin
 from app.core.calllog_store import CallLogStore
 from app.core.contacts_store import ContactsStore
+from app.core.sim_store import SimStore
 from app.core.sms_store import SmsStore
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,23 @@ class CallLogReportRequest(BaseModel):
     records: list[CallLogItem] = Field(default_factory=list)
 
 
+class SimItemIn(BaseModel):
+    slot_index: int = 0
+    subscription_id: int = 0
+    number: str = ""
+    carrier: str = ""
+
+
+class SimReportRequest(BaseModel):
+    sims: list[SimItemIn] = Field(default_factory=list)
+
+
+class SimListResponse(BaseModel):
+    total: int
+    items: list[dict]
+    sync_time: Optional[str] = None
+
+
 # ----------------------------------------------------------------------
 # 依赖与工具
 # ----------------------------------------------------------------------
@@ -115,6 +133,10 @@ def _get_stores(request: Request) -> tuple[ContactsStore, SmsStore, CallLogStore
         request.app.state.sms_store,
         request.app.state.calllog_store,
     )
+
+
+def _sim_store(request: Request) -> SimStore:
+    return request.app.state.sim_store
 
 
 def _check_device_auth(request: Request, device_id: str | None, token: str | None) -> str:
@@ -277,5 +299,42 @@ def list_calllogs(
 def delete_calllogs(request: Request, device_id: str = Query(min_length=1)) -> DeleteResponse:
     try:
         return DeleteResponse(deleted=_get_stores(request)[2].delete(device_id))
+    except Exception as e:
+        raise _store_unavailable(e) from e
+
+
+# ----------------------------------------------------------------------
+# SIM 卡信息
+# ----------------------------------------------------------------------
+
+
+@router.post("/sims", response_model=DataReportResponse)
+def report_sims(
+    body: SimReportRequest,
+    request: Request,
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+) -> DataReportResponse:
+    """设备上报 SIM 卡信息（整体覆盖该设备快照）。"""
+    device_id = _check_device_auth(request, x_device_id, x_device_token)
+    try:
+        result = _sim_store(request).replace_snapshot(
+            device_id, [s.model_dump() for s in body.sims]
+        )
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return DataReportResponse(**result)
+
+
+@router.get("/sims", response_model=SimListResponse, dependencies=[Depends(require_admin)])
+def list_sims(request: Request, device_id: str = Query(min_length=1)) -> SimListResponse:
+    items, sync_time = _sim_store(request).list(device_id)
+    return SimListResponse(total=len(items), items=items, sync_time=sync_time)
+
+
+@router.delete("/sims", response_model=DeleteResponse, dependencies=[Depends(require_admin)])
+def delete_sims(request: Request, device_id: str = Query(min_length=1)) -> DeleteResponse:
+    try:
+        return DeleteResponse(deleted=_sim_store(request).delete(device_id))
     except Exception as e:
         raise _store_unavailable(e) from e

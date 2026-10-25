@@ -26,6 +26,7 @@ from app.core.location_store import build_location_store
 from app.core.contacts_store import build_contacts_store
 from app.core.sms_store import build_sms_store
 from app.core.calllog_store import build_calllog_store
+from app.core.sim_store import build_sim_store
 from app.core.log_store import LogStore
 from app.core.music_state_store import MusicStateStore
 from app.models.connection import Connection
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
     contacts_store = build_contacts_store(settings.locations.mysql)
     sms_store = build_sms_store(settings.locations.mysql)
     calllog_store = build_calllog_store(settings.locations.mysql)
+    sim_store = build_sim_store(settings.locations.mysql)
 
     # 注入 app.state，供端点使用
     app.state.settings = settings
@@ -107,6 +109,7 @@ def create_app() -> FastAPI:
     app.state.contacts_store = contacts_store
     app.state.sms_store = sms_store
     app.state.calllog_store = calllog_store
+    app.state.sim_store = sim_store
 
     # 启动时预连位置存储（MySQL 不可达不阻塞启动，端点层报 503 兜底）
     @app.on_event("startup")
@@ -118,6 +121,7 @@ def create_app() -> FastAPI:
             contacts_store.connect()
             sms_store.connect()
             calllog_store.connect()
+            sim_store.connect()
 
         try:
             await asyncio.get_event_loop().run_in_executor(None, _connect_all)
@@ -131,6 +135,7 @@ def create_app() -> FastAPI:
         contacts_store.close()
         sms_store.close()
         calllog_store.close()
+        sim_store.close()
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)

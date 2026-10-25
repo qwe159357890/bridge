@@ -105,6 +105,17 @@ interface BridgeApi {
         val sim_number: String = "",
     )
 
+    /** SIM 卡上报请求体（get_sim_info，按设备覆盖快照）。 */
+    data class SimReportRequest(val sims: List<SimItem>)
+
+    /** 一张 SIM 卡（slot_index: 0 基卡槽序号；carrier: 运营商名称）。 */
+    data class SimItem(
+        val slot_index: Int,
+        val subscription_id: Int,
+        val number: String,
+        val carrier: String,
+    )
+
     /** 注册设备，返回 device_id + token。 */
     @POST("api/devices/register")
     suspend fun registerDevice(@Body body: RegisterRequest): RegisterResponse
@@ -143,6 +154,14 @@ interface BridgeApi {
         @Header("X-Device-Id") deviceId: String,
         @Header("X-Device-Token") token: String?,
         @Body body: CallLogReportRequest,
+    ): SnapshotReportResponse
+
+    /** 上报 SIM 卡信息快照（get_sim_info，整体覆盖该设备）。 */
+    @POST("api/sims")
+    suspend fun reportSims(
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+        @Body body: SimReportRequest,
     ): SnapshotReportResponse
 
     /**

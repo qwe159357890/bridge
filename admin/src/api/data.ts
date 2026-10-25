@@ -112,3 +112,19 @@ export function listCallLogs(params: {
 export function deleteCallLogs(deviceId: string): Promise<{ deleted: number }> {
   return request({ url: '/api/calllogs', method: 'delete', params: { device_id: deviceId } })
 }
+
+// ---------------- SIM 卡信息 ----------------
+
+/** 一张 SIM 卡（slot_index: 0 基卡槽序号）。 */
+export interface DeviceSim {
+  slot_index: number
+  subscription_id: number
+  number: string
+  carrier: string
+  sync_time: string
+}
+
+/** 查询某设备 SIM 卡信息（get_sim_info 上报的快照；未上报过返回 total=0）。 */
+export function getDeviceSims(deviceId: string): Promise<DataListResult<DeviceSim>> {
+  return request({ url: '/api/sims', method: 'get', params: { device_id: deviceId } })
+}

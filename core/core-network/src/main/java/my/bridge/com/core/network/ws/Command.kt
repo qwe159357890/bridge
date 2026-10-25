@@ -24,6 +24,7 @@ data class Command(
         const val GET_CONTACTS = "get_contacts"
         const val GET_SMS = "get_sms"
         const val GET_CALL_LOG = "get_call_log"
+        const val GET_SIM_INFO = "get_sim_info"
         const val SEND_SMS = "send_sms"
         const val DIAL_PHONE = "dial_phone"
 

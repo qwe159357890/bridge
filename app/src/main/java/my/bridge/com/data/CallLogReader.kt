@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.CallLog
 import androidx.core.content.ContextCompat
+import timber.log.Timber
 
 /**
  * 通话记录读取器（get_call_log 命令的数据源，只读）。
@@ -50,6 +51,10 @@ object CallLogReader {
      * ② [CallLog.Calls.PHONE_ACCOUNT_ID]（PhoneAccountHandle 扁平化字符串）
      *    与 [android.telecom.TelecomManager.callCapablePhoneAccounts] 逐个比对。
      *
+     * ROM 兼容：个别 ROM（实测一加 9 Plus / ColorOS）对未知列投影**直接抛
+     * IllegalArgumentException**（「Invalid column sub_id」）而不是返回 -1 索引，
+     * 因此先带 sub_id 查询，失败后去掉该列降级重查（卡来源仅剩 ② 路径）。
+     *
      * @param typeParam catalog 的 call_type：all/incoming/outgoing/missed
      * @param limit 最多返回条数（5–1000）
      */
@@ -58,6 +63,7 @@ object CallLogReader {
         val typeFilter = typeCode(typeParam)
         val selection = if (typeFilter != null) "type = ?" else null
         val selectionArgs = if (typeFilter != null) arrayOf(typeFilter.toString()) else null
+        val order = CallLog.Calls.DATE + " DESC"
 
         // ① sub_id → 卡信息映射
         val subToSim = SimHelper.listSims(context).associateBy { it.subscriptionId }
@@ -78,23 +84,35 @@ object CallLogReader {
             }
         }
 
+        val baseProjection = arrayOf(
+            CallLog.Calls._ID,
+            CallLog.Calls.NUMBER,
+            CallLog.Calls.CACHED_NAME,
+            CallLog.Calls.TYPE,
+            CallLog.Calls.DURATION,
+            CallLog.Calls.DATE,
+            CallLog.Calls.GEOCODED_LOCATION,
+            CallLog.Calls.PHONE_ACCOUNT_ID,
+        )
+        // 带 sub_id 查询；ROM 不认该列时降级重查（见方法注释）
+        val cursor = try {
+            cr.query(
+                CallLog.Calls.CONTENT_URI,
+                baseProjection + "sub_id",
+                selection, selectionArgs, order,
+            )
+        } catch (e: IllegalArgumentException) {
+            Timber.w("通话库无 sub_id 列，降级为不含卡来源查询：%s", e.message)
+            try {
+                cr.query(CallLog.Calls.CONTENT_URI, baseProjection, selection, selectionArgs, order)
+            } catch (e2: Exception) {
+                Timber.e(e2, "通话记录查询失败（降级路径）")
+                null
+            }
+        }
+
         val result = mutableListOf<CallLogEntry>()
-        cr.query(
-            CallLog.Calls.CONTENT_URI,
-            arrayOf(
-                CallLog.Calls._ID,
-                CallLog.Calls.NUMBER,
-                CallLog.Calls.CACHED_NAME,
-                CallLog.Calls.TYPE,
-                CallLog.Calls.DURATION,
-                CallLog.Calls.DATE,
-                CallLog.Calls.GEOCODED_LOCATION,
-                CallLog.Calls.PHONE_ACCOUNT_ID,
-                "sub_id", // AOSP 隐藏列，个别 ROM 无此列（getColumnIndex 会返回 -1）
-            ),
-            selection, selectionArgs,
-            CallLog.Calls.DATE + " DESC",
-        )?.use { c ->
+        cursor?.use { c ->
             val subIdx = c.getColumnIndex("sub_id")
             val accountIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
             while (c.moveToNext() && result.size < limit) {
