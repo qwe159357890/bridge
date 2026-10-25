@@ -61,3 +61,12 @@ export function getAmapConfig(): Promise<{ key: string; security_js_code: string
     method: 'get',
   })
 }
+
+/** 逆地理编码（服务端调高德 Web服务 REST，入参 WGS-84 坐标，服务端转 GCJ-02）。 */
+export function reverseGeocode(latitude: number, longitude: number): Promise<{ address: string }> {
+  return request({
+    url: '/api/locations/address',
+    method: 'get',
+    params: { latitude, longitude },
+  })
+}

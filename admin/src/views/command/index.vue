@@ -169,6 +169,9 @@
       </div>
     </el-card>
 
+    <!-- 定位结果：get_location 回执成功后自动显示（地图 + 误差圈 + 地址） -->
+    <LocationResultCard ref="locationCard" />
+
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -227,6 +230,7 @@ import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
 import { formatTime } from '@/utils/format'
 import DevicePicker from '@/components/DevicePicker.vue'
+import LocationResultCard from '@/components/LocationResultCard.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -309,6 +313,11 @@ const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
 // ---------------------------------------------------------------------------
 
 const musicState = ref<MusicState | null>(null)
+
+// 定位结果卡片：下发 get_location 后记录 command_id，回执推送按 ID 匹配触发地图展示
+const locationCard = ref<any>(null)
+let pendingLocationCommandId = ''
+let locationSentAt = 0
 
 /** 控制类命令允许下发的设备状态（播放音乐不受限，设备在线即可）。 */
 const MUSIC_STATE_RULES: Record<string, string[]> = {
@@ -397,6 +406,8 @@ watch(
   () => form.deviceId,
   () => {
     forceSend.value = false // 切换目标设备时重置强制下发，防止残留开启误操作
+    pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
+    locationCard.value?.hide()
     loadMusicState()
   },
 )
@@ -507,6 +518,11 @@ async function handleSend() {
       collectParams(),
     )
     ElMessage.success(`命令已下发（${r.command_id.slice(0, 8)}…）`)
+    // get_location：记下命令 ID 与下发时刻，等回执推送匹配后展示定位结果地图
+    if (selectedCommand.value.name === 'get_location') {
+      pendingLocationCommandId = r.command_id
+      locationSentAt = Date.now()
+    }
     load()
   } catch {
     // 错误已统一提示
@@ -534,6 +550,17 @@ function connectWS() {
       const msg = JSON.parse(event.data)
       if (msg.type === 'command_result') {
         load()
+        // get_location 回执：成功则触发定位结果地图（按下发时记录的 command_id 精准匹配）
+        if (msg.data.command_id === pendingLocationCommandId) {
+          pendingLocationCommandId = ''
+          if (msg.data.success && msg.data.device_id === form.deviceId) {
+            locationCard.value?.show(
+              msg.data.device_id,
+              deviceNameOf(msg.data.device_id),
+              locationSentAt,
+            )
+          }
+        }
         const text = msg.data.success ? '命令执行成功' : '命令执行失败'
         ElMessage.success(`${msg.data.device_id}：${text}`)
       } else if (msg.type === 'music_state') {

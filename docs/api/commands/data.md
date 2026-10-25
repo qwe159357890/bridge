@@ -54,9 +54,19 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   或 `DELETE /api/locations`，须带 id / device_id / before_ms 之一）。
 - **配置**：`config.yaml` 有 `locations.mysql` / `locations.amap` 模板段，
   真实密码/Key 放 `config.local.yaml`（gitignore，不入库）。
-- **管理后台**：设备管理页每行「位置」按钮 → 弹窗上半高德地图轨迹
+- **管理后台**：设备管理页每行「位置」按钮 → 弹窗（自适应宽度 + 右下角
+  手柄拖拽调宽；时间两列合并避免横向滚动条）上半高德地图轨迹
   （Key 由 `/api/locations/amap-config` 动态下发，不进前端代码）+
   下半位置历史列表。
+- **命令页实时定位结果**：下发 get_location 回执成功后，命令下发页自动
+  出现「定位结果」卡片——短轮询 `GET /api/locations/latest` 等本次入库
+  （按 server_time 与下发时刻匹配，容忍 1 分钟时钟偏差，最多等 ~8 秒），
+  地图展示「标记 + 误差圈 + 信息窗」，信息窗含逆地理编码地址
+  （走服务端 `GET /api/locations/address`：Web服务 REST + WGS-84→GCJ-02
+  自动转换 + 24h 坐标网格缓存；2021-12 后的新 JS API Key 平台受限，
+  浏览器 Geocoder 插件不可控，故解析统一收口服务端）。
+  （高德 JS API Geocoder 插件，服务端 Key 复用）。上报与回执解耦，
+  等不到入库则明示超时提示。
 
 ### 踩坑
 

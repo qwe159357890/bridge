@@ -116,6 +116,11 @@ class AmapConfig(BaseModel):
 
     key: str = Field(default="", description="高德 Web端(JS API) Key，敏感建议放 config.local.yaml")
     security_js_code: str = Field(default="", description="配套安全密钥（2021-12 后申请的 Key 必填）")
+    web_key: str = Field(
+        default="",
+        description="高德 Web服务 Key（服务端 REST 逆地理编码用；2021-12 前的老 Key 不受平台限制，"
+        "可与 JS API Key 相同；新 Key 需单独申请「Web服务」类型）",
+    )
 
 
 class LocationsConfig(BaseModel):

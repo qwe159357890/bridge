@@ -67,6 +67,11 @@ class AmapConfigResponse(BaseModel):
     security_js_code: str
 
 
+class ReverseGeocodeResponse(BaseModel):
+    address: str
+    cached: bool = False
+
+
 # ----------------------------------------------------------------------
 # 依赖
 # ----------------------------------------------------------------------
@@ -190,3 +195,60 @@ def amap_config(request: Request) -> AmapConfigResponse:
     if not cfg.key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="未配置高德地图 Key（config.local.yaml 的 locations.amap.key）")
     return AmapConfigResponse(key=cfg.key, security_js_code=cfg.security_js_code)
+
+
+# 逆地理编码结果缓存：坐标取 4 位小数（约 11m 网格）做 key，TTL 24 小时。
+# 静止设备重复查询同一位置命中缓存，节省配额。
+_geo_cache: dict[tuple[float, float], tuple[float, str]] = {}
+_GEO_TTL_S = 24 * 3600
+
+
+@router.get("/address", response_model=ReverseGeocodeResponse, dependencies=[Depends(require_admin)])
+def reverse_geocode(
+    latitude: float = Query(ge=-90, le=90),
+    longitude: float = Query(ge=-180, le=180),
+) -> ReverseGeocodeResponse:
+    """逆地理编码：坐标 → 结构化地址（服务端调高德 Web服务 REST，稳于浏览器插件）。
+
+    入参为记录里的 WGS-84 原始坐标，内部转 GCJ-02 后请求（高德底图坐标系）。
+    web_key 未配置时返回空地址（前端显示「未配置」），不报错。
+    """
+    import json
+    import time as _time
+    import urllib.parse
+    import urllib.request
+
+    from app.core.location_store import wgs84_to_gcj02
+
+    cfg = get_settings().locations.amap
+    if not cfg.web_key:
+        return ReverseGeocodeResponse(address="")
+
+    gcj_lat, gcj_lng = wgs84_to_gcj02(latitude, longitude)
+    cache_key = (round(gcj_lat, 4), round(gcj_lng, 4))
+    now = _time.time()
+    hit = _geo_cache.get(cache_key)
+    if hit and now - hit[0] < _GEO_TTL_S:
+        return ReverseGeocodeResponse(address=hit[1], cached=True)
+
+    qs = urllib.parse.urlencode(
+        {"key": cfg.web_key, "location": f"{cache_key[1]},{cache_key[0]}", "output": "json"}
+    )
+    try:
+        with urllib.request.urlopen(
+            f"https://restapi.amap.com/v3/geocode/regeo?{qs}", timeout=8
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logger.warning("逆地理编码请求失败：%s", e)
+        return ReverseGeocodeResponse(address=f"解析失败（{e.__class__.__name__}）")
+
+    if data.get("status") != "1":
+        logger.warning("逆地理编码返回异常：%s", data.get("info"))
+        return ReverseGeocodeResponse(address=f"解析失败（{data.get('info', '未知')}）")
+
+    address = (data.get("regeocode") or {}).get("formatted_address") or ""
+    if len(_geo_cache) > 500:  # 防膨胀：超限整体重建
+        _geo_cache.clear()
+    _geo_cache[cache_key] = (now, address)
+    return ReverseGeocodeResponse(address=address)

@@ -49,3 +49,4 @@ locations:
   amap:
     key: ""                      # 高德 Web端(JS API) Key，敏感！真实值放 config.local.yaml
     security_js_code: ""         # 2021-12 后申请的 Key 需配安全密钥，同样放 config.local.yaml
+    web_key: ""                  # 高德 Web服务 Key（服务端逆地理编码）；2021-12 前老 Key 可与 key 相同
