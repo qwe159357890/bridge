@@ -15,3 +15,18 @@ export function disconnectDevice(deviceId: string): Promise<{ status: string; de
     method: 'post',
   })
 }
+
+/** 设备音乐播放状态（playing/paused/idle/unknown）。 */
+export interface MusicState {
+  device_id: string
+  state: 'playing' | 'paused' | 'idle' | 'unknown'
+  source: string | null
+  updated_at?: number | null
+}
+
+export function getMusicState(deviceId: string): Promise<MusicState> {
+  return request<MusicState>({
+    url: `/api/devices/${deviceId}/music-state`,
+    method: 'get',
+  })
+}

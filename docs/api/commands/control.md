@@ -112,6 +112,44 @@ http:// 或 https:// 开头 → ①
 - 回执即状态显示（方案 A）：每次 play/pause/resume/stop 的回执消息都带
   当前状态与曲目，管理后台下发历史天然可见，无需额外上报通道。
 
+### 播放状态上报与后台联动（2026-10-25 第二轮）
+
+管理员不该「发一枪才知道死活」：控制类命令在后台**事前**按设备状态联动禁用，
+状态徽标常驻显示。三端数据流（全部复用现有通道，无新依赖）：
+
+```
+客户端 MusicPlayer 状态机
+  --状态变化--> WS message 通道上报 {"event":"music_state","state":"playing|paused|idle","source":"test.mp3"}
+  --> 服务端 ws.py 解析 → MusicStateStore（内存，device_id 维度）
+  --> GET /api/devices/{id}/music-state（管理鉴权，选中设备即拉取）
+  --> admin 事件总线广播 music_state 事件 → 管理后台 WS 实时更新徽标
+```
+
+- **客户端**（`MusicStateReporter`，BridgeApplication 启动时装载）：
+  状态一变即上报（播/暂停/恢复/停止/自然播完/出错）；WS 重连成功补报当前状态
+  （服务端重启/断连后状态会丢，借此对齐）；未连接时静默丢弃，不做重试队列。
+- **服务端**（`core/music_state_store.py` + `api/ws.py`）：
+  合法状态 playing/paused/idle，非法忽略；**断连即清除**（此后查询返回 unknown
+  并广播 unknown 事件），避免陈旧状态误导。
+- **管理后台**（命令下发页）：
+  - 选中目标设备即拉取状态并常驻徽标（▶ 播放中：曲目 / ⏸ 已暂停 / 空闲 / 状态未知），
+    旁有手动**刷新按钮**（设备重启等场景兜底）；
+  - 实时：admin WS 收到 `music_state` 事件即更新当前目标设备的徽标；
+  - **按钮联动矩阵**（卡片置灰 + 下发按钮禁用 + 原因提示）：
+
+| 命令 | playing | paused | idle | unknown/离线 |
+|---|---|---|---|---|
+| `play_music` | ✅（切歌） | ✅ | ✅ | ❌ |
+| `pause_music` | ✅ | ❌ | ❌ | ❌ |
+| `resume_music` | ❌ | ✅ | ❌ | ❌ |
+| `stop_music` | ✅ | ✅ | ❌ | ❌ |
+
+  注意：客户端侧的状态约束**仍然保留**（服务端不因前端禁用而放松校验）——
+  前端禁用只是体验优化，真实约束以客户端回执为准（防绕过/竞态）。
+  单测：`server/tests/test_music_state.py`（store 单元 + ws 处理逻辑 + REST 查询）。
+  已知限制：TestClient 的 WS 会话在当前 starlette 版本有兼容性问题，
+  ws 处理逻辑以提取的协程直测覆盖，端到端链路待真机验证。
+
 ---
 
 ## 未收录命令

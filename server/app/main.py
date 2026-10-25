@@ -21,6 +21,7 @@ from app.core.connection_manager import ConnectionManager
 from app.core.connection_event_store import ConnectionEventStore
 from app.core.device_registry import DeviceRegistry
 from app.core.log_store import LogStore
+from app.core.music_state_store import MusicStateStore
 from app.models.connection import Connection
 from app.schemas.ws import CloseData, Envelope
 
@@ -79,6 +80,8 @@ def create_app() -> FastAPI:
 
     admin_event_bus = AdminEventBus()
 
+    music_state_store = MusicStateStore()
+
     # 注入 app.state，供端点使用
     app.state.settings = settings
     app.state.connection_manager = manager
@@ -88,6 +91,7 @@ def create_app() -> FastAPI:
     app.state.connection_event_store = connection_event_store
     app.state.admin_auth = admin_auth
     app.state.admin_event_bus = admin_event_bus
+    app.state.music_state_store = music_state_store
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)

@@ -127,14 +127,29 @@
 | 命令 | 说明 |
 |---|---|
 | `upload_log` | 采集诊断日志并上传到后端（`POST /api/logs`） |
+| `play_music` | 播放音乐（音源三形态，见 `commands/control.md`） |
+| `pause_music` | 暂停播放 |
+| `resume_music` | 从暂停进度恢复 |
+| `stop_music` | 停止并释放播放器 |
 
-- 服务端 `ALLOWED_COMMANDS = {"upload_log"}` 白名单，客户端命令注册表与之保持一致。
+- 服务端 `ALLOWED_COMMANDS`（由 `command_catalog.py` 派生）与客户端命令注册表保持一致。
 - 收到未注册/不支持的命令 → 回执 `success=false`（不回执会阻塞服务端，须兜底）。
 
 ### 5.3 客户端命令执行器
 
 - 命令执行器实现 `CommandExecutor`（`suspend fun execute(command): CommandResult`），注册到 `BridgeWebSocketClient.commandExecutors`。
-- `upload_log` 执行器在 app 层 `CommandModule` 注册：`DiagLog.dump()` 采集 → `BridgeApiClient.uploadLog()` 上传。
+- 命令执行器在 app 层 `CommandModule` 注册（upload_log / 音乐四命令）。
+
+### 5.4 业务上行消息（message 通道）
+
+客户端可经 `BridgeWebSocketClient.sendBusinessMessage(data)` 上行 `message` 帧，
+当前仅一种：**音乐播放状态上报**（详见 `commands/control.md` 状态上报节）：
+
+```json
+{"type":"message","data":{"event":"music_state","state":"playing|paused|idle","source":"test.mp3"}}
+```
+
+由 `MusicStateReporter`（app 层单例）驱动：状态一变即上报，WS 重连成功补报当前状态。
 - 执行在协程（IO）中进行，异常统一转 `success=false` 回执，不抛。
 
 ---

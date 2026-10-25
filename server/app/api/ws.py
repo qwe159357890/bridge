@@ -27,6 +27,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _handle_music_state_message(app, device_id: str, data: dict) -> None:
+    """处理客户端上报的音乐播放状态（WS ``message`` 通道，event=music_state）。
+
+    存储最新状态并广播 ``music_state`` 事件给管理后台；非法状态忽略。
+    独立成函数便于单测（绕开 TestClient 的 WS 会话兼容性问题）。
+    """
+    store = app.state.music_state_store
+    state = data.get("state")
+    source = data.get("source")
+    if store.set(device_id, str(state) if state else "", source):
+        logger.debug("device %s 音乐状态上报：%s %s", device_id, state, source)
+        try:
+            bus = app.state.admin_event_bus
+            await bus.publish("music_state", {
+                "device_id": device_id,
+                "state": state,
+                "source": source,
+            })
+        except Exception:
+            logger.exception("发布音乐状态事件失败（忽略）")
+    else:
+        logger.debug("device %s 非法音乐状态：%s", device_id, state)
+
+
+async def _clear_music_state(app, device_id: str) -> None:
+    """断连时清除设备音乐状态（此后查询返回 unknown），并通知管理侧。"""
+    try:
+        app.state.music_state_store.clear(device_id)
+        bus = app.state.admin_event_bus
+        await bus.publish("music_state", {
+            "device_id": device_id,
+            "state": "unknown",
+            "source": None,
+        })
+    except Exception:
+        logger.exception("清除音乐状态失败（忽略）")
+
+
 async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     """连接处理主流程（提取为独立协程，便于注入 manager 进行测试）。"""
     await ws.accept()
@@ -137,8 +175,12 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 offline_reason = "closed"
                 break
             elif envelope.type == "message":
-                # 业务消息：预留，当前仅记录（后续可接入 services 层处理）
-                logger.debug("device %s 业务消息：%s", device_id, envelope.data)
+                # 业务消息：当前仅处理音乐播放状态上报（event=music_state）
+                data = envelope.data or {}
+                if data.get("event") == "music_state":
+                    await _handle_music_state_message(ws.app, device_id, data)
+                else:
+                    logger.debug("device %s 业务消息：%s", device_id, envelope.data)
             elif envelope.type == "command_result":
                 # 客户端命令执行回执：写入命令存储（供管理侧查询），并发布事件实时通知管理侧
                 data = envelope.data or {}
@@ -174,6 +216,8 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 ws.app.state.connection_event_store.record(device_id, "offline", offline_reason)
             except Exception:
                 logger.exception("记录下线事件失败（忽略）")
+            # 5.2 音乐状态随断连失效：清除记录（查询端点此后返回 unknown）并通知管理侧
+            await _clear_music_state(ws.app, device_id)
         # 6. 清理：从映射表移除（仅当映射仍指向本连接时）
         await manager.unregister(device_id, conn)
 

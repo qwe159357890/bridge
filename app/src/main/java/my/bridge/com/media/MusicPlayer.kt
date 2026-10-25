@@ -1,6 +1,7 @@
 package my.bridge.com.media
 
 import android.media.MediaPlayer
+import java.util.concurrent.CopyOnWriteArraySet
 import timber.log.Timber
 
 /**
@@ -37,6 +38,20 @@ object MusicPlayer {
     /** 当前播放器实例（null = 空闲）。 */
     private var player: MediaPlayer? = null
 
+    /** 状态变化监听器（上报器注册；回调线程可能是 MediaPlayer 回调线程或调用线程）。 */
+    private val stateListeners = CopyOnWriteArraySet<(State, String?) -> Unit>()
+
+    /** 注册状态变化监听（注册后立即回调一次当前状态，便于订阅方对齐）。 */
+    fun addStateListener(listener: (State, String?) -> Unit) {
+        stateListeners.add(listener)
+        listener(state, currentSource)
+    }
+
+    /** 通知所有监听器当前状态。 */
+    private fun notifyState() {
+        stateListeners.forEach { runCatching { it(state, currentSource) } }
+    }
+
     /** 当前状态（空闲 = 无播放器实例）。 */
     @Volatile
     var state: State = State.IDLE
@@ -60,6 +75,7 @@ object MusicPlayer {
         synchronized(this) {
             stopLocked()
             Timber.i("音乐已停止")
+            notifyState()
         }
     }
 
@@ -81,6 +97,7 @@ object MusicPlayer {
             }
             state = State.PAUSED
             Timber.i("音乐已暂停：$currentSource")
+            notifyState()
             return true
         }
     }
@@ -102,6 +119,7 @@ object MusicPlayer {
             }
             state = State.PLAYING
             Timber.i("音乐恢复播放：$currentSource")
+            notifyState()
         }
     }
 
@@ -130,14 +148,19 @@ object MusicPlayer {
                 mp.setOnCompletionListener {
                     // 非循环曲目自然播完：释放播放器，状态回落空闲（MediaPlayer 回调线程）
                     Timber.i("音乐自然播完，释放播放器")
-                    synchronized(this@MusicPlayer) { stopLocked() }
+                    synchronized(this@MusicPlayer) {
+                        stopLocked()
+                        notifyState()
+                    }
                 }
                 mp.start()
                 state = State.PLAYING
                 currentSource = source
                 Timber.i("开始播放：$source（loop=$loop）")
+                notifyState()
             } catch (e: Exception) {
                 stopLocked()
+                notifyState()
                 throw e
             }
         }

@@ -58,6 +58,18 @@ async def list_devices(request: Request) -> list[DeviceListItem]:
     return result
 
 
+@router.get("/{device_id}/music-state", dependencies=[Depends(require_admin)])
+async def get_music_state(device_id: str, request: Request) -> dict:
+    """查询设备最新音乐播放状态（管理侧，供命令下发页展示与按钮禁用）。
+
+    返回 {device_id, state, source, updated_at}；state ∈ playing/paused/idle/unknown。
+    unknown = 设备从未上报或当前离线（断连时 ws 层已清除记录）。
+    """
+    store = request.app.state.music_state_store
+    record = store.get(device_id)
+    return {"device_id": device_id, **record}
+
+
 @router.get("/count", dependencies=[Depends(require_admin)])
 async def device_count(request: Request) -> dict:
     """已注册设备总数。"""

@@ -31,6 +31,9 @@ class BridgeApplication : Application() {
     @Inject
     lateinit var apiClient: BridgeApiClient
 
+    @Inject
+    lateinit var musicStateReporter: my.bridge.com.media.MusicStateReporter
+
     override fun onCreate() {
         super.onCreate()
 
@@ -47,6 +50,9 @@ class BridgeApplication : Application() {
 
         // 启动后端长连接（设备注册 + WebSocket）
         connectionManager.start()
+
+        // 音乐播放状态上报（状态变化 → WS message 通道 → 管理后台实时展示/按钮联动）
+        musicStateReporter.start()
 
         Timber.i("BridgeApplication 初始化完成")
     }

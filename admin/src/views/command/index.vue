@@ -13,6 +13,22 @@
               placeholder="选择在线设备"
               style="width: 240px"
             />
+            <el-tag
+              v-if="form.deviceId && musicState"
+              :type="musicTagType"
+              size="small"
+              class="music-tag"
+            >
+              {{ musicStateText }}
+            </el-tag>
+            <el-button
+              v-if="form.deviceId"
+              :icon="Refresh"
+              size="small"
+              circle
+              title="刷新播放状态"
+              @click="loadMusicState"
+            />
           </div>
         </div>
       </template>
@@ -56,7 +72,7 @@
               v-for="cmd in filteredCommands"
               :key="cmd.name"
               class="command-card"
-              :class="{ active: selectedCommand?.name === cmd.name }"
+              :class="{ active: selectedCommand?.name === cmd.name, blocked: isBlocked(cmd) }"
               @click="selectCommand(cmd)"
             >
               <div class="command-icon">{{ cmd.icon }}</div>
@@ -130,12 +146,13 @@
                 type="primary"
                 size="large"
                 :loading="sending"
-                :disabled="!canSend"
+                :disabled="!canSend || commandBlocked"
                 @click="handleSend"
               >
                 下发命令
               </el-button>
               <span v-if="!form.deviceId" class="send-hint">请先选择在线设备</span>
+              <span v-else-if="commandBlocked" class="send-hint warn">{{ blockHint }}</span>
             </div>
           </div>
 
@@ -193,11 +210,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { listDevices } from '@/api/devices'
+import { getMusicState, listDevices } from '@/api/devices'
+import type { MusicState } from '@/api/devices'
 import { listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
@@ -279,6 +297,91 @@ const filteredCommands = computed(() => {
 })
 
 const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
+
+// ---------------------------------------------------------------------------
+// 音乐播放状态：目标设备的实时状态徽标 + 控制类命令按钮联动
+// ---------------------------------------------------------------------------
+
+const musicState = ref<MusicState | null>(null)
+
+/** 控制类命令允许下发的设备状态（播放音乐不受限，设备在线即可）。 */
+const MUSIC_STATE_RULES: Record<string, string[]> = {
+  pause_music: ['playing'],
+  resume_music: ['paused'],
+  stop_music: ['playing', 'paused'],
+}
+
+const musicStateText = computed(() => {
+  const s = musicState.value
+  if (!s) return ''
+  switch (s.state) {
+    case 'playing':
+      return `▶ 正在播放：${s.source || '未知曲目'}`
+    case 'paused':
+      return `⏸ 已暂停：${s.source || '未知曲目'}`
+    case 'idle':
+      return '空闲（无播放）'
+    default:
+      return '状态未知'
+  }
+})
+
+const musicTagType = computed(() => {
+  switch (musicState.value?.state) {
+    case 'playing':
+      return 'success'
+    case 'paused':
+      return 'warning'
+    default:
+      return 'info'
+  }
+})
+
+/** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。 */
+function isBlocked(cmd: CommandDef): boolean {
+  const allowed = MUSIC_STATE_RULES[cmd.name]
+  if (!allowed) return false
+  if (!form.deviceId) return true
+  const state = musicState.value?.state ?? 'unknown'
+  return !allowed.includes(state)
+}
+
+const commandBlocked = computed(() =>
+  selectedCommand.value ? isBlocked(selectedCommand.value) : false,
+)
+
+const blockHint = computed(() => {
+  if (!commandBlocked.value || !selectedCommand.value) return ''
+  const state = musicState.value?.state ?? 'unknown'
+  if (state === 'unknown') return '设备离线或状态未知，无法下发'
+  switch (selectedCommand.value.name) {
+    case 'pause_music':
+      return '当前没有正在播放的音乐，无法暂停'
+    case 'resume_music':
+      return state === 'idle' ? '当前没有可恢复的音乐' : '正在播放中，无需恢复'
+    case 'stop_music':
+      return '当前没有正在播放的音乐，无法停止'
+    default:
+      return ''
+  }
+})
+
+async function loadMusicState() {
+  if (!form.deviceId) {
+    musicState.value = null
+    return
+  }
+  try {
+    musicState.value = await getMusicState(form.deviceId)
+  } catch {
+    musicState.value = null
+  }
+}
+
+watch(
+  () => form.deviceId,
+  () => loadMusicState(),
+)
 
 const activeCategoryLabel = computed(() => {
   const cat = categories.value.find((c) => c.key === activeCategory.value)
@@ -415,6 +518,11 @@ function connectWS() {
         load()
         const text = msg.data.success ? '命令执行成功' : '命令执行失败'
         ElMessage.success(`${msg.data.device_id}：${text}`)
+      } else if (msg.type === 'music_state') {
+        // 实时音乐状态推送：仅更新当前目标设备
+        if (msg.data.device_id === form.deviceId) {
+          musicState.value = msg.data
+        }
       }
     } catch {
       // 忽略解析错误
@@ -650,5 +758,22 @@ onBeforeUnmount(() => {
 .send-hint {
   font-size: 13px;
   color: #909399;
+}
+.send-hint.warn {
+  color: #e6a23c;
+}
+.music-tag {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.command-card.blocked {
+  opacity: 0.45;
+}
+.command-card.blocked:hover {
+  border-color: #e4e7ed;
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
 }
 </style>

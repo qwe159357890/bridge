@@ -485,6 +485,7 @@ admin:
 | GET | `/api/connections/log` | 设备上下线记录（时间倒序，可按 device_id 过滤） |
 | POST | `/api/devices/{id}/disconnect` | 强制断开指定设备（服务端踢下线） |
 | GET | `/api/devices/count` | 已注册设备总数 |
+| GET | `/api/devices/{device_id}/music-state` | 查询设备音乐播放状态（playing/paused/idle/unknown，见 api/commands/control.md 状态上报节） |
 | POST | `/api/logs` | 上传日志（客户端上报诊断日志） |
 | GET | `/api/logs/{device_id}` | 读取某设备日志列表 |
 | GET | `/api/logs` | 列出有日志的设备摘要（昵称 + 日志数 + 最新时间 + 在线状态） |

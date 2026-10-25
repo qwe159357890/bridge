@@ -312,6 +312,21 @@ class BridgeWebSocketClient(
         Timber.i("命令回执：${result.command} success=${result.success} ${result.message}")
     }
 
+    /**
+     * 发送业务上行消息（TYPE_MESSAGE 通道，如音乐播放状态上报）。
+     *
+     * @return 是否已投递给 OkHttp 队列（未连接返回 false，调用方自行决定是否重试）
+     */
+    fun sendBusinessMessage(data: JsonObject): Boolean {
+        val ws = webSocket ?: return false
+        return try {
+            ws.send(WsEnvelope.make(WsEnvelope.TYPE_MESSAGE, data).toJson(gson))
+        } catch (e: Exception) {
+            Timber.w(e, "发送业务消息失败")
+            false
+        }
+    }
+
     /** 计算指数退避 + 抖动。 */
     private fun backoffDelay(attempt: Int): Long {
         val exp = WsConfig.RECONNECT_BASE_MS * 2.0.pow(attempt.coerceAtLeast(0)).toLong()
