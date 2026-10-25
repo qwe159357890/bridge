@@ -62,15 +62,50 @@
 | `select` | el-select | 下拉（需 options） |
 | `textarea` | el-input type=textarea | 多行文本 |
 
-### 3.3 扩展命令
-
-新增一条命令只需两处：
+### 3.3 扩展命令（固定流程，三步）
 
 1. **后端**：在 `command_catalog.py` 的 `COMMANDS` 里加一条 `_cmd(...)`（必要时加类别）。
-2. **客户端**：在 `app/.../di/CommandModule.kt` 注册对应 `CommandExecutor`，并在
-   `Command.kt` 的 companion 加命令名常量。
+2. **客户端**：`Command.kt` companion 加命令名常量 + `app/.../di/CommandModule.kt`
+   注册对应 `CommandExecutor`。
+3. **文档**：
+   - 有实现语义值得写（多端协作流程 / 客户端副作用 / 踩坑）→ 在
+     `commands/{category}.md` 加 `## 命令名 中文名` 章节；
+   - 同步 `commands/README.md` 索引表：有文档则把该命令行的 `—` 改成章节链接，
+     无文档保持 `—`（索引表必须含所有命令）。
 
 前端无需改动（自动拉取渲染）。
+
+### 3.4 命令实现文档组织（docs/api/commands/）
+
+命令会增长到几十上百个，**一命令一文档不可取**。实现文档按**命令分类聚合**，
+与后台侧边栏分类树共用同一套 category key（同一分类心智）：
+
+```
+docs/api/
+├── ws-client.md            协议层：WS 帧格式/握手/心跳/回执（跨命令，恒定 1 篇）
+├── command-catalog.md      元数据层：本规范（怎么扩展命令，恒定 1 篇）
+└── commands/               实现层：按分类聚合，文件名 = category key
+    ├── README.md           命令级索引表（含「缺文档台账」）
+    ├── control.md          🎛️ 控制类
+    ├── data.md             📡 数据采集（按需创建）
+    ├── media.md            🎬 音视频（按需创建）
+    ├── interact.md         💬 交互（按需创建）
+    └── system.md           ⚙️ 系统（按需创建）
+```
+
+四条规则（防膨胀的关键）：
+
+1. **分类文件名 = category key**：后端 `CATEGORIES` 新增分类时才允许新增文档文件，
+   文件数被分类数天然封顶；命令增长只表现为往文件里加 `## 命令名 中文名` 章节。
+2. **文档不复制 SSOT**：参数 schema 的唯一权威是 `command_catalog.py`，
+   文档只写 catalog 说不清的实现语义（机制/多端协作流程/缓存与副作用/踩坑）。
+3. **写入门槛**：命令满足其一才写文档——多端协作流程、客户端副作用（缓存/状态）、
+   有踩坑记录。简单命令（如 show_toast）不写，catalog 的 description 足够。
+4. **INDEX.md 登记到目录级**：`api/` 段只列 `commands/` 一个入口（指向 README），
+   不逐篇登记；README 是命令 → 文档章节的索引，无文档的命令也列出（标 `—`）。
+
+示例：play_music 的音源三形态/缓存机制见
+[commands/control.md](commands/control.md#play_music-播放音乐)。
 
 ## 4. meta 接口
 

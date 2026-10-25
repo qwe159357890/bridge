@@ -106,9 +106,12 @@ CATEGORIES: list[dict[str, Any]] = [
 
 COMMANDS: list[dict[str, Any]] = [
     # ---- 控制类 ----
-    _cmd("play_music", "播放音乐", "control", "▶️", "让客户端播放指定音乐",
-         [_param("url", "音乐地址", PARAM_TYPE_TEXT, required=True,
-                 placeholder="http(s)://… 或本地文件路径", description="音乐文件地址"),
+    _cmd("play_music", "播放音乐", "control", "▶️",
+         "播放音乐：URL 流播 / 本地路径直播 / 文件名走「客户端缓存+服务器共享目录」",
+         [_param("url", "音源", PARAM_TYPE_TEXT, required=True,
+                 placeholder="http(s)://… 或 /storage/… 或 test.mp3",
+                 description="三种形态：①远程 URL 直接流播；②本地绝对路径直接播放；"
+                             "③裸文件名先查客户端缓存，未命中从服务器音乐目录下载缓存后播放（下次直接命中）"),
           _param("loop", "循环播放", PARAM_TYPE_SWITCH, default=False)]),
     _cmd("pause_music", "暂停音乐", "control", "⏸️", "暂停客户端正在播放的音乐"),
     _cmd("set_volume", "调节音量", "control", "🔊",

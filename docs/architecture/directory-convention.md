@@ -44,22 +44,37 @@ Bridge/                             仓库根目录（monorepo：客户端 + 服
 docs/
 ├── INDEX.md                    总领索引：导航所有分文档，记录文档清单
 ├── architecture/               架构类文档
+│   ├── directory-convention.md 项目目录组织规范（本文）
+│   ├── terminology.md          术语约定（三端叫法）
 │   ├── overview.md             总体架构设计
 │   └── module-map.md           模块依赖关系图
 ├── keepalive/                  保活专题
 │   ├── design.md               保活方案设计（借鉴归纳）
 │   └── integration.md          保活模块集成说明
 ├── dev/                        开发规范
+│   ├── release-pipeline.md     构建与发布链路
 │   ├── coding-style.md         代码规范
 │   ├── git-workflow.md         Git 协作规范
 │   └── commit-convention.md    提交信息规范
-└── api/                        接口文档（未来）
+└── api/                        接口文档
+    ├── ws-client.md            客户端 WS 对接设计（协议层）
+    ├── command-catalog.md      命令元数据规范（含命令文档组织规则）
+    └── commands/               命令实现文档（按命令分类聚合）
+        ├── README.md           命令级索引表（含缺文档台账）
+        ├── control.md          🎛️ 控制类
+        ├── data.md             📡 数据采集（按需创建）
+        ├── media.md            🎬 音视频（按需创建）
+        ├── interact.md         💬 交互（按需创建）
+        └── system.md           ⚙️ 系统（按需创建）
 ```
 
 **规则：**
 - 每新增一个模块/功能，在 `docs/` 对应分类下新建独立文档，**不追加到 README**。
 - `docs/INDEX.md` 必须同步更新，是文档的唯一导航入口。
 - 文档命名用 `kebab-case.md`（小写连字符）。
+- **命令实现文档**（`docs/api/commands/`）：按命令分类聚合，文件名 = `command_catalog.py`
+  的 category key，文件数被分类数封顶，命令增长 = 加章节；INDEX 只登记 `commands/`
+  目录级入口。完整四条规则见 `api/command-catalog.md` §3.4。
 
 ### 2. `assets/` —— 静态资源源文件
 

@@ -16,6 +16,7 @@ data class Command(
     companion object {
         /** 已知命令名（与服务端 ALLOWED_COMMANDS 白名单一致）。 */
         const val UPLOAD_LOG = "upload_log"
+        const val PLAY_MUSIC = "play_music"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

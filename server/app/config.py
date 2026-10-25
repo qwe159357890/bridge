@@ -87,6 +87,16 @@ class AdminConfig(BaseModel):
     token_ttl: int = Field(default=86400, ge=0, description="管理员 token 有效期（秒），0 表示永久")
 
 
+class MusicConfig(BaseModel):
+    """音乐共享目录配置（play_music 命令的「裸文件名」音源）。"""
+
+    dir: str = Field(
+        default="data/music",
+        min_length=1,
+        description="音乐共享目录，相对路径相对 server 根目录（绝对路径原样使用）",
+    )
+
+
 class LoggingConfig(BaseModel):
     """日志配置。"""
 
@@ -103,6 +113,7 @@ class Settings(BaseModel):
     auth: AuthConfig = AuthConfig()
     admin: AdminConfig = AdminConfig()
     logging: LoggingConfig = LoggingConfig()
+    music: MusicConfig = MusicConfig()
 
 
 def _env_overrides() -> dict:

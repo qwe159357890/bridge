@@ -3,6 +3,7 @@ package my.bridge.com.core.network.api
 import com.google.gson.Gson
 import my.bridge.com.core.network.ws.ServerAddress
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
@@ -48,4 +49,14 @@ class BridgeApiClient(
             app_version = appVersion,
         )
     ).message
+
+    /**
+     * 下载服务器共享目录的音乐文件（play_music 裸文件名音源）。
+     * 404 等失败抛异常（HttpException，由调用方区分处理），调用方负责关闭响应体。
+     */
+    suspend fun downloadMusic(
+        filename: String,
+        deviceId: String,
+        token: String?,
+    ): ResponseBody = api().downloadMusic(filename, deviceId, token)
 }

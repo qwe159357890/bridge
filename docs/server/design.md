@@ -456,6 +456,7 @@ admin:
 |---|---|
 | `POST /api/devices/register`（设备注册） | ❌ 否（客户端调用） |
 | `POST /api/logs`（日志上传） | ❌ 否（客户端调用） |
+| `GET /api/music/{filename}`（音乐下载） | ❌ 否（客户端调用；要求设备头鉴权，与 WS hello 同一套注册表校验） |
 | 其余 `/api/devices` `/api/commands` `/api/logs`(读/删) `/api/push` `/api/connections` | ✅ 是 |
 
 ### 管理侧实时推送（WebSocket）
@@ -488,6 +489,7 @@ admin:
 | GET | `/api/logs/{device_id}` | 读取某设备日志列表 |
 | GET | `/api/logs` | 列出有日志的设备摘要（昵称 + 日志数 + 最新时间 + 在线状态） |
 | DELETE | `/api/logs/{device_id}` | 清除某设备日志 |
+| GET | `/api/music/{filename}` | 下载共享音乐文件（play_music 裸文件名音源，详见 api/commands/control.md） |
 | GET | `/health` | 健康检查 + 运行统计（连接数/注册数/运行时长） |
 
 ### 16.1 设备上下线记录

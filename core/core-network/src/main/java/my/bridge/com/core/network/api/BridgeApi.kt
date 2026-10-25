@@ -1,7 +1,12 @@
 package my.bridge.com.core.network.api
 
+import okhttp3.ResponseBody
 import retrofit2.http.Body
+import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.Path
+import retrofit2.http.Streaming
 
 /**
  * Bridge 后端 REST 接口（Retrofit）。
@@ -9,6 +14,7 @@ import retrofit2.http.POST
  * 客户端对接的 REST 能力（管理侧接口不在此列）：
  *   - 设备注册（POST /api/devices/register）→ device_id + token
  *   - 日志上传（POST /api/logs）→ code=0
+ *   - 音乐下载（GET /api/music/{filename}）→ 音频二进制（play_music 裸文件名音源）
  *
  * 字段与后端 schemas/ws.py、schemas/logs.py 对齐。
  */
@@ -38,4 +44,16 @@ interface BridgeApi {
     /** 上传诊断日志。 */
     @POST("api/logs")
     suspend fun uploadLog(@Body body: LogUploadRequest): LogUploadResponse
+
+    /**
+     * 下载服务器共享目录里的音乐文件（404 = 服务器无此文件）。
+     * 设备鉴权头：与 WS hello 同一套注册表校验（auth 关闭时服务端忽略）。
+     */
+    @Streaming
+    @GET("api/music/{filename}")
+    suspend fun downloadMusic(
+        @Path("filename") filename: String,
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+    ): ResponseBody
 }

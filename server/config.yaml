@@ -34,3 +34,7 @@ admin:
 
 logging:
   level: "INFO"                  # DEBUG / INFO / WARNING / ERROR / CRITICAL
+
+music:
+  dir: "data/music"              # 音乐共享目录（play_music 裸文件名音源）
+                                 # 相对路径相对 server 根目录，管理员把音乐文件放入即可下发
