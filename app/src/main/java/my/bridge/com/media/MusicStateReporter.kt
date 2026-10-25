@@ -6,7 +6,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import my.bridge.com.core.network.ws.BridgeWebSocketClient
-import my.bridge.com.core.network.ws.WsConnectionState
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -35,9 +34,10 @@ class MusicStateReporter @Inject constructor(
     fun start() {
         MusicPlayer.addStateListener { state, source -> report(state, source) }
         scope.launch {
-            webSocketClient.state.collect { s ->
-                if (s == WsConnectionState.CONNECTED) {
-                    // 重连成功：补报当前状态（含初始空闲）
+            // 监听「握手完成」而非 CONNECTED：hello 发出前发消息会被服务端判 4002 断开。
+            // 每次重连握手完成后补报当前状态（服务端重启或断连后状态会丢，借此对齐）。
+            webSocketClient.handshakeReady.collect { ready ->
+                if (ready) {
                     report(MusicPlayer.state, MusicPlayer.currentSource)
                 }
             }

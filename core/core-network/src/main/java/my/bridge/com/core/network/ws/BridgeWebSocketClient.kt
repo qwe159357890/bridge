@@ -66,6 +66,16 @@ class BridgeWebSocketClient(
     private val _state = MutableStateFlow(WsConnectionState.DISCONNECTED)
     val state: StateFlow<WsConnectionState> = _state.asStateFlow()
 
+    /**
+     * 握手完成信号：hello 已发出、服务端接受连接后为 true。
+     *
+     * 协议约定服务端首条消息必须是 hello，任何业务上行（音乐状态补报等）必须等到
+     * 本信号为 true 才允许发送——否则会在握手前抢跑，被服务端判 4002 断开，
+     * 造成「连接→拒绝→重连」死循环。每次发起新连接时重置为 false，重连后会重新发出。
+     */
+    private val _handshakeReady = MutableStateFlow(false)
+    val handshakeReady: StateFlow<Boolean> = _handshakeReady.asStateFlow()
+
     @Volatile
     private var webSocket: WebSocket? = null
 
@@ -145,6 +155,8 @@ class BridgeWebSocketClient(
      */
     private suspend fun connectOnce() {
         _state.value = WsConnectionState.CONNECTING
+        // 新连接开始：先关闭握手信号，杜绝上一条连接残留的 true 让业务消息抢跑
+        _handshakeReady.value = false
 
         val request = Request.Builder().url(ServerAddress.wsUrl()).build()
         val closed = CompletableDeferred<Unit>()
@@ -163,6 +175,8 @@ class BridgeWebSocketClient(
                         Timber.w(e, "连接前注册钩子失败（继续握手）")
                     }
                     sendHello(webSocket)
+                    // hello 已发出，此后才允许业务消息（音乐状态补报等）上线
+                    _handshakeReady.value = true
                     launchHeartbeat(webSocket)
                 }
             }
@@ -319,6 +333,8 @@ class BridgeWebSocketClient(
      */
     fun sendBusinessMessage(data: JsonObject): Boolean {
         val ws = webSocket ?: return false
+        // 握手未完成前静默丢弃：协议要求服务端首条消息必须是 hello
+        if (!_handshakeReady.value) return false
         return try {
             ws.send(WsEnvelope.make(WsEnvelope.TYPE_MESSAGE, data).toJson(gson))
         } catch (e: Exception) {
