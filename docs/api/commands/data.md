@@ -88,11 +88,15 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   `limit`（条数上限，默认 100，上限 1000）。
 - **链路**：命令 → 客户端 `SmsReader` → `POST /api/sms` → MySQL `sms_messages` 表。
 - **存储语义**：**累积存档 + (device_id, sms_key) 唯一键去重**——sms_key 取设备端
-  `_id`（异常时退化为内容摘要 MD5 前 16 位）；重复上报只刷新已读标记/正文/类型。
+  `_id`（异常时退化为内容摘要 MD5 前 16 位）；重复上报刷新已读标记/正文/类型/
+  **卡字段**（sim_slot/sim_number，v0.1.27+，重复上报可回填历史数据的卡信息）。
   去重统计用前后 COUNT 差值精确区分新增/更新（pymysql executemany 对
   ON DUPLICATE 的受影响行数语义模糊：更新计 2）。
+- **卡来源**（v0.1.27+）：短信库 `sub_id` 列（Android 5.1+）经
+  `SubscriptionManager` 映射为卡槽序号 + 本机号码；ROM 无此列或无
+  READ_PHONE_STATE 时按未知（-1/''），后台显示「未知」。
 - **后台**：「短信」页——类型筛选 + 号码/正文搜索 + **时间游标翻页**
-  （before_ms = 已加载最旧一条，对累积数据比 offset 稳）+ 单条删除。
+  （before_ms = 已加载最旧一条，对累积数据比 offset 稳）+ 所属卡列 + 单条删除。
 
 ## get_call_log 获取通话记录
 
@@ -102,8 +106,13 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   `limit`（条数上限，默认 200，上限 1000）。
 - **链路**：命令 → 客户端 `CallLogReader`（READ_CALL_LOG，查 `CallLog.Calls`，
   含联系人名缓存与归属地列）→ `POST /api/calllogs` → MySQL `call_logs` 表。
-- **存储语义**：按设备**覆盖快照**（与通讯录一致）。
-- **后台**：「通话记录」页——类型筛选 + 号码/联系人搜索 + 时长/归属地展示 + 清空快照。
+- **存储语义**：按设备**覆盖快照**（与通讯录一致）；含卡字段（sim_slot/sim_number，
+  v0.1.27+，重新采集即刷新）。
+- **卡来源**（v0.1.27+）：两层解析——通话库 `sub_id` 列（AOSP 隐藏列，多数 ROM
+  存在）映射激活卡；拿不到时用 `PHONE_ACCOUNT_ID` 与
+  `callCapablePhoneAccounts` 扁平化字符串比对兜底；都没有按未知（-1/''）。
+- **后台**：「通话记录」页——类型筛选 + 号码/联系人搜索 + 所属卡列 +
+  时长/归属地展示 + 清空快照。
 
 ### 数据采集类通用设计（v0.1.25）
 
@@ -113,8 +122,10 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   **数据本身是主产物**，上报失败在回执中明示（「已读取 N 条但上报失败，可重试」）。
 - **权限**：READ_CONTACTS / READ_SMS / READ_CALL_LOG 均已入 Manifest 与
   启动批量运行时权限申请清单；未授权时命令回执失败并提示授权。
-- **只读红线**：三类命令均只读——不发短信、不删联系人、不改通话记录
+- **只读红线**：三类采集命令均只读——不删联系人、不改短信库/通话记录
   （参考项目实测：写短信库需「默认短信应用」身份，Android 4.4+ 无法绕过）。
+  发短信/拨打电话属**写操作**，由独立的 `send_sms` / `dial_phone` 命令承担
+  （见 [control.md](control.md)），不破坏本红线。
 
 ### 踩坑
 

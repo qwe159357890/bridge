@@ -58,10 +58,26 @@ object SmsSender {
      *
      * @param phones  已解析的号码列表（调用方负责拆分分隔符）
      * @param content 内容（超 70 字自动 multipart 切分）
+     * @param subscriptionId 指定发送卡的 subscriptionId；null = 系统默认卡
      * @return 每个号码一条明细，顺序与入参一致
      */
-    suspend fun send(context: Context, phones: List<String>, content: String): List<SmsSendDetail> {
-        val smsManager = context.getSystemService(SmsManager::class.java)
+    suspend fun send(
+        context: Context,
+        phones: List<String>,
+        content: String,
+        subscriptionId: Int? = null,
+    ): List<SmsSendDetail> {
+        val smsManager: SmsManager? = try {
+            if (subscriptionId == null) {
+                context.getSystemService(SmsManager::class.java)
+            } else {
+                // 指定卡发送（API 22+ 静态方法，minSdk 24 均可用）
+                SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "获取指定卡 SmsManager 失败（subId=%s）", subscriptionId)
+            null
+        }
         val details = mutableListOf<SmsSendDetail>()
         for (phone in phones) {
             details += sendOne(context, smsManager, phone, content)
@@ -81,7 +97,7 @@ object SmsSender {
         if (smsManager == null) {
             return SmsSendDetail(phone, success = false, message = "设备短信服务不可用")
         }
-        // 双 SIM 卡指定 subId（v1 不做，走默认卡；后续按需扩展 sim_id 参数）
+        // 指定卡由调用方解析 subId 后传入（见 send 的 subscriptionId 参数）
 
         val requestCode = requestCodeSeq.getAndIncrement()
         val sentFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

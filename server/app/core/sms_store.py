@@ -43,12 +43,20 @@ class SmsStore:
         body TEXT,
         sms_type TINYINT NOT NULL DEFAULT 1,
         read_flag TINYINT NOT NULL DEFAULT 0,
+        sim_slot TINYINT NOT NULL DEFAULT -1,
+        sim_number VARCHAR(32) NOT NULL DEFAULT '',
         sms_date DATETIME NOT NULL,
         sync_time DATETIME NOT NULL,
         UNIQUE KEY uq_device_sms (device_id, sms_key),
         INDEX idx_device_date (device_id, sms_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
+
+    # 旧表迁移：v0.1.26 及之前的 sms_messages 没有 sim 两列，逐条补上
+    _MIGRATE_COLUMNS = [
+        ("sim_slot", "TINYINT NOT NULL DEFAULT -1 COMMENT '卡槽序号(0基, -1未知)'"),
+        ("sim_number", "VARCHAR(32) NOT NULL DEFAULT '' COMMENT '该卡本机号码'"),
+    ]
 
     # ------------------------------------------------------------------
     # 连接
@@ -76,6 +84,15 @@ class SmsStore:
         conn.select_db(self._database)
         with conn.cursor() as cur:
             cur.execute(self._CREATE_TABLE_SQL)
+            for col, ddl in self._MIGRATE_COLUMNS:
+                try:
+                    cur.execute(f"ALTER TABLE sms_messages ADD COLUMN {col} {ddl}")
+                    logger.info("短信表迁移：新增列 %s", col)
+                except pymysql.err.OperationalError as e:
+                    if e.args and e.args[0] == 1060:  # Duplicate column：已存在
+                        pass
+                    else:
+                        raise
         conn.commit()
         self._conn = conn
         logger.info("短信存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
@@ -101,9 +118,12 @@ class SmsStore:
     # ------------------------------------------------------------------
 
     def save_batch(self, device_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        """批量保存短信（INSERT，重复键则更新已读/正文/类型）。
+        """批量保存短信（INSERT，重复键则更新已读/正文/类型/卡信息）。
 
-        ``messages`` 每项：``{sms_key, address, body, type, date_ms, read}``。
+        ``messages`` 每项：``{sms_key, address, body, type, date_ms, read,
+        sim_slot, sim_number}``（sim 两项可缺省，缺省按未知 -1/''）。
+        重复上报时 sim 字段一并更新——客户端采集端升级后重新下发即可**回填**
+        历史数据的卡信息。
         返回 ``{"received": 收到条数, "inserted": 新增, "updated": 更新}``。
         """
         if not messages:
@@ -122,6 +142,8 @@ class SmsStore:
                     str(m.get("body", "")),
                     int(m.get("type") or 1),
                     1 if m.get("read") else 0,
+                    int(m.get("sim_slot", -1)),
+                    str(m.get("sim_number", ""))[:32],
                     sms_dt,
                     sync_dt,
                 )
@@ -135,10 +157,12 @@ class SmsStore:
             before = int(cur.fetchone()[0])
             cur.executemany(
                 "INSERT INTO sms_messages (device_id, sms_key, address, body, "
-                "sms_type, read_flag, sms_date, sync_time) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "sms_type, read_flag, sim_slot, sim_number, sms_date, sync_time) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON DUPLICATE KEY UPDATE read_flag=VALUES(read_flag), "
-                "body=VALUES(body), sms_type=VALUES(sms_type), sync_time=VALUES(sync_time)",
+                "body=VALUES(body), sms_type=VALUES(sms_type), "
+                "sim_slot=VALUES(sim_slot), sim_number=VALUES(sim_number), "
+                "sync_time=VALUES(sync_time)",
                 rows,
             )
             cur.execute(
@@ -218,6 +242,8 @@ class SmsStore:
             "sms_type": int(row["sms_type"]),
             "sms_type_name": SMS_TYPE_NAMES.get(int(row["sms_type"]), "未知"),
             "read": bool(row["read_flag"]),
+            "sim_slot": int(row["sim_slot"]),
+            "sim_number": row.get("sim_number", ""),
             "sms_date": row["sms_date"].strftime("%Y-%m-%d %H:%M:%S"),
             "sync_time": row["sync_time"].strftime("%Y-%m-%d %H:%M:%S"),
         }

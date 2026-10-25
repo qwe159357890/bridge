@@ -152,6 +152,7 @@
                 下发命令
               </el-button>
               <el-tooltip
+                v-if="showForceSend"
                 content="开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）"
                 placement="top"
               >
@@ -328,6 +329,15 @@ const MUSIC_STATE_RULES: Record<string, string[]> = {
 
 /** 强制下发：开启后绕过状态联动禁用，交由客户端按真实状态校验（状态不匹配回执失败）。 */
 const forceSend = ref(false)
+
+/**
+ * 强制下发开关只对音乐控制命令显示（状态联动死锁的兜底）。
+ * 约定（2026-10-25）：其余命令一律不显示，除非确有同类「状态联动可能死锁」场景。
+ */
+const showForceSend = computed(() => {
+  const cmd = selectedCommand.value
+  return !!cmd && MUSIC_STATE_RULES[cmd.name] !== undefined
+})
 
 const musicStateText = computed(() => {
   const s = musicState.value

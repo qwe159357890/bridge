@@ -59,6 +59,8 @@ class SmsItem(BaseModel):
     type: int = 1
     date_ms: int = 0
     read: bool = False
+    sim_slot: int = -1
+    sim_number: str = ""
 
 
 class SmsReportRequest(BaseModel):
@@ -94,6 +96,8 @@ class CallLogItem(BaseModel):
     duration: int = 0
     date_ms: int = 0
     location: str = ""
+    sim_slot: int = -1
+    sim_number: str = ""
 
 
 class CallLogReportRequest(BaseModel):

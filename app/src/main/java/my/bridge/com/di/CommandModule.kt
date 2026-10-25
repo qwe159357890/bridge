@@ -17,6 +17,7 @@ import my.bridge.com.core.storage.DeviceStore
 import my.bridge.com.data.CallLogReader
 import my.bridge.com.data.ContactsReader
 import my.bridge.com.data.PhoneDialer
+import my.bridge.com.data.SimHelper
 import my.bridge.com.data.SmsReader
 import my.bridge.com.data.SmsSender
 import my.bridge.com.location.LocationHelper
@@ -407,10 +408,12 @@ object CommandModule {
                     BridgeApi.SmsItem(
                         sms_key = it.key, address = it.address, body = it.body,
                         type = it.type, date_ms = it.dateMs, read = it.read,
+                        sim_slot = it.simSlot, sim_number = it.simNumber,
                     )
                 },
             )
-            "已读取 ${items.size} 条短信并上报（新增 ${r.inserted}，更新 ${r.updated}）"
+            "已读取 ${items.size} 条短信并上报（新增 ${r.inserted}，更新 ${r.updated}；" +
+                "含所属卡信息，重复上报可回填历史数据的卡字段）"
         }
     }
 
@@ -441,10 +444,11 @@ object CommandModule {
                         call_key = it.key, number = it.number, name = it.name,
                         type = it.type, duration = it.duration,
                         date_ms = it.dateMs, location = it.location,
+                        sim_slot = it.simSlot, sim_number = it.simNumber,
                     )
                 },
             )
-            "已上报 ${items.size} 条通话记录（服务端快照已更新）"
+            "已上报 ${items.size} 条通话记录（服务端快照已更新；含所属卡信息）"
         }
     }
 
@@ -461,9 +465,11 @@ object CommandModule {
      *
      * @param params.phones  收件人号码，中英文逗号/分号/竖线分隔可发多个
      * @param params.content 短信内容（超 70 字自动 multipart 切分）
+     * @param params.sim     发送卡：auto（默认卡）/ sim1 / sim2 / sim3；
+     *                       指定的卡不存在时回执失败（不静默退默认卡）
      *
      * 逐号码串行发送，等待系统 sent 回执（15 秒超时）后才计结果，
-     * 回执汇总每个号码的成功/失败明细（见 [SmsSender]）。
+     * 回执汇总实际使用卡 + 每个号码的成功/失败明细（见 [SmsSender]）。
      */
     private suspend fun executeSendSms(context: Context, command: Command): CommandResult {
         val id = command.commandId
@@ -486,11 +492,28 @@ object CommandModule {
         if (phones.size > 20) return CommandResult(id, name, false, "单次最多 20 个号码（当前 ${phones.size} 个）")
 
         return try {
-            val details = SmsSender.send(context, phones, content)
+            // 解析发送卡：auto=null（系统默认卡），否则按卡槽序号找激活卡
+            val simParam = command.params.get("sim")
+                ?.takeIf { it.isJsonPrimitive }?.asString?.trim() ?: "auto"
+            val simSlot = SimHelper.slotParam(simParam)
+            var subscriptionId: Int? = null
+            var simNote = "默认卡"
+            if (simSlot != null) {
+                val sim = SimHelper.findBySlot(context, simSlot)
+                if (sim == null) {
+                    return CommandResult(
+                        id, name, false,
+                        "设备上没有卡${simSlot + 1}（当前：${SimHelper.summarize(context)}）",
+                    )
+                }
+                subscriptionId = sim.subscriptionId
+                simNote = sim.displayLabel
+            }
+            val details = SmsSender.send(context, phones, content, subscriptionId)
             val okList = details.filter { it.success }
             val failList = details.filterNot { it.success }
             val message = buildString {
-                append("发送完成：成功 ${okList.size}/${details.size}")
+                append("用[$simNote]发送完成：成功 ${okList.size}/${details.size}")
                 if (failList.isNotEmpty()) {
                     append("；失败：")
                     append(failList.joinToString("；") { "${it.phone}（${it.message}）" })
@@ -523,6 +546,17 @@ object CommandModule {
         if (phone.isEmpty()) return CommandResult(id, name, false, "缺少电话号码参数 phone")
         val mode = command.params.get("mode")
             ?.takeIf { it.isJsonPrimitive }?.asString?.trim() ?: "direct"
+        // 使用卡：auto=null（系统默认卡），否则 0 基卡槽序号（仅 direct 模式生效）
+        val simParam = command.params.get("sim")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim() ?: "auto"
+        val simSlot = SimHelper.slotParam(simParam)
+        if (simSlot != null && mode != "dialer" && SimHelper.findBySlot(context, simSlot) == null) {
+            // 指定的卡不存在：直接回执失败，避免「以为用卡2打了实际走默认卡」
+            return CommandResult(
+                id, name, false,
+                "设备上没有卡${simSlot + 1}（当前：${SimHelper.summarize(context)}）",
+            )
+        }
 
         var direct = mode != "dialer"
         if (direct && !PhoneDialer.hasCallPermission(context)) {
@@ -536,7 +570,7 @@ object CommandModule {
             }
         }
         return try {
-            val message = PhoneDialer.dial(context, phone, direct)
+            val message = PhoneDialer.dial(context, phone, direct, simSlot)
             Timber.i("命令 %s：%s", name, message)
             CommandResult(id, name, true, message)
         } catch (e: IllegalArgumentException) {

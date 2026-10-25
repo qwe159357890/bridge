@@ -34,24 +34,41 @@ object PhoneDialer {
      * 发起拨号。
      *
      * @param direct true=直接拨打（ACTION_CALL）；false=打开拨号盘（ACTION_DIAL）
+     * @param simSlot 指定卡槽序号（0 基）；null = 系统默认卡。
+     *                仅 direct 模式生效（经 PHONE_ACCOUNT_HANDLE extra 指定，
+     *                对应关系与 autoxClient phone.js 相同，个别 ROM 不一致时
+     *                自动退回默认卡）；dialer 模式由用户在设备上自行选卡。
      * @return 结果描述（成功描述 + 限制提示；抛错由调用方转失败回执）
      */
-    fun dial(context: Context, number: String, direct: Boolean): String {
+    fun dial(context: Context, number: String, direct: Boolean, simSlot: Int? = null): String {
         val cleaned = cleanNumber(number)
         require(cleaned.matches(Regex("^\\+?[0-9]{3,20}$"))) { "号码格式不合法：$number" }
+        val slotLabel = simSlot?.let { "卡${it + 1}" } ?: "默认卡"
 
         if (direct) {
             val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$cleaned")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // 指定卡：PHONE_ACCOUNT_HANDLE extra（PhoneAccountHandle 可直接
+                // 作为 Parcelable extra 传递）；ROM 拿不到对应通道时走默认卡
+                if (simSlot != null) {
+                    val account = SimHelper.phoneAccountForSlot(context, simSlot)
+                    if (account != null) putExtra(
+                        "android.telecom.extra.PHONE_ACCOUNT_HANDLE", account,
+                    )
+                }
             }
             context.startActivity(intent)
-            return "已直接拨打 $cleaned（若设备息屏且无「其他应用上层」权限，" +
+            val simNote = if (simSlot != null) {
+                val resolved = SimHelper.phoneAccountForSlot(context, simSlot) != null
+                if (resolved) slotLabel else "$slotLabel（ROM 未提供该卡拨号通道，实际走默认卡）"
+            } else slotLabel
+            return "已用 $simNote 拨打 $cleaned（若设备息屏且无「其他应用上层」权限，" +
                 "系统可能拦截通话界面，请到设备上确认）"
         }
         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleaned")).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
-        return "已打开拨号盘并填入 $cleaned，请在设备上手动拨出"
+        return "已打开拨号盘并填入 $cleaned，请在设备上手动拨出（选卡由设备上用户决定）"
     }
 }

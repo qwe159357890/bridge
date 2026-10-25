@@ -82,6 +82,8 @@ interface BridgeApi {
         val type: Int,
         val date_ms: Long,
         val read: Boolean,
+        val sim_slot: Int = -1,
+        val sim_number: String = "",
     )
 
     /** 短信上报响应体。 */
@@ -99,6 +101,8 @@ interface BridgeApi {
         val duration: Int,
         val date_ms: Long,
         val location: String,
+        val sim_slot: Int = -1,
+        val sim_number: String = "",
     )
 
     /** 注册设备，返回 device_id + token。 */

@@ -26,6 +26,8 @@ object CallLogReader {
         val duration: Int,    // 通话时长（秒）
         val dateMs: Long,
         val location: String, // 归属地（设备端 geocoded）
+        val simSlot: Int,     // 经手的卡槽序号（0 基）；-1 = 未知
+        val simNumber: String, // 该卡本机号码（运营商未写入时为空）
     )
 
     /** catalog 的 call_type 参数 → Android type 值（all 返回 null = 不过滤）。 */
@@ -43,6 +45,11 @@ object CallLogReader {
     /**
      * 读取通话记录（时间倒序）。
      *
+     * 卡来源两层解析（都拿不到时按未知 -1/""）：
+     * ① 通话库的 ``sub_id`` 列（AOSP 5.1+ 隐藏列，多数 ROM 存在）→ 映射激活卡；
+     * ② [CallLog.Calls.PHONE_ACCOUNT_ID]（PhoneAccountHandle 扁平化字符串）
+     *    与 [android.telecom.TelecomManager.callCapablePhoneAccounts] 逐个比对。
+     *
      * @param typeParam catalog 的 call_type：all/incoming/outgoing/missed
      * @param limit 最多返回条数（5–1000）
      */
@@ -51,6 +58,26 @@ object CallLogReader {
         val typeFilter = typeCode(typeParam)
         val selection = if (typeFilter != null) "type = ?" else null
         val selectionArgs = if (typeFilter != null) arrayOf(typeFilter.toString()) else null
+
+        // ① sub_id → 卡信息映射
+        val subToSim = SimHelper.listSims(context).associateBy { it.subscriptionId }
+        // ② PhoneAccountHandle 扁平化字符串 → 卡槽序号映射（顺序≈卡槽，autox 同款假设）
+        val accountToSlot = buildMap {
+            try {
+                val tm = context.getSystemService(android.telecom.TelecomManager::class.java)
+                val accounts = tm?.callCapablePhoneAccounts
+                if (accounts != null) {
+                    for (i in 0 until accounts.size()) {
+                        val h = accounts[i]
+                        put(h.flattenToString(), i)
+                        put(h.toShortString(), i)
+                        put(h.toString(), i)
+                    }
+                }
+            } catch (_: Exception) {
+                // 无权限/ROM 异常时仅靠 sub_id 路径
+            }
+        }
 
         val result = mutableListOf<CallLogEntry>()
         cr.query(
@@ -63,11 +90,25 @@ object CallLogReader {
                 CallLog.Calls.DURATION,
                 CallLog.Calls.DATE,
                 CallLog.Calls.GEOCODED_LOCATION,
+                CallLog.Calls.PHONE_ACCOUNT_ID,
+                "sub_id", // AOSP 隐藏列，个别 ROM 无此列（getColumnIndex 会返回 -1）
             ),
             selection, selectionArgs,
             CallLog.Calls.DATE + " DESC",
         )?.use { c ->
+            val subIdx = c.getColumnIndex("sub_id")
+            val accountIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
             while (c.moveToNext() && result.size < limit) {
+                // 卡槽：sub_id 映射优先，phone_account_id 比对兜底
+                var sim: SimHelper.SimInfo? = null
+                if (subIdx >= 0 && !c.isNull(subIdx)) {
+                    sim = subToSim[c.getInt(subIdx)]
+                }
+                var slot = sim?.slotIndex
+                if (slot == null && accountIdx >= 0) {
+                    val acct = c.getString(accountIdx)
+                    if (!acct.isNullOrBlank()) slot = accountToSlot[acct]
+                }
                 result.add(
                     CallLogEntry(
                         key = c.getString(0) ?: "",
@@ -77,6 +118,10 @@ object CallLogReader {
                         duration = c.getInt(4),
                         dateMs = c.getLong(5),
                         location = c.getString(6) ?: "",
+                        simSlot = slot ?: -1,
+                        simNumber = slot?.let { s ->
+                            subToSim.values.firstOrNull { it.slotIndex == s }?.number
+                        } ?: "",
                     )
                 )
             }

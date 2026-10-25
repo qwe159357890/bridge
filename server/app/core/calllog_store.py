@@ -40,12 +40,20 @@ class CallLogStore:
         cached_name VARCHAR(255) NOT NULL DEFAULT '',
         call_type TINYINT NOT NULL DEFAULT 1,
         duration INT NOT NULL DEFAULT 0,
+        sim_slot TINYINT NOT NULL DEFAULT -1,
+        sim_number VARCHAR(32) NOT NULL DEFAULT '',
         call_time DATETIME NOT NULL,
         location VARCHAR(255) NOT NULL DEFAULT '',
         sync_time DATETIME NOT NULL,
         INDEX idx_device_time (device_id, call_time)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
+
+    # 旧表迁移：v0.1.26 及之前的 call_logs 没有 sim 两列，逐条补上
+    _MIGRATE_COLUMNS = [
+        ("sim_slot", "TINYINT NOT NULL DEFAULT -1 COMMENT '卡槽序号(0基, -1未知)'"),
+        ("sim_number", "VARCHAR(32) NOT NULL DEFAULT '' COMMENT '该卡本机号码'"),
+    ]
 
     # ------------------------------------------------------------------
     # 连接
@@ -73,6 +81,15 @@ class CallLogStore:
         conn.select_db(self._database)
         with conn.cursor() as cur:
             cur.execute(self._CREATE_TABLE_SQL)
+            for col, ddl in self._MIGRATE_COLUMNS:
+                try:
+                    cur.execute(f"ALTER TABLE call_logs ADD COLUMN {col} {ddl}")
+                    logger.info("通话记录表迁移：新增列 %s", col)
+                except pymysql.err.OperationalError as e:
+                    if e.args and e.args[0] == 1060:  # Duplicate column：已存在
+                        pass
+                    else:
+                        raise
         conn.commit()
         self._conn = conn
         logger.info("通话记录存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
@@ -100,7 +117,8 @@ class CallLogStore:
     def replace_snapshot(self, device_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         """整体替换某设备通话记录快照（单事务：先删后插）。
 
-        ``records`` 每项：``{call_key, number, name, type, duration, date_ms, location}``。
+        ``records`` 每项：``{call_key, number, name, type, duration, date_ms,
+        location, sim_slot, sim_number}``（sim 两项可缺省，缺省按未知 -1/''）。
         """
         conn = self._connection()
         sync_dt = datetime.now()
@@ -109,8 +127,8 @@ class CallLogStore:
             if records:
                 cur.executemany(
                     "INSERT INTO call_logs (device_id, call_key, number, cached_name, "
-                    "call_type, duration, call_time, location, sync_time) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "call_type, duration, sim_slot, sim_number, call_time, location, sync_time) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     [
                         (
                             device_id,
@@ -119,6 +137,8 @@ class CallLogStore:
                             str(r.get("name", ""))[:255],
                             int(r.get("type") or 1),
                             int(r.get("duration") or 0),
+                            int(r.get("sim_slot", -1)),
+                            str(r.get("sim_number", ""))[:32],
                             datetime.fromtimestamp(int(r.get("date_ms") or 0) / 1000.0)
                             if int(r.get("date_ms") or 0) > 0 else sync_dt,
                             str(r.get("location", ""))[:255],
@@ -184,6 +204,8 @@ class CallLogStore:
             "call_type": int(row["call_type"]),
             "call_type_name": CALL_TYPE_NAMES.get(int(row["call_type"]), "未知"),
             "duration": int(row["duration"]),
+            "sim_slot": int(row["sim_slot"]),
+            "sim_number": row.get("sim_number", ""),
             "call_time": row["call_time"].strftime("%Y-%m-%d %H:%M:%S"),
             "location": row["location"],
             "sync_time": row["sync_time"].strftime("%Y-%m-%d %H:%M:%S"),

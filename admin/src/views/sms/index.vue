@@ -4,7 +4,7 @@
       <div class="toolbar">
         <div class="left">
           <DevicePicker v-model="deviceId" :devices="devices" placeholder="选择设备" />
-          <el-select v-model="smsType" style="width: 130px" @change="reload">
+          <el-select v-model="smsType" style="width: 160px" @change="reload">
             <el-option label="全部" :value="undefined" />
             <el-option v-for="(n, t) in TYPE_NAMES" :key="t" :label="n" :value="Number(t)" />
           </el-select>
@@ -12,7 +12,7 @@
             v-model="keyword"
             placeholder="搜索号码 / 正文"
             clearable
-            style="width: 200px"
+            style="width: 260px"
             @keyup.enter="reload"
             @clear="reload"
           />
@@ -28,6 +28,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="address" label="号码" width="150" show-overflow-tooltip />
+        <el-table-column label="所属卡" width="150">
+          <template #default="{ row }">
+            <span v-if="row.sim_slot >= 0">{{ simLabel(row) }}</span>
+            <span v-else class="dim">未知（旧数据，重新下发采集可回填）</span>
+          </template>
+        </el-table-column>
         <el-table-column label="正文" min-width="360">
           <template #default="{ row }">
             <span class="body-text">{{ row.body }}</span>
@@ -74,7 +80,7 @@ import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
-import { listSms, deleteSms, type SmsItem } from '@/api/data'
+import { listSms, deleteSms, simLabel, type SmsItem } from '@/api/data'
 import type { Device } from '@/types'
 
 /**

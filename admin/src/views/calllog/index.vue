@@ -4,7 +4,7 @@
       <div class="toolbar">
         <div class="left">
           <DevicePicker v-model="deviceId" :devices="devices" placeholder="选择设备" />
-          <el-select v-model="callType" style="width: 120px" @change="load(0)">
+          <el-select v-model="callType" style="width: 150px" @change="load(0)">
             <el-option label="全部" :value="undefined" />
             <el-option label="呼入" :value="1" />
             <el-option label="呼出" :value="2" />
@@ -14,7 +14,7 @@
             v-model="keyword"
             placeholder="搜索号码 / 联系人"
             clearable
-            style="width: 200px"
+            style="width: 260px"
             @keyup.enter="load(0)"
             @clear="load(0)"
           />
@@ -46,6 +46,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="number" label="号码" width="150" show-overflow-tooltip />
+        <el-table-column label="所属卡" width="150">
+          <template #default="{ row }">
+            <span v-if="row.sim_slot >= 0">{{ simLabel(row) }}</span>
+            <span v-else class="dim">未知</span>
+          </template>
+        </el-table-column>
         <el-table-column label="联系人" width="130" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.name">{{ row.name }}</span>
@@ -92,7 +98,7 @@ import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
-import { listCallLogs, deleteCallLogs, type CallLogItem } from '@/api/data'
+import { listCallLogs, deleteCallLogs, simLabel, type CallLogItem } from '@/api/data'
 import type { Device } from '@/types'
 
 /** 通话记录页：按设备查看通话快照（数据来自「获取通话记录」命令上报）。 */

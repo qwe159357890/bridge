@@ -27,6 +27,8 @@ export interface SmsItem {
   sms_type: number
   sms_type_name: string
   read: boolean
+  sim_slot: number
+  sim_number: string
   sms_date: string
   sync_time: string
 }
@@ -40,9 +42,18 @@ export interface CallLogItem {
   call_type: number
   call_type_name: string
   duration: number
+  sim_slot: number
+  sim_number: string
   call_time: string
   location: string
   sync_time: string
+}
+
+/** 卡来源列显示：sim_slot=-1 视为未知。 */
+export function simLabel(row: { sim_slot: number; sim_number: string }): string {
+  if (row.sim_slot == null || row.sim_slot < 0) return '未知'
+  const slot = `卡${row.sim_slot + 1}`
+  return row.sim_number ? `${slot}（${row.sim_number}）` : slot
 }
 
 export interface DataListResult<T> {
