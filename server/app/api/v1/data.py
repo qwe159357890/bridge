@@ -1,0 +1,277 @@
+"""数据采集存储 API：通讯录 / 短信 / 通话记录。
+
+三类「设备数据」的 REST 端点，模式与 ``locations.py`` 完全一致：
+- 设备上报：``POST /api/contacts | /api/sms | /api/calllogs``（设备头鉴权，
+  与 WS hello 同一套注册表校验）
+- 管理查询：``GET ...``（管理员鉴权）
+- 手动清理：``DELETE ...``（管理员鉴权）
+
+三个存储的语义差异（详见各 store 模块 docstring）：
+- contacts / calllogs：按设备**覆盖快照**（当前状态）
+- sms：**累积去重**（历史存档，(device_id, sms_key) 唯一键）
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
+
+from app.api.v1.admin import require_admin
+from app.core.calllog_store import CallLogStore
+from app.core.contacts_store import ContactsStore
+from app.core.sms_store import SmsStore
+
+logger = logging.getLogger(__name__)
+
+# 不设 prefix：三个领域共用一个文件，路径各自写全领域段；
+# 聚合层（app/api/v1/router.py）统一加 /api 前缀
+router = APIRouter(tags=["data"])
+
+
+# ----------------------------------------------------------------------
+# 请求 / 响应模型
+# ----------------------------------------------------------------------
+
+
+class ContactItem(BaseModel):
+    contact_key: str = ""
+    name: str = ""
+    phones: list[str] = Field(default_factory=list)
+    emails: list[str] = Field(default_factory=list)
+
+
+class ContactsReportRequest(BaseModel):
+    contacts: list[ContactItem] = Field(default_factory=list)
+
+
+class DataReportResponse(BaseModel):
+    total: int
+    sync_time: str = ""
+
+
+class SmsItem(BaseModel):
+    sms_key: str = ""
+    address: str = ""
+    body: str = ""
+    type: int = 1
+    date_ms: int = 0
+    read: bool = False
+
+
+class SmsReportRequest(BaseModel):
+    messages: list[SmsItem] = Field(default_factory=list)
+
+
+class SmsReportResponse(BaseModel):
+    received: int
+    inserted: int
+    updated: int
+
+
+class DataListResponse(BaseModel):
+    total: int
+    items: list[dict]
+    sync_time: Optional[str] = None
+
+
+class SmsListResponse(BaseModel):
+    total: int
+    items: list[dict]
+
+
+class DeleteResponse(BaseModel):
+    deleted: int
+
+
+class CallLogItem(BaseModel):
+    call_key: str = ""
+    number: str = ""
+    name: str = ""
+    type: int = 1
+    duration: int = 0
+    date_ms: int = 0
+    location: str = ""
+
+
+class CallLogReportRequest(BaseModel):
+    records: list[CallLogItem] = Field(default_factory=list)
+
+
+# ----------------------------------------------------------------------
+# 依赖与工具
+# ----------------------------------------------------------------------
+
+
+def _get_stores(request: Request) -> tuple[ContactsStore, SmsStore, CallLogStore]:
+    return (
+        request.app.state.contacts_store,
+        request.app.state.sms_store,
+        request.app.state.calllog_store,
+    )
+
+
+def _check_device_auth(request: Request, device_id: str | None, token: str | None) -> str:
+    """设备鉴权（auth.enabled 时生效），返回已认证的 device_id。"""
+    settings = request.app.state.settings
+    if not settings.auth.enabled:
+        return device_id or ""
+    registry = request.app.state.device_registry
+    if not device_id or not token or not registry.authenticate(device_id, token):
+        logger.warning("数据上报鉴权失败：device=%s", device_id or "unknown")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="设备鉴权失败")
+    return device_id
+
+
+def _store_unavailable(e: Exception) -> HTTPException:
+    logger.error("数据存储不可用：%s", e)
+    return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="数据存储暂不可用")
+
+
+# ----------------------------------------------------------------------
+# 通讯录
+# ----------------------------------------------------------------------
+
+
+@router.post("/contacts", response_model=DataReportResponse)
+def report_contacts(
+    body: ContactsReportRequest,
+    request: Request,
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+) -> DataReportResponse:
+    """设备上报通讯录（整体覆盖该设备快照）。"""
+    device_id = _check_device_auth(request, x_device_id, x_device_token)
+    store = _get_stores(request)[0]
+    try:
+        result = store.replace_snapshot(
+            device_id, [c.model_dump() for c in body.contacts]
+        )
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return DataReportResponse(**result)
+
+
+@router.get("/contacts", response_model=DataListResponse, dependencies=[Depends(require_admin)])
+def list_contacts(
+    request: Request,
+    device_id: str = Query(min_length=1),
+    keyword: str = Query(default=""),
+    limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+) -> DataListResponse:
+    items, total, sync_time = _get_stores(request)[0].list(
+        device_id=device_id, keyword=keyword.strip(), limit=limit, offset=offset
+    )
+    return DataListResponse(total=total, items=items, sync_time=sync_time)
+
+
+@router.delete("/contacts", response_model=DeleteResponse, dependencies=[Depends(require_admin)])
+def delete_contacts(request: Request, device_id: str = Query(min_length=1)) -> DeleteResponse:
+    try:
+        return DeleteResponse(deleted=_get_stores(request)[0].delete(device_id))
+    except Exception as e:
+        raise _store_unavailable(e) from e
+
+
+# ----------------------------------------------------------------------
+# 短信
+# ----------------------------------------------------------------------
+
+
+@router.post("/sms", response_model=SmsReportResponse)
+def report_sms(
+    body: SmsReportRequest,
+    request: Request,
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+) -> SmsReportResponse:
+    """设备上报一批短信（去重入库）。"""
+    device_id = _check_device_auth(request, x_device_id, x_device_token)
+    store = _get_stores(request)[1]
+    try:
+        result = store.save_batch(device_id, [m.model_dump() for m in body.messages])
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return SmsReportResponse(**result)
+
+
+@router.get("/sms", response_model=SmsListResponse, dependencies=[Depends(require_admin)])
+def list_sms(
+    request: Request,
+    device_id: str = Query(min_length=1),
+    sms_type: Optional[int] = Query(default=None, ge=1, le=6),
+    keyword: str = Query(default=""),
+    before_ms: Optional[int] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> SmsListResponse:
+    items, total = _get_stores(request)[1].list(
+        device_id=device_id,
+        sms_type=sms_type,
+        keyword=keyword.strip(),
+        before_ms=before_ms,
+        limit=limit,
+    )
+    return SmsListResponse(total=total, items=items)
+
+
+@router.delete("/sms", response_model=DeleteResponse, dependencies=[Depends(require_admin)])
+def delete_sms(
+    request: Request,
+    device_id: str = Query(min_length=1),
+    row_id: Optional[int] = Query(default=None),
+) -> DeleteResponse:
+    try:
+        return DeleteResponse(deleted=_get_stores(request)[1].delete(device_id, row_id))
+    except Exception as e:
+        raise _store_unavailable(e) from e
+
+
+# ----------------------------------------------------------------------
+# 通话记录
+# ----------------------------------------------------------------------
+
+
+@router.post("/calllogs", response_model=DataReportResponse)
+def report_calllogs(
+    body: CallLogReportRequest,
+    request: Request,
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+) -> DataReportResponse:
+    """设备上报通话记录（整体覆盖该设备快照）。"""
+    device_id = _check_device_auth(request, x_device_id, x_device_token)
+    store = _get_stores(request)[2]
+    try:
+        result = store.replace_snapshot(
+            device_id, [r.model_dump() for r in body.records]
+        )
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return DataReportResponse(**result)
+
+
+@router.get("/calllogs", response_model=DataListResponse, dependencies=[Depends(require_admin)])
+def list_calllogs(
+    request: Request,
+    device_id: str = Query(min_length=1),
+    call_type: Optional[int] = Query(default=None, ge=1, le=6),
+    keyword: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+) -> DataListResponse:
+    items, total, sync_time = _get_stores(request)[2].list(
+        device_id=device_id, call_type=call_type, keyword=keyword.strip(),
+        limit=limit, offset=offset,
+    )
+    return DataListResponse(total=total, items=items, sync_time=sync_time)
+
+
+@router.delete("/calllogs", response_model=DeleteResponse, dependencies=[Depends(require_admin)])
+def delete_calllogs(request: Request, device_id: str = Query(min_length=1)) -> DeleteResponse:
+    try:
+        return DeleteResponse(deleted=_get_stores(request)[2].delete(device_id))
+    except Exception as e:
+        raise _store_unavailable(e) from e

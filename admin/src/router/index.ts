@@ -46,6 +46,24 @@ const router = createRouter({
           meta: { title: '消息推送' },
         },
         {
+          path: 'contacts',
+          name: 'contacts',
+          component: () => import('@/views/contacts/index.vue'),
+          meta: { title: '通讯录' },
+        },
+        {
+          path: 'sms',
+          name: 'sms',
+          component: () => import('@/views/sms/index.vue'),
+          meta: { title: '短信' },
+        },
+        {
+          path: 'calllog',
+          name: 'calllog',
+          component: () => import('@/views/calllog/index.vue'),
+          meta: { title: '通话记录' },
+        },
+        {
           path: 'connection',
           name: 'connection',
           component: () => import('@/views/connection/index.vue'),

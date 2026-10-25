@@ -39,7 +39,13 @@
 - **扩展命令固定三步**：① catalog 加 `_cmd(...)`；② 客户端 `Command.kt` 常量 + `CommandModule.kt` 执行器；③ 文档——值得写的在 `docs/api/commands/{category}.md` 加 `## 命令名` 章节 + README 索引表同步（`—` 改链接）。
 - **命令文档按分类聚合**：`docs/api/commands/{category}.md`（文件名 = category key，文件数封顶），INDEX 只登记目录级入口，README.md 是命令级索引 + 缺文档台账。
 - **权威文档**：`docs/api/command-catalog.md` §3.3（扩展流程）/ §3.4（文档组织）。
-- **已落地命令**（2026-10-25）：`upload_log`、`play_music`（音源三形态：URL/绝对路径/文件名缓存+服务器目录下载）、`pause_music`/`resume_music`/`stop_music`（播放控制状态机：空闲不可控、播放中可暂停/停止/切歌、暂停中可恢复/停止；状态显示走命令回执=方案 A，不做常驻上报）。机制详见 `docs/api/commands/control.md`。
+- **已落地命令**（2026-10-25）：`upload_log`、`play_music`（音源三形态：URL/绝对路径/文件名缓存+服务器目录下载）、`pause_music`/`resume_music`/`stop_music`（播放控制状态机：空闲不可控、播放中可暂停/停止/切歌、暂停中可恢复/停止；状态显示走命令回执=方案 A，不做常驻上报）、`get_location`（coarse/fine/refresh 强制刷新）。机制详见 `docs/api/commands/control.md` / `docs/api/commands/data.md`。
+
+## 位置信息功能（★ 已完成，2026-10-25）
+
+- **全链路**：get_location（precision/timeout/refresh 三参数）→ 命令回执 + fire-and-forget `POST /api/locations` 上报（失败不影响回执，需 APK ≥ v0.1.23）→ MySQL 持久化（`location_store.py`，静止合并 haversine < max(两次精度,30m)、WGS-84+GCJ-02 双坐标、无自动清理纯手动删除）→ 后台设备行「位置」弹窗（高德轨迹 + 历史表格 + 标记悬停详情）+ 命令页定位结果卡片（`LocationResultCard.vue`）。
+- **地址解析收口服务端**：`GET /api/locations/address`（高德 Web服务 REST + 24h 坐标网格缓存）；高德 Key 三件套在 `server/config.local.yaml`（JS Key+安全密钥=瓦片，web_key=老 Key 调 REST——2021-12 后新 JS Key 平台受限调不了 REST，浏览器 Geocoder 插件已弃用）。
+- **权威文档**：`docs/api/commands/data.md`。最新发布 APK：v0.1.24（WS 握手竞态修复）。
 
 ## 构建发布链路（2026-10-23）
 

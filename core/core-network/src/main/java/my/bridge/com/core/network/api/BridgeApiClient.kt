@@ -88,4 +88,44 @@ class BridgeApiClient(
             fix_time_ms = fixTimeMs,
         ),
     ).action
+
+    /**
+     * 上报通讯录快照（get_contacts）。失败抛异常，由调用方决定回执语义
+     * （通讯录是命令主产物，上报失败应在回执中注明）。
+     */
+    suspend fun reportContacts(
+        deviceId: String,
+        token: String?,
+        contacts: List<BridgeApi.ContactItem>,
+    ): Int = api().reportContacts(
+        deviceId,
+        token,
+        BridgeApi.ContactsReportRequest(contacts = contacts),
+    ).total
+
+    /**
+     * 上报一批短信（get_sms，服务端去重）。失败抛异常，由调用方处理。
+     */
+    suspend fun reportSmsBatch(
+        deviceId: String,
+        token: String?,
+        messages: List<BridgeApi.SmsItem>,
+    ): BridgeApi.SmsReportResponse = api().reportSms(
+        deviceId,
+        token,
+        BridgeApi.SmsReportRequest(messages = messages),
+    )
+
+    /**
+     * 上报通话记录快照（get_call_log）。失败抛异常，由调用方处理。
+     */
+    suspend fun reportCallLogs(
+        deviceId: String,
+        token: String?,
+        records: List<BridgeApi.CallLogItem>,
+    ): Int = api().reportCallLogs(
+        deviceId,
+        token,
+        BridgeApi.CallLogReportRequest(records = records),
+    ).total
 }

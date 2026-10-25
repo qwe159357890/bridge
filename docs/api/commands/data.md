@@ -65,8 +65,56 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   （走服务端 `GET /api/locations/address`：Web服务 REST + WGS-84→GCJ-02
   自动转换 + 24h 坐标网格缓存；2021-12 后的新 JS API Key 平台受限，
   浏览器 Geocoder 插件不可控，故解析统一收口服务端）。
-  （高德 JS API Geocoder 插件，服务端 Key 复用）。上报与回执解耦，
-  等不到入库则明示超时提示。
+  上报与回执解耦，等不到入库则明示超时提示。
+
+## get_contacts 获取通讯录
+
+读取设备联系人并上报服务端（v0.1.25）。借鉴 `references/pc-client` 与
+`references/autoxClient`（contacts.js 的两级 Map 查询防 N+1）。
+
+- **参数**：`only_with_phones`（仅含有号码的联系人，默认开）、
+  `limit`（数量上限，默认 2000，上限 5000）。
+- **链路**：命令 → 客户端 `ContactsReader`（READ_CONTACTS 权限，3 次批量查询：
+  联系人主表 + 全部电话 + 全部邮箱，按 contact_id 分组合并）→
+  `POST /api/contacts` → MySQL `contacts` 表。
+- **存储语义**：按设备**覆盖快照**——每次上报单事务先删后插，以最新采集为准。
+- **后台**：「通讯录」页——选设备 → 表格（姓名/电话/邮箱/采集时间）+ 姓名/号码/邮箱模糊搜索 + 分页 + 清空快照。
+
+## get_sms 获取短信
+
+读取设备短信并上报服务端（v0.1.25）。借鉴 autoxClient sms.js。
+
+- **参数**：`sms_type`（all/inbox/sent/draft/outbox/failed，默认 all）、
+  `limit`（条数上限，默认 100，上限 1000）。
+- **链路**：命令 → 客户端 `SmsReader` → `POST /api/sms` → MySQL `sms_messages` 表。
+- **存储语义**：**累积存档 + (device_id, sms_key) 唯一键去重**——sms_key 取设备端
+  `_id`（异常时退化为内容摘要 MD5 前 16 位）；重复上报只刷新已读标记/正文/类型。
+  去重统计用前后 COUNT 差值精确区分新增/更新（pymysql executemany 对
+  ON DUPLICATE 的受影响行数语义模糊：更新计 2）。
+- **后台**：「短信」页——类型筛选 + 号码/正文搜索 + **时间游标翻页**
+  （before_ms = 已加载最旧一条，对累积数据比 offset 稳）+ 单条删除。
+
+## get_call_log 获取通话记录
+
+读取设备通话记录并上报服务端（v0.1.25）。借鉴 autoxClient phone.js。
+
+- **参数**：`call_type`（all/incoming/outgoing/missed，默认 all）、
+  `limit`（条数上限，默认 200，上限 1000）。
+- **链路**：命令 → 客户端 `CallLogReader`（READ_CALL_LOG，查 `CallLog.Calls`，
+  含联系人名缓存与归属地列）→ `POST /api/calllogs` → MySQL `call_logs` 表。
+- **存储语义**：按设备**覆盖快照**（与通讯录一致）。
+- **后台**：「通话记录」页——类型筛选 + 号码/联系人搜索 + 时长/归属地展示 + 清空快照。
+
+### 数据采集类通用设计（v0.1.25）
+
+- **架构**：与位置功能同款「命令触发 → 客户端执行 → REST 上报 → MySQL →
+  后台页面」，大体量数据不进命令回执文本（回执只报汇总数字）。
+- **上报与回执关系**：与 get_location 的 fire-and-forget 不同，这三类命令的
+  **数据本身是主产物**，上报失败在回执中明示（「已读取 N 条但上报失败，可重试」）。
+- **权限**：READ_CONTACTS / READ_SMS / READ_CALL_LOG 均已入 Manifest 与
+  启动批量运行时权限申请清单；未授权时命令回执失败并提示授权。
+- **只读红线**：三类命令均只读——不发短信、不删联系人、不改通话记录
+  （参考项目实测：写短信库需「默认短信应用」身份，Android 4.4+ 无法绕过）。
 
 ### 踩坑
 
