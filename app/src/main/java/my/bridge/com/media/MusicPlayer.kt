@@ -34,6 +34,9 @@ object MusicPlayer {
     /** 播放状态。 */
     enum class State { IDLE, PLAYING, PAUSED }
 
+    /** 当前播放器实例（null = 空闲）。 */
+    private var player: MediaPlayer? = null
+
     /** 当前状态（空闲 = 无播放器实例）。 */
     @Volatile
     var state: State = State.IDLE
