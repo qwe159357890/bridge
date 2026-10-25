@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -131,7 +130,7 @@ object LocationHelper {
                     }
                 }
                 try {
-                    lm.requestSingleUpdate(provider, listener, Handler(Looper.getMainLooper()))
+                    lm.requestSingleUpdate(provider, listener, Looper.getMainLooper())
                 } catch (e: Exception) {
                     Timber.w(e, "requestSingleUpdate 失败：$provider")
                     if (cont.isActive) cont.resume(null)
