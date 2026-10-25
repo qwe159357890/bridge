@@ -88,7 +88,7 @@ object CommandModule {
             }
         },
         Command.GET_LOCATION to CommandExecutor { command ->
-            executeGetLocation(context, command)
+            executeGetLocation(context, deviceStore, apiClient, command)
         },
     )
 
@@ -191,6 +191,8 @@ object CommandModule {
      */
     private suspend fun executeGetLocation(
         context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
         command: Command,
     ): CommandResult {
         val id = command.commandId
