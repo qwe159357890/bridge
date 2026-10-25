@@ -59,4 +59,33 @@ class BridgeApiClient(
         deviceId: String,
         token: String?,
     ): ResponseBody = api().downloadMusic(filename, deviceId, token)
+
+    /**
+     * 上报一次位置（get_location 成功后 fire-and-forget）。
+     * 失败抛异常，调用方应静默处理（存档不影响命令回执）。
+     */
+    suspend fun reportLocation(
+        deviceId: String,
+        token: String?,
+        latitude: Double,
+        longitude: Double,
+        accuracy: Double,
+        provider: String,
+        altitude: Double?,
+        speed: Double?,
+        fixTimeMs: Long,
+    ): String = api().reportLocation(
+        deviceId,
+        token,
+        BridgeApi.LocationReportRequest(
+            device_id = deviceId,
+            latitude = latitude,
+            longitude = longitude,
+            accuracy = accuracy,
+            provider = provider,
+            altitude = altitude,
+            speed = speed,
+            fix_time_ms = fixTimeMs,
+        ),
+    ).action
 }

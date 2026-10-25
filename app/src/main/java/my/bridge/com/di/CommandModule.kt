@@ -17,6 +17,10 @@ import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MusicPlayer
 import retrofit2.HttpException
 import timber.log.Timber
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import javax.inject.Singleton
 
 /**
@@ -31,6 +35,9 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object CommandModule {
+
+    /** fire-and-forget 上报用的独立作用域：失败不影响命令执行链路。 */
+    private val reportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Provides
     @Singleton
@@ -213,10 +220,42 @@ object CommandModule {
         return try {
             val fix = LocationHelper.getLocation(context, precision, timeoutSec * 1000L, refresh)
             Timber.i("命令 get_location 成功：${fix.toMessage()}（refresh=$refresh）")
+            reportLocationFireAndForget(deviceStore, apiClient, fix)
             CommandResult(id, name, true, fix.toMessage() + degradedNote + refreshNote)
         } catch (e: Exception) {
             Timber.e(e, "命令 get_location 失败")
             CommandResult(id, name, false, "定位失败：${e.message}")
+        }
+    }
+
+    /**
+     * 位置上报服务端持久化（fire-and-forget）：成功后异步 POST /api/locations，
+     * 失败仅记日志，**绝不影响命令回执**——存档与回执解耦。
+     */
+    private fun reportLocationFireAndForget(
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        fix: my.bridge.com.location.LocationHelper.LocationFix,
+    ) {
+        reportScope.launch {
+            try {
+                val deviceId = deviceStore.deviceId()
+                val token = runCatching { deviceStore.token() }.getOrNull()
+                val action = apiClient.reportLocation(
+                    deviceId = deviceId,
+                    token = token,
+                    latitude = fix.latitude,
+                    longitude = fix.longitude,
+                    accuracy = fix.accuracyMeters.toDouble(),
+                    provider = fix.provider,
+                    altitude = fix.altitudeMeters,
+                    speed = fix.speedMps?.toDouble(),
+                    fixTimeMs = fix.timestampMs,
+                )
+                Timber.i("位置上报成功：device=%s action=%s", deviceId, action)
+            } catch (e: Exception) {
+                Timber.w(e, "位置上报失败（不影响回执，忽略）")
+            }
         }
     }
 

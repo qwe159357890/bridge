@@ -77,11 +77,12 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain @click="goCommand(row)">
               下发命令
             </el-button>
+            <el-button size="small" @click="showLocation(row)">位置</el-button>
             <el-button size="small" @click="goLog(row)">查看日志</el-button>
             <el-button
               size="small"
@@ -99,6 +100,13 @@
         </template>
       </el-table>
     </el-card>
+
+    <!-- 位置历史弹窗：上轨迹地图 + 下历史列表 -->
+    <LocationDialog
+      v-model:visible="locationVisible"
+      :device-id="locationDevice?.device_id || ''"
+      :device-name="locationDevice?.device_name || ''"
+    />
   </div>
 </template>
 
@@ -109,6 +117,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search, Monitor, Connection, CircleClose } from '@element-plus/icons-vue'
 import { listDevices, disconnectDevice } from '@/api/devices'
 import DeviceStatusTag from '@/components/DeviceStatusTag.vue'
+import LocationDialog from '@/components/LocationDialog.vue'
 import { formatTime } from '@/utils/format'
 import type { Device } from '@/types'
 
@@ -116,6 +125,14 @@ const router = useRouter()
 const devices = ref<Device[]>([])
 const keyword = ref('')
 const loading = ref(false)
+
+const locationVisible = ref(false)
+const locationDevice = ref<Device | null>(null)
+
+function showLocation(device: Device) {
+  locationDevice.value = device
+  locationVisible.value = true
+}
 
 const filteredDevices = computed(() => {
   const k = keyword.value.trim().toLowerCase()

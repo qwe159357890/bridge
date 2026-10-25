@@ -38,3 +38,14 @@ logging:
 music:
   dir: "data/music"              # 音乐共享目录（play_music 裸文件名音源）
                                  # 相对路径相对 server 根目录，管理员把音乐文件放入即可下发
+
+locations:
+  mysql:
+    host: "127.0.0.1"            # MySQL 主机（get_location 上报持久化）
+    port: 3306
+    user: "root"
+    password: ""                 # 敏感！真实密码放 config.local.yaml（不入库），库不存在自动创建
+    database: "bridge"
+  amap:
+    key: ""                      # 高德 Web端(JS API) Key，敏感！真实值放 config.local.yaml
+    security_js_code: ""         # 2021-12 后申请的 Key 需配安全密钥，同样放 config.local.yaml

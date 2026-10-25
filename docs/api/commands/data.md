@@ -37,12 +37,26 @@ fine 精确：
   「缺少定位权限，请打开 App 在系统设置中授予定位权限后重试」（一次性人工授权）。
 - fine 模式需 FINE 权限；仅有 COARSE 时**自动降级**为网络定位并在回执注明。
 
-### 持久化预留（后续版本）
+### 持久化（MySQL，已实现）
 
-v1 纯文本回执（下发历史可见）。`LocationHelper.LocationFix`
-（lat/lon/accuracy/provider/timestamp/altitude/speed 结构化数据类）已为入库预留：
-后续版本增加上报接口（如 `POST /api/locations`）+ 服务端 SQL/MySQL 存储，
-即可支持位置历史与轨迹查询，客户端只需在现有回执旁加一次 `apiClient` 调用。
+get_location 成功后客户端在回执之外 fire-and-forget 上报
+`POST /api/locations`（设备头鉴权；失败仅记日志，**不影响回执**）。
+服务端 MySQL 持久化（`core/location_store.py`）：
+
+- **库/表自动创建**（`locations` 表，启动时预连，连不上服务照常起、端点报 503）。
+- **静止合并**：与该设备最新一行算 haversine 距离，`< max(两次精度, 30米)`
+  （误差圈重叠=无法确认移动）则只刷新该行坐标/时间并 `report_count+1`，
+  不新建行——设备静止时不会堆积重复记录；真实移动必然超出误差圈，不会误合并。
+- **双坐标系**：WGS-84（原始）与 GCJ-02（火星坐标，高德/腾讯底图渲染用）
+  同存；转换仅中国境内生效。`first_fix_time` / `last_fix_time` / `report_count`
+  直接表达「在该位置停留了多久」。
+- **无自动保留策略**：删不删全由管理员决定（设备详情页「位置」弹窗删除，
+  或 `DELETE /api/locations`，须带 id / device_id / before_ms 之一）。
+- **配置**：`config.yaml` 有 `locations.mysql` / `locations.amap` 模板段，
+  真实密码/Key 放 `config.local.yaml`（gitignore，不入库）。
+- **管理后台**：设备管理页每行「位置」按钮 → 弹窗上半高德地图轨迹
+  （Key 由 `/api/locations/amap-config` 动态下发，不进前端代码）+
+  下半位置历史列表。
 
 ### 踩坑
 

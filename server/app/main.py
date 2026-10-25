@@ -14,12 +14,15 @@ from fastapi import FastAPI, WebSocket
 
 from app.api.router import api_router
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 from app.core.admin_auth import AdminAuth
 from app.core.admin_event_bus import AdminEventBus
 from app.core.command_store import CommandStore
 from app.core.connection_manager import ConnectionManager
 from app.core.connection_event_store import ConnectionEventStore
 from app.core.device_registry import DeviceRegistry
+from app.core.location_store import build_location_store
 from app.core.log_store import LogStore
 from app.core.music_state_store import MusicStateStore
 from app.models.connection import Connection
@@ -82,6 +85,8 @@ def create_app() -> FastAPI:
 
     music_state_store = MusicStateStore()
 
+    location_store = build_location_store(settings.locations.mysql)
+
     # 注入 app.state，供端点使用
     app.state.settings = settings
     app.state.connection_manager = manager
@@ -92,6 +97,22 @@ def create_app() -> FastAPI:
     app.state.admin_auth = admin_auth
     app.state.admin_event_bus = admin_event_bus
     app.state.music_state_store = music_state_store
+    app.state.location_store = location_store
+
+    # 启动时预连位置存储（MySQL 不可达不阻塞启动，端点层报 503 兜底）
+    @app.on_event("startup")
+    async def _connect_location_store() -> None:
+        import asyncio
+
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, location_store.connect)
+        except Exception:
+            logger.exception("位置存储（MySQL）预连失败，端点将返回 503，服务继续启动")
+
+    # 应用关闭时释放位置存储连接
+    @app.on_event("shutdown")
+    async def _close_location_store() -> None:
+        location_store.close()
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)

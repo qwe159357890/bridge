@@ -5,8 +5,9 @@
 加载优先级（从低到高）：
 1. 代码内置默认值（本模块内的 fallback）
 2. ``config.yaml``（仓库内默认配置）
-3. 环境变量 ``BRIDGE_CONFIG`` 指定的额外 YAML 文件（如生产配置）
-4. 环境变量（``BRIDGE_*`` 前缀，覆盖单个参数，用于敏感项）
+3. ``config.local.yaml``（本地敏感配置，gitignore，存在才加载，不存在跳过）
+4. 环境变量 ``BRIDGE_CONFIG`` 指定的额外 YAML 文件（如生产配置）
+5. 环境变量（``BRIDGE_*`` 前缀，覆盖单个参数，用于敏感项）
 
 校验失败（fail-fast）时抛异常，进程启动即报错，绝不静默使用错误配置。
 """
@@ -23,6 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 
 # 默认配置文件路径（相对本文件，即 server/app/config.py -> server/config.yaml）
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+
+# 本地敏感配置（与 config.yaml 同目录；gitignore，存在才加载）
+LOCAL_CONFIG_PATH = DEFAULT_CONFIG_PATH.parent / "config.local.yaml"
 
 
 class ServerConfig(BaseModel):
@@ -97,6 +101,30 @@ class MusicConfig(BaseModel):
     )
 
 
+class MySQLConfig(BaseModel):
+    """MySQL 连接配置（位置持久化存储用）。"""
+
+    host: str = Field(default="127.0.0.1", description="MySQL 主机")
+    port: int = Field(default=3306, ge=1, le=65535)
+    user: str = Field(default="root", min_length=1)
+    password: str = Field(default="", description="密码（敏感，建议放 config.local.yaml）")
+    database: str = Field(default="bridge", min_length=1, description="库名，不存在自动创建")
+
+
+class AmapConfig(BaseModel):
+    """高德地图 JS API 配置（管理后台位置轨迹渲染用）。"""
+
+    key: str = Field(default="", description="高德 Web端(JS API) Key，敏感建议放 config.local.yaml")
+    security_js_code: str = Field(default="", description="配套安全密钥（2021-12 后申请的 Key 必填）")
+
+
+class LocationsConfig(BaseModel):
+    """位置持久化（get_location 上报存档）+ 地图渲染配置。"""
+
+    mysql: MySQLConfig = MySQLConfig()
+    amap: AmapConfig = AmapConfig()
+
+
 class LoggingConfig(BaseModel):
     """日志配置。"""
 
@@ -114,6 +142,7 @@ class Settings(BaseModel):
     admin: AdminConfig = AdminConfig()
     logging: LoggingConfig = LoggingConfig()
     music: MusicConfig = MusicConfig()
+    locations: LocationsConfig = LocationsConfig()
 
 
 def _env_overrides() -> dict:
@@ -165,12 +194,15 @@ def get_settings() -> Settings:
     # 1. 默认 config.yaml
     config = _deep_merge(config, _load_yaml(DEFAULT_CONFIG_PATH))
 
-    # 2. BRIDGE_CONFIG 指定的额外文件
+    # 2. 本地敏感配置 config.local.yaml（gitignore；不存在跳过，不报错）
+    config = _deep_merge(config, _load_yaml(LOCAL_CONFIG_PATH))
+
+    # 3. BRIDGE_CONFIG 指定的额外文件
     extra_path = os.environ.get("BRIDGE_CONFIG")
     if extra_path:
         config = _deep_merge(config, _load_yaml(Path(extra_path)))
 
-    # 3. 环境变量覆盖
+    # 4. 环境变量覆盖
     config = _deep_merge(config, _env_overrides())
 
     return Settings(**config)

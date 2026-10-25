@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, commands, connections, devices, logs, music, push
+from app.api.v1 import admin, commands, connections, devices, locations, logs, music, push
 
 router = APIRouter(prefix="/api")
 
@@ -19,5 +19,6 @@ router.include_router(connections.router)
 router.include_router(logs.router)
 router.include_router(commands.router)
 router.include_router(music.router)
+router.include_router(locations.router)
 
 __all__ = ["router"]
