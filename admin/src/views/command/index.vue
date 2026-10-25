@@ -151,8 +151,14 @@
               >
                 下发命令
               </el-button>
+              <el-tooltip
+                content="开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）"
+                placement="top"
+              >
+                <el-checkbox v-model="forceSend" class="force-send">强制下发</el-checkbox>
+              </el-tooltip>
               <span v-if="!form.deviceId" class="send-hint">请先选择在线设备</span>
-              <span v-else-if="commandBlocked" class="send-hint warn">{{ blockHint }}</span>
+              <span v-else-if="blockHint" class="send-hint warn">{{ blockHint }}</span>
             </div>
           </div>
 
@@ -311,6 +317,9 @@ const MUSIC_STATE_RULES: Record<string, string[]> = {
   stop_music: ['playing', 'paused'],
 }
 
+/** 强制下发：开启后绕过状态联动禁用，交由客户端按真实状态校验（状态不匹配回执失败）。 */
+const forceSend = ref(false)
+
 const musicStateText = computed(() => {
   const s = musicState.value
   if (!s) return ''
@@ -337,10 +346,11 @@ const musicTagType = computed(() => {
   }
 })
 
-/** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。 */
+/** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
 function isBlocked(cmd: CommandDef): boolean {
   const allowed = MUSIC_STATE_RULES[cmd.name]
   if (!allowed) return false
+  if (forceSend.value) return false
   if (!form.deviceId) return true
   const state = musicState.value?.state ?? 'unknown'
   return !allowed.includes(state)
@@ -351,9 +361,14 @@ const commandBlocked = computed(() =>
 )
 
 const blockHint = computed(() => {
-  if (!commandBlocked.value || !selectedCommand.value) return ''
+  if (!selectedCommand.value) return ''
+  if (!MUSIC_STATE_RULES[selectedCommand.value.name]) return ''
+  if (forceSend.value) {
+    return '强制模式：命令将直接下发，由设备按真实状态执行，状态不匹配会回执失败'
+  }
+  if (!commandBlocked.value) return ''
   const state = musicState.value?.state ?? 'unknown'
-  if (state === 'unknown') return '设备离线或状态未知，无法下发'
+  if (state === 'unknown') return '设备离线或状态未知，无法下发；若确认设备在播放，可开启强制下发'
   switch (selectedCommand.value.name) {
     case 'pause_music':
       return '当前没有正在播放的音乐，无法暂停'
@@ -380,7 +395,10 @@ async function loadMusicState() {
 
 watch(
   () => form.deviceId,
-  () => loadMusicState(),
+  () => {
+    forceSend.value = false // 切换目标设备时重置强制下发，防止残留开启误操作
+    loadMusicState()
+  },
 )
 
 const activeCategoryLabel = computed(() => {
@@ -758,6 +776,11 @@ onBeforeUnmount(() => {
 .send-hint {
   font-size: 13px;
   color: #909399;
+}
+
+.force-send {
+  margin: 0 4px 0 12px;
+  white-space: nowrap;
 }
 .send-hint.warn {
   color: #e6a23c;

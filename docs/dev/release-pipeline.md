@@ -11,7 +11,7 @@
         ↓
 AI 全自动：
   ① 用 GitHub API 自动创建仓库（你无需手动建）
-  ② 提交代码（优先 git push；主站不通时走 API 通道，见第十节）
+  ② 提交代码（**优先走 API 通道**，见第十节；git push（清代理直连→默认代理重试）为回退）
   ③ 打 tag 触发 GitHub Actions 打包（固定 debug 签名）
   ④ 轮询等待打包完成
   ⑤ 用代理下载 APK 到本地 releases/
@@ -103,12 +103,18 @@ python tools/release/release.py v0.2.0   # 指定版本号
 3. `releases/` 下载产物不入库。
 4. CI 版本：JDK 17 + Gradle 8.13，与项目 `compileOptions/JVM 17`、AGP 8.13.1 严格匹配。
 
-## 十、github.com 主站不通时的 API 通道（重要经验）
+## 十、git 网络策略：API 通道优先（重要经验）
 
-**现象**：`git push` 到 `github.com` 常报 `CONNECT tunnel failed, response 502`（代理隧道失败），此时 git 协议完全不可用。
+**背景**：沙箱注入本地代理（`HTTP_PROXY=127.0.0.1:<随机端口>`，WorkBuddy 宿主行为，不可删除），git 走它间歇不稳（502/断连）；直连 github.com 也间歇被 reset。网络路径没有一条永远可靠，**按以下优先级执行（2026-10-25 定版）**：
 
-**解决**：改用 `github-api-automation` skill，走 `api.github.com`（REST API）完成全部操作。它不受主站阻断影响。
+| 优先级 | 路径 | 命令要点 |
+|---|---|---|
+| ①（首选） | **API 通道**（`api.github.com` 最稳） | `github-api-automation` skill 的 `gh_api.py`，curl 需 `--noproxy '*'` |
+| ② | 清代理直连 | `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy git fetch/push ...` |
+| ③（兜底重试） | 默认代理 | 直接 `git fetch/push`（读 env 代理），多试几次 |
 
+- 任何一步成功即继续后续流程；①成功时注意「别名提交」收尾（见下）。
+- API 通道常用命令：
 ### 连通性探测（先做）
 
 ```bash
@@ -119,7 +125,6 @@ done
 
 - `api.github.com` 返回 401（未带 token）即「通」；`github.com` 返回 `000` 即「git 协议不可用」。
 - 注意 `--noproxy '*'`：系统代理常拦截这些域名，必须绕过。
-
 ### 提交 / 打 tag / 触发打包（`gh_api.py`）
 
 ```bash
