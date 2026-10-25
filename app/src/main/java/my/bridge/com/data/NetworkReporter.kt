@@ -61,11 +61,14 @@ object NetworkReporter {
         return if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) "VPN（over $base）" else base
     }
 
-    /** LinkProperties 里第一个非回环 IPv4 地址。 */
+    /** LinkProperties 里第一个非回环 IPv4 地址（正确 API 是 getLinkAddresses()）。 */
     private fun firstIPv4(lp: LinkProperties?): String? {
         if (lp == null) return null
         return try {
-            lp.addresses.firstOrNull { !it.isLoopbackAddress && it.address.size == 4 }?.hostAddress
+            lp.linkAddresses
+                .map { it.address }
+                .firstOrNull { !it.isLoopbackAddress && it.address.size == 4 }
+                ?.hostAddress
         } catch (e: Exception) {
             null
         }
