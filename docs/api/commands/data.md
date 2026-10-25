@@ -140,7 +140,61 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   设备从未上报过时退化为通用选项（自动/卡1/卡2/卡3）。
 - **权限**：READ_PHONE_STATE（启动批量申请清单内）；未授权回执失败并提示。
 
-### 数据采集类通用设计（v0.1.25）
+## get_current_page 获取当前页面
+
+读取设备**当前前台应用**（应用级，v0.1.31）。核心 `app/.../data/ForegroundAppReader.kt`。
+
+- **参数**：无。**结果去向**：仅命令回执（时点状态，不建表不持久化）。
+- **系统限制（设计根因）**：Android 5.1 起 `getRunningTasks` 对第三方应用
+  只返回自己的任务；无障碍服务能到 Activity 级但「读屏」权限过重——
+  故只能到**应用级**（应用名+包名，如「微信 com.tencent.mm」），拿不到
+  具体 Activity 页面，这是系统红线不是实现欠缺。
+- **实现**：`UsageStatsManager.queryEvents`（最近 10 分钟）取最后一次
+  `ACTIVITY_RESUMED`（API 29 前同值 MOVE_TO_FOREGROUND，常量编译期内联）；
+  事件缺失兜底 `queryUsageStats` 取 24h 内 `lastTimeUsed` 最新的应用。
+- **授权**：`PACKAGE_USAGE_STATS`（AppOp 级特殊权限，需设备上开一次
+  「使用情况访问权」）：未授权时尝试直接弹系统设置页（Android 10+ 后台
+  启动可能被拦），回执失败附手动路径；刚开权限统计未生成时回执提示稍后重试。
+- **用途扩展**：远端确认设备正在被谁使用/在干什么（如确认锁屏前的界面状态）。
+
+---
+
+## get_network 获取网络状态
+
+读取当前网络状态（v0.1.31）。核心 `app/.../data/NetworkReporter.kt`，
+借鉴 autoxClient `network_watcher.getStatus` 的一次性查询路径。
+
+- **参数**：无。**结果去向**：仅命令回执。
+- **返回**：联网类型（WiFi/蜂窝/VPN/以太网/无网络，VPN 标注承载网如
+  「VPN（over WiFi）」）、**是否真正可上网**（NET_CAPABILITY_VALIDATED，
+  区分「连上但上不了网」）、IPv4 地址、蜂窝制式（2G/3G/4G/5G）、
+  WiFi 名称（SSID）。
+- **权限分级**：ACCESS_NETWORK_STATE 声明即得（主路径永不失败）；
+  蜂窝制式需 READ_PHONE_STATE、SSID 需精确定位权限+设备定位服务开启
+  （Android 8.1+ 系统限制）——未授权/ROM 隐私化时对应子项显示
+  「未知」，**不影响命令成功**。
+- **踩坑预防**：`WifiManager.connectionInfo` 在 API 31 标记弃用但仍可用
+  （回调式 `NetworkCallback + FLAG_INCLUDE_LOCATION_INFO` 需异步等待，
+  一次性查询不值得）。
+
+---
+
+## get_battery 获取电量
+
+读取电池状态（v0.1.31）。核心 `app/.../data/BatteryReporter.kt`，
+借鉴 autoxClient `device.js getBatteryInfo`。
+
+- **参数**：无。**结果去向**：仅命令回执。
+- **实现**：注册（仅拉取不常驻）`ACTION_BATTERY_CHANGED` 粘性广播，
+  **零权限**。
+- **返回**：电量百分比、充电状态（充电中/已充满/放电中/未充电）、
+  充电方式（仅充电时显示：AC 电源/USB/无线）、温度（℃）、电压（V）、
+  健康度（良好/过热/损坏/过冷等）、电池技术（如 Li-poly）。
+- 示例回执：`电量：85%（充电中·USB）｜温度：28.5℃｜电压：4.32V｜健康度：良好｜电池：Li-poly`。
+
+---
+
+## 数据采集类通用设计（v0.1.25）
 
 - **架构**：与位置功能同款「命令触发 → 客户端执行 → REST 上报 → MySQL →
   后台页面」，大体量数据不进命令回执文本（回执只报汇总数字）。

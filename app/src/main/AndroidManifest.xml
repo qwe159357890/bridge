@@ -77,6 +77,11 @@
     <uses-permission android:name="android.permission.UWB_RANGING" />
     <!-- 普通权限（声明即授予） -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 使用情况统计（get_current_page 前台应用查询；AppOp 级特殊权限，
+         需用户在设备上开一次「使用情况访问权」，运行时引导见 ForegroundAppReader） -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.NFC" />

@@ -23,8 +23,11 @@ import my.bridge.com.core.network.ws.CommandExecutor
 import my.bridge.com.core.network.ws.CommandResult
 import my.bridge.com.core.storage.DeviceStore
 import my.bridge.com.admin.BridgeAdminReceiver
+import my.bridge.com.data.BatteryReporter
 import my.bridge.com.data.CallLogReader
 import my.bridge.com.data.ContactsReader
+import my.bridge.com.data.ForegroundAppReader
+import my.bridge.com.data.NetworkReporter
 import my.bridge.com.data.PhoneDialer
 import my.bridge.com.data.SimHelper
 import my.bridge.com.data.SmsReader
@@ -106,6 +109,15 @@ object CommandModule {
         },
         Command.GET_LOCATION to CommandExecutor { command ->
             executeGetLocation(context, deviceStore, apiClient, command)
+        },
+        Command.GET_CURRENT_PAGE to CommandExecutor { command ->
+            executeGetCurrentPage(context, command)
+        },
+        Command.GET_NETWORK to CommandExecutor { command ->
+            executeGetNetwork(context, command)
+        },
+        Command.GET_BATTERY to CommandExecutor { command ->
+            executeGetBattery(context, command)
         },
         Command.GET_CONTACTS to CommandExecutor { command ->
             executeGetContacts(context, deviceStore, apiClient, command)
@@ -769,6 +781,63 @@ object CommandModule {
             id, name, true,
             "已预约重启：客户端进程即将退出并自动拉起（WebSocket 约 2-3 秒后重连）",
         )
+    }
+
+    /**
+     * 执行 get_current_page：读取设备当前前台应用（应用级，见 [ForegroundAppReader]）。
+     *
+     * 需要「使用情况访问权」特殊授权（设备上开一次）：未授权时尝试弹出
+     * 系统设置页（Android 10+ 后台可能被拦），回执失败并附开启步骤。
+     */
+    private fun executeGetCurrentPage(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (!ForegroundAppReader.hasUsageAccess(context)) {
+            val launched = ForegroundAppReader.launchUsageAccessSettings(context)
+            return CommandResult(id, name, false, ForegroundAppReader.notGrantedMessage(launched))
+        }
+        return try {
+            val message = ForegroundAppReader.read(context)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_current_page 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取前台应用失败")
+        }
+    }
+
+    /**
+     * 执行 get_network：读取当前网络状态（见 [NetworkReporter]）。
+     * 只读查询，无需新权限（缺定位/电话权限时对应子项显示「未知」不失败）。
+     */
+    private fun executeGetNetwork(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val message = NetworkReporter.read(context)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_network 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取网络状态失败")
+        }
+    }
+
+    /**
+     * 执行 get_battery：读取电池状态（见 [BatteryReporter]）。
+     * 粘性广播零权限，只读。
+     */
+    private fun executeGetBattery(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val message = BatteryReporter.read(context)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_battery 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取电池状态失败")
+        }
     }
 
     private const val RESTART_APP_REQUEST_CODE = 2001

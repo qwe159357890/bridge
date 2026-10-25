@@ -26,13 +26,13 @@
 | 命令 | 中文名 | 文档 |
 |---|---|---|
 | `get_location` | 获取位置 | [data.md#get_location](data.md#get_location-获取位置) |
-| `get_current_page` | 获取当前页面 | — |
+| `get_current_page` | 获取当前页面 | [data.md#get_current_page-获取当前页面](data.md#get_current_page-获取当前页面) |
 | `get_contacts` | 获取通讯录 | [data.md#get_contacts-获取通讯录](data.md#get_contacts-获取通讯录) |
 | `get_sms` | 获取短信 | [data.md#get_sms-获取短信](data.md#get_sms-获取短信) |
 | `get_call_log` | 获取通话记录 | [data.md#get_call_log-获取通话记录](data.md#get_call_log-获取通话记录) |
 | `get_sim_info` | 获取SIM卡信息 | [data.md#get_sim_info-获取sim卡信息](data.md#get_sim_info-获取sim卡信息) |
-| `get_network` | 获取网络状态 | — |
-| `get_battery` | 获取电量 | — |
+| `get_network` | 获取网络状态 | [data.md#get_network-获取网络状态](data.md#get_network-获取网络状态) |
+| `get_battery` | 获取电量 | [data.md#get_battery-获取电量](data.md#get_battery-获取电量) |
 
 ## 🎬 media（音视频）→ media.md（按需创建）
 
