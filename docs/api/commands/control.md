@@ -83,7 +83,38 @@ http:// 或 https:// 开头 → ①
 
 ---
 
+## pause_music / resume_music / stop_music 播放控制
+
+三个控制命令共用 `MusicPlayer`（`app/.../media/MusicPlayer.kt`）里的同一份播放状态机，
+行为约束在客户端按状态判定，非法操作**回执失败**并说明原因（管理后台下发历史可见）：
+
+| 命令 | 空闲 | 播放中 | 暂停中 |
+|---|---|---|---|
+| `pause_music` | ✗「当前没有正在播放的音乐」 | 暂停（记住进度） | 幂等成功「已处于暂停状态：\<曲目\>」 |
+| `resume_music` | ✗「当前没有可恢复的音乐」 | ✗「正在播放中，无需恢复」 | 从暂停进度恢复 |
+| `stop_music` | ✗「当前没有正在播放的音乐」 | 停止并释放 | 停止并释放（清掉暂停态） |
+
+与 `play_music` 的交互：
+
+- 播放中下发 `play_music` = **切歌**（顶掉当前播放器，释放后新起）；
+- 暂停中下发 `play_music` = 丢弃暂停会话，新起播放（**不**从进度续播，续播用 `resume_music`）。
+
+实现要点：
+
+- `MusicPlayer` 进程内单例，状态机 `IDLE / PLAYING / PAUSED`，记录 `currentSource`
+  用于回执展示（如「已暂停：test.mp3」）；状态只存内存，进程被杀即回空闲。
+- 非循环曲目自然播完 → `OnCompletionListener` 释放播放器，状态自动回落空闲
+  （此后 pause/stop/resume 均回执失败，符合「空闲不可控」约束）。
+- `loop=true` 时永远不触发 completion，**必须用 `stop_music` 终止**。
+- 控制命令与 `play_music` 可能在不同线程并发执行：`MusicPlayer` 内部全部
+  `synchronized`；状态判定与操作之间的窄窗口竞态由播放器的
+  `IllegalStateException` 兜底（`CommandModule.executeMusicControl` 统一转失败回执）。
+- 回执即状态显示（方案 A）：每次 play/pause/resume/stop 的回执消息都带
+  当前状态与曲目，管理后台下发历史天然可见，无需额外上报通道。
+
+---
+
 ## 未收录命令
 
-`pause_music`、`set_volume`、`lock_screen`、`reboot` 尚未实现/落地，实现时在本文补
+`set_volume`、`lock_screen`、`reboot` 尚未实现/落地，实现时在本文补
 `## 命令名` 章节（写实现语义，参数细节以 catalog 为准）。

@@ -17,6 +17,9 @@ data class Command(
         /** 已知命令名（与服务端 ALLOWED_COMMANDS 白名单一致）。 */
         const val UPLOAD_LOG = "upload_log"
         const val PLAY_MUSIC = "play_music"
+        const val PAUSE_MUSIC = "pause_music"
+        const val RESUME_MUSIC = "resume_music"
+        const val STOP_MUSIC = "stop_music"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

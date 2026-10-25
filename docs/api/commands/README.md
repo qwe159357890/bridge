@@ -12,7 +12,9 @@
 | 命令 | 中文名 | 文档 |
 |---|---|---|
 | `play_music` | 播放音乐 | [control.md#play_music](control.md#play_music-播放音乐) |
-| `pause_music` | 暂停音乐 | — |
+| `pause_music` | 暂停音乐 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
+| `resume_music` | 继续播放 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
+| `stop_music` | 停止音乐 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
 | `set_volume` | 调节音量 | — |
 | `lock_screen` | 锁屏 | — |
 | `reboot` | 重启 | — |

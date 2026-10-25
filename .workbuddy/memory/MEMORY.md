@@ -33,6 +33,14 @@
 - 版本目录统一管理依赖：gradle/libs.versions.toml。
 - 图标源图：`assets/icons/沟通记录.png`（229×200 非正方形），生成脚本 `tools/icon/generate_icon.py`。
 
+## 命令下发（三端对齐 + 扩展流程）（2026-10-25）
+
+- **命令名锚点**：后端 `COMMANDS[].name` = 客户端 `Command` 常量 = 前端 `CommandDef.name`；前端从 `/api/commands/meta` 动态渲染，加命令零前端改动。
+- **扩展命令固定三步**：① catalog 加 `_cmd(...)`；② 客户端 `Command.kt` 常量 + `CommandModule.kt` 执行器；③ 文档——值得写的在 `docs/api/commands/{category}.md` 加 `## 命令名` 章节 + README 索引表同步（`—` 改链接）。
+- **命令文档按分类聚合**：`docs/api/commands/{category}.md`（文件名 = category key，文件数封顶），INDEX 只登记目录级入口，README.md 是命令级索引 + 缺文档台账。
+- **权威文档**：`docs/api/command-catalog.md` §3.3（扩展流程）/ §3.4（文档组织）。
+- **已落地命令**（2026-10-25）：`upload_log`、`play_music`（音源三形态：URL/绝对路径/文件名缓存+服务器目录下载）、`pause_music`/`resume_music`/`stop_music`（播放控制状态机：空闲不可控、播放中可暂停/停止/切歌、暂停中可恢复/停止；状态显示走命令回执=方案 A，不做常驻上报）。机制详见 `docs/api/commands/control.md`。
+
 ## 构建发布链路（2026-10-23）
 
 - **结论**：当前为**内部测试阶段**，用 **debug 签名**打包。全自动闭环：用户提供 1 个 GitHub PAT → AI 自动建仓库（GitHub API）→ push → 打 tag → GitHub Actions 打包 → 代理下载 APK 到本地 `releases/`。**用户除生成 PAT 外无需任何操作。**

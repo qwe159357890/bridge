@@ -113,7 +113,12 @@ COMMANDS: list[dict[str, Any]] = [
                  description="三种形态：①远程 URL 直接流播；②本地绝对路径直接播放；"
                              "③裸文件名先查客户端缓存，未命中从服务器音乐目录下载缓存后播放（下次直接命中）"),
           _param("loop", "循环播放", PARAM_TYPE_SWITCH, default=False)]),
-    _cmd("pause_music", "暂停音乐", "control", "⏸️", "暂停客户端正在播放的音乐"),
+    _cmd("pause_music", "暂停音乐", "control", "⏸️",
+         "暂停客户端正在播放的音乐（无播放时回执失败）"),
+    _cmd("resume_music", "继续播放", "control", "⏯️",
+         "从暂停进度恢复播放（仅暂停中有效，播放中/空闲回执失败）"),
+    _cmd("stop_music", "停止音乐", "control", "⏹️",
+         "停止播放并释放播放器（播放中/暂停中有效，空闲回执失败）"),
     _cmd("set_volume", "调节音量", "control", "🔊",
          "调节客户端媒体音量",
          [_param("level", "音量值", PARAM_TYPE_NUMBER, required=True, default=50,

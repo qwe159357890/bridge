@@ -23,7 +23,8 @@ import javax.inject.Singleton
  *
  * 注册服务端可下发的命令（与服务端 ALLOWED_COMMANDS 白名单一致）：
  * - upload_log：采集诊断日志并上传到后端。
- * - play_music：播放音乐（音源三形态，见 [executePlayMusic]）。
+ * - play_music / pause_music / resume_music / stop_music：音乐播放与控制
+ *   （状态机与回执语义见 [MusicPlayer] 与 docs/api/commands/control.md）。
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -41,6 +42,41 @@ object CommandModule {
         },
         Command.PLAY_MUSIC to CommandExecutor { command ->
             executePlayMusic(context, deviceStore, apiClient, command)
+        },
+        Command.PAUSE_MUSIC to CommandExecutor { command ->
+            executeMusicControl(command) {
+                when (MusicPlayer.state) {
+                    MusicPlayer.State.IDLE -> fail("当前没有正在播放的音乐")
+                    MusicPlayer.State.PAUSED -> ok("已处于暂停状态：${MusicPlayer.currentSource}")
+                    MusicPlayer.State.PLAYING -> {
+                        MusicPlayer.pause()
+                        ok("已暂停：${MusicPlayer.currentSource}")
+                    }
+                }
+            }
+        },
+        Command.RESUME_MUSIC to CommandExecutor { command ->
+            executeMusicControl(command) {
+                when (MusicPlayer.state) {
+                    MusicPlayer.State.IDLE -> fail("当前没有可恢复的音乐")
+                    MusicPlayer.State.PLAYING -> fail("正在播放中，无需恢复")
+                    MusicPlayer.State.PAUSED -> {
+                        MusicPlayer.resume()
+                        ok("恢复播放：${MusicPlayer.currentSource}")
+                    }
+                }
+            }
+        },
+        Command.STOP_MUSIC to CommandExecutor { command ->
+            executeMusicControl(command) {
+                when (MusicPlayer.state) {
+                    MusicPlayer.State.IDLE -> fail("当前没有正在播放的音乐")
+                    else -> {
+                        MusicPlayer.stop()
+                        ok("已停止")
+                    }
+                }
+            }
         },
     )
 
@@ -103,12 +139,34 @@ object CommandModule {
             val resolved = resolveSource(context, deviceStore, apiClient, source)
             MusicPlayer.play(resolved, loop)
             Timber.i("命令 play_music 播放成功：$resolved（loop=$loop）")
-            CommandResult(id, name, true, "播放中：$resolved")
+            CommandResult(id, name, true, "播放中：$source")
         } catch (e: Exception) {
             Timber.e(e, "命令 play_music 播放失败：$source")
             CommandResult(id, name, false, "播放失败：${e.message}")
         }
     }
+
+    /**
+     * 音乐控制类命令（pause/resume/stop）统一包装：
+     * 按当前 [MusicPlayer.state] 判定操作合法性，异常统一转失败回执。
+     *
+     * block 返回 (是否成功, 回执消息)；操作被状态约束拒绝时直接返回失败对，
+     * 播放器抛出的 [IllegalStateException] 等异常也在此兜底。
+     */
+    private inline fun executeMusicControl(
+        command: Command,
+        block: () -> Pair<Boolean, String>,
+    ): CommandResult = try {
+        val (success, message) = block()
+        CommandResult(command.commandId, command.command, success, message)
+    } catch (e: Exception) {
+        Timber.e(e, "命令 ${command.command} 执行失败")
+        CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+    }
+
+    private fun ok(message: String): Pair<Boolean, String> = true to message
+
+    private fun fail(message: String): Pair<Boolean, String> = false to message
 
     /** 按音源形态分三路解析（见 [executePlayMusic] 注释），返回可直接交给 MediaPlayer 的地址。 */
     private suspend fun resolveSource(
