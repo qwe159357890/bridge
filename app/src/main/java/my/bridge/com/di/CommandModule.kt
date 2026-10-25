@@ -313,7 +313,7 @@ object CommandModule {
         val id = command.commandId
         val name = command.command
         if (!hasPermission(context)) {
-            return CommandResult(id, name, false, "缺少$permissionName权限，请打开 App 在系统设置中授予后重试")
+            return CommandResult(id, name, false, "缺少${permissionName}权限，请打开 App 在系统设置中授予后重试")
         }
         val items = try {
             read(context)
