@@ -174,6 +174,8 @@ object CommandModule {
      *
      * @param params.precision "coarse"（网络定位，默认）/ "fine"（GPS，超时回退网络）
      * @param params.timeout   超时秒数（默认 15，下限 5 上限 120）
+     * @param params.refresh   强制刷新：跳过 5 分钟新鲜缓存短路，直接监听定位；
+     *                         陈旧缓存兜底仍保留（回执来源字段标注缓存年龄）
      *
      * 权限：Manifest 已声明 COARSE/FINE/BACKGROUND（保活资源锚点），此处校验运行时授权；
      * fine 模式需 FINE 权限（仅有 COARSE 时自动降级为 coarse 并注明）。
@@ -203,11 +205,15 @@ object CommandModule {
             ?.takeIf { it.isJsonPrimitive }
             ?.asInt
             ?.coerceIn(5, 120) ?: 15
+        val refresh = command.params.get("refresh")
+            ?.takeIf { it.isJsonPrimitive }
+            ?.asBoolean ?: false
+        val refreshNote = if (refresh) "（强制刷新，已跳过缓存）" else ""
 
         return try {
-            val fix = LocationHelper.getLocation(context, precision, timeoutSec * 1000L)
-            Timber.i("命令 get_location 成功：${fix.toMessage()}")
-            CommandResult(id, name, true, fix.toMessage() + degradedNote)
+            val fix = LocationHelper.getLocation(context, precision, timeoutSec * 1000L, refresh)
+            Timber.i("命令 get_location 成功：${fix.toMessage()}（refresh=$refresh）")
+            CommandResult(id, name, true, fix.toMessage() + degradedNote + refreshNote)
         } catch (e: Exception) {
             Timber.e(e, "命令 get_location 失败")
             CommandResult(id, name, false, "定位失败：${e.message}")

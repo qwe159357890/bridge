@@ -12,16 +12,21 @@
 
 ```
 coarse 粗略（默认）：
-  lastKnown 缓存（network/passive，5 分钟内视为新鲜）→ 命中直接返回「network(缓存)」
-  → 未命中：监听一次 network 定位（timeout 内）→ 返回「network」
+  （refresh=off）lastKnown 缓存（network/passive，5 分钟内视为新鲜）
+    → 命中直接返回「network(缓存)」
+  （refresh=on 强制刷新）跳过新鲜缓存短路，直接进入下一级监听
+  → 监听一次 network 定位（timeout 内）→ 返回「network」
   → 超时：回退陈旧 lastKnown（标注「缓存 N 分钟前」）→ 都没有则回执失败
 
 fine 精确：
   监听一次 GPS 定位（timeout 内）→ 返回「gps」
-  → 超时：自动回退 coarse 结果，来源标注「GPS超时回退」
+  → 超时：自动回退 coarse 结果（遵循同一 refresh 开关），来源标注「GPS超时回退」
 ```
 
 - 冷启动 GPS 搜星可能 30 秒+，精确模式建议 timeout=30；timeout 参数下限 5 上限 120 秒。
+- `refresh` 强制刷新开关：解决「设备静止时缓存一直新鲜、coarse 永远拿不到实时位置」的
+  滞后问题；只跳过新鲜缓存短路，**陈旧缓存兜底保留**（兜底语义=宁可旧也不报错，
+  与新鲜度要求是两回事）。开启后成功回执追加「（强制刷新，已跳过缓存）」。
 - 回执文本示例：`位置：30.123456, 120.654321（±35m，来源 gps，2026-10-25 12:05:30，海拔 12.0m，速度 1.2m/s）`
 
 ### 权限

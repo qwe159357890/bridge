@@ -22,6 +22,8 @@ import kotlin.coroutines.resume
  * 定位策略（无 GMS 依赖，全部走 AOSP 原生 [LocationManager]，国产 ROM 可用）：
  * - coarse 粗略：先取 network/passive 的最近缓存位置（5 分钟内视为新鲜直接返回），
  *   无新鲜缓存则监听一次 network 定位；仍超时则回退任意 lastKnown（标注陈旧）。
+ *   skipFreshCache=true（强制刷新）时跳过新鲜缓存短路，直接监听定位，
+ *   但陈旧缓存兜底保留——兜底语义是「宁可旧也不报错」，与新鲜度要求无关。
  * - fine 精确：监听一次 gps 定位；超时自动回退 coarse 结果（回执注明）。
  *
  * 权限：COARSE/FINE 均为运行时权限，调用方（命令执行器）先校验，未授权抛
@@ -69,10 +71,16 @@ object LocationHelper {
      *
      * @param precision "coarse"（网络定位）/ "fine"（GPS，超时回退网络）
      * @param timeoutMs 等待上限（毫秒）
+     * @param skipFreshCache 强制刷新：跳过 5 分钟新鲜缓存短路（陈旧缓存兜底仍保留）
      * @throws SecurityException 权限未授予
      * @throws IllegalStateException 各 provider 均无法取得位置
      */
-    suspend fun getLocation(context: Context, precision: String, timeoutMs: Long): LocationFix {
+    suspend fun getLocation(
+        context: Context,
+        precision: String,
+        timeoutMs: Long,
+        skipFreshCache: Boolean = false,
+    ): LocationFix {
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         return if (precision == "fine") {
             val gps = requestSingle(lm, LocationManager.GPS_PROVIDER, timeoutMs)
@@ -80,12 +88,12 @@ object LocationHelper {
                 gps.toFix("gps")
             } else {
                 Timber.i("GPS 定位超时，回退网络定位")
-                coarse(context, lm, timeoutMs).let {
+                coarse(context, lm, timeoutMs, skipFreshCache).let {
                     it.copy(provider = "${it.provider}/GPS超时回退")
                 }
             }
         } else {
-            coarse(context, lm, timeoutMs)
+            coarse(context, lm, timeoutMs, skipFreshCache)
         }
     }
 
@@ -93,15 +101,23 @@ object LocationHelper {
     // 内部实现
     // ------------------------------------------------------------------
 
-    /** 粗略定位：新鲜缓存 → 主动监听一次 → 陈旧缓存兜底。 */
+    /**
+     * 粗略定位：新鲜缓存 → 主动监听一次 → 陈旧缓存兜底。
+     *
+     * skipFreshCache=true（强制刷新）时跳过第一级新鲜缓存短路，
+     * 直接监听定位；陈旧缓存兜底保留且明确标注缓存年龄。
+     */
     private suspend fun coarse(
         context: Context,
         lm: LocationManager,
         timeoutMs: Long,
+        skipFreshCache: Boolean = false,
     ): LocationFix {
         val cached = lastKnown(lm, LocationManager.NETWORK_PROVIDER)
             ?: lastKnown(lm, LocationManager.PASSIVE_PROVIDER)
-        if (cached != null && System.currentTimeMillis() - cached.time <= FRESH_MS) {
+        if (!skipFreshCache && cached != null &&
+            System.currentTimeMillis() - cached.time <= FRESH_MS
+        ) {
             return cached.toFix("network(缓存)")
         }
         val fresh = requestSingle(lm, LocationManager.NETWORK_PROVIDER, timeoutMs)
