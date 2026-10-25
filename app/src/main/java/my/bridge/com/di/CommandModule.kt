@@ -13,6 +13,7 @@ import my.bridge.com.core.network.ws.Command
 import my.bridge.com.core.network.ws.CommandExecutor
 import my.bridge.com.core.network.ws.CommandResult
 import my.bridge.com.core.storage.DeviceStore
+import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MusicPlayer
 import retrofit2.HttpException
 import timber.log.Timber
@@ -25,6 +26,7 @@ import javax.inject.Singleton
  * - upload_log：采集诊断日志并上传到后端。
  * - play_music / pause_music / resume_music / stop_music：音乐播放与控制
  *   （状态机与回执语义见 [MusicPlayer] 与 docs/api/commands/control.md）。
+ * - get_location：获取设备位置（定位策略见 [LocationHelper] 与 docs/api/commands/data.md）。
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -77,6 +79,9 @@ object CommandModule {
                     }
                 }
             }
+        },
+        Command.GET_LOCATION to CommandExecutor { command ->
+            executeGetLocation(context, command)
         },
     )
 
@@ -162,6 +167,51 @@ object CommandModule {
     } catch (e: Exception) {
         Timber.e(e, "命令 ${command.command} 执行失败")
         CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+    }
+
+    /**
+     * 执行 get_location：获取设备位置（真实实现，见 [LocationHelper]）。
+     *
+     * @param params.precision "coarse"（网络定位，默认）/ "fine"（GPS，超时回退网络）
+     * @param params.timeout   超时秒数（默认 15，下限 5 上限 120）
+     *
+     * 权限：Manifest 已声明 COARSE/FINE/BACKGROUND（保活资源锚点），此处校验运行时授权；
+     * fine 模式需 FINE 权限（仅有 COARSE 时自动降级为 coarse 并注明）。
+     * v1 纯文本回执；[my.bridge.com.location.LocationHelper.LocationFix] 为结构化数据，
+     * 后续版本直接序列化上报服务端持久化（SQL/MySQL）。
+     */
+    private suspend fun executeGetLocation(
+        context: Context,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+
+        if (!LocationHelper.hasPermission(context)) {
+            return CommandResult(id, name, false, "缺少定位权限，请打开 App 在系统设置中授予定位权限后重试")
+        }
+        var precision = command.params.get("precision")
+            ?.takeIf { it.isJsonPrimitive }
+            ?.asString
+            ?.trim() ?: "coarse"
+        var degradedNote = ""
+        if (precision == "fine" && !LocationHelper.hasFinePermission(context)) {
+            precision = "coarse"
+            degradedNote = "（仅有粗略定位权限，已降级为网络定位）"
+        }
+        val timeoutSec = command.params.get("timeout")
+            ?.takeIf { it.isJsonPrimitive }
+            ?.asInt
+            ?.coerceIn(5, 120) ?: 15
+
+        return try {
+            val fix = LocationHelper.getLocation(context, precision, timeoutSec * 1000L)
+            Timber.i("命令 get_location 成功：${fix.toMessage()}")
+            CommandResult(id, name, true, fix.toMessage() + degradedNote)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_location 失败")
+            CommandResult(id, name, false, "定位失败：${e.message}")
+        }
     }
 
     private fun ok(message: String): Pair<Boolean, String> = true to message

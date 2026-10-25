@@ -19,11 +19,11 @@
 | `lock_screen` | 锁屏 | — |
 | `reboot` | 重启 | — |
 
-## 📡 data（数据采集）→ data.md（按需创建）
+## 📡 data（数据采集）→ [data.md](data.md)
 
 | 命令 | 中文名 | 文档 |
 |---|---|---|
-| `get_location` | 获取位置 | — |
+| `get_location` | 获取位置 | [data.md#get_location](data.md#get_location-获取位置) |
 | `get_current_page` | 获取当前页面 | — |
 | `get_sms` | 获取短信 | — |
 | `get_network` | 获取网络状态 | — |

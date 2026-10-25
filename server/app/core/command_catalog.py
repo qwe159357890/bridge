@@ -127,7 +127,18 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("reboot", "重启", "control", "🔄", "重启客户端设备"),
 
     # ---- 数据采集类 ----
-    _cmd("get_location", "获取位置", "data", "📍", "获取客户端当前 GPS 位置数据"),
+    _cmd("get_location", "获取位置", "data", "📍",
+         "获取客户端当前位置：粗略（网络定位，快）或精确（GPS，慢）；"
+         "v1 纯文本回执，后续版本将上报服务端持久化",
+         [_param("precision", "定位精度", PARAM_TYPE_SELECT, default="coarse",
+                 options=[
+                     {"value": "coarse", "label": "粗略（网络定位，秒级返回）"},
+                     {"value": "fine", "label": "精确（GPS 定位，需空旷环境）"},
+                 ],
+                 description="粗略=基站/WiFi 定位（误差几百米）；精确=GPS 卫星定位（误差几十米内，"
+                             "冷启动可能 30 秒+，超时自动回退网络定位）"),
+          _param("timeout", "超时(秒)", PARAM_TYPE_NUMBER, default=15,
+                 placeholder="默认 15 秒", description="定位等待上限；精确模式建议 30 秒")]),
     _cmd("get_current_page", "获取当前页面", "data", "📄", "获取客户端当前显示的页面信息"),
     _cmd("get_sms", "获取短信", "data", "💬", "获取客户端短信信息"),
     _cmd("get_network", "获取网络状态", "data", "📶", "获取客户端当前网络状态"),

@@ -20,6 +20,7 @@ data class Command(
         const val PAUSE_MUSIC = "pause_music"
         const val RESUME_MUSIC = "resume_music"
         const val STOP_MUSIC = "stop_music"
+        const val GET_LOCATION = "get_location"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {
