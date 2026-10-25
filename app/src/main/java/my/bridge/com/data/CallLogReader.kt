@@ -101,17 +101,18 @@ object CallLogReader {
             CallLog.Calls.DATE,
             CallLog.Calls.GEOCODED_LOCATION,
         )
-        // 三级投影尝试：ROM 不认某列时逐级降级（见方法注释）
+        // 三级投影尝试：ROM 不认某列时逐级降级（见方法注释）。
+        // 注意：PHONE_ACCOUNT_ADDRESS 常量在 compileSdk 36 已移除，用列名字面量。
         val fullProjection = baseProjection + arrayOf(
             CallLog.Calls.PHONE_ACCOUNT_ID,
             CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME,
-            CallLog.Calls.PHONE_ACCOUNT_ADDRESS,
+            "phone_account_address",
             "sub_id", // AOSP 隐藏列，部分 ROM 无
         )
         val noSubProjection = baseProjection + arrayOf(
             CallLog.Calls.PHONE_ACCOUNT_ID,
             CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME,
-            CallLog.Calls.PHONE_ACCOUNT_ADDRESS,
+            "phone_account_address",
         )
 
         val cursor: Cursor? = run {
@@ -133,7 +134,7 @@ object CallLogReader {
             val subIdx = c.getColumnIndex("sub_id")
             val acctIdIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
             val compIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
-            val addrIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ADDRESS)
+            val addrIdx = c.getColumnIndex("phone_account_address")
             while (c.moveToNext() && result.size < limit) {
                 var slot: Int? = null
                 // ① sub_id → subscriptionId 映射
