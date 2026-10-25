@@ -94,7 +94,7 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   ON DUPLICATE 的受影响行数语义模糊：更新计 2）。
 - **卡来源**（v0.1.27+）：短信库 `sub_id` 列（Android 5.1+）经
   `SubscriptionManager` 映射为卡槽序号 + 本机号码；ROM 无此列或无
-  READ_PHONE_STATE 时按未知（-1/''），后台显示「未知」。
+  READ_PHONE_STATE 时按**单卡兜底 → 未知**（-1/''），后台显示「未知」。
 - **后台**：「短信」页——类型筛选 + 号码/正文搜索 + **时间游标翻页**
   （before_ms = 已加载最旧一条，对累积数据比 offset 稳）+ 所属卡列 + 单条删除。
 
@@ -108,9 +108,14 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   含联系人名缓存与归属地列）→ `POST /api/calllogs` → MySQL `call_logs` 表。
 - **存储语义**：按设备**覆盖快照**（与通讯录一致）；含卡字段（sim_slot/sim_number，
   v0.1.27+，重新采集即刷新）。
-- **卡来源**（v0.1.27+）：两层解析——通话库 `sub_id` 列（AOSP 隐藏列，多数 ROM
-  存在）映射激活卡；拿不到时用 `PHONE_ACCOUNT_ID` 与
-  `callCapablePhoneAccounts` 扁平化字符串比对兜底；都没有按未知（-1/''）。
+- **卡来源**（v0.1.27+）：四层解析（v0.1.29 修正）——① 通话库 `sub_id` 列
+  （AOSP 隐藏列，多数 ROM 存在）映射激活卡；② `PHONE_ACCOUNT_COMPONENT_NAME`
+  + `PHONE_ACCOUNT_ID` 两列拼装「组件名/id」与 `callCapablePhoneAccounts`
+  精确比对（ACCOUNT_ID 列只存 handle 的 id 部分，必须与 COMPONENT_NAME 组合；
+  v0.1.28 及之前拿完整 toString() 对 id 部分，永远匹配不上——这就是
+  「短信有卡、通话未知」的根因）；③ `PHONE_ACCOUNT_ADDRESS`（线路地址 ≈
+  本机号码）与 SIM 号码尾号比对（兼容 +86 前缀）；④ 单卡兜底（仅一张激活卡
+  时通话必然经它；无权限时不猜测）。都没有按未知（-1/''）。
   **ROM 兼容**（v0.1.28+）：个别 ROM（实测一加 9 Plus / ColorOS）对未知列
   投影直接抛 `IllegalArgumentException`（「Invalid column sub_id」）而非返回
   -1 索引——客户端先带 `sub_id` 查询，失败后去掉该列降级重查（仅丢卡来源，

@@ -67,7 +67,8 @@ object SmsReader {
         val order = "date DESC"
 
         // sub_id → 卡信息映射（一次性构建；无权限/无卡时为空 map）
-        val subToSim = SimHelper.listSims(context).associateBy { it.subscriptionId }
+        val sims = SimHelper.listSims(context)
+        val subToSim = sims.associateBy { it.subscriptionId }
 
         val baseProjection = arrayOf("_id", "address", "body", "date", "read", "type")
         // 带 sub_id 查询；ROM 不认该列时降级重查（见方法注释）
@@ -97,10 +98,12 @@ object SmsReader {
                 val date = c.getLong(3)
                 val read = c.getInt(4) > 0
                 val type = c.getInt(5)
-                // sub_id 列存在且能映射到激活卡 → 卡槽/号码；否则未知
+                // sub_id 列存在且能映射到激活卡 → 卡槽/号码；否则单卡兜底/未知
                 val sim = if (subIdx >= 0 && !c.isNull(subIdx)) {
                     subToSim[c.getInt(subIdx)]
                 } else null
+                    // 设备只有一张激活卡时短信必然经它（无权限/读不到卡时不猜测）
+                    ?: if (sims.size == 1) sims[0] else null
                 result.add(
                     SmsEntry(
                         key = if (id != "0") id else stableKey(date, address, body),

@@ -3,6 +3,7 @@ package my.bridge.com.data
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.provider.CallLog
 import androidx.core.content.ContextCompat
 import timber.log.Timber
@@ -46,14 +47,21 @@ object CallLogReader {
     /**
      * 读取通话记录（时间倒序）。
      *
-     * 卡来源两层解析（都拿不到时按未知 -1/""）：
-     * ① 通话库的 ``sub_id`` 列（AOSP 5.1+ 隐藏列，多数 ROM 存在）→ 映射激活卡；
-     * ② [CallLog.Calls.PHONE_ACCOUNT_ID]（PhoneAccountHandle 扁平化字符串）
-     *    与 [android.telecom.TelecomManager.callCapablePhoneAccounts] 逐个比对。
+     * 卡来源四层解析（都拿不到时按未知 -1/""）：
+     * ① 通话库 ``sub_id`` 列（AOSP 5.1+ 隐藏列，多数 ROM 存在）→ 映射激活卡；
+     * ② ``PHONE_ACCOUNT_COMPONENT_NAME`` + ``PHONE_ACCOUNT_ID`` 两列拼装
+     *    「组件名/id」与 [android.telecom.TelecomManager.callCapablePhoneAccounts]
+     *    逐个比对——注意 ACCOUNT_ID 列只存 handle 的 **id 部分**，必须与
+     *    COMPONENT_NAME 组合才是完整键（v0.1.29 修正：此前拿完整 toString()
+     *    对 id 部分，永远匹配不上）；
+     * ③ ``PHONE_ACCOUNT_ADDRESS``（该通话使用的线路地址 ≈ 本机号码）与
+     *    SIM 卡号码做尾号比对（兼容 +86 国码前缀差异）；
+     * ④ 单卡兜底：设备只有一张激活卡时，通话必然都经它（无权限/读不到卡
+     *    时不猜测）。
      *
      * ROM 兼容：个别 ROM（实测一加 9 Plus / ColorOS）对未知列投影**直接抛
      * IllegalArgumentException**（「Invalid column sub_id」）而不是返回 -1 索引，
-     * 因此先带 sub_id 查询，失败后去掉该列降级重查（卡来源仅剩 ② 路径）。
+     * 因此投影分三级尝试：全量（含 sub_id）→ 去 sub_id → 最小基础列。
      *
      * @param typeParam catalog 的 call_type：all/incoming/outgoing/missed
      * @param limit 最多返回条数（5–1000）
@@ -65,22 +73,22 @@ object CallLogReader {
         val selectionArgs = if (typeFilter != null) arrayOf(typeFilter.toString()) else null
         val order = CallLog.Calls.DATE + " DESC"
 
-        // ① sub_id → 卡信息映射
-        val subToSim = SimHelper.listSims(context).associateBy { it.subscriptionId }
-        // ② PhoneAccountHandle → 卡槽序号映射（顺序≈卡槽，autox 同款假设）。
-        //    只用 toString() 作键（flattenToString 非公开 API）；个别 ROM 对不上
-        //    时按未知处理，主路径是 sub_id 列。
-        val accountToSlot = buildMap {
+        val sims = SimHelper.listSims(context)
+        val subToSim = sims.associateBy { it.subscriptionId }
+
+        // 「组件名/id」→ 卡槽映射（与通话库 COMPONENT_NAME + ACCOUNT_ID 对齐）
+        val handleToSlot = buildMap {
             try {
                 val tm = context.getSystemService(android.telecom.TelecomManager::class.java)
                 val accounts = tm?.callCapablePhoneAccounts
                 if (accounts != null) {
-                    for (i in 0 until accounts.size) {
-                        put(accounts[i].toString(), i)
+                    for (i in accounts.indices) {
+                        val h = accounts[i]
+                        put("${h.componentName.flattenToString()}/${h.id}", i)
                     }
                 }
             } catch (_: Exception) {
-                // 无权限/ROM 异常时仅靠 sub_id 路径
+                // 无权限/ROM 异常时走后续兜底层
             }
         }
 
@@ -92,39 +100,67 @@ object CallLogReader {
             CallLog.Calls.DURATION,
             CallLog.Calls.DATE,
             CallLog.Calls.GEOCODED_LOCATION,
-            CallLog.Calls.PHONE_ACCOUNT_ID,
         )
-        // 带 sub_id 查询；ROM 不认该列时降级重查（见方法注释）
-        val cursor = try {
-            cr.query(
-                CallLog.Calls.CONTENT_URI,
-                baseProjection + "sub_id",
-                selection, selectionArgs, order,
-            )
-        } catch (e: IllegalArgumentException) {
-            Timber.w("通话库无 sub_id 列，降级为不含卡来源查询：%s", e.message)
-            try {
-                cr.query(CallLog.Calls.CONTENT_URI, baseProjection, selection, selectionArgs, order)
-            } catch (e2: Exception) {
-                Timber.e(e2, "通话记录查询失败（降级路径）")
-                null
+        // 三级投影尝试：ROM 不认某列时逐级降级（见方法注释）
+        val fullProjection = baseProjection + arrayOf(
+            CallLog.Calls.PHONE_ACCOUNT_ID,
+            CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME,
+            CallLog.Calls.PHONE_ACCOUNT_ADDRESS,
+            "sub_id", // AOSP 隐藏列，部分 ROM 无
+        )
+        val noSubProjection = baseProjection + arrayOf(
+            CallLog.Calls.PHONE_ACCOUNT_ID,
+            CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME,
+            CallLog.Calls.PHONE_ACCOUNT_ADDRESS,
+        )
+
+        val cursor: Cursor? = run {
+            var lastErr: Exception? = null
+            for ((label, proj) in listOf("全量(含sub_id)" to fullProjection, "去sub_id" to noSubProjection, "最小基础列" to baseProjection)) {
+                try {
+                    return@run cr.query(CallLog.Calls.CONTENT_URI, proj, selection, selectionArgs, order)
+                } catch (e: IllegalArgumentException) {
+                    Timber.w("通话库投影（%s）不被支持，降级：%s", label, e.message)
+                    lastErr = e
+                }
             }
+            Timber.e(lastErr ?: IllegalStateException("unknown"), "通话记录查询全部投影均失败")
+            null
         }
 
         val result = mutableListOf<CallLogEntry>()
         cursor?.use { c ->
             val subIdx = c.getColumnIndex("sub_id")
-            val accountIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
+            val acctIdIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
+            val compIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
+            val addrIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ADDRESS)
             while (c.moveToNext() && result.size < limit) {
-                // 卡槽：sub_id 映射优先，phone_account_id 比对兜底
-                var sim: SimHelper.SimInfo? = null
+                var slot: Int? = null
+                // ① sub_id → subscriptionId 映射
                 if (subIdx >= 0 && !c.isNull(subIdx)) {
-                    sim = subToSim[c.getInt(subIdx)]
+                    slot = subToSim[c.getInt(subIdx)]?.slotIndex
                 }
-                var slot = sim?.slotIndex
-                if (slot == null && accountIdx >= 0) {
-                    val acct = c.getString(accountIdx)
-                    if (!acct.isNullOrBlank()) slot = accountToSlot[acct]
+                // ② 组件名 + id 精确匹配（完整键）
+                if (slot == null && compIdx >= 0) {
+                    val comp = c.getString(compIdx)
+                    val acctId = if (acctIdIdx >= 0) c.getString(acctIdIdx) else null
+                    if (!comp.isNullOrBlank() && !acctId.isNullOrBlank()) {
+                        slot = handleToSlot["$comp/$acctId"]
+                    }
+                }
+                // ③ 线路地址（本机号码）尾号比对（兼容 +86 前缀）
+                if (slot == null && addrIdx >= 0) {
+                    val addr = normalizeForMatch(c.getString(addrIdx))
+                    if (addr.length >= 5) {
+                        slot = sims.firstOrNull { s ->
+                            val n = normalizeForMatch(s.number)
+                            n.length >= 5 && (n.endsWith(addr) || addr.endsWith(n))
+                        }?.slotIndex
+                    }
+                }
+                // ④ 单卡兜底：只有一张激活卡时通话必然经它
+                if (slot == null && sims.size == 1) {
+                    slot = sims[0].slotIndex
                 }
                 result.add(
                     CallLogEntry(
@@ -137,7 +173,7 @@ object CallLogReader {
                         location = c.getString(6) ?: "",
                         simSlot = slot ?: -1,
                         simNumber = slot?.let { s ->
-                            subToSim.values.firstOrNull { it.slotIndex == s }?.number
+                            sims.firstOrNull { it.slotIndex == s }?.number
                         } ?: "",
                     )
                 )
@@ -145,4 +181,8 @@ object CallLogReader {
         }
         return result
     }
+
+    /** 号码比对清洗：只留数字（去掉 +/空格/连字符），使「+86138…」与「138…」可尾号互配。 */
+    private fun normalizeForMatch(raw: String?): String =
+        raw?.filter { it.isDigit() } ?: ""
 }
