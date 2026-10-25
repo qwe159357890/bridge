@@ -61,17 +61,16 @@ object CallLogReader {
 
         // ① sub_id → 卡信息映射
         val subToSim = SimHelper.listSims(context).associateBy { it.subscriptionId }
-        // ② PhoneAccountHandle 扁平化字符串 → 卡槽序号映射（顺序≈卡槽，autox 同款假设）
+        // ② PhoneAccountHandle → 卡槽序号映射（顺序≈卡槽，autox 同款假设）。
+        //    只用 toString() 作键（flattenToString 非公开 API）；个别 ROM 对不上
+        //    时按未知处理，主路径是 sub_id 列。
         val accountToSlot = buildMap {
             try {
                 val tm = context.getSystemService(android.telecom.TelecomManager::class.java)
                 val accounts = tm?.callCapablePhoneAccounts
                 if (accounts != null) {
-                    for (i in 0 until accounts.size()) {
-                        val h = accounts[i]
-                        put(h.flattenToString(), i)
-                        put(h.toShortString(), i)
-                        put(h.toString(), i)
+                    for (i in 0 until accounts.size) {
+                        put(accounts[i].toString(), i)
                     }
                 }
             } catch (_: Exception) {

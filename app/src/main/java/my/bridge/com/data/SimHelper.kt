@@ -3,10 +3,8 @@ package my.bridge.com.data
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import android.telecom.TelecomManager
 import androidx.core.content.ContextCompat
 import timber.log.Timber
@@ -83,7 +81,7 @@ object SimHelper {
     fun phoneAccountForSlot(context: Context, slotIndex: Int): android.telecom.PhoneAccountHandle? = try {
         val tm = context.getSystemService(TelecomManager::class.java) ?: return null
         val accounts = tm.callCapablePhoneAccounts ?: return null
-        if (slotIndex in 0 until accounts.size()) accounts[slotIndex] else null
+        if (slotIndex in 0 until accounts.size) accounts[slotIndex] else null
     } catch (e: Exception) {
         Timber.w(e, "查询 PhoneAccount 失败（slot=%d）", slotIndex)
         null
@@ -97,20 +95,6 @@ object SimHelper {
             "${it.slotLabel}（${if (it.number.isNotBlank()) it.number else "号码未知"}）"
         }
         return "${sims.size} 张卡：$detail"
-    }
-
-    /** 设备本机号码（dialer 兜底等场景备用；无权限/未写入返回空）。 */
-    fun ownNumber(context: Context, slotIndex: Int): String {
-        if (!hasPhoneStatePermission(context)) return ""
-        return try {
-            val tm = context.getSystemService(TelephonyManager::class.java) ?: return ""
-            val line = if (Build.VERSION.SDK_INT >= 23 && slotIndex >= 0) {
-                tm.getLine1Number(slotIndex)
-            } else tm.line1Number
-            normalizeNumber(line)
-        } catch (e: Exception) {
-            ""
-        }
     }
 
     /** 清洗号码显示：去空格与连字符，把「unknown」类占位符归为空。 */
