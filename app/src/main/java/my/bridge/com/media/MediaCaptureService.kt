@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
+import android.graphics.SurfaceTexture
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioManager
@@ -25,7 +26,6 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.Surface
-import android.view.SurfaceTexture
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import my.bridge.com.R
@@ -325,7 +325,7 @@ class MediaCaptureService : Service() {
                 cam.startPreview()
 
                 @Suppress("DEPRECATION")
-                cam.takePicture(null, null, null) { data ->
+                cam.takePicture(null, null) { data, _ ->
                     try {
                         if (data != null && data.isNotEmpty()) {
                             val dir = mediaDir(this@MediaCaptureService).apply { mkdirs() }
@@ -418,6 +418,7 @@ class MediaCaptureService : Service() {
         if (data == null) throw IllegalStateException("投屏授权结果缺失")
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val p = manager.getMediaProjection(resultCode, data)
+            ?: throw IllegalStateException("获取投屏会话失败（授权结果无效）")
         projection = p
         return p
     }

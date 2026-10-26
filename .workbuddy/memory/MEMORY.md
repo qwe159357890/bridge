@@ -45,7 +45,13 @@
 
 - **全链路**：get_location（precision/timeout/refresh 三参数）→ 命令回执 + fire-and-forget `POST /api/locations` 上报（失败不影响回执，需 APK ≥ v0.1.23）→ MySQL 持久化（`location_store.py`，静止合并 haversine < max(两次精度,30m)、WGS-84+GCJ-02 双坐标、无自动清理纯手动删除）→ 后台设备行「位置」弹窗（高德轨迹 + 历史表格 + 标记悬停详情）+ 命令页定位结果卡片（`LocationResultCard.vue`）。
 - **地址解析收口服务端**：`GET /api/locations/address`（高德 Web服务 REST + 24h 坐标网格缓存）；高德 Key 三件套在 `server/config.local.yaml`（JS Key+安全密钥=瓦片，web_key=老 Key 调 REST——2021-12 后新 JS Key 平台受限调不了 REST，浏览器 Geocoder 插件已弃用）。
-- **权威文档**：`docs/api/commands/data.md`。最新发布 APK：v0.1.24（WS 握手竞态修复）。
+- **权威文档**：`docs/api/commands/data.md`。
+
+## 交互/媒体/更新八命令（2026-10-26，v0.1.32）
+
+- **结论**：交互 4 命令（toast/speak/vibrate/dialog）+ 音视频 3 命令（截屏/录屏/拍照）+ check_update 全部真实落地。最新发布 APK：v0.1.32。
+- **关键拍板**：① 截屏/录屏每次需设备端点「立即开始」（Android 14 系统限制，接受）；② 拍照只带 camera（前/后置）参数、默认静音、不做连拍；③ 弹窗做点击二次上报（`event=dialog_click` → result_message 追加 + SSE `command_interaction`）；④ check_update **服务器目录版不依赖 GitHub**——APK 放 `server/data/updates/`（文件名含版本号取最高，可选 update.json），release.py 下载后自动拷贝进去；⑤ 媒体文件自动清理（默认 100 条/7 天先到先触发，config.yaml `media.*`）。
+- **权威文档**：`docs/api/commands/{media,interact,system}.md`。核心组件：`MediaCaptureService`（mediaProjection|camera 双类型前台服务）+ `ScreenCaptureHolder`（consent/capture 通道）+ `OverlayDialog`（SAW 悬浮窗）。媒体查看页 `admin/src/views/media/index.vue`（文件端点鉴权支持 Bearer 或 `?token=`）。
 
 ## 构建发布链路（2026-10-23）
 
