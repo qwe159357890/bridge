@@ -232,6 +232,25 @@ class SmsStore:
             conn.commit()
             return int(n)
 
+    def set_read(self, device_id: str, ids: list[int], read: bool) -> int:
+        """批量设置存档已读状态（双向：已读/未读），返回实际更新条数。
+
+        仅更新存档的 ``read_flag``；设备端短信库如需同步，另行下发
+        ``mark_sms_read`` 命令（by_id，ID 可从本表 ``sms_key`` 取）。
+        """
+        if not ids:
+            return 0
+        conn = self._connection()
+        placeholders = ", ".join(["%s"] * len(ids))
+        with conn.cursor() as cur:
+            n = cur.execute(
+                f"UPDATE sms_messages SET read_flag = %s "
+                f"WHERE device_id = %s AND id IN ({placeholders})",
+                (1 if read else 0, device_id, *ids),
+            )
+            conn.commit()
+            return int(n)
+
     @staticmethod
     def _row_to_dict(row: dict) -> dict[str, Any]:
         return {

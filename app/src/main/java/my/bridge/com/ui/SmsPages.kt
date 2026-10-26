@@ -1,5 +1,8 @@
 package my.bridge.com.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,11 +14,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -68,11 +73,14 @@ private val timeFmtTime = SimpleDateFormat("HH:mm", Locale.getDefault())
 private val timeFmtDate = SimpleDateFormat("MM-dd", Locale.getDefault())
 
 /**
- * Bridge 内置短信页（主页「会话」Tab）：会话列表 ↔ 会话详情两级导航。
+ * Bridge 内置短信页（主页「短信」Tab）：短信列表 ↔ 会话详情两级导航。
  *
  * - 读取（READ_SMS）无需默认短信应用身份，随时可浏览；
- * - 顶部状态条支持「设为默认 / 切回原短信应用」快速切换（系统弹窗一次确认）；
- * - Bridge 为默认应用期间，新短信由 SmsDeliverReceiver 写库并通知，本页可见。
+ * - 顶部状态条支持「设为默认 / 切回原短信应用」快速切换（系统弹窗一次确认，
+ *   经 ActivityResultLauncher 拉起并回调结果——裸 startActivity 在部分 ROM 被
+ *   静默取消，表现为「点了没反应」）；
+ * - Bridge 为默认应用期间，新短信由 SmsDeliverReceiver 写库并通知，本页可见；
+ * - 标记已读/未读双向可用：整会话按钮 + 详情页点单条气泡切换（需默认身份）。
  */
 @Composable
 fun SmsConversationsPage() {
@@ -86,8 +94,43 @@ fun SmsConversationsPage() {
     }
     var openThread by remember { mutableStateOf<SmsRepository.Conversation?>(null) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    // 当前 launcher 拉起的是「设为默认」还是「切回」，用于结果回执提示
+    var pendingBecome by remember { mutableStateOf(false) }
 
-    // 加载会话列表（权限就绪时）
+    // 系统确认框结果回调：按实际身份给反馈（canceled 不再静默）
+    val roleLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val became = SmsDefaultHelper.isDefault(context)
+        isDefault = became
+        when {
+            pendingBecome && became ->
+                toast(context, "已设为默认短信应用")
+            pendingBecome && !became ->
+                toast(context, "未完成设置（已取消），标记已读/未读仍不可用")
+            !pendingBecome && !became ->
+                toast(context, "已切回原短信应用")
+            else -> toast(context, "切换完成")
+        }
+        pendingBecome = false
+        refreshKey++
+    }
+
+    fun launchRole(intent: android.content.Intent?, becoming: Boolean) {
+        if (intent == null) {
+            toast(context, if (becoming) "设备不支持设置默认短信应用" else "未记录原短信应用")
+            return
+        }
+        pendingBecome = becoming
+        try {
+            roleLauncher.launch(intent)
+        } catch (e: Exception) {
+            pendingBecome = false
+            toast(context, "拉起系统设置失败：${e.message}")
+        }
+    }
+
+    // 加载短信列表（权限就绪时）
     LaunchedEffect(hasPermission, refreshKey) {
         if (!hasPermission) return@LaunchedEffect
         SmsDefaultHelper.recordPreviousDefault(context) // 维护「原短信应用」记忆
@@ -107,6 +150,12 @@ fun SmsConversationsPage() {
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // 系统返回键/手势：详情页返回列表，而不是退出应用
+    BackHandler(enabled = openThread != null) {
+        openThread = null
+        refreshKey++ // 返回后刷新未读数
     }
 
     val thread = openThread
@@ -130,14 +179,17 @@ fun SmsConversationsPage() {
             hasPermission = hasPermission,
             onSwitch = {
                 if (!isDefault) {
-                    SmsDefaultHelper.launchBecomeDefault(context)
-                } else if (!SmsDefaultHelper.launchRestorePrevious(context)) {
-                    // 无记忆包名：引导手动到系统设置
-                    android.widget.Toast.makeText(
-                        context,
-                        "未记录原短信应用，请到 系统设置→应用→默认应用→短信应用 手动切换",
-                        android.widget.Toast.LENGTH_LONG,
-                    ).show()
+                    launchRole(SmsDefaultHelper.becomeDefaultIntent(context), becoming = true)
+                } else {
+                    val intent = SmsDefaultHelper.restorePreviousIntent(context)
+                    if (intent != null) {
+                        launchRole(intent, becoming = false)
+                    } else {
+                        toast(
+                            context,
+                            "未记录原短信应用，请到 系统设置→应用→默认应用→短信应用 手动切换",
+                        )
+                    }
                 }
             },
         )
@@ -152,6 +204,10 @@ fun SmsConversationsPage() {
             )
         }
     }
+}
+
+private fun toast(context: android.content.Context, text: String) {
+    android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
 }
 
 // ============ 状态条 ============
@@ -186,8 +242,8 @@ private fun DefaultSmsStatusBar(
                     color = Color(0xFF303133),
                 )
                 Text(
-                    text = if (isDefault) "新短信由 Bridge 接收，标记已读可用"
-                    else "标记已读需设为默认（系统限制）",
+                    text = if (isDefault) "新短信由 Bridge 接收，标记已读/未读可用"
+                    else "标记已读/未读需设为默认（系统限制）",
                     fontSize = 11.sp,
                     color = Color(0xFF8A919F),
                 )
@@ -212,7 +268,7 @@ private fun DefaultSmsStatusBar(
     }
 }
 
-// ============ 会话列表 ============
+// ============ 短信列表 ============
 @Composable
 private fun ConversationList(
     conversations: List<SmsRepository.Conversation>,
@@ -307,6 +363,34 @@ private fun ThreadDetailPage(
         }
     }
 
+    /** 双向标记整会话（read=true 已读 / false 未读），本地乐观更新。 */
+    fun markThread(read: Boolean, current: List<SmsRepository.ThreadMessage>) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                SmsRepository.setReadState(
+                    context, read, "thread_id = ?", arrayOf(thread.threadId),
+                )
+            }
+            messages = current.map {
+                if (it.type == 1) it.copy(read = read) else it
+            }
+        }
+    }
+
+    /** 点单条气泡：收到的短信在 已读↔未读 间切换（需默认身份）。 */
+    fun toggleMessage(msg: SmsRepository.ThreadMessage, current: List<SmsRepository.ThreadMessage>) {
+        if (!isDefault) {
+            toast(context, "标记已读/未读需先在上方把 Bridge 设为默认短信应用")
+            return
+        }
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                SmsRepository.setReadState(context, !msg.read, "_id = ?", arrayOf(msg.id))
+            }
+            messages = current.map { if (it.id == msg.id) it.copy(read = !msg.read) else it }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         // 顶栏
         Row(
@@ -321,7 +405,7 @@ private fun ThreadDetailPage(
             Column {
                 Text(thread.address, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                 Text(
-                    "${thread.messageCount} 条消息",
+                    "${thread.messageCount} 条消息 · 点消息可切换已读/未读",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -345,41 +429,73 @@ private fun ThreadDetailPage(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(msgList, key = { it.id }) { msg ->
-                        MessageBubble(msg)
+                        MessageBubble(
+                            msg = msg,
+                            showUnread = msg.type == 1 && !msg.read,
+                            onClick = { toggleMessage(msg, msgList) },
+                        )
                     }
                 }
-                // 标记已读（仅默认身份可用）
-                if (isDefault && msgList.any { !it.read && it.type == 1 }) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        Button(
-                            onClick = {
-                                val current = msgList
-                                scope.launch {
-                                    withContext(Dispatchers.IO) {
-                                        SmsRepository.markRead(
-                                            context, "thread_id = ?",
-                                            arrayOf(thread.threadId),
-                                        )
-                                    }
-                                    messages = current.map {
-                                        if (it.type == 1) it.copy(read = true) else it
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = GreenOk),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                horizontal = 14.dp, vertical = 6.dp,
-                            ),
-                        ) {
-                            Text("标记全部已读", fontSize = 12.sp)
-                        }
-                    }
-                }
+                // 双向标记按钮（仅默认身份可用；非默认给引导提示）
+                MarkActionsBar(
+                    isDefault = isDefault,
+                    canMarkRead = msgList.any { !it.read && it.type == 1 },
+                    canMarkUnread = msgList.any { it.read && it.type == 1 },
+                    onMarkRead = { markThread(true, msgList) },
+                    onMarkUnread = { markThread(false, msgList) },
+                )
+            }
+        }
+    }
+}
+
+// ============ 双向标记操作条 ============
+@Composable
+private fun MarkActionsBar(
+    isDefault: Boolean,
+    canMarkRead: Boolean,
+    canMarkUnread: Boolean,
+    onMarkRead: () -> Unit,
+    onMarkUnread: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (!isDefault) {
+            Text(
+                "标记已读/未读需设为默认短信应用",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Row
+        }
+        if (canMarkUnread) {
+            Button(
+                onClick = onMarkUnread,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE6A23C),
+                ),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 14.dp, vertical = 6.dp,
+                ),
+            ) {
+                Text("标记全部未读", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+        }
+        if (canMarkRead) {
+            Button(
+                onClick = onMarkRead,
+                colors = ButtonDefaults.buttonColors(containerColor = GreenOk),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 14.dp, vertical = 6.dp,
+                ),
+            ) {
+                Text("标记全部已读", fontSize = 12.sp)
             }
         }
     }
@@ -387,18 +503,39 @@ private fun ThreadDetailPage(
 
 // ============ 消息气泡 ============
 @Composable
-private fun MessageBubble(msg: SmsRepository.ThreadMessage) {
+private fun MessageBubble(
+    msg: SmsRepository.ThreadMessage,
+    showUnread: Boolean,
+    onClick: () -> Unit,
+) {
     val fromMe = msg.type != 1 // 1=收件，其余（已发/失败/队列等）按发出侧展示
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         horizontalAlignment = if (fromMe) Alignment.End else Alignment.Start,
     ) {
-        Text(
-            text = timeFmtFull.format(Date(msg.dateMs)),
-            fontSize = 10.sp,
-            color = Color(0xFFA8ADB8),
-            modifier = Modifier.padding(bottom = 2.dp),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (fromMe) Arrangement.End else Arrangement.Start,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (showUnread) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(UnreadRed, CircleShape),
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                text = timeFmtFull.format(Date(msg.dateMs)) +
+                    if (showUnread) " · 未读" else "",
+                fontSize = 10.sp,
+                color = if (showUnread) UnreadRed else Color(0xFFA8ADB8),
+                fontWeight = if (showUnread) FontWeight.SemiBold else FontWeight.Normal,
+            )
+        }
         Box(
             modifier = Modifier
                 .widthIn(max = 300.dp)

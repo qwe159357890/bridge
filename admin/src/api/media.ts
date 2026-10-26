@@ -1,4 +1,4 @@
-import instance, { getToken } from './request'
+import instance, { getToken, request } from './request'
 
 export interface MediaItem {
   id: number

@@ -58,10 +58,14 @@ object SmsDefaultHelper {
         prefs(context).getString(KEY_PREVIOUS, null)
 
     /**
-     * 拉起「设为默认短信应用」系统确认框。
-     * @return 是否成功拉起（拉起后仍需用户在设备上点确认）
+     * 构建「设为默认短信应用」系统确认框 Intent（不拉起）。
+     *
+     * 规范要求该 Intent 经 startActivityForResult 拉起（系统据此回调授权结果）；
+     * Compose 页面用 rememberLauncherForActivityResult + 本函数，裸 startActivity
+     * 在部分 ROM（HyperOS 等）会被静默取消——用户视角即「点了没反应」。
+     * @return Intent；角色不可用且回退也不可行时返回 null
      */
-    fun launchBecomeDefault(context: Context): Boolean = try {
+    fun becomeDefaultIntent(context: Context): Intent? = try {
         recordPreviousDefault(context) // 成为默认前记住原应用，供「切回」用
         val intent: Intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val rm = context.getSystemService(RoleManager::class.java)
@@ -74,30 +78,53 @@ object SmsDefaultHelper {
         } else {
             changeDefaultIntent(context.packageName)
         }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-        Timber.i("已拉起「设为默认短信应用」确认框")
-        true
+        intent
     } catch (e: Exception) {
-        Timber.e(e, "拉起默认短信应用设置失败")
-        false
+        Timber.e(e, "构建「设为默认短信应用」Intent 失败")
+        null
     }
 
     /**
-     * 拉起「切回原短信应用」系统确认框（预选已记录的原应用包名）。
+     * 拉起「设为默认短信应用」系统确认框（后台命令路径用，无 Activity 结果回调）。
+     * @return 是否成功拉起（拉起后仍需用户在设备上点确认）
+     */
+    fun launchBecomeDefault(context: Context): Boolean {
+        val intent = becomeDefaultIntent(context) ?: return false
+        return try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            Timber.i("已拉起「设为默认短信应用」确认框")
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "拉起默认短信应用设置失败")
+            false
+        }
+    }
+
+    /**
+     * 构建「切回原短信应用」确认框 Intent（预选已记录的原应用包名，不拉起）。
+     * @return Intent；无记忆包名或目标就是自己时返回 null
+     */
+    fun restorePreviousIntent(context: Context): Intent? {
+        val prev = previousDefault(context) ?: run {
+            Timber.w("未记录原默认短信应用，无法预选切回目标")
+            return null
+        }
+        if (prev == context.packageName) return null
+        return changeDefaultIntent(prev)
+    }
+
+    /**
+     * 拉起「切回原短信应用」系统确认框（后台命令路径用）。
      * @return 拉起结果：true=已弹窗；false=无记录或拉起失败（调用方引导手动去系统设置）
      */
     fun launchRestorePrevious(context: Context): Boolean {
-        val prev = previousDefault(context) ?: run {
-            Timber.w("未记录原默认短信应用，无法预选切回目标")
-            return false
-        }
-        if (prev == context.packageName) return false
+        val intent = restorePreviousIntent(context) ?: return false
         return try {
-            context.startActivity(changeDefaultIntent(prev).apply {
+            context.startActivity(intent.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             })
-            Timber.i("已拉起「切回原短信应用」确认框：%s", prev)
+            Timber.i("已拉起「切回原短信应用」确认框")
             true
         } catch (e: Exception) {
             Timber.e(e, "拉起切回确认框失败")

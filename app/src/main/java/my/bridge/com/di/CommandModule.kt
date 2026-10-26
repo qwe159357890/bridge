@@ -664,7 +664,7 @@ object CommandModule {
     }
 
     /**
-     * 执行 mark_sms_read：批量把短信标记为已读。
+     * 执行 mark_sms_read：批量把短信标记为已读/未读（read 参数双向）。
      *
      * 系统限制（借鉴 references/autoxClient sms.js 的弃用教训）：Android 4.4+
      * 写短信库（含 read 字段）要求「默认短信应用」身份，非默认时 update 静默
@@ -688,7 +688,7 @@ object CommandModule {
                         "已在设备上弹出确认框，请在设备上选择 Bridge，完成后重新下发本命令"
                 } else {
                     "设备未将 Bridge 设为默认短信应用，且拉起设置框失败；" +
-                        "请在设备上打开 Bridge → 会话页手动「设为默认」后重试"
+                        "请在设备上打开 Bridge → 短信页手动「设为默认」后重试"
                 },
             )
         }
@@ -696,6 +696,11 @@ object CommandModule {
         val mode = command.strParam("mode", "all_unread")
         val smsId = command.strParam("sms_id", "")
         val address = command.strParam("address", "")
+        // 标记方向：read（默认）=标记为已读；unread=标记为未读
+        val targetRead = command.strParam("read", "read") != "unread"
+        val targetName = if (targetRead) "已读" else "未读"
+        // 标记未读只对收到的短信有意义（发出的短信无未读概念），type=1 过滤
+        val readFilter = if (targetRead) "read = 0" else "read = 1 AND type = 1"
         val (selection, args) = when (mode) {
             "by_id" -> {
                 if (smsId.isEmpty()) {
@@ -718,20 +723,22 @@ object CommandModule {
                         "mode=before_date 需要参数 before_date，格式：2026-10-26 或 2026-10-26 12:30",
                     )
                 }
-                "date < ? AND read = 0" to arrayOf(epoch.toString())
+                "date < ? AND $readFilter" to arrayOf(epoch.toString())
             }
-            else -> "read = 0" to emptyArray() // all_unread（默认）
+            else -> readFilter to emptyArray() // all_unread（默认）
         }
 
         return try {
-            val affected = SmsRepository.markRead(context, selection, args)
+            val affected = SmsRepository.setReadState(context, targetRead, selection, args)
             var message = when (mode) {
-                "by_id" -> if (affected > 0) "短信 $smsId 已标记为已读"
-                          else "未找到该短信（可能已删除或已是已读）"
-                "by_address" -> "已将号码 $address 的 $affected 条短信标记为已读"
-                "before_date" -> "已将指定时间之前的 $affected 条未读短信标记为已读"
-                else -> if (affected > 0) "已将 $affected 条未读短信标记为已读"
-                       else "没有需要标记的未读短信"
+                "by_id" -> if (affected > 0) "短信 $smsId 已标记为$targetName"
+                          else "未找到该短信（可能已删除或已是该状态）"
+                "by_address" -> "已将号码 $address 的 $affected 条短信标记为$targetName"
+                "before_date" -> "已将指定时间之前的 $affected 条短信标记为$targetName"
+                else -> if (affected > 0) {
+                    if (targetRead) "已将 $affected 条未读短信标记为已读"
+                    else "已将 $affected 条已收短信标记为未读"
+                } else "没有需要标记的短信"
             }
             if (mode == "by_id" && affected == 0) {
                 return CommandResult(id, name, false, message)
@@ -743,7 +750,7 @@ object CommandModule {
                 message += if (SmsDefaultHelper.launchRestorePrevious(context)) {
                     "；已在设备上弹出「切回原短信应用」确认框，请确认"
                 } else {
-                    "；如需切回原短信应用，请在设备上打开 Bridge → 会话页操作"
+                    "；如需切回原短信应用，请在设备上打开 Bridge → 短信页操作"
                 }
             }
             Timber.i("命令 %s：%s", name, message)

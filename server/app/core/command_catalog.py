@@ -178,11 +178,11 @@ COMMANDS: list[dict[str, Any]] = [
                  description="直接拨打时指定用哪张卡；拨号盘模式由用户在设备上自行选卡。"
                              "后台按设备实际卡动态显示（号码/运营商），"
                              "未显示具体卡信息时先下发一次「获取SIM卡信息」")]),
-    _cmd("mark_sms_read", "标记短信已读", "control", "📖",
-         "批量把设备短信标记为已读。系统限制：写短信库要求 Bridge 是设备上的"
-         "「默认短信应用」——非默认时会在设备上弹出确认框，选择 Bridge 后重新"
-         "下发即可（Bridge 短信页也有同样的设置入口）；restore 开启时标记完成后"
-         "会弹「切回原短信应用」确认框，恢复设备正常收信",
+    _cmd("mark_sms_read", "标记短信已读/未读", "control", "📖",
+         "批量把设备短信标记为已读或未读（read 参数双向）。系统限制：写短信库要求 "
+         "Bridge 是设备上的「默认短信应用」——非默认时会在设备上弹出确认框，选择 "
+         "Bridge 后重新下发即可（Bridge 短信页也有同样的设置入口）；restore 开启时"
+         "标记完成后会弹「切回原短信应用」确认框，恢复设备正常收信",
          [_param("mode", "标记范围", PARAM_TYPE_SELECT, default="all_unread",
                  options=[
                      {"value": "all_unread", "label": "全部未读短信"},
@@ -191,6 +191,12 @@ COMMANDS: list[dict[str, Any]] = [
                      {"value": "before_date", "label": "某时间之前的未读"},
                  ],
                  description="标记的短信范围"),
+          _param("read", "标记为", PARAM_TYPE_SELECT, default="read",
+                 options=[
+                     {"value": "read", "label": "已读"},
+                     {"value": "unread", "label": "未读"},
+                 ],
+                 description="标记方向（双向）：已读或未读；标记为未读仅对收到的短信生效"),
           _param("address", "号码", PARAM_TYPE_TEXT, placeholder="13800000000",
                  description="mode=按号码 时必填；与短信库精确匹配"),
           _param("before_date", "时间", PARAM_TYPE_TEXT, placeholder="2026-10-26 或 2026-10-26 12:30",

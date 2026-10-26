@@ -85,6 +85,17 @@ class SmsListResponse(BaseModel):
     items: list[dict]
 
 
+class SmsReadRequest(BaseModel):
+    """批量设置存档已读状态（双向）。"""
+    device_id: str
+    ids: list[int] = Field(default_factory=list)
+    read: bool = True
+
+
+class SmsReadResponse(BaseModel):
+    updated: int
+
+
 class DeleteResponse(BaseModel):
     deleted: int
 
@@ -253,6 +264,20 @@ def delete_sms(
         return DeleteResponse(deleted=_get_stores(request)[1].delete(device_id, row_id))
     except Exception as e:
         raise _store_unavailable(e) from e
+
+
+@router.put("/sms/read", response_model=SmsReadResponse, dependencies=[Depends(require_admin)])
+def set_sms_read(body: SmsReadRequest, request: Request) -> SmsReadResponse:
+    """批量标记存档短信为已读/未读（双向）。
+
+    仅更新服务端存档的已读标记；如需同步设备端短信库，另行下发
+    ``mark_sms_read`` 命令（mode=by_id，ID 取存档的 ``sms_key`` 字段）。
+    """
+    try:
+        updated = _get_stores(request)[1].set_read(body.device_id, body.ids, body.read)
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return SmsReadResponse(updated=updated)
 
 
 # ----------------------------------------------------------------------

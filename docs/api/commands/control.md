@@ -235,12 +235,12 @@ Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，�
 
 ---
 
-## mark_sms_read 标记短信已读
+## mark_sms_read 标记短信已读/未读
 
-实现核心 `app/.../data/SmsRepository.kt`（写库）+ `SmsDefaultHelper.kt`
-（默认身份与切换）。借鉴 autoxClient `sms.js` 的弃用教训：**Android 4.4+
-写短信库（含 read 字段）要求「默认短信应用」身份**，仅 WRITE_SMS 权限会被
-一加/ColorOS 等 ROM 静默拒绝（update 返回 0，不抛异常）。
+实现核心 `app/.../data/SmsRepository.kt`（写库，`setReadState` 双向）+
+`SmsDefaultHelper.kt`（默认身份与切换）。借鉴 autoxClient `sms.js` 的弃用教训：
+**Android 4.4+ 写短信库（含 read 字段）要求「默认短信应用」身份**，仅 WRITE_SMS
+权限会被一加/ColorOS 等 ROM 静默拒绝（update 返回 0，不抛异常）。
 
 ### 默认短信应用身份
 
@@ -256,24 +256,33 @@ Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，�
 - 「原短信应用」包名在成为默认前的瞬间记录到本地（短信页加载/设为默认按钮/
   本命令引导前三个时机），`restore` 切回时用 ACTION_CHANGE_DEFAULT 预选它。
 
+### 标记方向（read 参数，v0.1.35 双向）
+
+`read=read`（默认）标记为**已读**；`read=unread` 标记为**未读**。标记为未读仅对
+**收到的短信**（type=1）有意义——发出的短信无未读概念，客户端在未读方向的
+范围筛选里自动追加 `type = 1` 过滤。
+
 ### 标记范围（mode 参数）
 
-| mode | selection | 说明 |
-|---|---|---|
-| `all_unread`（默认） | `read = 0` | 全部未读 |
-| `by_address` | `address = ?` | 精确匹配号码 |
-| `by_id` | `_id = ?` | 单条（0 行命中回执失败：可能已删除或已是已读） |
-| `before_date` | `date < ? AND read = 0` | `yyyy-MM-dd[ HH:mm[:ss]]` 本地时区 |
+| mode | selection（read=已读） | selection（read=未读） | 说明 |
+|---|---|---|---|
+| `all_unread`（默认） | `read = 0` | `read = 1 AND type = 1` | 全部未读 / 全部已收 |
+| `by_address` | `address = ?` | 同左 | 精确匹配号码 |
+| `by_id` | `_id = ?` | 同左 | 单条（0 行命中回执失败：可能已删除或已是该状态） |
+| `before_date` | `date < ? AND read = 0` | `date < ? AND read = 1 AND type = 1` | `yyyy-MM-dd[ HH:mm[:ss]]` 本地时区 |
 
 ### restore 切回
 
 `restore=true`（默认）且标记成功后：弹「切回原短信应用」确认框（预选记住的
 原包名）。连续批量下发多条时可关闭，避免每次都弹窗。
 
-### 与内置短信页的关系（v0.1.34）
+### 与内置短信页的关系（v0.1.34 / v0.1.35）
 
-Bridge 主页「会话」Tab 即真实短信页（`ui/SmsPages.kt`）：会话列表（未读角标）
-↔ 会话详情（只读浏览 + 本地「标记全部已读」）+ 顶部快速切换状态条。读不需要
+Bridge 主页「短信」Tab 即真实短信页（`ui/SmsPages.kt`）：短信列表（未读角标）
+↔ 会话详情（点单条气泡切换已读/未读 + 「标记全部已读/未读」双向按钮）+
+顶部快速切换状态条。快速切换经 ActivityResultLauncher 拉起系统确认框
+（规范要求 startActivityForResult；v0.1.35 修复裸 startActivity 在部分 ROM
+被静默取消导致「设为默认点了没反应」），结果回调给 Toast 反馈。读不需要
 默认身份；Bridge 为默认期间新短信由 SmsDeliverReceiver 写库（切回原短信
 App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通知补位）。
 

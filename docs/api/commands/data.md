@@ -97,6 +97,10 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
   READ_PHONE_STATE 时按**单卡兜底 → 未知**（-1/''），后台显示「未知」。
 - **后台**：「短信」页——类型筛选 + 号码/正文搜索 + **时间游标翻页**
   （before_ms = 已加载最旧一条，对累积数据比 offset 稳）+ 所属卡列 + 单条删除。
+- **存档已读双向标记**（v0.1.35）：`PUT /api/sms/read`
+  （body：`{device_id, ids: [存档行 id], read: true|false}`，管理员鉴权）
+  批量把存档标为已读/未读；**仅更新存档 read_flag**，设备端短信库同步另发
+  `mark_sms_read` 命令（mode=by_id，ID 取存档 `sms_key` 字段）。
 
 ## get_call_log 获取通话记录
 

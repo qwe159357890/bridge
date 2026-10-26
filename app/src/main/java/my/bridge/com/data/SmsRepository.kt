@@ -141,15 +141,25 @@ object SmsRepository {
     }
 
     /**
-     * 批量标记短信已读（要求本应用已是默认短信应用，调用方先校验）。
+     * 批量设置短信已读状态（双向：已读/未读；要求本应用已是默认短信应用，
+     * 调用方先校验）。
+     * @param read true=标记已读，false=标记未读
      * @return 受影响行数；失败抛异常
      */
-    fun markRead(context: Context, selection: String, selectionArgs: Array<String>): Int {
-        val values = android.content.ContentValues().apply { put("read", 1) }
+    fun setReadState(
+        context: Context,
+        read: Boolean,
+        selection: String,
+        selectionArgs: Array<String>,
+    ): Int {
+        val values = android.content.ContentValues().apply { put("read", if (read) 1 else 0) }
         val affected = context.contentResolver.update(
             Telephony.Sms.CONTENT_URI, values, selection, selectionArgs,
         )
-        Timber.i("标记短信已读：affected=%d（%s）", affected, selection)
+        Timber.i(
+            "标记短信%s：affected=%d（%s）",
+            if (read) "已读" else "未读", affected, selection,
+        )
         return affected
     }
 }

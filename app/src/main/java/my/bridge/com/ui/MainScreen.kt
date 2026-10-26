@@ -126,7 +126,7 @@ private fun BridgeBottomBar(
 fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         BridgeTabRow(
-            titles = listOf("会话", "通讯录", "发现"),
+            titles = listOf("短信", "通讯录", "发现"),
             currentTab = currentTab,
             onTabChange = onTabChange,
         )

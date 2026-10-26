@@ -18,10 +18,34 @@
           />
           <el-button type="primary" :disabled="!deviceId" @click="reload">查询</el-button>
         </div>
-        <span class="summary">共 {{ total }} 条（累积存档，重复下发自动去重）</span>
+        <div class="right">
+          <el-button
+            size="small"
+            :disabled="selected.length === 0"
+            @click="markSelected(true)"
+          >
+            标记已读（{{ selected.length }}）
+          </el-button>
+          <el-button
+            size="small"
+            :disabled="selected.length === 0"
+            @click="markSelected(false)"
+          >
+            标记未读（{{ selected.length }}）
+          </el-button>
+          <span class="summary">共 {{ total }} 条（累积存档，重复下发自动去重）</span>
+        </div>
       </div>
 
-      <el-table :data="items" v-loading="loading" stripe size="small" max-height="560">
+      <el-table
+        :data="items"
+        v-loading="loading"
+        stripe
+        size="small"
+        max-height="560"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="42" />
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <el-tag :type="tagType(row.sms_type)" size="small">{{ row.sms_type_name }}</el-tag>
@@ -45,8 +69,16 @@
           </template>
         </el-table-column>
         <el-table-column prop="sms_date" label="时间" width="160" />
-        <el-table-column label="操作" width="72" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
+            <el-button
+              size="small"
+              :type="row.read ? 'warning' : 'success'"
+              link
+              @click="markOne(row)"
+            >
+              {{ row.read ? '标为未读' : '标为已读' }}
+            </el-button>
             <el-button size="small" type="danger" link @click="removeOne(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -80,13 +112,14 @@ import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
-import { listSms, deleteSms, simLabel, type SmsItem } from '@/api/data'
+import { listSms, deleteSms, setSmsRead, simLabel, type SmsItem } from '@/api/data'
 import type { Device } from '@/types'
 
 /**
  * 短信页：按设备查看短信存档。
  * 分页用时间游标（before_ms = 已加载最旧一条的 sms_date），配合累积存档
  * 比页码翻页稳定（新数据插入不影响游标）。
+ * 已读状态双向可标记（已读/未读），仅更新存档；设备端同步另发 mark_sms_read 命令。
  */
 
 const TYPE_NAMES: Record<number, string> = {
@@ -141,6 +174,33 @@ function loadMore() {
   loadPage()
 }
 
+// ---------------- 标记已读/未读（双向） ----------------
+
+const selected = ref<SmsItem[]>([])
+
+function onSelectionChange(rows: SmsItem[]) {
+  selected.value = rows
+}
+
+async function markRows(ids: number[], read: boolean, tip: string) {
+  if (!deviceId.value || ids.length === 0) return
+  const { updated } = await setSmsRead(deviceId.value, ids, read)
+  ElMessage.success(`${tip} ${updated} 条`)
+  reload()
+}
+
+function markOne(row: SmsItem) {
+  markRows([row.id], !row.read, row.read ? '已标为未读' : '已标为已读')
+}
+
+function markSelected(read: boolean) {
+  markRows(
+    selected.value.map((r) => r.id),
+    read,
+    read ? '已标为已读' : '已标为未读',
+  )
+}
+
 async function removeOne(row: SmsItem) {
   try {
     await ElMessageBox.confirm(`删除 ${row.sms_date} 来自 ${row.address} 的这条存档？`, '提示', {
@@ -171,6 +231,11 @@ function tagType(t: number): 'primary' | 'success' | 'warning' | 'danger' | 'inf
   margin-bottom: 12px;
 }
 .left {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.right {
   display: flex;
   gap: 10px;
   align-items: center;

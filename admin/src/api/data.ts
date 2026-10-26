@@ -97,6 +97,15 @@ export function deleteSms(deviceId: string, rowId?: number): Promise<{ deleted: 
   })
 }
 
+/** 批量标记存档短信为已读/未读（双向）；仅更新存档，设备端同步另发 mark_sms_read 命令。 */
+export function setSmsRead(
+  deviceId: string,
+  ids: number[],
+  read: boolean,
+): Promise<{ updated: number }> {
+  return request({ url: '/api/sms/read', method: 'put', data: { device_id: deviceId, ids, read } })
+}
+
 // ---------------- 通话记录 ----------------
 
 export function listCallLogs(params: {
