@@ -38,7 +38,11 @@ export interface AdbEnableAccessibilityResult {
   /** 该设备上报的全部 IP（弹窗交叉确认用） */
   device_ips?: string[]
   /** 失败时附带：当前 adb 已连接的每台手机及 IP */
-  adb_devices?: { serial: string; ip?: string | null }[]
+  adb_devices?: {
+    serial: string
+    ip?: string | null
+    conn_type?: 'usb' | 'wifi' | 'wifi_mdns'
+  }[]
   steps?: { step: string; ok: boolean; detail?: string }[]
   error?: string
 }
@@ -46,7 +50,19 @@ export interface AdbEnableAccessibilityResult {
 /** 设备网络信息（ADB 弹窗交叉确认）：设备 IP 对照 adb 设备 IP。 */
 export interface DeviceNetInfo {
   device_ips: string[]
-  adb_devices: { serial: string; ip?: string | null }[]
+  adb_devices: {
+    serial: string
+    ip?: string | null
+    /** 连接类型：usb=数据线 / wifi=无线连接(adb connect) / wifi_mdns=mDNS 自动发现的无线设备 */
+    conn_type?: 'usb' | 'wifi' | 'wifi_mdns'
+  }[]
+}
+
+/** adb 设备连接类型的中文标签。 */
+export const CONN_TYPE_LABEL: Record<string, string> = {
+  usb: '数据线',
+  wifi: 'WiFi 无线',
+  wifi_mdns: 'WiFi 自动发现',
 }
 
 export function getDeviceNetInfo(deviceId: string): Promise<DeviceNetInfo> {

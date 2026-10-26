@@ -151,7 +151,11 @@
           <span class="adb-netinfo-label">adb 已连设备：</span>
           <span v-if="adbNetInfo.adb_devices.length">
             <span v-for="(d, i) in adbNetInfo.adb_devices" :key="d.serial">
-              {{ i > 0 ? '；' : '' }}{{ d.serial }}<template v-if="d.ip">（{{ d.ip }}）</template>
+              {{ i > 0 ? '；' : '' }}{{ d.serial
+              }}<template v-if="d.ip">（{{ d.ip }}</template
+              ><template v-if="d.conn_type"
+                > · {{ CONN_TYPE_LABEL[d.conn_type] || d.conn_type }}</template
+              ><template v-if="d.ip || d.conn_type">）</template>
             </span>
           </span>
           <span v-else class="adb-hint">未检测到（未装 adb / 无设备连接——数据线或 WiFi adb 任一即可）</span>
@@ -265,7 +269,11 @@
           >
             当前 adb 已连设备：
             <span v-for="(d, i) in adbResult.adb_devices" :key="d.serial">
-              {{ i > 0 ? '；' : '' }}{{ d.serial }}<template v-if="d.ip">（{{ d.ip }}）</template>
+              {{ i > 0 ? '；' : '' }}{{ d.serial
+              }}<template v-if="d.ip">（{{ d.ip }}</template
+              ><template v-if="d.conn_type"
+                > · {{ CONN_TYPE_LABEL[d.conn_type] || d.conn_type }}</template
+              ><template v-if="d.ip || d.conn_type">）</template>
             </span>
           </div>
         </div>
@@ -294,6 +302,7 @@ import {
   getDeviceNetInfo,
 } from '@/api/devices'
 import type { AdbEnableAccessibilityResult, DeviceNetInfo } from '@/api/devices'
+import { CONN_TYPE_LABEL } from '@/api/devices'
 import DeviceStatusTag from '@/components/DeviceStatusTag.vue'
 import LocationDialog from '@/components/LocationDialog.vue'
 import { formatTime } from '@/utils/format'

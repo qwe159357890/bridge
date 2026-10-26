@@ -97,14 +97,31 @@ def _connected_serials(adb_path: str) -> list[str]:
     return serials
 
 
-def list_devices_with_ips(adb_path: str) -> list[dict]:
-    """列出所有已连接 adb 设备及其 IP（供管理后台展示，让用户交叉确认）。
+def _conn_type(serial: str) -> str:
+    """按序列号形态判定连接类型（供管理后台明确展示连接方式）。
 
-    返回 [{serial, ip?}]；WiFi 序列号直接解析 IP，USB 设备查 wlan0。
+    - ``adb-xxx._adb-tls-connect._tcp`` → wifi_mdns（mDNS 自动发现的无线设备）
+    - ``ip:port``（如 192.168.1.5:5555） → wifi（adb connect 建立的无线连接）
+    - 其余（纯硬件序列号） → usb（数据线）
+    """
+    if "._adb" in serial:
+        return "wifi_mdns"
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+:\d+", serial):
+        return "wifi"
+    return "usb"
+
+
+def list_devices_with_ips(adb_path: str) -> list[dict]:
+    """列出所有已连接 adb 设备及其 IP 与连接类型（供管理后台展示，让用户交叉确认）。
+
+    返回 [{serial, ip?, conn_type}]；conn_type ∈ usb / wifi / wifi_mdns。
+    WiFi 序列号直接解析 IP，USB 设备查 wlan0。
     """
     result = []
     for serial in _connected_serials(adb_path):
-        result.append({"serial": serial, "ip": _serial_ip(adb_path, serial)})
+        result.append(
+            {"serial": serial, "ip": _serial_ip(adb_path, serial), "conn_type": _conn_type(serial)}
+        )
     return result
 
 

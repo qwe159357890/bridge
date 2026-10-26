@@ -92,9 +92,10 @@ class AdbDirectRequest(BaseModel):
 async def device_net_info(device_id: str, request: Request) -> dict:
     """查询设备的网络信息（供 ADB 弹窗展示，用户交叉确认操作的是哪台手机）。
 
-    返回 {device_ips: [...], adb_devices: [{serial, ip?}]}：
+    返回 {device_ips: [...], adb_devices: [{serial, ip?, conn_type}]}：
     - device_ips：该设备 hello 上报的本机全部 IPv4（WiFi 优先）+ WS 连接 IP；
-    - adb_devices：服务端 adb 当前连接的每台手机及其 IP。
+    - adb_devices：服务端 adb 当前连接的每台手机及其 IP 与连接类型
+      （conn_type ∈ usb / wifi / wifi_mdns，供后台明确展示连接方式）。
     两者有交集（或只连了一台 adb 设备）即可放心执行；adb 环境异常时 adb_devices 为空表。
     """
     manager = _get_manager(request)

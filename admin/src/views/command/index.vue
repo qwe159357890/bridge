@@ -229,18 +229,22 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="回执信息" min-width="160" show-overflow-tooltip>
+        <el-table-column label="回执信息" min-width="220">
           <template #default="{ row }">
-            <span>{{ row.result_message || '-' }}</span>
-            <el-button
-              v-if="mediaFilenameOf(row)"
-              size="small"
-              type="primary"
-              link
-              @click="openMediaPreview(row)"
-            >
-              查看
-            </el-button>
+            <!-- 布局要点：不能用 show-overflow-tooltip（整格裁切会把「查看」按钮
+                 一起裁没），文字自行省略、按钮 flex-shrink:0 恒可见 -->
+            <div class="receipt-cell">
+              <span class="receipt-text">{{ row.result_message || '-' }}</span>
+              <el-button
+                v-if="mediaFilenameOf(row)"
+                size="small"
+                type="primary"
+                link
+                @click="openMediaPreview(row)"
+              >
+                查看
+              </el-button>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="创建时间" width="180">
@@ -805,6 +809,23 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 回执信息格：文字省略 + 「查看」按钮恒可见（不能整格裁切） */
+.receipt-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.receipt-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.receipt-cell .el-button {
+  flex-shrink: 0;
+}
+
 /* 命令产物预览弹窗 */
 .media-preview {
   min-height: 120px;
