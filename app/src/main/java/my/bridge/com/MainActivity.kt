@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import my.bridge.com.core.ui.theme.BridgeTheme
+import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveUtils
 import my.bridge.com.ui.MainScreen
 import timber.log.Timber
@@ -60,6 +61,11 @@ class MainActivity : ComponentActivity() {
         requestRuntimePermissions()
         // 引导关闭电池优化（一次性）
         guideBatteryOptimization()
+        // 按存储状态应用「在最近任务中隐藏」（默认开：防上滑/一键清理误杀，见 docs/keepalive/design.md）
+        KeepAliveUtils.setExcludeFromRecents(
+            this,
+            KeepAlivePrefs.getBoolean(this, KeepAlivePrefs.KEY_KEEP_ALIVE_HIDE_RECENTS),
+        )
 
         setContent {
             BridgeTheme {

@@ -58,6 +58,7 @@
 - **已落地**（v0.1.32 + v0.1.33 + v0.1.34）：show_toast / speak（TTS 播完回执）/ vibrate / show_dialog（悬浮窗+点击二次上报 event=dialog_click）/ **send_notification**（通知驱动角标）/ **mark_sms_read**（标记短信已读，默认短信应用身份）。
 - **send_notification 关键**：Android 无公开角标 API，角标=通知驱动（小米/华为/三星读 `Notification.number` 显数字，OPPO/vivo 红点；保活常驻通知不计角标）。framework `Notification.Builder` **无 setNumber，number 是 Notification 字段需 build() 后赋值**；固定 id 2001 覆盖式下发；sound 走双渠道（渠道声音属性创建后不可变）；clear 模式 cancel(2001)；通知权限未开启 → ACTION_APP_NOTIFICATION_SETTINGS 引导。
 - **权威文档**：`docs/api/commands/interact.md`。最新发布 APK：v0.1.33。
+- **★ 一加 9 Pro 角标终局（2026-10-26，三轮假设均被反例推翻后定案）**：① 列表收录与 OPPO 开放平台白名单无关；② 与 Manifest 角标权限无关（HBuilderX 样本仅华为/vivo 2 条能进列表，Bridge 补 6 条 v0.1.38 仍不进，收录依据在 ROM 系统侧不可控）；③ **列表开关≠真角标**（用户证实 HBuilderX 应用在列表、开关开、从未显示过角标）→ ColorOS 第三方真角标只认 OPPO Push 通道，追「进列表」无收益。**拍板：一加/OPPO 接受无角标，代码不动**；ShortcutBadger 不引入（官方 OPPO=Not Fully Support，ColorOS Launcher 忽略私有广播，实测无效）。小米/华为/三星走现有 Notification.number 方案；未来若需华为真角标加一条 CHANGE_BADGE 广播即可（约 2 行）。
 
 ## 短信写能力与内置短信页（v0.1.34，2026-10-26）
 
@@ -80,7 +81,7 @@
 
 - **结论**：借鉴 `references/` 下 Aurelay（自研多层）与 SmsForwarder（轻量框架）两方案，取「两者结合」——吸收 Aurelay 分层架构 + SmsForwarder 电池白名单引导，去掉第三方 Cactus 依赖与激进权限，产出**自研轻量保活模块**。
 - **位置**：`core/core-keepalive`（包名 my.bridge.com.keepalive），共 9 个类，入口 Activity 经 `KeepAliveEntryActivityHolder` 注册解耦。
-- **默认开关**：总开关/开机自启/双兜底/资源锚点/无声播放 = 开；一像素 = 关（避免悬浮窗提示）。
+- **默认开关**：总开关/开机自启/双兜底/资源锚点/无声播放/最近任务隐藏 = 开；一像素 = 关（避免悬浮窗提示）。最近任务隐藏（v0.1.39，借鉴 SmsForwarder `enableExcludeFromRecents`）：`KeepAliveUtils.setExcludeFromRecents` + MainActivity.onCreate 应用 + 设置页开关即时生效（修复原版关开关不恢复的缺陷），防上滑/一键清理误杀。
 - **最有效手段排序**：前台服务 > 电池白名单引导 > 开机自启 > 双兜底 > 一像素/无声播放 > 资源锚点。
 - **权威文档**：设计详见 `docs/keepalive/design.md`（含组件清单/踩坑清单），集成详见 `docs/keepalive/integration.md`，Manifest 模板 `core/core-keepalive/AndroidManifest.template.xml`。
 - **待适配 TODO**：`KeepAliveService.openMainActivityClass()` 入口类名、通知小图标资源。

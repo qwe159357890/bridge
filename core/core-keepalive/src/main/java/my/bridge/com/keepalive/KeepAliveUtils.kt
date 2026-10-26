@@ -3,6 +3,7 @@ package my.bridge.com.keepalive
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -51,6 +52,31 @@ object KeepAliveUtils {
         } catch (e: Exception) {
             Log.e(TAG, "跳转电池优化设置失败", e)
             false
+        }
+    }
+
+    /**
+     * 在最近任务列表中隐藏/恢复显示本应用（借鉴 SmsForwarder 的 enableExcludeFromRecents）。
+     *
+     * 原理：把本应用的任务标记为 excludeFromRecents，最近任务列表不再出现 Bridge 卡片，
+     * 用户上滑移除 / 一键清理都碰不到它，防误杀，保活加分。
+     * 与 SmsForwarder 的差异：关闭时同步调 setExcludeFromRecents(false) 即时恢复显示
+     * （原版只存偏好不恢复，需重启应用）。
+     *
+     * @param hide true=从最近任务隐藏；false=恢复显示。minSdk 24 ≥ 21 无需版本判断。
+     */
+    fun setExcludeFromRecents(activity: Activity, hide: Boolean) {
+        try {
+            val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val task = am.appTasks.firstOrNull()
+            if (task == null) {
+                Log.w(TAG, "appTasks 为空，跳过最近任务隐藏设置")
+                return
+            }
+            task.setExcludeFromRecents(hide)
+            Log.i(TAG, "最近任务隐藏 -> ${if (hide) "已隐藏" else "显示"}")
+        } catch (e: Exception) {
+            Log.e(TAG, "设置最近任务可见性失败", e)
         }
     }
 

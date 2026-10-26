@@ -19,6 +19,8 @@ object KeepAlivePrefs {
     const val KEY_KEEP_ALIVE_FALLBACK = "keep_alive_fallback"
     const val KEY_KEEP_ALIVE_RESOURCE = "keep_alive_resource"
     const val KEY_KEEP_ALIVE_BOOT = "keep_alive_boot"
+    // 在最近任务列表中隐藏（防上滑/一键清理误杀，借鉴 SmsForwarder enableExcludeFromRecents）
+    const val KEY_KEEP_ALIVE_HIDE_RECENTS = "keep_alive_hide_recents"
 
     // 「后台资源占用」的 8 类细分资源开关（受总开关 KEY_KEEP_ALIVE_RESOURCE 约束）
     const val KEY_RES_WAKELOCK = "keep_alive_res_wakelock"
@@ -38,6 +40,8 @@ object KeepAlivePrefs {
         KEY_KEEP_ALIVE_FALLBACK to true,
         KEY_KEEP_ALIVE_RESOURCE to true,
         KEY_KEEP_ALIVE_BOOT to true,
+        // 最近任务隐藏默认开启：Bridge 是受控端，防误杀优先于用户从最近任务快速切换
+        KEY_KEEP_ALIVE_HIDE_RECENTS to true,
         // 8 类细分资源默认全开
         KEY_RES_WAKELOCK to true,
         KEY_RES_WIFILOCK to true,

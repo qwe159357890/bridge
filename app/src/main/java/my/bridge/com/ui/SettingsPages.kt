@@ -1,6 +1,7 @@
 package my.bridge.com.ui
 
 import android.app.Activity
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -109,6 +110,7 @@ fun KeepAliveSettings() {
     var fallback by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_FALLBACK)) }
     var resource by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_RESOURCE)) }
     var onePixel by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL)) }
+    var hideRecents by remember { mutableStateOf(KeepAlivePrefs.getBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_HIDE_RECENTS)) }
 
     // 细化弹窗状态
     var showResourceSheet by remember { mutableStateOf(false) }
@@ -177,6 +179,27 @@ fun KeepAliveSettings() {
                         onePixel = it
                         update(KeepAlivePrefs.KEY_KEEP_ALIVE_ONE_PIXEL, it)
                         Timber.d("切换：一像素锚点 -> ${if (it) "开" else "关"}")
+                    },
+                )
+                // 在最近任务中隐藏（借鉴 SmsForwarder enableExcludeFromRecents）：
+                // 开=最近任务不再出现 Bridge 卡片，上滑/一键清理碰不到，防误杀；
+                // 关=即时恢复显示（修复 SmsForwarder 原版只存偏好、需重启才恢复的缺陷）
+                SettingSwitchRow(
+                    icon = "🕵️",
+                    title = "在最近任务中隐藏",
+                    checked = hideRecents,
+                    onCheckedChange = {
+                        hideRecents = it
+                        KeepAlivePrefs.setBoolean(context, KeepAlivePrefs.KEY_KEEP_ALIVE_HIDE_RECENTS, it)
+                        (context as? Activity)?.let { act ->
+                            KeepAliveUtils.setExcludeFromRecents(act, it)
+                        }
+                        Toast.makeText(
+                            context,
+                            if (it) "已隐藏：最近任务不再显示 Bridge，可从桌面图标进入" else "已恢复：Bridge 重新出现在最近任务",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        Timber.d("切换：在最近任务中隐藏 -> ${if (it) "开" else "关"}")
                     },
                 )
             }
