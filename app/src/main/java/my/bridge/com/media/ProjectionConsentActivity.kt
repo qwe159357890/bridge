@@ -8,12 +8,13 @@ import android.os.Bundle
 import timber.log.Timber
 
 /**
- * MediaProjection 授权透明页（screenshot / record_screen 前置）。
+ * MediaProjection 授权透明页（screenshot / record_screen 前置，**仅首次**）。
  *
  * 系统限制：投屏授权必须经 Activity 调 [MediaProjectionManager.createScreenCaptureIntent]
- * 弹出系统授权框，用户在设备上点「立即开始」（Android 14 起授权结果一次性有效，
- * 无法跨命令复用）。Activity 透明无 UI，授权/拒绝后立即 finish，
- * 结果写入 [ScreenCaptureHolder]（key = commandId）由执行器取走。
+ * 弹出系统授权框，用户在设备上点「立即开始」。v0.1.37 起授权结果由
+ * [MediaCaptureService] 建立会话后**常驻持有**（借鉴 autox：进程不重启一直有效），
+ * 后续命令 projectionHeld=true 时不再走到本页。Activity 透明无 UI，
+ * 授权/拒绝后立即 finish，结果写入 [ScreenCaptureHolder]（key = commandId）由执行器取走。
  */
 class ProjectionConsentActivity : Activity() {
 

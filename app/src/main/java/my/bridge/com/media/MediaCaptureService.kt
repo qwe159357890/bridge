@@ -43,6 +43,15 @@ import java.util.concurrent.TimeUnit
  * - 拍照：Camera1 静音拍照（enableShutterSound(false) + 系统音量临时静音兜底），
  *   后台访问相机要求 CAMERA 类型前台服务（Android 11+ while-in-use 规则）。
  *
+ * 投屏会话复用（借鉴 autox 思路，v0.1.37）：首次授权后 MediaProjection 由本服务
+ * **持有不释放**，采集完成只释放 VirtualDisplay/Reader 等单次资源，服务转入
+ * 「会话保持中」常驻态——进程不重启就一直有效，后续截屏/录屏免系统确认框。
+ * 会话失效（用户下拉取消投屏/服务被杀）时 [projectionHeld] 归位 false，
+ * 下一条命令重新走授权。Android 14+ 硬性要求：getMediaProjection 后必须先
+ * [registerCallback] 再 createVirtualDisplay，否则抛
+ * 「Must register a callback before starting capture」——这是 v0.1.36 及以前
+ * 每次采集必报错的根因。
+ *
  * 结果经 [ScreenCaptureHolder.capture]（key = commandId）回传执行器：
  * 成功为产物文件路径（App 私有 media/ 目录，上传后由执行器清理）。
  */
@@ -63,13 +72,21 @@ class MediaCaptureService : Service() {
         private const val CHANNEL_ID = "media_capture"
         private const val NOTIFICATION_ID = 2101
 
+        /**
+         * 投屏会话是否已保持（进程级状态，执行器据此跳过授权确认）。
+         * true = MediaProjection 已持有且有效，截屏/录屏可免确认直接采集。
+         */
+        @Volatile
+        var projectionHeld: Boolean = false
+            private set
+
         /** 采集目录（App 私有 media/，与上传后清理配套）。 */
         fun mediaDir(context: Context): File =
             context.getExternalFilesDir("media") ?: File(context.filesDir, "media")
     }
 
-    private lateinit var workThread: HandlerThread
-    private lateinit var handler: Handler
+    private var workThread: HandlerThread? = null
+    private var handler: Handler? = null
 
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -86,15 +103,30 @@ class MediaCaptureService : Service() {
     private var mutedStreams: Int = -1
     private var savedVolumes: MutableMap<Int, Int> = mutableMapOf()
 
+    /**
+     * 投屏会话回调（Android 14+ 必须在 createVirtualDisplay 前注册）。
+     * 系统侧会话停止（用户取消投屏、系统回收）时释放保持状态并停服务，
+     * 下一条截屏/录屏命令会重新走授权流程。
+     */
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Timber.i("投屏会话被系统停止，释放保持状态")
+            projectionHeld = false
+            handler?.post { stopSelf() }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
-            stopSelf()
+            // 系统重投递或异常启动：无任务则退出（会话保持态由 stopSelf 前的回调兜底）
+            if (!projectionHeld) stopSelf()
             return START_NOT_STICKY
         }
         commandId = intent.getStringExtra(EXTRA_COMMAND_ID) ?: ""
         mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_SCREENSHOT
+        finished = false
 
         // 前台类型按模式选择：投屏类 MEDIA_PROJECTION，拍照 CAMERA。
         // camera 类型 API 30 起才有，低于 30 用两参 startForeground（while-in-use 限制也是 30+ 才生效）
@@ -109,11 +141,15 @@ class MediaCaptureService : Service() {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
 
-        workThread = HandlerThread("bridge-capture").also { it.start() }
-        handler = Handler(workThread.looper)
+        // 工作线程只在服务生命周期内创建一次（会话复用后服务常驻，多次采集共用）
+        val h: Handler = handler ?: run {
+            val thread = HandlerThread("bridge-capture").also { it.start() }
+            workThread = thread
+            Handler(thread.looper).also { handler = it }
+        }
 
         val startedAt = SystemClock.elapsedRealtime()
-        handler.post {
+        h.post {
             try {
                 when (mode) {
                     MODE_PHOTO -> capturePhoto(intent)
@@ -122,18 +158,26 @@ class MediaCaptureService : Service() {
                 }
             } catch (e: Exception) {
                 Timber.e(e, "采集失败（mode=%s）", mode)
+                // 复用会话的采集失败：多半是会话已失效（服务被杀后残留状态），
+                // 释放会话让下一条命令重新走授权，避免连续失败
+                if (mode != MODE_PHOTO && projectionHeld) {
+                    Timber.w("释放可能失效的投屏会话，下次采集将重新授权")
+                    releaseAll()
+                    runCatching { stopSelf() }
+                }
                 complete(ScreenCaptureHolder.failure("采集失败：${e.message}"))
             } finally {
-                Timber.i("采集服务结束（mode=%s，耗时 %d ms）", mode, SystemClock.elapsedRealtime() - startedAt)
+                Timber.i("采集任务结束（mode=%s，耗时 %d ms）", mode, SystemClock.elapsedRealtime() - startedAt)
             }
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        projectionHeld = false
         releaseAll()
         restoreVolumes()
-        workThread.looper?.quit()
+        workThread?.looper?.quit()
         cameraThread?.looper?.quit()
         super.onDestroy()
     }
@@ -410,16 +454,38 @@ class MediaCaptureService : Service() {
     // 公共
     // ------------------------------------------------------------------
 
-    /** 校验并构建 MediaProjection（Android 14+ 要求先 startForeground 再调）。 */
+    /**
+     * 校验并获取 MediaProjection（v0.1.37：会话复用 + registerCallback）。
+     *
+     * - Intent 带授权结果（首次）：停掉旧会话 → getMediaProjection → **必须先
+     *   registerCallback 再 createVirtualDisplay**（Android 14+ 硬性要求，否则
+     *   抛 SecurityException「Must register a callback…」，即旧版每次报错的根因）
+     *   → 置 projectionHeld=true 转入会话保持；
+     * - Intent 不带授权结果（复用）：直接返回已持有的 projection
+     *   （projectionHeld=true 保证有效；失效场景执行器不会走到这里）。
+     */
     private fun requireProjection(intent: Intent): MediaProjection {
+        projection?.let { existing ->
+            if (projectionHeld && intent.hasExtra(EXTRA_CONSENT_DATA).not()) {
+                Timber.i("复用已保持的投屏会话（免系统确认）")
+                return existing
+            }
+        }
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
         @Suppress("DEPRECATION")
         val data: Intent? = intent.getBundleExtra(EXTRA_CONSENT_DATA)?.getParcelable("data")
         if (data == null) throw IllegalStateException("投屏授权结果缺失")
+        // 换新会话前先释放旧的（同进程重复 getMediaProjection 不叠放）
+        runCatching { projection?.stop() }
+        projection = null
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val p = manager.getMediaProjection(resultCode, data)
             ?: throw IllegalStateException("获取投屏会话失败（授权结果无效）")
+        // Android 14+：createVirtualDisplay 前必须注册回调（资源回收响应）
+        p.registerCallback(projectionCallback, handler ?: Handler(mainLooper))
         projection = p
+        projectionHeld = true
+        Timber.i("投屏会话已建立并转入保持（后续采集免确认）")
         return p
     }
 
@@ -445,9 +511,10 @@ class MediaCaptureService : Service() {
                 NotificationChannel(CHANNEL_ID, "媒体采集", NotificationManager.IMPORTANCE_LOW),
             )
         }
-        val text = when (mode) {
-            MODE_PHOTO -> "正在拍照…"
-            MODE_RECORD -> "正在录制屏幕…"
+        val text = when {
+            mode == MODE_PHOTO -> "正在拍照…"
+            mode == MODE_RECORD -> "正在录制屏幕…"
+            projectionHeld -> "投屏会话保持中：截屏/录屏免确认（进程退出自动释放）"
             else -> "正在截取屏幕…"
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -458,16 +525,23 @@ class MediaCaptureService : Service() {
             .build()
     }
 
-    /** 回传结果（只回一次）。 */
+    /**
+     * 回传结果（只回一次）。采集类资源（VirtualDisplay/Reader/Recorder）即用即释，
+     * 但 **不释放 MediaProjection**——保持会话供后续免确认复用；服务不 stopSelf，
+     * 以「会话保持中」常驻（借鉴 autox：一次授权进程不重启一直有效）。
+     */
     private fun complete(file: ScreenCaptureHolder.CaptureFile) {
         if (finished) return
         finished = true
-        releaseAll()
+        releaseCaptureResources()
         ScreenCaptureHolder.takeCapture(commandId)?.complete(file)
-        handler.post { stopSelf() }
+        // 刷新通知为会话保持文案
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        runCatching { nm.notify(NOTIFICATION_ID, buildNotification()) }
     }
 
-    private fun releaseAll() {
+    /** 释放单次采集资源（不动 MediaProjection 会话本身）。 */
+    private fun releaseCaptureResources() {
         runCatching { virtualDisplay?.release() }
         virtualDisplay = null
         runCatching { imageReader?.close() }
@@ -475,10 +549,13 @@ class MediaCaptureService : Service() {
         runCatching { recorder?.release() }
         recorder = null
         releaseCamera()
-        runCatching {
-            projection?.stop()
-            projection = null
-        }
+    }
+
+    private fun releaseAll() {
+        releaseCaptureResources()
+        projectionHeld = false
+        runCatching { projection?.stop() }
+        projection = null
     }
 
     @Suppress("DEPRECATION")

@@ -862,8 +862,9 @@ object CommandModule {
      * 执行 lock_screen：锁屏（熄屏并上锁）。
      *
      * 依赖设备管理员激活（force-lock 策略，见 [my.bridge.com.admin.BridgeAdminReceiver]）：
-     * 未激活时尝试在设备上弹出系统激活页（Android 10+ 后台启动可能被拦），
-     * 回执失败并附激活步骤；已激活直接 lockNow。
+     * 已激活直接 lockNow；未激活时发**高优先级引导通知**（v0.1.37：此前裸
+     * startActivity 被 Android 10+ 后台启动限制静默拦截，误报「已弹出激活页」），
+     * 用户点通知（系统放行）进入激活页，激活后重新下发即可。
      */
     private fun executeLockScreen(context: Context, command: Command): CommandResult {
         val id = command.commandId
@@ -871,28 +872,13 @@ object CommandModule {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val admin = ComponentName(context, BridgeAdminReceiver::class.java)
         if (dpm == null || !dpm.isAdminActive(admin)) {
-            var launched = false
-            try {
-                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
-                    putExtra(
-                        DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                        "Bridge 需要设备管理员权限以支持远程锁屏（仅使用「锁定屏幕」能力，" +
-                            "可在设置中随时停用）",
-                    )
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-                launched = true
-            } catch (e: Exception) {
-                Timber.w(e, "弹出设备管理员激活页失败（可能被后台启动限制拦截）")
-            }
-            val guide = if (launched) {
-                "已在设备上弹出激活页，请在设备上点击「激活」，完成后重新下发本命令"
-            } else {
-                "请在设备上激活：设置 → 安全性 → 设备管理应用 → Bridge（仅锁屏能力），完成后重新下发本命令"
-            }
-            return CommandResult(id, name, false, "尚未激活设备管理员，无法锁屏。$guide")
+            my.bridge.com.admin.AdminActivationNotifier.post(context)
+            return CommandResult(
+                id, name, false,
+                "尚未激活设备管理员，无法锁屏。已在设备通知栏发送引导通知：" +
+                    "请点按该通知进入激活页并点击「激活」；若通知栏没有，" +
+                    "请在设备上手动激活（设置 → 安全性 → 设备管理应用 → Bridge），完成后重新下发本命令",
+            )
         }
         return try {
             dpm.lockNow()
@@ -1006,8 +992,10 @@ object CommandModule {
     // 媒体采集类命令（screenshot / record_screen / take_photo）
     //
     // 共同形态：采集 → 产物落 App 私有 media/ 目录 → multipart 上传服务端 → 回执。
-    // 截屏/录屏需设备端用户点一次「立即开始」（MediaProjection 系统限制，
-    // Android 14 起授权一次性有效，无法跨命令复用）。
+    // 截屏/录屏首次需设备端点一次「立即开始」（MediaProjection 系统限制）；
+    // 之后投屏会话由 MediaCaptureService 常驻保持（借鉴 autox：一次授权进程
+    // 不重启一直有效），后续命令免确认直接采集。Android 14+ 采集前必须
+    // registerCallback（v0.1.36 每次报错的根因，v0.1.37 修复）。
     // ------------------------------------------------------------------
 
     /** 采集等待常量：授权最长等 90 秒，单帧采集等 20 秒。 */
@@ -1019,8 +1007,10 @@ object CommandModule {
      *
      * @param params.duration 录制秒数 3~60（仅 record_screen，默认 10）
      *
-     * ① 弹系统投屏授权框（透明 Activity），90 秒内未确认回执失败；
-     * ② 授权后启动 [MediaCaptureService]（mediaProjection 类型前台服务）采集；
+     * ① 会话保持中（projectionHeld）直接跳授权进采集；否则弹系统投屏授权框
+     *    （透明 Activity），90 秒内未确认回执失败；
+     * ② 授权后启动 [MediaCaptureService]（mediaProjection 类型前台服务）采集，
+     *    完成后服务转「会话保持中」常驻（不释放授权）；
      * ③ 产物 multipart 上传 POST /api/media，上传失败在回执注明（文件保留）。
      */
     private suspend fun executeProjectionCapture(
@@ -1037,43 +1027,57 @@ object CommandModule {
             if (isRecord) command.intParam("duration", 10, 3, 60) else 0
         val actionLabel = if (isRecord) "录屏" else "截屏"
 
-        // ① 投屏授权：注册等待 → 弹透明授权页 → 阻塞等设备端确认
-        val consentOutcome = ScreenCaptureHolder.Outcome<Pair<Int, Intent?>>()
-        ScreenCaptureHolder.consent[command.commandId] = consentOutcome
-        val launched = try {
-            context.startActivity(ProjectionConsentActivity.intentOf(context, command.commandId))
-            true
-        } catch (e: Exception) {
-            Timber.w(e, "%s：弹出投屏授权框失败（后台启动被拦截）", name)
-            false
-        }
-        if (!launched) {
-            ScreenCaptureHolder.consent.remove(command.commandId)
-            return CommandResult(
-                id, name, false,
-                "无法在设备上弹出投屏授权框（后台启动被系统拦截），请打开 App 后重试下发",
-            )
-        }
-        Timber.i("%s：等待设备端投屏授权（最长 %d 秒）…", name, CONSENT_TIMEOUT_MS / 1000)
-        val consentReady = consentOutcome.latch.await(CONSENT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        val consent = consentOutcome.value
-        if (!consentReady || consent == null || consent.second == null) {
-            ScreenCaptureHolder.consent.remove(command.commandId)
-            return CommandResult(
-                id, name, false,
-                "设备端未确认投屏授权（${CONSENT_TIMEOUT_MS / 1000} 秒内未点「立即开始」或被拒绝）",
-            )
+        // 会话保持中：跳过系统授权确认（首次授权后 MediaProjection 由服务持有）
+        val reuse = MediaCaptureService.projectionHeld
+        var resultCode = 0
+        var consentData: Intent? = null
+        if (!reuse) {
+            // ① 投屏授权：注册等待 → 弹透明授权页 → 阻塞等设备端确认
+            val consentOutcome = ScreenCaptureHolder.Outcome<Pair<Int, Intent?>>()
+            ScreenCaptureHolder.consent[command.commandId] = consentOutcome
+            val launched = try {
+                context.startActivity(ProjectionConsentActivity.intentOf(context, command.commandId))
+                true
+            } catch (e: Exception) {
+                Timber.w(e, "%s：弹出投屏授权框失败（后台启动被拦截）", name)
+                false
+            }
+            if (!launched) {
+                ScreenCaptureHolder.consent.remove(command.commandId)
+                return CommandResult(
+                    id, name, false,
+                    "无法在设备上弹出投屏授权框（后台启动被系统拦截），请打开 App 后重试下发",
+                )
+            }
+            Timber.i("%s：等待设备端投屏授权（最长 %d 秒）…", name, CONSENT_TIMEOUT_MS / 1000)
+            val consentReady = consentOutcome.latch.await(CONSENT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            val consent = consentOutcome.value
+            if (!consentReady || consent == null || consent.second == null) {
+                ScreenCaptureHolder.consent.remove(command.commandId)
+                return CommandResult(
+                    id, name, false,
+                    "设备端未确认投屏授权（${CONSENT_TIMEOUT_MS / 1000} 秒内未点「立即开始」或被拒绝）",
+                )
+            }
+            resultCode = consent.first
+            consentData = consent.second
         }
 
-        // ② 采集：注册结果等待 → 启动采集服务（mediaProjection 类型前台）
+        // ② 采集：注册结果等待 → 启动采集服务（mediaProjection 类型前台；
+        //    复用模式不带授权 extras，服务直接用已持有的会话）
         val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
         ScreenCaptureHolder.capture[command.commandId] = captureOutcome
         val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
             putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
             putExtra(MediaCaptureService.EXTRA_MODE, mode)
             if (isRecord) putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
-            putExtra(MediaCaptureService.EXTRA_RESULT_CODE, consent.first)
-            putExtra(MediaCaptureService.EXTRA_CONSENT_DATA, Bundle().apply { putParcelable("data", consent.second) })
+            if (!reuse) {
+                putExtra(MediaCaptureService.EXTRA_RESULT_CODE, resultCode)
+                putExtra(
+                    MediaCaptureService.EXTRA_CONSENT_DATA,
+                    Bundle().apply { putParcelable("data", consentData) },
+                )
+            }
         }
         val started = try {
             ContextCompat.startForegroundService(context, serviceIntent)
@@ -1358,11 +1362,12 @@ object CommandModule {
     }
 
     /**
-     * 执行 check_update：检查更新（服务器目录版，不依赖 GitHub）。
+     * 执行 check_update：检查并自动更新（服务器目录版，不依赖 GitHub）。
      *
-     * 服务端扫描 updates/ 目录取最高版本 APK（文件名解析版本号，可选
-     * update.json 提供更新说明），与客户端当前 versionName 比对后回执；
-     * APK 下载走服务器自身直链。本期不做自动下载安装。
+     * 完整闭环（v0.1.37 起）：检查 → 自动下载 APK（进度通知）→ 拉起系统安装页
+     * （Android 不允许静默安装，用户点一次「安装」）。防重复触发：下载/安装中
+     * 再次下发直接拒绝并提示，见 [my.bridge.com.update.UpdateManager]。
+     * 关于页「检查更新」按钮走同一入口，行为一致。
      */
     private suspend fun executeCheckUpdate(
         context: Context,
@@ -1372,25 +1377,10 @@ object CommandModule {
     ): CommandResult {
         val id = command.commandId
         val name = command.command
-        val current = DiagLog.appVersionName(context).ifBlank { "unknown" }
         return try {
-            val deviceId = deviceStore.deviceId()
-            val token = runCatching { deviceStore.token() }.getOrNull()
-            val r = apiClient.getLatestUpdate(deviceId, token, current)
-            when {
-                !r.found ->
-                    CommandResult(id, name, true, "服务器暂无更新包（updates 目录为空），当前版本 v$current")
-                !r.available ->
-                    CommandResult(id, name, true, "已是最新版本 v$current")
-                else -> {
-                    val sizeMb = r.size_bytes / 1048576.0
-                    val notes = if (r.notes.isNotBlank()) "；更新说明：${r.notes}" else ""
-                    CommandResult(
-                        id, name, true,
-                        "有新版本 v${r.version}（%.1f MB）$notes。请把 APK 安装到设备完成更新".format(sizeMb),
-                    )
-                }
-            }
+            val message = my.bridge.com.update.UpdateManager.checkAndInstall(context)
+            Timber.i("命令 check_update：%s", message)
+            CommandResult(id, name, true, message)
         } catch (e: Exception) {
             Timber.e(e, "命令 check_update 执行失败")
             CommandResult(id, name, false, "检查更新失败：${e.message}")

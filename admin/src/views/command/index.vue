@@ -205,6 +205,7 @@
             <el-button type="primary" :icon="Refresh" size="small" @click="load">
               刷新
             </el-button>
+            <el-button type="danger" size="small" @click="clearHistory">清空历史</el-button>
           </div>
         </div>
       </template>
@@ -242,11 +243,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { getMusicState, listDevices } from '@/api/devices'
 import type { MusicState } from '@/api/devices'
-import { listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
+import { clearCommands, listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
 import { getDeviceSims } from '@/api/data'
 import type { DeviceSim } from '@/api/data'
 import { getToken } from '@/api/request'
@@ -554,6 +555,24 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+/** 清空命令历史（二次确认；当前选中的设备存在时只清该设备，否则清空全部）。 */
+async function clearHistory() {
+  const deviceId = form.deviceId || ''
+  const scope = deviceId ? `设备「${deviceNameOf(deviceId)}」的` : '全部'
+  try {
+    await ElMessageBox.confirm(
+      `确定清空${scope}命令历史吗？此操作不可恢复。`,
+      '清空历史',
+      { confirmButtonText: '清空', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  const r = await clearCommands(deviceId || undefined)
+  ElMessage.success(`已清空 ${r.deleted} 条命令历史`)
+  await load()
 }
 
 async function loadDevices() {

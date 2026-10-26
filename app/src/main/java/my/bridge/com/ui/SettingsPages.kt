@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import my.bridge.com.BuildConfig
 import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveService
@@ -467,6 +469,50 @@ fun AboutPage() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+
+        // 检查更新卡片：与 check_update 命令走同一入口（UpdateManager，
+        // 自动下载 APK + 进度通知 + 弹系统安装页）；busy 时按钮禁用防重复触发。
+        Spacer(Modifier.padding(top = 12.dp))
+        val scope = rememberCoroutineScope()
+        var updateMessage by remember { mutableStateOf("检查服务器是否有新版本，自动下载并弹出安装页") }
+        var updating by remember { mutableStateOf(false) }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp, horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                androidx.compose.material3.Button(
+                    onClick = {
+                        if (updating) return@Button
+                        updating = true
+                        scope.launch {
+                            updateMessage = try {
+                                my.bridge.com.update.UpdateManager.checkAndInstall(context)
+                            } catch (e: Exception) {
+                                "检查更新失败：${e.message}"
+                            }
+                            updating = false
+                        }
+                    },
+                    enabled = !updating,
+                ) {
+                    Text(if (updating) "更新处理中…" else "检查更新")
+                }
+                Text(
+                    text = updateMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
                     textAlign = TextAlign.Center,
                 )
             }

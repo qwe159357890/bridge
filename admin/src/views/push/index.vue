@@ -48,7 +48,7 @@
       <el-alert
         type="info"
         :closable="false"
-        title="消息通过 WebSocket 下发给设备端（message 帧），payload 为自定义 JSON，客户端业务层自行解析。"
+        title="预留的调试通道：消息经 WebSocket 以 message 帧透传自定义 JSON，设备端当前不解析、不显示任何内容（与「发送通知」命令不同）。可用于对接后续业务扩展，详见 docs/server/design.md §14.4。"
       />
     </el-card>
 

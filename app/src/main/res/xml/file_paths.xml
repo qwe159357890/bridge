@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 共享路径声明：
+     - updates/：自动更新下载的 APK（UpdateManager 拉起系统安装页用）；
+     - media/：媒体采集产物（截屏/拍照/录屏，当前仅在 App 内使用，预留共享能力）。 -->
+<paths>
+    <external-files-path name="updates" path="updates/" />
+    <external-files-path name="media" path="media/" />
+    <files-path name="internal_updates" path="updates/" />
+</paths>
