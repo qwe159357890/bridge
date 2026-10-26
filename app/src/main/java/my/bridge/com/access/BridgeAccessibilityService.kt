@@ -94,7 +94,8 @@ class BridgeAccessibilityService : AccessibilityService() {
                 svc.takeScreenshot(
                     Display.DEFAULT_DISPLAY,
                     executor,
-                    object : TakeScreenshotCallback() {
+                    // TakeScreenshotCallback 是接口（非抽象类），匿名对象不带构造括号
+                    object : TakeScreenshotCallback {
                         override fun onSuccess(screenshot: ScreenshotResult) {
                             try {
                                 val hardware = Bitmap.wrapHardwareBuffer(
