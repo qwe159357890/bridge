@@ -30,6 +30,7 @@ data class Command(
         const val GET_SIM_INFO = "get_sim_info"
         const val SEND_SMS = "send_sms"
         const val DIAL_PHONE = "dial_phone"
+        const val MARK_SMS_READ = "mark_sms_read"
         const val SET_VOLUME = "set_volume"
         const val LOCK_SCREEN = "lock_screen"
         const val RESTART_APP = "restart_app"

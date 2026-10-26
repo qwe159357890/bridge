@@ -178,6 +178,28 @@ COMMANDS: list[dict[str, Any]] = [
                  description="直接拨打时指定用哪张卡；拨号盘模式由用户在设备上自行选卡。"
                              "后台按设备实际卡动态显示（号码/运营商），"
                              "未显示具体卡信息时先下发一次「获取SIM卡信息」")]),
+    _cmd("mark_sms_read", "标记短信已读", "control", "📖",
+         "批量把设备短信标记为已读。系统限制：写短信库要求 Bridge 是设备上的"
+         "「默认短信应用」——非默认时会在设备上弹出确认框，选择 Bridge 后重新"
+         "下发即可（Bridge 短信页也有同样的设置入口）；restore 开启时标记完成后"
+         "会弹「切回原短信应用」确认框，恢复设备正常收信",
+         [_param("mode", "标记范围", PARAM_TYPE_SELECT, default="all_unread",
+                 options=[
+                     {"value": "all_unread", "label": "全部未读短信"},
+                     {"value": "by_address", "label": "按号码"},
+                     {"value": "by_id", "label": "按短信 ID"},
+                     {"value": "before_date", "label": "某时间之前的未读"},
+                 ],
+                 description="标记的短信范围"),
+          _param("address", "号码", PARAM_TYPE_TEXT, placeholder="13800000000",
+                 description="mode=按号码 时必填；与短信库精确匹配"),
+          _param("before_date", "时间", PARAM_TYPE_TEXT, placeholder="2026-10-26 或 2026-10-26 12:30",
+                 description="mode=某时间之前 时必填；将该时间之前的未读短信标记为已读"),
+          _param("sms_id", "短信 ID", PARAM_TYPE_TEXT, placeholder="设备短信库 _id",
+                 description="mode=按短信 ID 时必填；ID 可在后台短信列表中查看"),
+          _param("restore", "完成后切回", PARAM_TYPE_SWITCH, default=True,
+                 description="标记完成后弹出「切回原短信应用」确认框（需设备上点一次），"
+                             "恢复系统短信 App 正常收信；连续多条命令可关闭避免反复弹窗")]),
 
     # ---- 数据采集类 ----
     _cmd("get_location", "获取位置", "data", "📍",

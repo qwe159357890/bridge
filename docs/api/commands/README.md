@@ -20,6 +20,7 @@
 | `restart_app` | 重启客户端 | [control.md#restart_app-重启客户端](control.md#restart_app-重启客户端) |
 | `send_sms` | 发送短信 | [control.md#send_sms-发送短信](control.md#send_sms-发送短信) |
 | `dial_phone` | 拨打电话 | [control.md#dial_phone-拨打电话](control.md#dial_phone-拨打电话) |
+| `mark_sms_read` | 标记短信已读 | [control.md#mark_sms_read-标记短信已读](control.md#mark_sms_read-标记短信已读) |
 
 ## 📡 data（数据采集）→ [data.md](data.md)
 

@@ -1,0 +1,449 @@
+package my.bridge.com.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import my.bridge.com.data.SmsDefaultHelper
+import my.bridge.com.data.SmsReader
+import my.bridge.com.data.SmsRepository
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+// 品牌色（与 MainScreen 对齐）
+private val BrandBlue = Color(0xFF1A6EE8)
+private val BubbleIn = Color(0xFFF1F3F6)
+private val UnreadRed = Color(0xFFE5484D)
+private val GreenOk = Color(0xFF67C23A)
+
+private val timeFmtFull = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+private val timeFmtTime = SimpleDateFormat("HH:mm", Locale.getDefault())
+private val timeFmtDate = SimpleDateFormat("MM-dd", Locale.getDefault())
+
+/**
+ * Bridge 内置短信页（主页「会话」Tab）：会话列表 ↔ 会话详情两级导航。
+ *
+ * - 读取（READ_SMS）无需默认短信应用身份，随时可浏览；
+ * - 顶部状态条支持「设为默认 / 切回原短信应用」快速切换（系统弹窗一次确认）；
+ * - Bridge 为默认应用期间，新短信由 SmsDeliverReceiver 写库并通知，本页可见。
+ */
+@Composable
+fun SmsConversationsPage() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var hasPermission by remember { mutableStateOf(SmsReader.hasPermission(context)) }
+    var isDefault by remember { mutableStateOf(SmsDefaultHelper.isDefault(context)) }
+    var conversations by remember {
+        mutableStateOf<List<SmsRepository.Conversation>?>(null)
+    }
+    var openThread by remember { mutableStateOf<SmsRepository.Conversation?>(null) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    // 加载会话列表（权限就绪时）
+    LaunchedEffect(hasPermission, refreshKey) {
+        if (!hasPermission) return@LaunchedEffect
+        SmsDefaultHelper.recordPreviousDefault(context) // 维护「原短信应用」记忆
+        conversations = withContext(Dispatchers.IO) {
+            SmsRepository.listConversations(context)
+        }
+    }
+
+    // 从系统确认弹窗返回时刷新默认身份与列表（切换后立即生效）
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasPermission = SmsReader.hasPermission(context)
+                isDefault = SmsDefaultHelper.isDefault(context)
+                refreshKey++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val thread = openThread
+    if (thread != null) {
+        ThreadDetailPage(
+            thread = thread,
+            isDefault = isDefault,
+            onBack = {
+                openThread = null
+                refreshKey++ // 返回后刷新未读数
+            },
+        )
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+
+        // ===== 默认短信应用状态条（快速切换） =====
+        DefaultSmsStatusBar(
+            isDefault = isDefault,
+            hasPermission = hasPermission,
+            onSwitch = {
+                if (!isDefault) {
+                    SmsDefaultHelper.launchBecomeDefault(context)
+                } else if (!SmsDefaultHelper.launchRestorePrevious(context)) {
+                    // 无记忆包名：引导手动到系统设置
+                    android.widget.Toast.makeText(
+                        context,
+                        "未记录原短信应用，请到 系统设置→应用→默认应用→短信应用 手动切换",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            },
+        )
+
+        when {
+            !hasPermission -> CenterHint("短信权限未授予\n请在 设置→应用→Bridge→权限 中开启「短信」")
+            conversations == null -> CenterHint("加载中…")
+            conversations!!.isEmpty() -> CenterHint("暂无短信")
+            else -> ConversationList(
+                conversations = conversations!!,
+                onOpen = { openThread = it },
+            )
+        }
+    }
+}
+
+// ============ 状态条 ============
+@Composable
+private fun DefaultSmsStatusBar(
+    isDefault: Boolean,
+    hasPermission: Boolean,
+    onSwitch: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDefault) Color(0xFFEAF3FF) else Color(0xFFF7F8FA),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("📨", fontSize = 16.sp)
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (isDefault) "Bridge 是默认短信应用" else "当前默认：系统短信应用",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF303133),
+                )
+                Text(
+                    text = if (isDefault) "新短信由 Bridge 接收，标记已读可用"
+                    else "标记已读需设为默认（系统限制）",
+                    fontSize = 11.sp,
+                    color = Color(0xFF8A919F),
+                )
+            }
+            if (hasPermission) {
+                Button(
+                    onClick = onSwitch,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isDefault) GreenOk else BrandBlue,
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 14.dp, vertical = 6.dp,
+                    ),
+                ) {
+                    Text(
+                        if (isDefault) "切回原短信" else "设为默认",
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ============ 会话列表 ============
+@Composable
+private fun ConversationList(
+    conversations: List<SmsRepository.Conversation>,
+    onOpen: (SmsRepository.Conversation) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = 12.dp, vertical = 4.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(conversations, key = { it.threadId }) { conv ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpen(conv) },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(text = conv.address.take(1).ifBlank { "?" })
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                conv.address,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (conv.unreadCount > 0) FontWeight.SemiBold
+                                else FontWeight.Normal,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                formatListTime(conv.lastDateMs),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                conv.lastBody,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (conv.unreadCount > 0) {
+                                Spacer(Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .background(UnreadRed, RoundedCornerShape(9.dp))
+                                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                                ) {
+                                    Text(
+                                        if (conv.unreadCount > 99) "99+" else "${conv.unreadCount}",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============ 会话详情 ============
+@Composable
+private fun ThreadDetailPage(
+    thread: SmsRepository.Conversation,
+    isDefault: Boolean,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var messages by remember { mutableStateOf<List<SmsRepository.ThreadMessage>?>(null) }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(thread.threadId) {
+        messages = withContext(Dispatchers.IO) {
+            SmsRepository.listThreadMessages(context, thread.threadId)
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // 顶栏
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+            }
+            Column {
+                Text(thread.address, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(
+                    "${thread.messageCount} 条消息",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        val msgList = messages
+        when {
+            msgList == null -> CenterHint("加载中…")
+            msgList.isEmpty() -> CenterHint("该会话暂无消息")
+            else -> {
+                LaunchedEffect(msgList.size) {
+                    if (msgList.isNotEmpty()) listState.scrollToItem(msgList.lastIndex)
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(msgList, key = { it.id }) { msg ->
+                        MessageBubble(msg)
+                    }
+                }
+                // 标记已读（仅默认身份可用）
+                if (isDefault && msgList.any { !it.read && it.type == 1 }) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Button(
+                            onClick = {
+                                val current = msgList
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        SmsRepository.markRead(
+                                            context, "thread_id = ?",
+                                            arrayOf(thread.threadId),
+                                        )
+                                    }
+                                    messages = current.map {
+                                        if (it.type == 1) it.copy(read = true) else it
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenOk),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                horizontal = 14.dp, vertical = 6.dp,
+                            ),
+                        ) {
+                            Text("标记全部已读", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============ 消息气泡 ============
+@Composable
+private fun MessageBubble(msg: SmsRepository.ThreadMessage) {
+    val fromMe = msg.type != 1 // 1=收件，其余（已发/失败/队列等）按发出侧展示
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (fromMe) Alignment.End else Alignment.Start,
+    ) {
+        Text(
+            text = timeFmtFull.format(Date(msg.dateMs)),
+            fontSize = 10.sp,
+            color = Color(0xFFA8ADB8),
+            modifier = Modifier.padding(bottom = 2.dp),
+        )
+        Box(
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .background(
+                    if (fromMe) BrandBlue else BubbleIn,
+                    RoundedCornerShape(
+                        topStart = 12.dp, topEnd = 12.dp,
+                        bottomStart = if (fromMe) 12.dp else 2.dp,
+                        bottomEnd = if (fromMe) 2.dp else 12.dp,
+                    ),
+                )
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = msg.body,
+                color = if (fromMe) Color.White else Color(0xFF303133),
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+            )
+        }
+    }
+}
+
+// ============ 通用 ============
+private fun formatListTime(dateMs: Long): String {
+    val cal = java.util.Calendar.getInstance()
+    val now = java.util.Calendar.getInstance()
+    cal.timeInMillis = dateMs
+    return if (now.get(java.util.Calendar.DAY_OF_YEAR) == cal.get(java.util.Calendar.DAY_OF_YEAR) &&
+        now.get(java.util.Calendar.YEAR) == cal.get(java.util.Calendar.YEAR)
+    ) {
+        timeFmtTime.format(Date(dateMs))
+    } else {
+        timeFmtDate.format(Date(dateMs))
+    }
+}
+
+@Composable
+private fun CenterHint(text: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+            lineHeight = 20.sp,
+        )
+    }
+}

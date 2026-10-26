@@ -235,6 +235,50 @@ Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，�
 
 ---
 
+## mark_sms_read 标记短信已读
+
+实现核心 `app/.../data/SmsRepository.kt`（写库）+ `SmsDefaultHelper.kt`
+（默认身份与切换）。借鉴 autoxClient `sms.js` 的弃用教训：**Android 4.4+
+写短信库（含 read 字段）要求「默认短信应用」身份**，仅 WRITE_SMS 权限会被
+一加/ColorOS 等 ROM 静默拒绝（update 返回 0，不抛异常）。
+
+### 默认短信应用身份
+
+- Bridge 已在 Manifest 声明**默认短信应用完整四组件**（autoxClient 正是
+  缺组件而无法成为候选）：
+  1. `SmsDeliverReceiver`（SMS_DELIVER，BROADCAST_SMS 权限）——收短信写库+本地通知；
+  2. `MmsReceiver`（WAP_PUSH_DELIVER，BROADCAST_WAP_PUSH）——彩信 PDU 落盘+通知（首期不解析）；
+  3. `ComposeSmsActivity`（ACTION_SENDTO sms:/smsto:）——其他 App 发短信入口；
+  4. `HeadlessSmsSendService`（RESPOND_VIA_MESSAGE，SEND_RESPOND_VIA_MESSAGE）——快捷回复。
+- 非默认时执行本命令：客户端拉起系统确认框（API 29+ RoleManager SMS 角色 /
+  旧版 ACTION_CHANGE_DEFAULT），回执失败并引导设备上选择 Bridge 后重新下发。
+- **切换必须用户确认**（系统安全设计，无静默 API）：每个方向各需设备上点一次。
+- 「原短信应用」包名在成为默认前的瞬间记录到本地（短信页加载/设为默认按钮/
+  本命令引导前三个时机），`restore` 切回时用 ACTION_CHANGE_DEFAULT 预选它。
+
+### 标记范围（mode 参数）
+
+| mode | selection | 说明 |
+|---|---|---|
+| `all_unread`（默认） | `read = 0` | 全部未读 |
+| `by_address` | `address = ?` | 精确匹配号码 |
+| `by_id` | `_id = ?` | 单条（0 行命中回执失败：可能已删除或已是已读） |
+| `before_date` | `date < ? AND read = 0` | `yyyy-MM-dd[ HH:mm[:ss]]` 本地时区 |
+
+### restore 切回
+
+`restore=true`（默认）且标记成功后：弹「切回原短信应用」确认框（预选记住的
+原包名）。连续批量下发多条时可关闭，避免每次都弹窗。
+
+### 与内置短信页的关系（v0.1.34）
+
+Bridge 主页「会话」Tab 即真实短信页（`ui/SmsPages.kt`）：会话列表（未读角标）
+↔ 会话详情（只读浏览 + 本地「标记全部已读」）+ 顶部快速切换状态条。读不需要
+默认身份；Bridge 为默认期间新短信由 SmsDeliverReceiver 写库（切回原短信
+App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通知补位）。
+
+---
+
 ## set_volume 调节音量
 
 实现核心 `app/.../data/VolumeController.kt`，借鉴 autoxClient `sys.js` 的三段兜底：

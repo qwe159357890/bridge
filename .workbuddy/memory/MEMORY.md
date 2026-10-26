@@ -53,6 +53,12 @@
 - **关键拍板**：① 截屏/录屏每次需设备端点「立即开始」（Android 14 系统限制，接受）；② 拍照只带 camera（前/后置）参数、默认静音、不做连拍；③ 弹窗做点击二次上报（`event=dialog_click` → result_message 追加 + SSE `command_interaction`）；④ check_update **服务器目录版不依赖 GitHub**——APK 放 `server/data/updates/`（文件名含版本号取最高，可选 update.json），release.py 下载后自动拷贝进去；⑤ 媒体文件自动清理（默认 100 条/7 天先到先触发，config.yaml `media.*`）。
 - **权威文档**：`docs/api/commands/{media,interact,system}.md`。核心组件：`MediaCaptureService`（mediaProjection|camera 双类型前台服务）+ `ScreenCaptureHolder`（consent/capture 通道）+ `OverlayDialog`（SAW 悬浮窗）。媒体查看页 `admin/src/views/media/index.vue`（文件端点鉴权支持 Bearer 或 `?token=`）。
 
+## 交互命令层（2026-10-26 定版）
+
+- **已落地**（v0.1.32 + v0.1.33）：show_toast / speak（TTS 播完回执）/ vibrate / show_dialog（悬浮窗+点击二次上报 event=dialog_click）/ **send_notification**（通知驱动角标）。
+- **send_notification 关键**：Android 无公开角标 API，角标=通知驱动（小米/华为/三星读 `Notification.number` 显数字，OPPO/vivo 红点；保活常驻通知不计角标）。framework `Notification.Builder` **无 setNumber，number 是 Notification 字段需 build() 后赋值**；固定 id 2001 覆盖式下发；sound 走双渠道（渠道声音属性创建后不可变）；clear 模式 cancel(2001)；通知权限未开启 → ACTION_APP_NOTIFICATION_SETTINGS 引导。
+- **权威文档**：`docs/api/commands/interact.md`。最新发布 APK：v0.1.33。
+
 ## 构建发布链路（2026-10-23）
 
 - **结论**：当前为**内部测试阶段**，用 **debug 签名**打包。全自动闭环：用户提供 1 个 GitHub PAT → AI 自动建仓库（GitHub API）→ push → 打 tag → GitHub Actions 打包 → 代理下载 APK 到本地 `releases/`。**用户除生成 PAT 外无需任何操作。**

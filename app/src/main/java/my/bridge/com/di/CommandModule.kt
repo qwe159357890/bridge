@@ -34,7 +34,9 @@ import my.bridge.com.data.ForegroundAppReader
 import my.bridge.com.data.NetworkReporter
 import my.bridge.com.data.PhoneDialer
 import my.bridge.com.data.SimHelper
+import my.bridge.com.data.SmsDefaultHelper
 import my.bridge.com.data.SmsReader
+import my.bridge.com.data.SmsRepository
 import my.bridge.com.data.SmsSender
 import my.bridge.com.data.VolumeController
 import my.bridge.com.interact.DeviceVibrator
@@ -154,6 +156,9 @@ object CommandModule {
         },
         Command.DIAL_PHONE to CommandExecutor { command ->
             executeDialPhone(context, command)
+        },
+        Command.MARK_SMS_READ to CommandExecutor { command ->
+            executeMarkSmsRead(context, command)
         },
         Command.SET_VOLUME to CommandExecutor { command ->
             executeSetVolume(context, command)
@@ -656,6 +661,111 @@ object CommandModule {
             Timber.e(e, "命令 send_sms 执行失败")
             CommandResult(id, name, false, "发送失败：${e.message}")
         }
+    }
+
+    /**
+     * 执行 mark_sms_read：批量把短信标记为已读。
+     *
+     * 系统限制（借鉴 references/autoxClient sms.js 的弃用教训）：Android 4.4+
+     * 写短信库（含 read 字段）要求「默认短信应用」身份，非默认时 update 静默
+     * 返回 0。因此：非默认 → 拉起系统确认框引导用户设置（Bridge 已声明完整
+     * 四组件，具备候选资格）并回执失败；默认 → update 生效。
+     * restore=true 时标记完成后弹「切回原短信应用」确认框（预选原包名）。
+     */
+    private fun executeMarkSmsRead(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+
+        if (!SmsReader.hasPermission(context)) {
+            return CommandResult(id, name, false, "设备未授予短信权限（READ_SMS），请打开 App 授权")
+        }
+        if (!SmsDefaultHelper.isDefault(context)) {
+            val launched = SmsDefaultHelper.launchBecomeDefault(context)
+            return CommandResult(
+                id, name, false,
+                if (launched) {
+                    "设备未将 Bridge 设为默认短信应用（Android 限制：写短信库需默认身份）。" +
+                        "已在设备上弹出确认框，请在设备上选择 Bridge，完成后重新下发本命令"
+                } else {
+                    "设备未将 Bridge 设为默认短信应用，且拉起设置框失败；" +
+                        "请在设备上打开 Bridge → 会话页手动「设为默认」后重试"
+                },
+            )
+        }
+
+        val mode = command.strParam("mode", "all_unread")
+        val smsId = command.strParam("sms_id", "")
+        val address = command.strParam("address", "")
+        val (selection, args): Pair<String, Array<String>> = when (mode) {
+            "by_id" -> {
+                if (smsId.isEmpty()) {
+                    return CommandResult(id, name, false, "mode=by_id 需要参数 sms_id（短信 ID）")
+                }
+                "_id = ?" to arrayOf(smsId)
+            }
+            "by_address" -> {
+                if (address.isEmpty()) {
+                    return CommandResult(id, name, false, "mode=by_address 需要参数 address（号码）")
+                }
+                "address = ?" to arrayOf(address)
+            }
+            "before_date" -> {
+                val raw = command.strParam("before_date", "")
+                val epoch = parseBeforeDate(raw)
+                if (epoch == null) {
+                    return CommandResult(
+                        id, name, false,
+                        "mode=before_date 需要参数 before_date，格式：2026-10-26 或 2026-10-26 12:30",
+                    )
+                }
+                "date < ? AND read = 0" to arrayOf(epoch.toString())
+            }
+            else -> "read = 0" to emptyArray() // all_unread（默认）
+        }
+
+        return try {
+            val affected = SmsRepository.markRead(context, selection, args)
+            var message = when (mode) {
+                "by_id" -> if (affected > 0) "短信 $smsId 已标记为已读"
+                          else "未找到该短信（可能已删除或已是已读）"
+                "by_address" -> "已将号码 $address 的 $affected 条短信标记为已读"
+                "before_date" -> "已将指定时间之前的 $affected 条未读短信标记为已读"
+                else -> if (affected > 0) "已将 $affected 条未读短信标记为已读"
+                       else "没有需要标记的未读短信"
+            }
+            if (mode == "by_id" && affected == 0) {
+                return CommandResult(id, name, false, message)
+            }
+
+            // restore：完成后引导切回原短信应用（需设备上再点一次确认）
+            val restore = command.boolParam("restore")
+            if (restore) {
+                message += if (SmsDefaultHelper.launchRestorePrevious(context)) {
+                    "；已在设备上弹出「切回原短信应用」确认框，请确认"
+                } else {
+                    "；如需切回原短信应用，请在设备上打开 Bridge → 会话页操作"
+                }
+            }
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 mark_sms_read 执行失败")
+            CommandResult(id, name, false, "标记失败：${e.message}")
+        }
+    }
+
+    /** "yyyy-MM-dd[ HH:mm[:ss]]" → epoch 毫秒（本地时区）；非法返回 null。 */
+    private fun parseBeforeDate(raw: String): Long? = try {
+        val trimmed = raw.trim()
+        val fmt = when (trimmed.length) {
+            10 -> java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            16 -> java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+            else -> java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+        }
+        fmt.isLenient = false
+        fmt.parse(trimmed)?.time
+    } catch (e: Exception) {
+        null
     }
 
     /**

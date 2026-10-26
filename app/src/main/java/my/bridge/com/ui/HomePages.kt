@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,59 +28,8 @@ import androidx.compose.ui.unit.dp
 import timber.log.Timber
 
 // ============ 会话列表 ============
-private data class ChatItem(val name: String, val desc: String, val time: String, val icon: String)
-
-private val chats = listOf(
-    ChatItem("产品研发群", "张三：新版界面框架评审", "10:24", "产"),
-    ChatItem("李四", "保活模块集成进度同步", "09:58", "李"),
-    ChatItem("王五", "[文件] release-pipeline.md", "昨天", "王"),
-    ChatItem("系统通知", "构建发布 v0.1.1 已完成", "昨天", "系"),
-    ChatItem("赵六", "好的，收到", "周二", "赵"),
-    ChatItem("Bridge 团队", "孙七：明天评审记得参加", "周一", "B"),
-)
-
-@Composable
-fun ChatList() {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        item { SectionTitle("消息") }
-        items(chats) { chat ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { Timber.d("打开会话：${chat.name}") },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Avatar(text = chat.icon)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(chat.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            chat.desc,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Text(
-                        chat.time,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
+// 真实短信会话（读取系统短信库 + 默认短信应用快速切换），实现见 SmsPages.kt。
+// 旧版假数据骨架已由 v0.1.34 的内置短信页替换。
 
 // ============ 通讯录 ============
 private data class ContactItem(val name: String, val role: String, val icon: String)

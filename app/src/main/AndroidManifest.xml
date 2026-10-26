@@ -171,6 +171,62 @@
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+        <!-- ===================== 默认短信应用四组件（官方规范声明） =====================
+             满足系统 SMS 角色资格（RoleManager 候选），用户确认后 Bridge 可成为
+             默认短信应用（mark_sms_read 写短信库 / 内置短信页收信的前提）。 -->
+        <!-- 收短信：SMS_DELIVER 仅投给默认应用 → 写库 + 本地通知 -->
+        <receiver
+            android:name="my.bridge.com.sms.SmsDeliverReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_DELIVER" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 彩信推送：首期只存原始 PDU + 通知（不解析） -->
+        <receiver
+            android:name="my.bridge.com.sms.MmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 编写入口：其他 App 的 sms:/smsto: 链接落到这里 -->
+        <activity
+            android:name="my.bridge.com.sms.ComposeSmsActivity"
+            android:exported="true"
+            android:taskAffinity="my.bridge.com.sms.compose"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </activity>
+
+        <!-- 快捷回复：通知栏/来电界面「回复」按钮的静默发送通道 -->
+        <service
+            android:name="my.bridge.com.sms.HeadlessSmsSendService"
+            android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
+
     </application>
 
 </manifest>

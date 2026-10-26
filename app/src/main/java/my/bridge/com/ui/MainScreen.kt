@@ -131,7 +131,7 @@ fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
             onTabChange = onTabChange,
         )
         when (currentTab) {
-            0 -> ChatList()
+            0 -> SmsConversationsPage() // 真实短信页（v0.1.34，原假数据骨架）
             1 -> ContactList()
             2 -> DiscoverList()
         }
