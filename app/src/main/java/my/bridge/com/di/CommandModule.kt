@@ -79,7 +79,9 @@ object CommandModule {
         @ApplicationContext context: Context,
         deviceStore: DeviceStore,
         apiClient: BridgeApiClient,
-        webSocketClient: BridgeWebSocketClient,
+        // dagger.Lazy 断依赖环：BridgeWebSocketClient 构造需要本执行器表，
+        // 执行器表只在弹窗点击回调时才真正取用 client（运行期已装配完成）
+        webSocketClient: dagger.Lazy<BridgeWebSocketClient>,
     ): Map<String, CommandExecutor> = mapOf(
         Command.UPLOAD_LOG to CommandExecutor { command ->
             executeUploadLog(context, deviceStore, apiClient, command)
@@ -180,7 +182,7 @@ object CommandModule {
             executeVibrate(context, command)
         },
         Command.SHOW_DIALOG to CommandExecutor { command ->
-            executeShowDialog(context, webSocketClient, command)
+            executeShowDialog(context, webSocketClient::get, command)
         },
         Command.CHECK_UPDATE to CommandExecutor { command ->
             executeCheckUpdate(context, deviceStore, apiClient, command)
@@ -1140,7 +1142,7 @@ object CommandModule {
      */
     private fun executeShowDialog(
         context: Context,
-        webSocketClient: BridgeWebSocketClient,
+        webSocketClient: () -> BridgeWebSocketClient,
         command: Command,
     ): CommandResult {
         val id = command.commandId
@@ -1168,7 +1170,12 @@ object CommandModule {
                     addProperty("command_id", command.commandId)
                     addProperty("command", command.command)
                 }
-                val sent = webSocketClient.sendBusinessMessage(data)
+                val sent = try {
+                    webSocketClient().sendBusinessMessage(data)
+                } catch (e: Exception) {
+                    Timber.w(e, "弹窗点击上报失败（连接未就绪）")
+                    false
+                }
                 Timber.i("show_dialog 用户点击确认（二次上报 sent=%s）", sent)
             }
             if (error != null) {
