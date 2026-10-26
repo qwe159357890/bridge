@@ -32,6 +32,9 @@
       <span>坐标：{{ record.latitude.toFixed(6) }}, {{ record.longitude.toFixed(6) }}</span>
       <span>来源：{{ record.provider || '-' }}</span>
       <span>误差：±{{ Math.round(record.accuracy) }}m</span>
+      <span v-if="record.speed != null">
+        速度：{{ record.speed.toFixed(1) }} m/s{{ record.speed > 0 ? `（${(record.speed * 3.6).toFixed(1)} km/h）` : '' }}
+      </span>
       <span v-if="record.report_count > 1">该点累计上报 {{ record.report_count }} 次</span>
     </div>
   </el-card>
@@ -177,6 +180,9 @@ function buildInfoContent(): string {
     address.value ? `<div>地址：${escapeHtml(address.value)}</div>` : '',
     `<div>坐标：${r.latitude.toFixed(6)}, ${r.longitude.toFixed(6)}</div>`,
     `<div>来源：${r.provider || '-'}　误差：±${Math.round(r.accuracy)}m</div>`,
+    r.speed != null
+      ? `<div>速度：${r.speed.toFixed(1)} m/s${r.speed > 0 ? `（${(r.speed * 3.6).toFixed(1)} km/h）` : ''}</div>`
+      : '',
     `<div>时间：${r.last_fix_time}</div>`,
   ]
   return `<div class="loc-iw">${rows.filter(Boolean).join('')}</div>`

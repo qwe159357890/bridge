@@ -37,13 +37,29 @@ import java.util.concurrent.atomic.AtomicBoolean
 object UpdateManager {
 
     /** 流程阶段（防重复触发与 UI 展示共用）。 */
-    enum class Phase { IDLE, DOWNLOADING, WAITING_INSTALL }
+    enum class Phase { IDLE, CHECKING, DOWNLOADING, WAITING_INSTALL }
 
     private val busy = AtomicBoolean(false)
 
     /** 当前阶段（volatile 读，供 UI/命令判断）。 */
     @Volatile
     var phase: Phase = Phase.IDLE
+        private set
+
+    // 下载实时进度（volatile 供 UI 轮询读取；仅在 DOWNLOADING 阶段有意义）
+    /** 下载百分比（0~100）；-1 = 总大小未知（不确定式进度）。 */
+    @Volatile
+    var downloadPct: Int = -1
+        private set
+
+    /** 已下载字节数。 */
+    @Volatile
+    var downloadReadBytes: Long = 0
+        private set
+
+    /** 下载总字节数（未知为 0）。 */
+    @Volatile
+    var downloadTotalBytes: Long = 0
         private set
 
     /** Hilt 依赖入口（从 App 上下文现取，见类注释）。 */
@@ -70,12 +86,13 @@ object UpdateManager {
         // 原子锁：下载/安装中再次触发直接拒绝（防连点、防重复下发并发下载）
         if (!busy.compareAndSet(false, true)) {
             return when (phase) {
+                Phase.CHECKING -> "正在检查服务器版本，请稍候"
                 Phase.DOWNLOADING -> "更新包正在下载中，请稍候（通知栏有进度）"
                 Phase.WAITING_INSTALL -> "更新包已就绪，请在安装页确认安装；或先取消安装再重试"
                 else -> "更新任务进行中，请稍候"
             }
         }
-        phase = Phase.DOWNLOADING
+        phase = Phase.CHECKING
         try {
             val d = deps(context)
             val deviceId = d.deviceStore().deviceId()
@@ -87,6 +104,7 @@ object UpdateManager {
                 d.apiClient().getLatestUpdate(deviceId, token, current)
             } catch (e: Exception) {
                 Timber.e(e, "检查更新失败")
+                phase = Phase.IDLE
                 return "检查更新失败：${e.message}"
             }
             if (!latest.found) return "服务器暂无更新包（updates 目录为空），当前版本 v$current"
@@ -97,11 +115,16 @@ object UpdateManager {
             if (target.isFile && target.length() == latest.size_bytes && latest.size_bytes > 0) {
                 Timber.i("更新包缓存命中：%s", target.name)
             } else {
+                phase = Phase.DOWNLOADING
+                downloadPct = -1
+                downloadReadBytes = 0
+                downloadTotalBytes = latest.size_bytes
                 try {
                     download(context, d.apiClient(), deviceId, token, latest.filename, target, latest.size_bytes)
                 } catch (e: Exception) {
                     Timber.e(e, "更新包下载失败")
                     target.delete() // 清掉半截文件
+                    phase = Phase.IDLE
                     return "更新包下载失败：${e.message}"
                 }
             }
@@ -162,6 +185,9 @@ object UpdateManager {
                         if (n < 0) break
                         output.write(buf, 0, n)
                         read += n
+                        // 实时进度（UI 轮询读取，每次都写；volatile 写代价可忽略）
+                        downloadReadBytes = read
+                        downloadPct = if (totalBytes > 0) (read * 100 / totalBytes).toInt() else -1
                         // 进度通知节流：每 5% 或每 500ms 刷一次
                         val now = System.currentTimeMillis()
                         val pct = if (totalBytes > 0) (read * 100 / totalBytes).toInt() else -1

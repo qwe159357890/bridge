@@ -155,6 +155,12 @@ python scripts/gh_api.py --repo qwe159357890/bridge download ./releases --match 
     "https://v4.gh-proxy.org/https://github.com/{owner}/{repo}/releases/download/v0.1.6/app-debug.apk"
   ```
   下载后对比 `stat -c%s` 与 Release asset 的 `size` 字段做完整性校验。
+- **dispatch 注意**：`dispatch release.yml vX` 应指定 **tag ref**（`github.ref` = `refs/tags/vX` 时
+  softprops 才必然执行 Create Release）。2026-10-26 实测即使用 `ref=main` dispatch，
+  workflow 也在构建完成时自行创建了 Release 并上传 `app-debug.apk`（github-actions[bot]）。
+- **应急下载路径**（仅当 Release 缺失、git 协议全断时）：artifact zip 经
+  `GET /actions/artifacts/{id}/zip` 会 302 到 Azure blob 签名地址——**直接下载签名地址**
+  可行（blob 域名不在被 reset 名单），api.github.com 的 zip 端点本身仍会 SIGTERM。
 
 ### 验证改动真的编进 APK
 

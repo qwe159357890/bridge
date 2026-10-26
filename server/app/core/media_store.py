@@ -22,7 +22,7 @@ import pymysql
 logger = logging.getLogger(__name__)
 
 # 允许入库的扩展名白名单（与客户端上传类型对应）
-MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4"}
+MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".m4a"}
 
 
 class MediaStore:

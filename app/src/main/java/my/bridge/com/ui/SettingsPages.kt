@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -37,6 +38,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import my.bridge.com.BuildConfig
 import my.bridge.com.access.BridgeAccessibilityService
@@ -522,6 +525,9 @@ fun AboutPage() {
         val scope = rememberCoroutineScope()
         var updateMessage by remember { mutableStateOf("检查服务器是否有新版本，自动下载并弹出安装页") }
         var updating by remember { mutableStateOf(false) }
+        // 阶段文案与下载进度（轮询 UpdateManager 的 volatile 状态，150ms 一次足够顺滑）
+        var updateStage by remember { mutableStateOf("") }
+        var updatePct by remember { mutableStateOf(-2) } // -2=不显示进度条 -1=不确定式 0..100=确定式
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -538,17 +544,64 @@ fun AboutPage() {
                         if (updating) return@Button
                         updating = true
                         scope.launch {
+                            // 阶段轮询：检查中 / 下载中（带真实百分比）/ 拉安装页
+                            val poll = launch {
+                                while (isActive) {
+                                    when (my.bridge.com.update.UpdateManager.phase) {
+                                        my.bridge.com.update.UpdateManager.Phase.CHECKING -> {
+                                            updateStage = "正在检查服务器版本…"
+                                            updatePct = -2
+                                        }
+                                        my.bridge.com.update.UpdateManager.Phase.DOWNLOADING -> {
+                                            val m = my.bridge.com.update.UpdateManager
+                                            val pct = m.downloadPct
+                                            updateStage = if (pct >= 0) {
+                                                "正在下载更新… $pct%%（%.1f / %.1f MB）".format(
+                                                    m.downloadReadBytes / 1048576.0,
+                                                    m.downloadTotalBytes / 1048576.0,
+                                                )
+                                            } else {
+                                                "正在下载更新… %.1f MB".format(m.downloadReadBytes / 1048576.0)
+                                            }
+                                            updatePct = pct
+                                        }
+                                        my.bridge.com.update.UpdateManager.Phase.WAITING_INSTALL -> {
+                                            updateStage = "更新包就绪，正在拉起安装页…"
+                                            updatePct = -2
+                                        }
+                                        else -> {}
+                                    }
+                                    delay(150)
+                                }
+                            }
                             updateMessage = try {
                                 my.bridge.com.update.UpdateManager.checkAndInstall(context)
                             } catch (e: Exception) {
                                 "检查更新失败：${e.message}"
                             }
+                            poll.cancel()
                             updating = false
                         }
                     },
                     enabled = !updating,
                 ) {
-                    Text(if (updating) "更新处理中…" else "检查更新")
+                    Text(if (updating) (updateStage.ifBlank { "更新处理中…" }) else "检查更新")
+                }
+                if (updating && updatePct != -2) {
+                    if (updatePct in 0..100) {
+                        LinearProgressIndicator(
+                            progress = { updatePct / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp),
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp),
+                        )
+                    }
                 }
                 Text(
                     text = updateMessage,

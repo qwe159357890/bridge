@@ -234,7 +234,15 @@
             <!-- 布局要点：不能用 show-overflow-tooltip（整格裁切会把「查看」按钮
                  一起裁没），文字自行省略、按钮 flex-shrink:0 恒可见 -->
             <div class="receipt-cell">
-              <span class="receipt-text">{{ row.result_message || '-' }}</span>
+              <!-- 文字超宽时悬停看全文（不能用 show-overflow-tooltip：整格裁切会连「查看」一起裁没） -->
+              <el-tooltip
+                :content="row.result_message || '-'"
+                placement="top"
+                :show-after="300"
+                :disabled="!(row.result_message && row.result_message.length > 24)"
+              >
+                <span class="receipt-text">{{ row.result_message || '-' }}</span>
+              </el-tooltip>
               <el-button
                 v-if="mediaFilenameOf(row)"
                 size="small"
