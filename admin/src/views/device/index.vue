@@ -159,11 +159,28 @@
       </div>
 
       <el-radio-group v-model="adbMode" style="margin-bottom: 14px">
-        <el-radio-button value="wifi">WiFi 无线调试（推荐）</el-radio-button>
-        <el-radio-button value="direct">已用数据线连接</el-radio-button>
+        <el-radio-button value="auto">自动发现（推荐）</el-radio-button>
+        <el-radio-button value="wifi">WiFi 无线调试</el-radio-button>
       </el-radio-group>
 
-      <template v-if="adbMode === 'wifi'">
+      <template v-if="adbMode === 'auto'">
+        <el-alert type="success" :closable="false" style="margin-bottom: 12px">
+          <p style="margin: 0">
+            adb 已有连着的设备（<b>数据线插入</b>或<b>自动发现的无线设备</b>都算），<b>无需填写任何内容</b>，
+            只连了一台时直接点下方「连接并开启」即可。
+          </p>
+        </el-alert>
+        <el-form label-width="140px">
+          <el-form-item label="手机 IP（可选）">
+            <el-input
+              v-model="adbIp"
+              placeholder="仅连接多台手机需要区分时填写"
+              clearable
+            />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template v-else>
         <el-alert type="warning" :closable="false" style="margin-bottom: 12px">
           <p style="margin: 0">
             自动发现失败时用这条路兜底：手机开「无线调试」后填主界面显示的端口
@@ -217,23 +234,6 @@
               />
             </el-form-item>
           </template>
-        </el-form>
-      </template>
-      <template v-else>
-        <el-alert type="success" :closable="false" style="margin-bottom: 12px">
-          <p style="margin: 0">
-            adb 已有连着的设备（数据线插入或自动发现的无线设备都算），<b>无需填写任何内容</b>，
-            只连了一台时直接点下方「连接并开启」即可。
-          </p>
-        </el-alert>
-        <el-form label-width="140px">
-          <el-form-item label="手机 IP（可选）">
-            <el-input
-              v-model="adbIp"
-              placeholder="仅连接多台手机需要区分时填写"
-              clearable
-            />
-          </el-form-item>
         </el-form>
       </template>
 
@@ -359,12 +359,13 @@ async function handleDisconnect(device: Device) {
 
 /**
  * ADB 一键开启无障碍（借鉴 autox 的 WRITE_SECURE_SETTINGS 方案）：
- * 打开弹窗，支持两种模式——WiFi（填 IP/端口/配对码，服务端自动 pair+connect+
- * 授权+开启）与直接执行（已有 USB/已 connect 的设备）。
+ * 打开弹窗，支持两种模式——自动发现（adb 已连设备：数据线或已配对的无线
+ * 都算，无需填写）与 WiFi 无线调试（填 IP/端口/配对码，服务端自动
+ * pair+connect+授权+开启，自动发现失败时的兜底）。
  */
 const adbVisible = ref(false)
 const adbDevice = ref<Device | null>(null)
-const adbMode = ref<'wifi' | 'direct'>('wifi')
+const adbMode = ref<'auto' | 'wifi'>('auto')
 const adbIp = ref('')
 const adbConnectPort = ref<number | undefined>()
 const adbPairPort = ref<number | undefined>()
@@ -386,10 +387,10 @@ async function loadNetInfo(deviceId: string) {
   adbNetInfo.value = null
   try {
     adbNetInfo.value = await getDeviceNetInfo(deviceId)
-    // adb 已有连着的设备（USB 线 / mDNS 自动发现的无线设备都算）→ 自动切到
-    // 「直接执行」模式：用户什么都不用填，选 WiFi + 填端口只是自动发现失败时的兜底
+    // adb 已有连着的设备（USB 线 / mDNS 自动发现的无线设备都算）→ 停在
+    // 「自动发现」模式：用户什么都不用填；WiFi 手动模式只是发现失败时的兜底
     if (adbNetInfo.value.adb_devices.length > 0) {
-      adbMode.value = 'direct'
+      adbMode.value = 'auto'
     }
   } catch {
     /* 拉取失败不打断流程，弹窗仍可用 */
@@ -398,7 +399,7 @@ async function loadNetInfo(deviceId: string) {
 
 function handleAdbAccessibility(device: Device) {
   adbDevice.value = device
-  adbMode.value = 'wifi'
+  adbMode.value = 'auto'
   adbIp.value = ''
   adbConnectPort.value = undefined
   adbPairPort.value = undefined
@@ -435,6 +436,7 @@ async function runAdb() {
         ip: adbIp.value.trim() || undefined,
       })
     } else {
+      // 自动发现模式：数据线 / 已配对无线均走此端点（服务端按 IP 匹配设备）
       res = await adbEnableAccessibility(device.device_id, adbIp.value.trim() || undefined)
     }
   } catch (e) {

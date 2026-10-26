@@ -300,7 +300,10 @@ const sending = ref(false)
 // 不用再切到媒体文件页找。文件名从回执消息提取（上传回执格式固定含 filename），
 // 按 device_id + filename 在媒体列表里反查记录 id，再拼带 token 的文件 URL。
 // ---------------------------------------------------------------------------
-const MEDIA_FILE_RE = /((?:screenshot|screen|photo)_\d+\.(?:jpg|mp4))/
+// 媒体文件名两种形态：
+// ① 服务端重命名（上传落盘后的正式名，回执消息里就是这个）：20261026_210709_549381_screen_record.mp4
+// ② 客户端原始名（老回执兜底）：screen_1729980000000.mp4
+const MEDIA_FILE_RE = /((?:\d{8}_\d{6}_\d+_(?:screenshot|photo|screen_record)|(?:screenshot|photo|screen)_\d+)\.(?:jpg|mp4))/
 
 function mediaFilenameOf(row: CommandRecord): string | null {
   if (row.status !== 'success' || !row.result_message) return null
