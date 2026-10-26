@@ -20,7 +20,7 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.1.35"
+        versionName = "0.1.36"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

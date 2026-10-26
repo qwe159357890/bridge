@@ -94,25 +94,31 @@ fun SmsConversationsPage() {
     }
     var openThread by remember { mutableStateOf<SmsRepository.Conversation?>(null) }
     var refreshKey by remember { mutableIntStateOf(0) }
-    // 当前 launcher 拉起的是「设为默认」还是「切回」，用于结果回执提示
-    var pendingBecome by remember { mutableStateOf(false) }
+    // 当前 launcher 拉起的请求类型：true=设为默认 / false=切回原应用 / null=无
+    var pendingRequest by remember { mutableStateOf<Boolean?>(null) }
 
-    // 系统确认框结果回调：按实际身份给反馈（canceled 不再静默）
+    // 系统确认框结果回调：按「请求类型 + 实际身份」给反馈，杜绝含糊提示
     val roleLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         val became = SmsDefaultHelper.isDefault(context)
         isDefault = became
-        when {
-            pendingBecome && became ->
+        when (pendingRequest) {
+            true -> if (became) {
                 toast(context, "已设为默认短信应用")
-            pendingBecome && !became ->
+            } else {
                 toast(context, "未完成设置（已取消），标记已读/未读仍不可用")
-            !pendingBecome && !became ->
+            }
+            false -> if (!became) {
                 toast(context, "已切回原短信应用")
-            else -> toast(context, "切换完成")
+            } else {
+                // 切回未生效（部分 ROM 屏蔽了 ACTION_CHANGE_DEFAULT 确认框，
+                // 静默返回）：降级打开系统「默认应用」设置页引导手动切回
+                fallbackToDefaultAppsSettings(context)
+            }
+            null -> Unit
         }
-        pendingBecome = false
+        pendingRequest = null
         refreshKey++
     }
 
@@ -121,11 +127,11 @@ fun SmsConversationsPage() {
             toast(context, if (becoming) "设备不支持设置默认短信应用" else "未记录原短信应用")
             return
         }
-        pendingBecome = becoming
+        pendingRequest = becoming
         try {
             roleLauncher.launch(intent)
         } catch (e: Exception) {
-            pendingBecome = false
+            pendingRequest = null
             toast(context, "拉起系统设置失败：${e.message}")
         }
     }
@@ -208,6 +214,20 @@ fun SmsConversationsPage() {
 
 private fun toast(context: android.content.Context, text: String) {
     android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
+}
+
+/** 切回原短信应用失败时的降级：打开系统「默认应用」设置页引导手动切换。 */
+private fun fallbackToDefaultAppsSettings(context: android.content.Context) {
+    try {
+        context.startActivity(
+            android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS,
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        toast(context, "该系统不支持一键切回，请在「默认应用→短信应用」中选回原应用")
+    } catch (e: Exception) {
+        toast(context, "切回未生效，请到 系统设置→应用→默认应用→短信应用 手动切换")
+    }
 }
 
 // ============ 状态条 ============

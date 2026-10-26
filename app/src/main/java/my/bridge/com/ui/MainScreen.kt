@@ -1,5 +1,6 @@
 package my.bridge.com.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,8 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
@@ -21,14 +24,18 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,15 +46,48 @@ private val InactiveColor = Color(0xFF8A919F)
 
 /**
  * 应用主界面：底部导航（主页 / 设置）+ 各页二级 Tab。
- * 当前为界面骨架实现，内容为假数据，仅展示界面结构与交互。
+ *
+ * 返回键全局策略（v0.1.36）：
+ * - 非首 tab（通讯录/发现/连接/保活/关于）→ 切回当前页首 tab；
+ * - 首 tab 第 1 次按 → 底部冒泡提醒「再按一次返回退出」；2 秒内再按 → 退出应用；
+ * - 二级页面（短信会话详情）由页内 BackHandler 处理（注册更晚，优先级更高）；
+ * - 页内弹窗（material3 AlertDialog）系统默认返回键关闭，无需处理。
  */
 @Composable
 fun MainScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     // 底部导航当前选中项
     var selectedBottom by rememberSaveable { mutableIntStateOf(0) }
     // 各页二级 Tab 当前选中项
     var homeTab by rememberSaveable { mutableIntStateOf(0) }
     var settingsTab by rememberSaveable { mutableIntStateOf(0) }
+    // 退出提醒冒泡 + 二次退出时间窗
+    var showExitHint by remember { mutableStateOf(false) }
+    var lastBackAt by remember { mutableLongStateOf(0L) }
+
+    // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），
+    // 这样页内 BackHandler（短信详情）在其启用时优先接管
+    BackHandler {
+        val onLanding = if (selectedBottom == 0) homeTab == 0 else settingsTab == 0
+        if (!onLanding) {
+            // 非首 tab：切回当前页的首 tab
+            if (selectedBottom == 0) homeTab = 0 else settingsTab = 0
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - lastBackAt < 2000) {
+                (context as? android.app.Activity)?.finishAffinity()
+            } else {
+                lastBackAt = now
+                showExitHint = true
+            }
+        }
+    }
+    LaunchedEffect(showExitHint) {
+        if (showExitHint) {
+            kotlinx.coroutines.delay(2000)
+            showExitHint = false
+        }
+    }
 
     Column(
         modifier = modifier
@@ -64,6 +104,26 @@ fun MainScreen(modifier: Modifier = Modifier) {
             when (selectedBottom) {
                 0 -> HomePage(currentTab = homeTab, onTabChange = { homeTab = it })
                 1 -> SettingsPage(currentTab = settingsTab, onTabChange = { settingsTab = it })
+            }
+            // 退出提醒冒泡（内容区底部居中，自动 2 秒消失）
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showExitHint,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
+                enter = androidx.compose.animation.fadeIn() +
+                    androidx.compose.animation.slideInVertically { it / 2 },
+                exit = androidx.compose.animation.fadeOut() +
+                    androidx.compose.animation.slideOutVertically { it / 2 },
+            ) {
+                Text(
+                    "再按一次返回退出 Bridge",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .background(Color(0xCC303133), RoundedCornerShape(20.dp))
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                )
             }
         }
         // 底部导航
