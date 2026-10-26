@@ -27,6 +27,7 @@ from app.core.contacts_store import build_contacts_store
 from app.core.sms_store import build_sms_store
 from app.core.calllog_store import build_calllog_store
 from app.core.sim_store import build_sim_store
+from app.core.media_store import build_media_store
 from app.core.log_store import LogStore
 from app.core.music_state_store import MusicStateStore
 from app.models.connection import Connection
@@ -95,6 +96,16 @@ def create_app() -> FastAPI:
     calllog_store = build_calllog_store(settings.locations.mysql)
     sim_store = build_sim_store(settings.locations.mysql)
 
+    # 媒体文件存储：元数据走同一 MySQL，文件本体按 media.dir 落盘
+    from pathlib import Path as _Path
+
+    _media_dir = _Path(settings.media.dir)
+    if not _media_dir.is_absolute():
+        _media_dir = _Path(__file__).resolve().parent.parent / _media_dir  # app/main.py -> server 根
+    media_store = build_media_store(
+        settings.locations.mysql, _media_dir, settings.media.max_count, settings.media.max_age_days,
+    )
+
     # 注入 app.state，供端点使用
     app.state.settings = settings
     app.state.connection_manager = manager
@@ -110,6 +121,7 @@ def create_app() -> FastAPI:
     app.state.sms_store = sms_store
     app.state.calllog_store = calllog_store
     app.state.sim_store = sim_store
+    app.state.media_store = media_store
 
     # 启动时预连位置存储（MySQL 不可达不阻塞启动，端点层报 503 兜底）
     @app.on_event("startup")
@@ -122,6 +134,7 @@ def create_app() -> FastAPI:
             sms_store.connect()
             calllog_store.connect()
             sim_store.connect()
+            media_store.connect()
 
         try:
             await asyncio.get_event_loop().run_in_executor(None, _connect_all)
@@ -136,6 +149,7 @@ def create_app() -> FastAPI:
         sms_store.close()
         calllog_store.close()
         sim_store.close()
+        media_store.close()
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)

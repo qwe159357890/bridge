@@ -34,29 +34,29 @@
 | `get_network` | 获取网络状态 | [data.md#get_network-获取网络状态](data.md#get_network-获取网络状态) |
 | `get_battery` | 获取电量 | [data.md#get_battery-获取电量](data.md#get_battery-获取电量) |
 
-## 🎬 media（音视频）→ media.md（按需创建）
+## 🎬 media（音视频）→ [media.md](media.md)
 
 | 命令 | 中文名 | 文档 |
 |---|---|---|
-| `screenshot` | 截屏 | — |
-| `record_screen` | 录屏 | — |
-| `take_photo` | 拍照 | — |
+| `screenshot` | 截屏 | [media.md#screenshot-截屏](media.md#screenshot-截屏) |
+| `record_screen` | 录屏 | [media.md#record_screen-录屏](media.md#record_screen-录屏) |
+| `take_photo` | 拍照 | [media.md#take_photo-拍照](media.md#take_photo-拍照) |
 
-## 💬 interact（交互）→ interact.md（按需创建）
+## 💬 interact（交互）→ [interact.md](interact.md)
 
 | 命令 | 中文名 | 文档 |
 |---|---|---|
-| `show_toast` | 弹提示 | — |
-| `speak` | 语音播报 | — |
-| `vibrate` | 震动 | — |
-| `show_dialog` | 弹窗 | — |
+| `show_toast` | 弹提示 | [interact.md#show_toast-弹提示](interact.md#show_toast-弹提示) |
+| `speak` | 语音播报 | [interact.md#speak-语音播报](interact.md#speak-语音播报) |
+| `vibrate` | 震动 | [interact.md#vibrate-震动](interact.md#vibrate-震动) |
+| `show_dialog` | 弹窗 | [interact.md#show_dialog-弹窗](interact.md#show_dialog-弹窗) |
 
-## ⚙️ system（系统）→ system.md（按需创建）
+## ⚙️ system（系统）→ [system.md](system.md)
 
 | 命令 | 中文名 | 文档 |
 |---|---|---|
 | `upload_log` | 上传日志 | [../ws-client.md](../ws-client.md) §五/§七（命令框架 + 日志上传） |
-| `check_update` | 检查更新 | — |
+| `check_update` | 检查更新 | [system.md#check_update-检查更新服务器目录版不依赖-github](system.md#check_update-检查更新服务器目录版不依赖-github) |
 
 ---
 

@@ -6,18 +6,22 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.io.File
+import java.util.concurrent.TimeUnit
 import my.bridge.com.core.common.DiagLog
 import my.bridge.com.core.network.api.BridgeApi
 import my.bridge.com.core.network.api.BridgeApiClient
+import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import my.bridge.com.core.network.ws.Command
 import my.bridge.com.core.network.ws.CommandExecutor
 import my.bridge.com.core.network.ws.CommandResult
@@ -33,8 +37,18 @@ import my.bridge.com.data.SimHelper
 import my.bridge.com.data.SmsReader
 import my.bridge.com.data.SmsSender
 import my.bridge.com.data.VolumeController
+import my.bridge.com.interact.DeviceVibrator
+import my.bridge.com.interact.OverlayDialog
+import my.bridge.com.interact.ToastHelper
+import my.bridge.com.interact.TtsSpeaker
 import my.bridge.com.location.LocationHelper
+import my.bridge.com.media.MediaCaptureService
+import my.bridge.com.media.ProjectionConsentActivity
+import my.bridge.com.media.ScreenCaptureHolder
 import my.bridge.com.media.MusicPlayer
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import retrofit2.HttpException
 import timber.log.Timber
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +79,7 @@ object CommandModule {
         @ApplicationContext context: Context,
         deviceStore: DeviceStore,
         apiClient: BridgeApiClient,
+        webSocketClient: BridgeWebSocketClient,
     ): Map<String, CommandExecutor> = mapOf(
         Command.UPLOAD_LOG to CommandExecutor { command ->
             executeUploadLog(context, deviceStore, apiClient, command)
@@ -145,6 +160,30 @@ object CommandModule {
         },
         Command.RESTART_APP to CommandExecutor { command ->
             executeRestartApp(context, command)
+        },
+        Command.SCREENSHOT to CommandExecutor { command ->
+            executeProjectionCapture(context, deviceStore, apiClient, command, MediaCaptureService.MODE_SCREENSHOT)
+        },
+        Command.RECORD_SCREEN to CommandExecutor { command ->
+            executeProjectionCapture(context, deviceStore, apiClient, command, MediaCaptureService.MODE_RECORD)
+        },
+        Command.TAKE_PHOTO to CommandExecutor { command ->
+            executeTakePhoto(context, deviceStore, apiClient, command)
+        },
+        Command.SHOW_TOAST to CommandExecutor { command ->
+            executeShowToast(context, command)
+        },
+        Command.SPEAK to CommandExecutor { command ->
+            executeSpeak(context, command)
+        },
+        Command.VIBRATE to CommandExecutor { command ->
+            executeVibrate(context, command)
+        },
+        Command.SHOW_DIALOG to CommandExecutor { command ->
+            executeShowDialog(context, webSocketClient, command)
+        },
+        Command.CHECK_UPDATE to CommandExecutor { command ->
+            executeCheckUpdate(context, deviceStore, apiClient, command)
         },
     )
 
@@ -837,6 +876,349 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 get_battery 执行失败")
             CommandResult(id, name, false, e.message ?: "读取电池状态失败")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 媒体采集类命令（screenshot / record_screen / take_photo）
+    //
+    // 共同形态：采集 → 产物落 App 私有 media/ 目录 → multipart 上传服务端 → 回执。
+    // 截屏/录屏需设备端用户点一次「立即开始」（MediaProjection 系统限制，
+    // Android 14 起授权一次性有效，无法跨命令复用）。
+    // ------------------------------------------------------------------
+
+    /** 采集等待常量：授权最长等 90 秒，单帧采集等 20 秒。 */
+    private const val CONSENT_TIMEOUT_MS = 90_000L
+    private const val CAPTURE_TIMEOUT_MS = 20_000L
+
+    /**
+     * 执行 screenshot / record_screen：投屏授权 → 前台服务采集 → 上传。
+     *
+     * @param params.duration 录制秒数 3~60（仅 record_screen，默认 10）
+     *
+     * ① 弹系统投屏授权框（透明 Activity），90 秒内未确认回执失败；
+     * ② 授权后启动 [MediaCaptureService]（mediaProjection 类型前台服务）采集；
+     * ③ 产物 multipart 上传 POST /api/media，上传失败在回执注明（文件保留）。
+     */
+    private suspend fun executeProjectionCapture(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+        mode: String,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val isRecord = mode == MediaCaptureService.MODE_RECORD
+        val durationSec =
+            if (isRecord) command.intParam("duration", 10, 3, 60) else 0
+        val actionLabel = if (isRecord) "录屏" else "截屏"
+
+        // ① 投屏授权：注册等待 → 弹透明授权页 → 阻塞等设备端确认
+        val consentOutcome = ScreenCaptureHolder.Outcome<Pair<Int, Intent?>>()
+        ScreenCaptureHolder.consent[command.commandId] = consentOutcome
+        val launched = try {
+            context.startActivity(ProjectionConsentActivity.intentOf(context, command.commandId))
+            true
+        } catch (e: Exception) {
+            Timber.w(e, "%s：弹出投屏授权框失败（后台启动被拦截）", name)
+            false
+        }
+        if (!launched) {
+            ScreenCaptureHolder.consent.remove(command.commandId)
+            return CommandResult(
+                id, name, false,
+                "无法在设备上弹出投屏授权框（后台启动被系统拦截），请打开 App 后重试下发",
+            )
+        }
+        Timber.i("%s：等待设备端投屏授权（最长 %d 秒）…", name, CONSENT_TIMEOUT_MS / 1000)
+        val consentReady = consentOutcome.latch.await(CONSENT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        val consent = consentOutcome.value
+        if (!consentReady || consent == null || consent.second == null) {
+            ScreenCaptureHolder.consent.remove(command.commandId)
+            return CommandResult(
+                id, name, false,
+                "设备端未确认投屏授权（${CONSENT_TIMEOUT_MS / 1000} 秒内未点「立即开始」或被拒绝）",
+            )
+        }
+
+        // ② 采集：注册结果等待 → 启动采集服务（mediaProjection 类型前台）
+        val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
+        ScreenCaptureHolder.capture[command.commandId] = captureOutcome
+        val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
+            putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
+            putExtra(MediaCaptureService.EXTRA_MODE, mode)
+            if (isRecord) putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+            putExtra(MediaCaptureService.EXTRA_RESULT_CODE, consent.first)
+            putExtra(MediaCaptureService.EXTRA_CONSENT_DATA, Bundle().apply { putParcelable("data", consent.second) })
+        }
+        val started = try {
+            ContextCompat.startForegroundService(context, serviceIntent)
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "%s：采集服务启动失败", name)
+            false
+        }
+        if (!started) {
+            ScreenCaptureHolder.capture.remove(command.commandId)
+            return CommandResult(id, name, false, "$actionLabel 采集服务启动失败")
+        }
+        val waitMs = if (isRecord) durationSec * 1000L + CAPTURE_TIMEOUT_MS else CAPTURE_TIMEOUT_MS
+        val done = captureOutcome.latch.await(waitMs, TimeUnit.MILLISECONDS)
+        val capture = captureOutcome.value
+        if (!done || capture == null) {
+            return CommandResult(id, name, false, "$actionLabel 采集超时")
+        }
+        if (!capture.success) {
+            return CommandResult(id, name, false, capture.error ?: "$actionLabel 失败")
+        }
+
+        // ③ 上传
+        return uploadCaptureFile(deviceStore, apiClient, id, name, kindOf(mode), File(capture.path))
+    }
+
+    /**
+     * 执行 take_photo：Camera1 静默拍照（无需投屏授权，需相机运行时权限）。
+     *
+     * @param params.camera back（后置，默认）/ front（前置）
+     *
+     * 后台访问相机要求 CAMERA 类型前台服务（Android 11+ while-in-use 规则），
+     * 静音策略：enableShutterSound(false) + 临时静音系统流，见 [MediaCaptureService]。
+     */
+    private suspend fun executeTakePhoto(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return CommandResult(
+                id, name, false,
+                "缺少相机权限，请打开 App 在系统设置中授予相机权限后重试",
+            )
+        }
+        val facing = command.strParam("camera", "back")
+        if (facing !in setOf("back", "front")) {
+            return CommandResult(id, name, false, "camera 参数只支持 back/front，收到：$facing")
+        }
+
+        val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
+        ScreenCaptureHolder.capture[command.commandId] = captureOutcome
+        val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
+            putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
+            putExtra(MediaCaptureService.EXTRA_MODE, MediaCaptureService.MODE_PHOTO)
+            putExtra(MediaCaptureService.EXTRA_CAMERA_FACING, facing)
+        }
+        val started = try {
+            ContextCompat.startForegroundService(context, serviceIntent)
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "take_photo：采集服务启动失败")
+            false
+        }
+        if (!started) {
+            ScreenCaptureHolder.capture.remove(command.commandId)
+            return CommandResult(id, name, false, "相机服务启动失败")
+        }
+        val done = captureOutcome.latch.await(30_000, TimeUnit.MILLISECONDS)
+        val capture = captureOutcome.value
+        if (!done || capture == null) {
+            return CommandResult(id, name, false, "拍照超时（相机无响应）")
+        }
+        if (!capture.success) {
+            return CommandResult(id, name, false, capture.error ?: "拍照失败")
+        }
+        return uploadCaptureFile(deviceStore, apiClient, id, name, "photo", File(capture.path))
+    }
+
+    /** 上传采集产物并在成功后清理本地临时文件。 */
+    private suspend fun uploadCaptureFile(
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        id: String,
+        name: String,
+        kind: String,
+        file: File,
+    ): CommandResult {
+        if (!file.isFile || file.length() == 0L) {
+            return CommandResult(id, name, false, "采集产物无效：${file.absolutePath}")
+        }
+        val mediaType = if (file.extension == "mp4") "video/mp4" else "image/jpeg"
+        val part = MultipartBody.Part.createFormData(
+            "file", file.name, RequestBody.create(mediaType.toMediaTypeOrNull(), file),
+        )
+        return try {
+            val deviceId = deviceStore.deviceId()
+            val token = runCatching { deviceStore.token() }.getOrNull()
+            val r = apiClient.uploadMedia(deviceId, token, kind, part)
+            file.delete()
+            val sizeText = if (r.size >= 1024 * 1024) "%.1f MB".format(r.size / 1048576.0)
+            else "%.0f KB".format(r.size / 1024.0)
+            Timber.i("命令 %s：%s", name, r.message)
+            CommandResult(id, name, true, "${r.message}：${r.filename}（$sizeText），已在管理后台「媒体文件」页可查看")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 %s 上传失败", name)
+            CommandResult(
+                id, name, false,
+                "已采集（${file.name}）但上传失败：${e.message}；文件已保留在设备 media/ 目录，可重试下发",
+            )
+        }
+    }
+
+    /** 采集模式 → 服务端 kind 字段。 */
+    private fun kindOf(mode: String): String = when (mode) {
+        MediaCaptureService.MODE_RECORD -> "screen_record"
+        MediaCaptureService.MODE_PHOTO -> "photo"
+        else -> "screenshot"
+    }
+
+    // ------------------------------------------------------------------
+    // 交互类命令（show_toast / speak / vibrate / show_dialog）
+    // ------------------------------------------------------------------
+
+    /** 执行 show_toast：设备上显示一条 Toast（见 [ToastHelper]）。 */
+    private fun executeShowToast(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val text = command.params.get("text")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        if (text.isEmpty()) return CommandResult(id, name, false, "缺少提示内容参数 text")
+        if (text.length > 500) return CommandResult(id, name, false, "提示内容过长（${text.length} 字，上限 500）")
+        return try {
+            val message = ToastHelper.show(context, text)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 show_toast 执行失败")
+            CommandResult(id, name, false, "显示失败：${e.message}")
+        }
+    }
+
+    /**
+     * 执行 speak：TTS 朗读（见 [TtsSpeaker]）。
+     * 播完（或失败）才回执；依赖设备装有 TTS 引擎。
+     */
+    private fun executeSpeak(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val text = command.params.get("text")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        if (text.isEmpty()) return CommandResult(id, name, false, "缺少播报内容参数 text")
+        if (text.length > 1000) return CommandResult(id, name, false, "播报内容过长（${text.length} 字，上限 1000）")
+        return try {
+            val message = TtsSpeaker.speak(context, text, timeoutMs = 120_000)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 speak 执行失败")
+            CommandResult(id, name, false, e.message ?: "语音播报失败")
+        }
+    }
+
+    /** 执行 vibrate：单次震动（见 [DeviceVibrator]）。 */
+    private fun executeVibrate(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val duration = command.intParam("duration", 500, 50, 10_000)
+        return try {
+            val message = DeviceVibrator.vibrate(context, duration.toLong())
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 vibrate 执行失败")
+            CommandResult(id, name, false, e.message ?: "震动失败")
+        }
+    }
+
+    /**
+     * 执行 show_dialog：全局悬浮窗对话框（见 [OverlayDialog]）。
+     *
+     * 需要「显示在其他应用上层」特殊权限：未授权时自动弹系统设置页引导，
+     * 开一次永久有效。回执「已弹出」后即完成；用户点「知道了」会触发
+     * 二次上报（WS event=dialog_click），管理后台回执区追加显示点击结果。
+     */
+    private fun executeShowDialog(
+        context: Context,
+        webSocketClient: BridgeWebSocketClient,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (!OverlayDialog.hasPermission(context)) {
+            val launched = OverlayDialog.launchOverlaySettings(context)
+            val guide = if (launched) {
+                "已在设备上打开设置页，请开启「显示在其他应用上层」后重新下发本命令"
+            } else {
+                "请在设备上：设置 → 应用 → Bridge → 显示在其他应用上层，开启后重新下发本命令"
+            }
+            return CommandResult(id, name, false, "未授予悬浮窗权限。$guide")
+        }
+        val title = command.params.get("title")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        val content = command.params.get("content")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        if (content.isEmpty()) return CommandResult(id, name, false, "缺少弹窗内容参数 content")
+
+        return try {
+            val error = OverlayDialog.show(context, title, content) {
+                // 用户点击「知道了」→ 二次上报（点击结果追加到后台命令回执区）
+                val data = com.google.gson.JsonObject().apply {
+                    addProperty("event", "dialog_click")
+                    addProperty("command_id", command.commandId)
+                    addProperty("command", command.command)
+                }
+                val sent = webSocketClient.sendBusinessMessage(data)
+                Timber.i("show_dialog 用户点击确认（二次上报 sent=%s）", sent)
+            }
+            if (error != null) {
+                CommandResult(id, name, false, error)
+            } else {
+                CommandResult(id, name, true, "已弹出对话框，等待用户点击「知道了」（点击后回传结果）")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 show_dialog 执行失败")
+            CommandResult(id, name, false, e.message ?: "弹窗失败")
+        }
+    }
+
+    /**
+     * 执行 check_update：检查更新（服务器目录版，不依赖 GitHub）。
+     *
+     * 服务端扫描 updates/ 目录取最高版本 APK（文件名解析版本号，可选
+     * update.json 提供更新说明），与客户端当前 versionName 比对后回执；
+     * APK 下载走服务器自身直链。本期不做自动下载安装。
+     */
+    private suspend fun executeCheckUpdate(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val current = DiagLog.appVersionName(context).ifBlank { "unknown" }
+        return try {
+            val deviceId = deviceStore.deviceId()
+            val token = runCatching { deviceStore.token() }.getOrNull()
+            val r = apiClient.getLatestUpdate(deviceId, token, current)
+            when {
+                !r.found ->
+                    CommandResult(id, name, true, "服务器暂无更新包（updates 目录为空），当前版本 v$current")
+                !r.available ->
+                    CommandResult(id, name, true, "已是最新版本 v$current")
+                else -> {
+                    val sizeMb = r.size_bytes / 1048576.0
+                    val notes = if (r.notes.isNotBlank()) "；更新说明：${r.notes}" else ""
+                    CommandResult(
+                        id, name, true,
+                        "有新版本 v${r.version}（%.1f MB）$notes。请把 APK 安装到设备完成更新".format(sizeMb),
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 check_update 执行失败")
+            CommandResult(id, name, false, "检查更新失败：${e.message}")
         }
     }
 

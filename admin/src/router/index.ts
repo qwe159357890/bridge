@@ -64,6 +64,12 @@ const router = createRouter({
           meta: { title: '通话记录' },
         },
         {
+          path: 'media',
+          name: 'media',
+          component: () => import('@/views/media/index.vue'),
+          meta: { title: '媒体文件' },
+        },
+        {
           path: 'connection',
           name: 'connection',
           component: () => import('@/views/connection/index.vue'),

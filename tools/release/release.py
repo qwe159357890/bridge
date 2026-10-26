@@ -21,6 +21,7 @@ Bridge 一键发布脚本：自动建仓库 → push 代码 → 触发 GitHub Ac
 """
 
 import os
+import shutil
 import sys
 import json
 import re
@@ -324,8 +325,30 @@ def main():
     run_id = wait_workflow(env, tag)
     if run_id:
         download_apk(env, tag, run_id)
+        copy_to_updates_dir(tag)
 
     print("\n全部完成。APK 已下载到 releases/ 目录。")
+
+
+def copy_to_updates_dir(tag):
+    """把刚下载的 APK 拷贝到服务端更新目录（check_update 服务器目录版）。
+
+    目录 server/data/updates/ 里保留最新一个（同名覆盖），旧版本 APK 不自动
+    删除（服务端按版本号取最高，多存几个也无妨）。
+    """
+    version = tag.lstrip("v")
+    candidates = sorted(
+        RELEASE_DIR.glob("*.apk"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    if not candidates:
+        print("[提示] releases/ 无 APK，跳过更新目录拷贝")
+        return
+    src = candidates[0]
+    updates_dir = ROOT / "server/data/updates"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    dst = updates_dir / f"bridge-{tag}.apk"
+    shutil.copy2(src, dst)
+    print(f"[5] 已拷贝更新包：{src} -> {dst}（check_update 将提示新版本 {version}）")
 
 
 if __name__ == "__main__":

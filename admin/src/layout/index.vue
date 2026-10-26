@@ -44,6 +44,10 @@
           <el-icon><Phone /></el-icon>
           <span>通话记录</span>
         </el-menu-item>
+        <el-menu-item index="/media">
+          <el-icon><Picture /></el-icon>
+          <span>媒体文件</span>
+        </el-menu-item>
         <el-menu-item index="/connection">
           <el-icon><Connection /></el-icon>
           <span>连接监控</span>

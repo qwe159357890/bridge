@@ -51,6 +51,31 @@ async def _handle_music_state_message(app, device_id: str, data: dict) -> None:
         logger.debug("device %s 非法音乐状态：%s", device_id, state)
 
 
+async def _handle_dialog_click(app, device_id: str, data: dict) -> None:
+    """处理 show_dialog 的用户点击回传（WS ``message`` 通道，event=dialog_click）。
+
+    向命令记录追加交互备注（后台命令历史「回执信息」列可见），并经 SSE
+    推送 ``command_interaction`` 事件实时通知管理侧。
+    """
+    command_id = data.get("command_id")
+    if not command_id:
+        return
+    try:
+        note = "用户已点击弹窗确认"
+        record = app.state.command_store.append_note(str(command_id), note)
+        if record is None:
+            return
+        bus = app.state.admin_event_bus
+        await bus.publish("command_interaction", {
+            "command_id": command_id,
+            "device_id": device_id,
+            "note": note,
+        })
+        logger.info("device %s 弹窗点击回传：command=%s", device_id, command_id)
+    except Exception:
+        logger.exception("处理弹窗点击回传失败（忽略）")
+
+
 async def _clear_music_state(app, device_id: str) -> None:
     """断连时清除设备音乐状态（此后查询返回 unknown），并通知管理侧。"""
     try:
@@ -175,10 +200,12 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 offline_reason = "closed"
                 break
             elif envelope.type == "message":
-                # 业务消息：当前仅处理音乐播放状态上报（event=music_state）
+                # 业务消息：音乐播放状态 / 弹窗点击回传
                 data = envelope.data or {}
                 if data.get("event") == "music_state":
                     await _handle_music_state_message(ws.app, device_id, data)
+                elif data.get("event") == "dialog_click":
+                    await _handle_dialog_click(ws.app, device_id, data)
                 else:
                     logger.debug("device %s 业务消息：%s", device_id, envelope.data)
             elif envelope.type == "command_result":

@@ -1,11 +1,16 @@
 package my.bridge.com.core.network.api
 
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.Multipart
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
+import retrofit2.http.Query
 import retrofit2.http.Streaming
 
 /**
@@ -116,6 +121,26 @@ interface BridgeApi {
         val carrier: String,
     )
 
+    /** 媒体上传响应体（screenshot/take_photo/record_screen 成功后服务端返回）。 */
+    data class MediaUploadResponse(
+        val code: Int,
+        val message: String,
+        val id: Long = 0,
+        val filename: String = "",
+        val size: Long = 0,
+    )
+
+    /** 更新检查响应体（check_update；服务端扫描 updates 目录并比对版本）。 */
+    data class LatestUpdateResponse(
+        val found: Boolean,
+        val available: Boolean = false,
+        val current_version: String = "",
+        val version: String = "",
+        val filename: String = "",
+        val size_bytes: Long = 0,
+        val notes: String = "",
+    )
+
     /** 注册设备，返回 device_id + token。 */
     @POST("api/devices/register")
     suspend fun registerDevice(@Body body: RegisterRequest): RegisterResponse
@@ -175,4 +200,25 @@ interface BridgeApi {
         @Header("X-Device-Id") deviceId: String,
         @Header("X-Device-Token") token: String?,
     ): ResponseBody
+
+    /**
+     * 上传媒体文件（截屏 PNG / 拍照 JPEG / 录屏 MP4）。
+     * kind 为表单文本字段（screenshot/photo/screen_record），file 为二进制分片。
+     */
+    @Multipart
+    @POST("api/media")
+    suspend fun uploadMedia(
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+        @Part("kind") kind: RequestBody,
+        @Part file: MultipartBody.Part,
+    ): MediaUploadResponse
+
+    /** 检查更新（服务端扫描指定目录取最高版本并与 currentVersion 比对）。 */
+    @GET("api/updates/latest")
+    suspend fun getLatestUpdate(
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+        @Query("current_version") currentVersion: String,
+    ): LatestUpdateResponse
 }

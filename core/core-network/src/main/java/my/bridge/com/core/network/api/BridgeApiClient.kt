@@ -2,6 +2,8 @@ package my.bridge.com.core.network.api
 
 import com.google.gson.Gson
 import my.bridge.com.core.network.ws.ServerAddress
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
 import retrofit2.Retrofit
@@ -141,4 +143,27 @@ class BridgeApiClient(
         token,
         BridgeApi.SimReportRequest(sims = sims),
     ).total
+
+    /**
+     * 上传媒体文件（截屏/拍照/录屏产物）。失败抛异常，由调用方决定回执语义。
+     * kind: "screenshot" / "photo" / "screen_record"。
+     */
+    suspend fun uploadMedia(
+        deviceId: String,
+        token: String?,
+        kind: String,
+        file: MultipartBody.Part,
+    ): BridgeApi.MediaUploadResponse {
+        val kindBody = RequestBody.create(MultipartBody.FORM, kind)
+        return api().uploadMedia(deviceId, token, kindBody, file)
+    }
+
+    /**
+     * 检查更新（check_update）。服务端扫描 updates 目录返回最新版本信息。
+     */
+    suspend fun getLatestUpdate(
+        deviceId: String,
+        token: String?,
+        currentVersion: String,
+    ): BridgeApi.LatestUpdateResponse = api().getLatestUpdate(deviceId, token, currentVersion)
 }

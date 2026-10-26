@@ -83,6 +83,21 @@ class CommandStore:
     def get(self, command_id: str) -> Optional[CommandRecord]:
         return self._records.get(command_id)
 
+    def append_note(self, command_id: str, note: str) -> Optional[CommandRecord]:
+        """向已回执的命令追加交互备注（如 show_dialog 用户点击确认）。
+
+        备注直接拼接到 ``result_message``，管理后台刷新后即可看到。
+        """
+        record = self._records.get(command_id)
+        if record is None:
+            logger.warning("交互备注对应命令不存在：%s", command_id)
+            return None
+        record.result_message = (
+            f"{record.result_message}；{note}" if record.result_message else note
+        )
+        logger.info("命令 %s 交互备注：%s", command_id, note)
+        return record
+
     def list(self) -> list[CommandRecord]:
         """全部命令记录（由旧到新）。"""
         return list(self._records.values())

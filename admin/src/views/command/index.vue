@@ -650,6 +650,10 @@ function connectWS() {
         if (msg.data.device_id === form.deviceId) {
           musicState.value = msg.data
         }
+      } else if (msg.type === 'command_interaction') {
+        // 弹窗点击回传等交互事件：刷新命令历史 + 轻提示
+        load()
+        ElMessage.success(`${deviceNameOf(msg.data.device_id)}：${msg.data.note}`)
       }
     } catch {
       // 忽略解析错误

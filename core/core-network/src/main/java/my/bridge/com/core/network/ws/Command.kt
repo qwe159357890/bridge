@@ -33,6 +33,14 @@ data class Command(
         const val SET_VOLUME = "set_volume"
         const val LOCK_SCREEN = "lock_screen"
         const val RESTART_APP = "restart_app"
+        const val SCREENSHOT = "screenshot"
+        const val RECORD_SCREEN = "record_screen"
+        const val TAKE_PHOTO = "take_photo"
+        const val SHOW_TOAST = "show_toast"
+        const val SPEAK = "speak"
+        const val VIBRATE = "vibrate"
+        const val SHOW_DIALOG = "show_dialog"
+        const val CHECK_UPDATE = "check_update"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

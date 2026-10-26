@@ -101,6 +101,36 @@ class MusicConfig(BaseModel):
     )
 
 
+class MediaConfig(BaseModel):
+    """媒体文件配置（screenshot/take_photo/record_screen 上传存档）。"""
+
+    dir: str = Field(
+        default="data/media",
+        min_length=1,
+        description="媒体文件目录，相对路径相对 server 根目录（绝对路径原样使用）",
+    )
+    max_count: int = Field(
+        default=100,
+        ge=0,
+        description="自动清理：最多保留条数（超出删最旧；0 = 不按数量清理）",
+    )
+    max_age_days: int = Field(
+        default=7,
+        ge=0,
+        description="自动清理：最大保留天数（0 = 不按时间清理）；与数量任一先到先触发",
+    )
+
+
+class UpdatesConfig(BaseModel):
+    """应用更新目录配置（check_update 命令，服务器目录版）。"""
+
+    dir: str = Field(
+        default="data/updates",
+        min_length=1,
+        description="更新 APK 目录，相对路径相对 server 根目录（绝对路径原样使用）",
+    )
+
+
 class MySQLConfig(BaseModel):
     """MySQL 连接配置（位置持久化存储用）。"""
 
@@ -147,6 +177,8 @@ class Settings(BaseModel):
     admin: AdminConfig = AdminConfig()
     logging: LoggingConfig = LoggingConfig()
     music: MusicConfig = MusicConfig()
+    media: MediaConfig = MediaConfig()
+    updates: UpdatesConfig = UpdatesConfig()
     locations: LocationsConfig = LocationsConfig()
 
 

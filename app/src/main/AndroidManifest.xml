@@ -5,6 +5,9 @@
     <!-- ===================== 保活核心权限 ===================== -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 媒体采集（screenshot/record_screen 投屏 + take_photo 后台相机） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <!-- 前台服务通知（Android 13+ 需运行时申请，否则通知被静默拦截） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -154,6 +157,19 @@
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
+
+        <!-- 媒体采集前台服务：截屏/录屏（mediaProjection）+ 拍照（camera）双类型 -->
+        <service
+            android:name="my.bridge.com.media.MediaCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|camera" />
+
+        <!-- 投屏授权透明页：系统强制要求经 Activity 弹授权框，用户点「立即开始」 -->
+        <activity
+            android:name="my.bridge.com.media.ProjectionConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
     </application>
 

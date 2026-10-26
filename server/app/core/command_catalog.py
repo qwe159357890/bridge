@@ -249,30 +249,42 @@ COMMANDS: list[dict[str, Any]] = [
          []),
 
     # ---- 音视频类 ----
-    _cmd("screenshot", "截屏", "media", "📸", "截取客户端当前屏幕并上传"),
-    _cmd("record_screen", "录屏", "media", "🎥", "录制客户端屏幕",
+    _cmd("screenshot", "截屏", "media", "📸",
+         "截取客户端当前屏幕并上传；下发后设备会弹系统投屏授权框，"
+         "需在设备上点一次「立即开始」（系统限制），90 秒内未确认命令失败"),
+    _cmd("record_screen", "录屏", "media", "🎥", "录制客户端屏幕并上传（授权方式同截屏）",
          [_param("duration", "时长(秒)", PARAM_TYPE_NUMBER, required=True, default=10,
-                 placeholder="默认 10 秒", description="录制时长（秒）")]),
-    _cmd("take_photo", "拍照", "media", "📷", "调用客户端摄像头拍照并上传"),
+                 placeholder="3~60 秒", description="录制时长（秒）")]),
+    _cmd("take_photo", "拍照", "media", "📷", "调用客户端摄像头静音拍照并上传（无需设备端确认）",
+         [_param("camera", "摄像头", PARAM_TYPE_SELECT, default="back",
+                 options=[{"value": "back", "label": "后置（默认）"},
+                          {"value": "front", "label": "前置"}],
+                 description="前置/后置；指定方向不存在时回退第一个摄像头")]),
 
     # ---- 交互类 ----
     _cmd("show_toast", "弹提示", "interact", "💬", "在客户端显示一条 Toast 提示",
          [_param("text", "提示内容", PARAM_TYPE_TEXTAREA, required=True,
-                 placeholder="要显示的文字", description="Toast 显示的文字")]),
-    _cmd("speak", "语音播报", "interact", "🔊", "让客户端朗读一段文字",
+                 placeholder="要显示的文字", description="Toast 显示的文字（上限 500 字）")]),
+    _cmd("speak", "语音播报", "interact", "🔊", "让客户端 TTS 引擎朗读一段文字（播完才回执）",
          [_param("text", "播报内容", PARAM_TYPE_TEXTAREA, required=True,
-                 placeholder="要朗读的文字")]),
-    _cmd("vibrate", "震动", "interact", "📳", "让客户端震动",
+                 placeholder="要朗读的文字", description="上限 1000 字；设备需装有 TTS 引擎")]),
+    _cmd("vibrate", "震动", "interact", "📳", "让客户端震动一次",
          [_param("duration", "时长(毫秒)", PARAM_TYPE_NUMBER, default=500,
-                 placeholder="默认 500 毫秒")]),
-    _cmd("show_dialog", "弹窗", "interact", "🪟", "在客户端弹出对话框",
+                 placeholder="默认 500 毫秒（50~10000）")]),
+    _cmd("show_dialog", "弹窗", "interact", "🪟",
+         "在客户端弹出全局对话框（盖在任意应用上，停留到用户点击）；"
+         "需设备已授予「显示在其他应用上层」权限（未授权时自动引导开启，开一次永久有效）；"
+         "用户点击后点击结果会追加到本命令回执",
          [_param("title", "标题", PARAM_TYPE_TEXT, placeholder="弹窗标题"),
           _param("content", "内容", PARAM_TYPE_TEXTAREA, required=True,
                  placeholder="弹窗正文")]),
 
     # ---- 系统类 ----
     _cmd("upload_log", "上传日志", "system", "📤", "让客户端自动上传诊断日志"),
-    _cmd("check_update", "检查更新", "system", "🔎", "让客户端检查应用更新"),
+    _cmd("check_update", "检查更新", "system", "🔎",
+         "让客户端检查应用更新（服务器 updates 目录版，不依赖 GitHub）；"
+         "开发者把最新 APK（文件名含版本号，如 bridge-v0.1.32.apk，可选配 update.json "
+         "写更新说明）放到服务器 data/updates/ 目录即可"),
 ]
 
 
