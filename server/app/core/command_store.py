@@ -102,6 +102,23 @@ class CommandStore:
         """全部命令记录（由旧到新）。"""
         return list(self._records.values())
 
+    def clear(self, device_id: Optional[str] = None) -> int:
+        """清空命令历史（管理后台「清空历史」按钮）。
+
+        :param device_id: 只清该设备的记录；None 清空全部
+        :return: 实际删除条数
+        """
+        if device_id is None:
+            n = len(self._records)
+            self._records.clear()
+        else:
+            keys = [k for k, r in self._records.items() if r.device_id == device_id]
+            for k in keys:
+                self._records.pop(k, None)
+            n = len(keys)
+        logger.info("清空命令历史：device=%s，删除 %d 条", device_id or "全部", n)
+        return n
+
     def count(self) -> int:
         return len(self._records)
 

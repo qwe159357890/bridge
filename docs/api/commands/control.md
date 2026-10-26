@@ -311,10 +311,13 @@ App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通�
 - **授权载体**：`app/.../admin/BridgeAdminReceiver.kt` +
   `res/xml/device_admin_policies.xml`（**只申请 force-lock 锁屏策略**，最小权限面），
   Manifest 注册时挂 `BIND_DEVICE_ADMIN` 权限守卫。
-- **首次使用**：下发时客户端检查 `isAdminActive`，未激活则尝试在设备上弹出
-  系统激活页（`ACTION_ADD_DEVICE_ADMIN`，带解释文案），回执失败并附激活步骤；
-  Android 10+ 后台启动限制可能拦掉激活页弹出，回执附手动激活路径
-  （设置 → 安全性 → 设备管理应用 → Bridge）。**设备上点一次激活，永久可用**。
+- **首次使用**：下发时客户端检查 `isAdminActive`，未激活则发**高优先级引导通知**
+  （`AdminActivationNotifier`，v0.1.37）——通知的 contentIntent 属用户点击路径，
+  不受 Android 10+ 后台启动 Activity 限制（v0.1.36 之前裸 startActivity 会被
+  **静默拦截**，回执却误报「已弹出激活页」）。用户点通知进入激活页
+  （`ACTION_ADD_DEVICE_ADMIN`，带解释文案并预选 Bridge），点「激活」后重新下发即可；
+  通知权限未授予时回执附手动激活路径（设置 → 安全性 → 设备管理应用 → Bridge）。
+  **设备上点一次激活，永久可用**。
 - **执行**：已激活直接 `DevicePolicyManager.lockNow()`，回执「已锁屏」。
 - **注意**：激活管理员后应用受保护，**须先停用管理员才能卸载 App**
   （对自控设备是防误卸的优点）；停用后本命令回执失败并重新引导激活。

@@ -13,7 +13,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 
 from app.api.v1.admin import require_admin
@@ -54,15 +54,17 @@ def _resolve_dir(settings) -> Path:
 @router.post("", status_code=status.HTTP_200_OK)
 async def upload_media(
     request: Request,
-    kind: str,
-    file: UploadFile,
+    kind: str = Form(...),
+    file: UploadFile = File(...),
     x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
     x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
 ) -> dict:
     """客户端上传一个媒体文件（截屏/拍照/录屏产物）。
 
-    kind 为查询参数（screenshot/photo/screen_record）；file 为 multipart 文件分片。
-    服务端重命名落盘（防路径穿越），返回文件名与大小。
+    kind 必须是 **multipart 表单文本字段**（screenshot/photo/screen_record），
+    与客户端 OkHttp ``@Part("kind")`` 对齐——v0.1.37 修复：此前误声明为查询参数，
+    客户端把 kind 放在 multipart 体里导致 FastAPI 422（拍照/截屏/录屏上传全挂）。
+    file 为 multipart 文件分片。服务端重命名落盘（防路径穿越），返回文件名与大小。
     """
     if kind not in MEDIA_KINDS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"kind 只支持 {'/'.join(sorted(MEDIA_KINDS))}")

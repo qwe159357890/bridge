@@ -11,18 +11,25 @@
 ## screenshot 截屏
 
 - 机制：MediaProjection 投屏取单帧（ImageReader RGBA → JPEG 90）。
-- **授权**：系统强制要求经 Activity 弹「投屏授权框」，**每次下发需在设备上点一次
-  「立即开始」**（Android 14 起授权结果一次性有效，无法复用）。90 秒未确认回执失败。
+- **授权（v0.1.37 起一次授权长期有效）**：首次下发经 Activity 弹「投屏授权框」
+  （设备上点一次「立即开始」）；之后 MediaProjection 由 `MediaCaptureService`
+  **常驻持有**（借鉴 autox：进程不重启一直有效），后续截屏/录屏**免确认**直接采集。
+  会话失效场景（用户下拉取消投屏、系统回收、App 进程重启）自动重新走授权。
+  90 秒未确认回执失败。
   - 后台启动授权页可能被部分 ROM 拦截：已授予「显示在其他应用上层」权限的设备不受限。
+- Android 14+ 硬性要求：`getMediaProjection` 后必须先 `registerCallback` 再
+  `createVirtualDisplay`，否则抛 SecurityException「Must register a callback
+  before starting capture」——v0.1.36 及以前每次采集必报错即此根因，v0.1.37 修复。
 - 产物：`screenshot_{时间戳}.jpg`（屏幕原分辨率）。
 - 服务端配套：前台服务 `MediaCaptureService`（`foregroundServiceType="mediaProjection"`，
-  Android 14+ 必须先 startForeground 再建 VirtualDisplay）。
+  Android 14+ 必须先 startForeground 再建 VirtualDisplay；采集完成后转
+  「会话保持中」常驻，通知栏有提示）。
 
 ## record_screen 录屏
 
 - 参数：`duration` 秒（3~60，默认 10）。
 - 机制：MediaProjection + MediaRecorder（H.264/MP4，30fps，6 Mbps，长边压到 1280）。
-- 授权方式同截屏（每次点「立即开始」）；回执 = 录制完成并上传成功。
+- 授权方式同截屏（首次点「立即开始」，之后免确认）；回执 = 录制完成并上传成功。
 - 产物：`screen_{时间戳}.mp4`（无音频轨——录系统声需系统投屏音频，且麦克风
   录音有隐私风险，暂不支持）。
 
@@ -43,7 +50,11 @@
 
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
-| `POST /api/media?kind={screenshot\|photo\|screen_record}` | 设备头 | multipart 上传，单文件 ≤ 200 MB |
+| `POST /api/media`（kind 为 **multipart 表单字段**） | 设备头 | multipart 上传，单文件 ≤ 200 MB |
 | `GET /api/media` | 管理员 | 列表（倒序，含 kind_label / exists） |
 | `GET /api/media/{id}/file` | 管理员（Bearer 或 `?token=`） | 文件本体（预览/播放/下载） |
 | `DELETE /api/media/{id}` | 管理员 | 删记录 + 磁盘文件 |
+
+> v0.1.37 修复：kind 此前误声明为查询参数，而客户端把 kind 放在 multipart 体里
+> （OkHttp `@Part("kind")`），FastAPI 校验直接 422——拍照/截屏/录屏上传全部失败。
+> 现改为 `Form(...)` 接收，与已发布客户端的 multipart 形态对齐。

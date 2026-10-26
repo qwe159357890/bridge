@@ -221,4 +221,16 @@ interface BridgeApi {
         @Header("X-Device-Token") token: String?,
         @Query("current_version") currentVersion: String,
     ): LatestUpdateResponse
+
+    /**
+     * 下载更新 APK（check_update 自动更新，服务器自身直链，不依赖 GitHub）。
+     * 404 = 服务端 updates 目录无此文件；调用方负责关闭响应体并写盘。
+     */
+    @Streaming
+    @GET("api/updates/{filename}")
+    suspend fun downloadUpdate(
+        @Path("filename") filename: String,
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+    ): ResponseBody
 }

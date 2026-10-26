@@ -166,4 +166,14 @@ class BridgeApiClient(
         token: String?,
         currentVersion: String,
     ): BridgeApi.LatestUpdateResponse = api().getLatestUpdate(deviceId, token, currentVersion)
+
+    /**
+     * 下载更新 APK（自动更新）。失败抛异常（HttpException），调用方负责关闭
+     * 响应体并写盘（先 .tmp 再原子重命名，与音乐下载同套路）。
+     */
+    suspend fun downloadUpdate(
+        filename: String,
+        deviceId: String,
+        token: String?,
+    ): ResponseBody = api().downloadUpdate(filename, deviceId, token)
 }

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.v1.admin import require_admin
 from app.core.command_catalog import ALLOWED_COMMANDS, catalog_payload
@@ -106,6 +106,19 @@ async def send_command(body: CommandRequest, request: Request) -> CommandRespons
 async def list_commands(request: Request) -> list[dict]:
     """列出全部命令记录（由旧到新）。"""
     return [r.to_dict() for r in _get_store(request).list()]
+
+
+@router.delete("", status_code=status.HTTP_200_OK, dependencies=[Depends(require_admin)])
+async def clear_commands(
+    request: Request,
+    device_id: str | None = Query(default=None, min_length=1),
+) -> dict:
+    """清空命令历史（管理后台「清空历史」按钮，带二次确认）。
+
+    :param device_id: 只清该设备的记录；缺省清空全部（存储上限 200 条，防堆积）。
+    """
+    deleted = _get_store(request).clear(device_id)
+    return {"deleted": deleted, "device_id": device_id}
 
 
 @router.get("/{command_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(require_admin)])
