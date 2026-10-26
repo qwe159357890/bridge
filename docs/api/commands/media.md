@@ -10,7 +10,21 @@
 
 ## screenshot 截屏
 
-- 机制：MediaProjection 投屏取单帧（ImageReader RGBA → JPEG 90）。
+两级路线（v0.1.40，借鉴 autox）：
+
+### 首选：无障碍静默截屏（`BridgeAccessibilityService.takeScreenshot`）
+
+- 前置：开启「设置 → 无障碍 → Bridge 辅助服务」（XML 声明 `canTakeScreenshot`，
+  Android 11+，需 minSdk 能力见下）。开启后**下发即拍**：无投屏授权框、无前台服务、
+  无通知、无屏幕拉起——**全程无感**，这正是 autox 截屏完全静默的原理。
+- 机制：系统 `AccessibilityService.takeScreenshot()` 直接返回屏幕 HardwareBuffer →
+  `Bitmap.wrapHardwareBuffer` 拷贝为软件位图 → JPEG 90 保存。不再依赖 MediaProjection
+  会话，也就不存在投屏路线的「截屏超时（屏幕可能受 DRM 保护）」问题。
+- 失败自动**降级投屏路线**（会弹系统授权框，属兜底而非常态）。
+
+### 兜底：MediaProjection 投屏取单帧（无障碍未开启时）
+
+- 机制：ImageReader RGBA → JPEG 90。
 - **授权（v0.1.37 起一次授权长期有效）**：首次下发经 Activity 弹「投屏授权框」
   （设备上点一次「立即开始」）；之后 MediaProjection 由 `MediaCaptureService`
   **常驻持有**（借鉴 autox：进程不重启一直有效），后续截屏/录屏**免确认**直接采集。
@@ -23,13 +37,14 @@
 - 产物：`screenshot_{时间戳}.jpg`（屏幕原分辨率）。
 - 服务端配套：前台服务 `MediaCaptureService`（`foregroundServiceType="mediaProjection"`，
   Android 14+ 必须先 startForeground 再建 VirtualDisplay；采集完成后转
-  「会话保持中」常驻，通知栏有提示）。
+  「会话保持中」常驻）。
 
 ## record_screen 录屏
 
 - 参数：`duration` 秒（3~60，默认 10）。
 - 机制：MediaProjection + MediaRecorder（H.264/MP4，30fps，6 Mbps，长边压到 1280）。
-- 授权方式同截屏（首次点「立即开始」，之后免确认）；回执 = 录制完成并上传成功。
+- **无法走无障碍路线**（无障碍只能取单帧），始终走投屏：首次点「立即开始」，
+  之后免确认（会话保持）；回执 = 录制完成并上传成功。
 - 产物：`screen_{时间戳}.mp4`（无音频轨——录系统声需系统投屏音频，且麦克风
   录音有隐私风险，暂不支持）。
 
@@ -41,9 +56,11 @@
   CameraInfo.orientation 修正。
 - **静音**：`enableShutterSound(false)` + 拍照期间临时静音系统/铃声/提示音流
   （拍完恢复）。个别 ROM 强制快门声属机型限制。
+- **通知静默化（v0.1.40）**：Android 11+ 后台访问相机**必须**走 CAMERA 类型前台
+  服务，前台服务通知是系统硬性要求**无法完全去除**——静默上限为
+  IMPORTANCE_MIN 渠道（无声音/无横幅/折叠通知栏底部）+ 中性文案「Bridge 运行中」，
+  不再显示「正在拍照…」等动作内容。
 - 权限：`CAMERA` 运行时权限（首次需打开 App 授权一次，未授权回执明示）。
-  后台访问相机要求 CAMERA 类型前台服务（Android 11+ while-in-use 规则）——
-  拍照走 `MediaCaptureService`（camera 类型）承载。
 - 无需投屏授权，下发即拍（无需设备端确认）。
 
 ## 上传接口（服务端新增）

@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import my.bridge.com.BuildConfig
+import my.bridge.com.access.BridgeAccessibilityService
 import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveService
 import my.bridge.com.keepalive.KeepAliveUtils
@@ -222,6 +223,24 @@ fun KeepAliveSettings() {
         }
         item {
             SettingCard {
+                // 无障碍服务（v0.1.40）：模拟电源键锁屏 + 静默截屏的前置开关
+                val accReady = BridgeAccessibilityService.isEnabledInSettings(context)
+                SettingValueRow(
+                    icon = if (accReady) "✅" else "♿",
+                    title = "无障碍服务（锁屏/静默截屏）",
+                    value = if (accReady) "已开启" else "去开启",
+                    onClick = {
+                        Timber.d("引导开启无障碍服务（Bridge 辅助服务）")
+                        try {
+                            context.startActivity(
+                                android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        } catch (e: Exception) {
+                            Timber.e(e, "跳转无障碍设置失败")
+                        }
+                    },
+                )
                 val activity = context as? Activity
                 KeepAliveUtils.runtimePermissions().forEach { permission ->
                     val granted = KeepAliveUtils.hasPermission(context, permission)

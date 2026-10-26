@@ -47,6 +47,7 @@ import my.bridge.com.interact.TtsSpeaker
 import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MediaCaptureService
 import my.bridge.com.media.ProjectionConsentActivity
+import my.bridge.com.access.BridgeAccessibilityService
 import my.bridge.com.media.ScreenCaptureHolder
 import my.bridge.com.media.MusicPlayer
 import okhttp3.MultipartBody
@@ -861,29 +862,49 @@ object CommandModule {
     /**
      * 执行 lock_screen：锁屏（熄屏并上锁）。
      *
-     * 依赖设备管理员激活（force-lock 策略，见 [my.bridge.com.admin.BridgeAdminReceiver]）：
-     * 已激活直接 lockNow；未激活时发**高优先级引导通知**（v0.1.37：此前裸
-     * startActivity 被 Android 10+ 后台启动限制静默拦截，误报「已弹出激活页」），
-     * 用户点通知（系统放行）进入激活页，激活后重新下发即可。
+     * 两级策略（v0.1.40）：
+     * 1. **首选无障碍模拟电源键**（GLOBAL_ACTION_LOCK_SCREEN，Android 9+）：与手动按
+     *    电源键完全等价——正常锁屏、正常解锁，不会触发 lockNow 的「为安全起见请输入
+     *    密码解锁」强制认证（设备管理员锁屏的固有副作用，实测确认）；
+     * 2. **兜底设备管理员 lockNow**：无障碍未开启时走旧路（保留该方式，用户拍板）；
+     *    未激活时发高优先级引导通知（v0.1.37：裸 startActivity 被 Android 10+ 后台
+     *    启动限制静默拦截），并建议开启无障碍获得更好的锁屏体验。
      */
     private fun executeLockScreen(context: Context, command: Command): CommandResult {
         val id = command.commandId
         val name = command.command
+
+        // ① 无障碍模拟电源键（与手动锁屏一致，无密码认证副作用）
+        if (BridgeAccessibilityService.isReady()) {
+            return if (BridgeAccessibilityService.lockScreen()) {
+                Timber.i("命令 lock_screen：已模拟电源键锁屏（无障碍）")
+                CommandResult(id, name, true, "已锁屏（模拟电源键）")
+            } else {
+                Timber.e("命令 lock_screen：无障碍锁屏动作执行失败")
+                CommandResult(id, name, false, "锁屏失败：无障碍锁屏动作未生效")
+            }
+        }
+
+        // ② 设备管理员兜底（lockNow：锁的是安全锁，重新点亮屏幕会要求输密码）
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val admin = ComponentName(context, BridgeAdminReceiver::class.java)
         if (dpm == null || !dpm.isAdminActive(admin)) {
             my.bridge.com.admin.AdminActivationNotifier.post(context)
             return CommandResult(
                 id, name, false,
-                "尚未激活设备管理员，无法锁屏。已在设备通知栏发送引导通知：" +
-                    "请点按该通知进入激活页并点击「激活」；若通知栏没有，" +
-                    "请在设备上手动激活（设置 → 安全性 → 设备管理应用 → Bridge），完成后重新下发本命令",
+                "无法锁屏：无障碍服务与设备管理员均未开启。推荐在设备上开启「Bridge 辅助服务」" +
+                    "（设置 → 无障碍 → Bridge 辅助服务，锁屏体验与手动按电源键一致）；" +
+                    "或手动激活设备管理员（设置 → 安全性 → 设备管理应用 → Bridge）后重新下发",
             )
         }
         return try {
             dpm.lockNow()
-            Timber.i("命令 lock_screen：已锁屏")
-            CommandResult(id, name, true, "已锁屏")
+            Timber.i("命令 lock_screen：已锁屏（设备管理员 lockNow）")
+            CommandResult(
+                id, name, true,
+                "已锁屏（设备管理员方式）。注意：重新点亮屏幕时系统会要求输入密码解锁；" +
+                    "开启无障碍「Bridge 辅助服务」可改为与电源键一致的正常锁屏",
+            )
         } catch (e: Exception) {
             Timber.e(e, "命令 lock_screen 执行失败")
             CommandResult(id, name, false, "锁屏失败：${e.message}")
@@ -1026,6 +1047,19 @@ object CommandModule {
         val durationSec =
             if (isRecord) command.intParam("duration", 10, 3, 60) else 0
         val actionLabel = if (isRecord) "录屏" else "截屏"
+
+        // 静默截屏优先（借鉴 autox，v0.1.40）：无障碍 takeScreenshot——无投屏授权框、
+        // 无前台服务通知、无屏幕拉起，全程无感；录屏无法用无障碍，仍走 MediaProjection。
+        // 静默路径失败才降级投屏路线（会弹系统授权框，属兜底而非常态）。
+        if (mode == MediaCaptureService.MODE_SCREENSHOT && BridgeAccessibilityService.isReady()) {
+            try {
+                val path = BridgeAccessibilityService.takeScreenshotToFile(context)
+                Timber.i("%s：无障碍静默截屏完成（%s）", name, path)
+                return uploadCaptureFile(deviceStore, apiClient, id, name, kindOf(mode), File(path))
+            } catch (e: Exception) {
+                Timber.w(e, "%s：静默截屏失败，降级投屏路线（将弹系统授权框）", name)
+            }
+        }
 
         // 会话保持中：跳过系统授权确认（首次授权后 MediaProjection 由服务持有）
         val reuse = MediaCaptureService.projectionHeld

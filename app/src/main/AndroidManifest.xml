@@ -188,6 +188,22 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection|camera" />
 
+        <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏（GLOBAL_ACTION_LOCK_SCREEN）
+             + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。
+             用户在系统设置 → 无障碍中开启；命令路径见 CommandModule 的降级链。 -->
+        <service
+            android:name="my.bridge.com.access.BridgeAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_summary"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- 投屏授权透明页：系统强制要求经 Activity 弹授权框，用户点「立即开始」 -->
         <activity
             android:name="my.bridge.com.media.ProjectionConsentActivity"

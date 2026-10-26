@@ -306,19 +306,31 @@ App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通�
 
 ## lock_screen 锁屏
 
-普通应用无直接锁屏 API，实现采用**设备管理员（Device Admin）**方案：
+两级策略（v0.1.40，借鉴 autox）：
+
+### 首选：无障碍模拟电源键（`BridgeAccessibilityService`）
+
+- `performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)`（Android 9+），与用户手动按电源键
+  **完全等价**——正常锁屏、正常解锁，**不会触发**设备管理员 lockNow 的
+  「为安全起见，请在使用第三方锁屏后输入密码解锁」强制认证（lockNow 的固有副作用，
+  实测确认无法绕过，这正是引入无障碍路线的动机）。
+- 前置：用户在设备上开启「设置 → 无障碍 → Bridge 辅助服务」（设置页权限管理有引导行）；
+  服务声明 `canRetrieveWindowContent=false`，不读取不记录屏幕内容。
+- 开启后本路径**无需任何授权弹窗/通知**，即发即锁。
+
+### 兜底：设备管理员 lockNow（保留）
 
 - **授权载体**：`app/.../admin/BridgeAdminReceiver.kt` +
   `res/xml/device_admin_policies.xml`（**只申请 force-lock 锁屏策略**，最小权限面），
   Manifest 注册时挂 `BIND_DEVICE_ADMIN` 权限守卫。
 - **首次使用**：下发时客户端检查 `isAdminActive`，未激活则发**高优先级引导通知**
   （`AdminActivationNotifier`，v0.1.37）——通知的 contentIntent 属用户点击路径，
-  不受 Android 10+ 后台启动 Activity 限制（v0.1.36 之前裸 startActivity 会被
-  **静默拦截**，回执却误报「已弹出激活页」）。用户点通知进入激活页
+  不受 Android 10+ 后台启动 Activity 限制。用户点通知进入激活页
   （`ACTION_ADD_DEVICE_ADMIN`，带解释文案并预选 Bridge），点「激活」后重新下发即可；
   通知权限未授予时回执附手动激活路径（设置 → 安全性 → 设备管理应用 → Bridge）。
   **设备上点一次激活，永久可用**。
-- **执行**：已激活直接 `DevicePolicyManager.lockNow()`，回执「已锁屏」。
+- **执行**：已激活直接 `DevicePolicyManager.lockNow()`，回执注明
+  「重新点亮屏幕会要求输入密码解锁」，并建议开启无障碍获得更好的体验。
 - **注意**：激活管理员后应用受保护，**须先停用管理员才能卸载 App**
   （对自控设备是防误卸的优点）；停用后本命令回执失败并重新引导激活。
 

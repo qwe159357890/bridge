@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bridge 辅助服务配置：canTakeScreenshot 是 takeScreenshot() 的硬性要求（API 30+），
+     缺少会抛 SecurityException「Services don't have the capability of taking the screenshot」；
+     不订阅窗口内容（canRetrieveWindowContent=false），纯动作型服务，最小权限原则。 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="false"
+    android:canTakeScreenshot="true"
+    android:summary="@string/accessibility_service_summary"
+    android:description="@string/accessibility_service_desc" />

@@ -69,7 +69,9 @@ class MediaCaptureService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_CONSENT_DATA = "consent_data"
 
-        private const val CHANNEL_ID = "media_capture"
+        // v0.1.40：旧渠道 media_capture 以 IMPORTANCE_LOW 创建过（渠道创建后重要性不可变），
+        // 静默化需换新渠道 id 才能生效：MIN = 无声音、无横幅、折叠在通知栏底部
+        private const val CHANNEL_ID = "media_capture_quiet"
         private const val NOTIFICATION_ID = 2101
 
         /**
@@ -508,19 +510,15 @@ class MediaCaptureService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "媒体采集", NotificationManager.IMPORTANCE_LOW),
+                NotificationChannel(CHANNEL_ID, "媒体采集（静默）", NotificationManager.IMPORTANCE_MIN),
             )
         }
-        val text = when {
-            mode == MODE_PHOTO -> "正在拍照…"
-            mode == MODE_RECORD -> "正在录制屏幕…"
-            projectionHeld -> "投屏会话保持中：截屏/录屏免确认（进程退出自动释放）"
-            else -> "正在截取屏幕…"
-        }
+        // 尽最大可能静默（用户要求）：前台服务通知是 Android 8+ 系统硬性要求无法去除，
+        // 能做到的上限 = IMPORTANCE_MIN 渠道（无声音/无横幅/折叠底部）+ 中性文案不透露动作内容
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Bridge 媒体采集")
-            .setContentText(text)
+            .setContentTitle("Bridge")
+            .setContentText("运行中")
             .setOngoing(true)
             .build()
     }
