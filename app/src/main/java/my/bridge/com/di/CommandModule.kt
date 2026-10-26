@@ -696,7 +696,7 @@ object CommandModule {
         val mode = command.strParam("mode", "all_unread")
         val smsId = command.strParam("sms_id", "")
         val address = command.strParam("address", "")
-        val (selection, args): Pair<String, Array<String>> = when (mode) {
+        val (selection, args) = when (mode) {
             "by_id" -> {
                 if (smsId.isEmpty()) {
                     return CommandResult(id, name, false, "mode=by_id 需要参数 sms_id（短信 ID）")

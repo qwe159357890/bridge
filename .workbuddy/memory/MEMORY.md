@@ -55,9 +55,16 @@
 
 ## 交互命令层（2026-10-26 定版）
 
-- **已落地**（v0.1.32 + v0.1.33）：show_toast / speak（TTS 播完回执）/ vibrate / show_dialog（悬浮窗+点击二次上报 event=dialog_click）/ **send_notification**（通知驱动角标）。
+- **已落地**（v0.1.32 + v0.1.33 + v0.1.34）：show_toast / speak（TTS 播完回执）/ vibrate / show_dialog（悬浮窗+点击二次上报 event=dialog_click）/ **send_notification**（通知驱动角标）/ **mark_sms_read**（标记短信已读，默认短信应用身份）。
 - **send_notification 关键**：Android 无公开角标 API，角标=通知驱动（小米/华为/三星读 `Notification.number` 显数字，OPPO/vivo 红点；保活常驻通知不计角标）。framework `Notification.Builder` **无 setNumber，number 是 Notification 字段需 build() 后赋值**；固定 id 2001 覆盖式下发；sound 走双渠道（渠道声音属性创建后不可变）；clear 模式 cancel(2001)；通知权限未开启 → ACTION_APP_NOTIFICATION_SETTINGS 引导。
 - **权威文档**：`docs/api/commands/interact.md`。最新发布 APK：v0.1.33。
+
+## 短信写能力与内置短信页（v0.1.34，2026-10-26）
+
+- **系统约束**：Android 4.4+ 写短信库（read 字段等）必须「默认短信应用」身份，WRITE_SMS 被 ROM 静默拒绝（autoxClient sms.js 弃用教训）；切换默认必须用户系统弹窗确认（每方向一次，无静默 API）。
+- **Bridge 方案**：Manifest 声明默认短信应用完整四组件（SmsDeliverReceiver/MmsReceiver/ComposeSmsActivity/HeadlessSmsSendService）→ RoleManager 候选资格；mark_sms_read 四种范围（all_unread/by_address/by_id/before_date）+ restore 切回。
+- **内置短信页**：主页「会话」Tab=真实短信（`ui/SmsPages.kt`：会话列表+未读角标 / 详情气泡 / 本地标记已读 / 顶部快速切换状态条）；Bridge 默认期间新短信写库+Bridge 本地通知，切回原 App 后消息照常可见；彩信首期 PDU 落盘占位不解析。
+- **权威文档**：`docs/api/commands/control.md`（mark_sms_read 章节）。
 
 ## 构建发布链路（2026-10-23）
 
