@@ -18,6 +18,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 from app.core.admin_auth import AdminAuth
 from app.core.admin_event_bus import AdminEventBus
+from app.core.admin_token_store import AdminTokenStore
 from app.core.command_store import CommandStore
 from app.core.connection_manager import ConnectionManager
 from app.core.connection_event_store import ConnectionEventStore
@@ -80,10 +81,21 @@ def create_app() -> FastAPI:
 
     connection_event_store = ConnectionEventStore()
 
+    # 管理员 token 持久层（MySQL）：重启后已签发 token 仍有效，
+    # 持久层不可达时 AdminAuth 自动降级为纯内存模式
+    admin_token_store = AdminTokenStore(
+        host=settings.locations.mysql.host,
+        port=settings.locations.mysql.port,
+        user=settings.locations.mysql.user,
+        password=settings.locations.mysql.password,
+        database=settings.locations.mysql.database,
+    )
+
     admin_auth = AdminAuth(
         username=settings.admin.username,
         password=settings.admin.password,
         token_ttl=settings.admin.token_ttl,
+        store=admin_token_store,
     )
 
     admin_event_bus = AdminEventBus()
@@ -135,6 +147,8 @@ def create_app() -> FastAPI:
             calllog_store.connect()
             sim_store.connect()
             media_store.connect()
+            admin_token_store.connect()
+            admin_auth.load_persisted()  # 启动预热：持久层 token 回填内存缓存
 
         try:
             await asyncio.get_event_loop().run_in_executor(None, _connect_all)
@@ -150,6 +164,7 @@ def create_app() -> FastAPI:
         calllog_store.close()
         sim_store.close()
         media_store.close()
+        admin_token_store.close()
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)

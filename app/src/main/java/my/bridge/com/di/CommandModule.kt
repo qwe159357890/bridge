@@ -1220,7 +1220,7 @@ object CommandModule {
             val sizeText = if (r.size >= 1024 * 1024) "%.1f MB".format(r.size / 1048576.0)
             else "%.0f KB".format(r.size / 1024.0)
             Timber.i("命令 %s：%s", name, r.message)
-            CommandResult(id, name, true, "${r.message}：${r.filename}（$sizeText），已在管理后台「媒体文件」页可查看")
+            CommandResult(id, name, true, "${r.message}：${r.filename}（$sizeText），点回执旁「查看」可直接预览")
         } catch (e: Exception) {
             Timber.e(e, "命令 %s 上传失败", name)
             CommandResult(

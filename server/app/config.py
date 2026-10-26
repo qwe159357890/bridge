@@ -121,6 +121,15 @@ class MediaConfig(BaseModel):
     )
 
 
+class AdbConfig(BaseModel):
+    """adb 助手配置（管理后台「ADB 一键开启无障碍」等 PC 侧 adb 操作）。"""
+
+    path: str = Field(
+        default="adb",
+        description="adb 可执行文件：PATH 里的 'adb' 或绝对路径（Windows 如 C:/platform-tools/adb.exe）",
+    )
+
+
 class UpdatesConfig(BaseModel):
     """应用更新目录配置（check_update 命令，服务器目录版）。"""
 
@@ -180,6 +189,7 @@ class Settings(BaseModel):
     media: MediaConfig = MediaConfig()
     updates: UpdatesConfig = UpdatesConfig()
     locations: LocationsConfig = LocationsConfig()
+    adb: AdbConfig = AdbConfig()
 
 
 def _env_overrides() -> dict:

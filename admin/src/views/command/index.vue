@@ -230,13 +230,38 @@
           </template>
         </el-table-column>
         <el-table-column label="回执信息" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.result_message || '-' }}</template>
+          <template #default="{ row }">
+            <span>{{ row.result_message || '-' }}</span>
+            <el-button
+              v-if="mediaFilenameOf(row)"
+              size="small"
+              type="primary"
+              link
+              @click="openMediaPreview(row)"
+            >
+              查看
+            </el-button>
+          </template>
         </el-table-column>
         <el-table-column label="创建时间" width="180">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 命令产物预览（截屏/拍照/录屏结果内嵌查看，免去切换到媒体文件页） -->
+    <el-dialog v-model="previewVisible" :title="previewTitle" width="760px" destroy-on-close>
+      <div v-loading="previewLoading" class="media-preview">
+        <video
+          v-if="previewIsVideo && previewSrc"
+          :src="previewSrc"
+          controls
+          autoplay
+          class="media-preview-body"
+        />
+        <img v-else-if="previewSrc" :src="previewSrc" class="media-preview-body" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -245,9 +270,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { getMusicState, listDevices } from '@/api/devices'
+import { deviceCount, getMusicState, listDevices } from '@/api/devices'
 import type { MusicState } from '@/api/devices'
 import { clearCommands, listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
+import { listMedia, mediaFileUrl } from '@/api/media'
+import type { MediaItem } from '@/api/media'
 import { getDeviceSims } from '@/api/data'
 import type { DeviceSim } from '@/api/data'
 import { getToken } from '@/api/request'
@@ -268,6 +295,49 @@ const commands = ref<CommandRecord[]>([])
 const loading = ref(false)
 const sending = ref(false)
 
+// ---------------------------------------------------------------------------
+// 命令产物内嵌预览（v0.1.41）：截屏/拍照/录屏回执里点「查看」直接弹窗预览，
+// 不用再切到媒体文件页找。文件名从回执消息提取（上传回执格式固定含 filename），
+// 按 device_id + filename 在媒体列表里反查记录 id，再拼带 token 的文件 URL。
+// ---------------------------------------------------------------------------
+const MEDIA_FILE_RE = /((?:screenshot|screen|photo)_\d+\.(?:jpg|mp4))/
+
+function mediaFilenameOf(row: CommandRecord): string | null {
+  if (row.status !== 'success' || !row.result_message) return null
+  return row.result_message.match(MEDIA_FILE_RE)?.[1] ?? null
+}
+
+const previewVisible = ref(false)
+const previewLoading = ref(false)
+const previewSrc = ref('')
+const previewIsVideo = ref(false)
+const previewTitle = ref('')
+
+async function openMediaPreview(row: CommandRecord) {
+  const filename = mediaFilenameOf(row)
+  if (!filename) return
+  previewTitle.value = `命令产物预览 — ${filename}`
+  previewVisible.value = true
+  previewLoading.value = true
+  previewSrc.value = ''
+  try {
+    const { items }: { items: MediaItem[] } = await listMedia(200)
+    const hit = items.find((it) => it.device_id === row.device_id && it.filename === filename)
+    if (!hit) {
+      previewVisible.value = false
+      ElMessage.warning(`媒体文件 ${filename} 不在列表中（可能已被自动清理）`)
+      return
+    }
+    previewIsVideo.value = filename.endsWith('.mp4')
+    previewSrc.value = mediaFileUrl(hit.id)
+  } catch (e) {
+    previewVisible.value = false
+    ElMessage.error(`加载媒体信息失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 // 命令目录（从后端动态拉取）
 const categories = ref<CommandCategory[]>([])
 const commandDefs = ref<CommandDef[]>([])
@@ -283,6 +353,12 @@ const params = reactive<Record<string, any>>({})
 const wsState = ref<'connecting' | 'connected' | 'disconnected' | 'reconnecting'>('connecting')
 let ws: WebSocket | null = null
 let reconnectTimer: number | null = null
+// 连续连接失败次数与退避间隔：失败后先探测 token 有效性（401 由 axios
+// 拦截器清 token 跳登录），token 有效才继续指数退避重连（3s 起步翻倍，
+// 30s 封顶，±20% 抖动——token 已持久化到数据库，服务端重启不再失效）
+let wsFailCount = 0
+let reconnectDelay = 3000
+const RECONNECT_MAX_DELAY = 30000
 
 const wsStatusText = computed(() => {
   switch (wsState.value) {
@@ -637,6 +713,8 @@ function connectWS() {
 
   ws.onopen = () => {
     wsState.value = 'connected'
+    wsFailCount = 0
+    reconnectDelay = 3000
   }
   ws.onmessage = (event) => {
     try {
@@ -691,10 +769,22 @@ function connectWS() {
 function scheduleReconnect() {
   if (reconnectTimer) return
   wsState.value = 'reconnecting'
+  wsFailCount += 1
+  if (wsFailCount >= 2) {
+    // 连续失败 ≥2 次：探测 token 是否还有效（走 axios 拦截器）。
+    // 401 → 拦截器清 token + 跳登录，重连循环随之终止；网络错误 → 停在本次等待。
+    deviceCount().catch(() => {
+      /* 401 已跳登录；网络错误保持静默，靠下方退避节奏重试 */
+    })
+  }
+  // 指数退避 + ±20% 随机抖动（3s → 30s 封顶）：服务端长时间不在线时
+  // 不刷日志/不弹错误轰炸；抖动避免多标签页同时打开时同步踩踏重连
+  const jitter = reconnectDelay * 0.8 + Math.random() * reconnectDelay * 0.4
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null
     connectWS()
-  }, 3000)
+  }, Math.round(jitter))
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY)
 }
 
 onMounted(() => {
@@ -712,6 +802,17 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 命令产物预览弹窗 */
+.media-preview {
+  min-height: 120px;
+  display: flex;
+  justify-content: center;
+}
+.media-preview-body {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 6px;
+}
 .card-header {
   display: flex;
   justify-content: space-between;

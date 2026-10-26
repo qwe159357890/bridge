@@ -30,3 +30,62 @@ export function getMusicState(deviceId: string): Promise<MusicState> {
     method: 'get',
   })
 }
+
+/** ADB 一键开启无障碍：逐步骤结果（服务端代跑 adb）。 */
+export interface AdbEnableAccessibilityResult {
+  success: boolean
+  serial?: string
+  /** 该设备上报的全部 IP（弹窗交叉确认用） */
+  device_ips?: string[]
+  /** 失败时附带：当前 adb 已连接的每台手机及 IP */
+  adb_devices?: { serial: string; ip?: string | null }[]
+  steps?: { step: string; ok: boolean; detail?: string }[]
+  error?: string
+}
+
+/** 设备网络信息（ADB 弹窗交叉确认）：设备 IP 对照 adb 设备 IP。 */
+export interface DeviceNetInfo {
+  device_ips: string[]
+  adb_devices: { serial: string; ip?: string | null }[]
+}
+
+export function getDeviceNetInfo(deviceId: string): Promise<DeviceNetInfo> {
+  return request<DeviceNetInfo>({
+    url: `/api/devices/${deviceId}/net-info`,
+    method: 'get',
+  })
+}
+
+export function adbEnableAccessibility(
+  deviceId: string,
+  ip?: string,
+): Promise<AdbEnableAccessibilityResult> {
+  return request<AdbEnableAccessibilityResult>({
+    url: `/api/devices/${deviceId}/adb-enable-accessibility`,
+    method: 'post',
+    data: ip ? { ip } : {},
+  })
+}
+
+/** WiFi adb 一条龙请求体。 */
+export interface AdbWifiSetupParams {
+  /** 无线调试主界面显示的端口 */
+  connect_port: number
+  /** 首次配对：配对页显示的端口 */
+  pair_port?: number
+  /** 首次配对：6 位配对码 */
+  pair_code?: string
+  /** 手机局域网 IP（WS 走公网时自动 IP 不可用，需手填） */
+  ip?: string
+}
+
+export function adbWifiEnableAccessibility(
+  deviceId: string,
+  params: AdbWifiSetupParams,
+): Promise<AdbEnableAccessibilityResult> {
+  return request<AdbEnableAccessibilityResult>({
+    url: `/api/devices/${deviceId}/adb-wifi-enable-accessibility`,
+    method: 'post',
+    data: params,
+  })
+}

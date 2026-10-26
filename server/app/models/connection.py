@@ -41,6 +41,11 @@ class Connection:
     replaced_at: Optional[float] = None
     # 客户端进程运行时长（秒），握手 hello 时上报，用于展示「APP 已运行 XX」
     uptime_seconds: Optional[float] = None
+    # 客户端 IP（WS 握手时取 ws.client.host），供 adb 助手匹配「哪台手机是这台设备」
+    ip: Optional[str] = None
+    # 客户端本机全部 IPv4（hello 里 ips 字段上报，WiFi/蜂窝/热点等）：
+    # adb 匹配「任一命中」即可确认设备，同时在管理后台展示供用户交叉确认
+    ips: list[str] = field(default_factory=list)
     # 发送回调（由端点层注入，用于服务端主动推送/顶旧通知）
     send_handler: Optional[SendHandler] = field(default=None, repr=False)
 

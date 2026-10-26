@@ -28,6 +28,10 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- 无障碍自动开启（autox 方案）：签名级权限，普通安装不可得，经 adb 一次性授予
+         （adb shell pm grant）后应用可直写系统无障碍设置；重启不掉，卸载重装失效。
+         注意：若不声明此权限，adb grant 会报 "has not requested permission"。 -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <uses-permission
         android:name="android.permission.SCHEDULE_EXACT_ALARM"
         android:maxSdkVersion="32" />

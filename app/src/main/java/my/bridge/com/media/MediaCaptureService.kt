@@ -91,7 +91,20 @@ class MediaCaptureService : Service() {
     private var handler: Handler? = null
 
     private var projection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
+
+    /**
+     * 持久镜像虚拟显示器（v0.1.41 核心修复）。
+     *
+     * Android 14+ 投屏令牌**一次性**：同一个 MediaProjection 实例只能
+     * createVirtualDisplay 一次，第二次直接抛 SecurityException「Don't re-use
+     * the resultData…」——这就是旧版「录屏第 1 次成功、第 2 次报错、第 3 次
+     * 重新授权、第 4 次又报错」死循环的根因。
+     * 修复：授权后只建**一面幕布**（VirtualDisplay，初始无 surface），此后截屏
+     * 挂 ImageReader 的 surface、录屏挂 MediaRecorder 的 surface，用完
+     * [VirtualDisplay.setSurface](null) 摘下——不再触发第二次 createVirtualDisplay，
+     * 一次授权跨截屏/录屏永久复用（autox 级体验）。
+     */
+    private var mirrorDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var recorder: MediaRecorder? = null
     private var camera: android.hardware.Camera? = null
@@ -218,13 +231,15 @@ class MediaCaptureService : Service() {
             }
         }, handler)
 
-        virtualDisplay = p.createVirtualDisplay(
-            "bridge-shot", metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, handler,
-        )
-
-        if (!latch.await(15, TimeUnit.SECONDS)) {
-            throw IllegalStateException("截屏超时（屏幕可能受 DRM 保护）")
+        // 幕布挂上 ImageReader 的 surface（不触发新的 createVirtualDisplay，规避令牌一次性）
+        val display = obtainMirrorDisplay(p, metrics)
+        display.setSurface(reader.surface)
+        try {
+            if (!latch.await(15, TimeUnit.SECONDS)) {
+                throw IllegalStateException("截屏超时（屏幕可能受 DRM 保护）")
+            }
+        } finally {
+            display.setSurface(null)
         }
         error?.let { throw IllegalStateException("截屏失败：$it") }
         val file = savedFile ?: throw IllegalStateException("截屏产物未生成")
@@ -302,10 +317,9 @@ class MediaCaptureService : Service() {
         rec.setOutputFile(tmp.absolutePath)
         rec.prepare()
 
-        virtualDisplay = p.createVirtualDisplay(
-            "bridge-record", metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, rec.surface, null, handler,
-        )
+        // 幕布挂上 MediaRecorder 的 surface（复用同一面 VirtualDisplay，规避令牌一次性）
+        val display = obtainMirrorDisplay(p, metrics)
+        display.setSurface(rec.surface)
         rec.start()
         Timber.i("录屏开始（%d 秒，%dx%d）", durationSec, w, h)
         SystemClock.sleep(durationSec * 1000L)
@@ -316,6 +330,7 @@ class MediaCaptureService : Service() {
         } finally {
             rec.release()
             recorder = null
+            display.setSurface(null)
         }
         if (!tmp.renameTo(target)) {
             throw IllegalStateException("录屏文件保存失败")
@@ -477,7 +492,9 @@ class MediaCaptureService : Service() {
         @Suppress("DEPRECATION")
         val data: Intent? = intent.getBundleExtra(EXTRA_CONSENT_DATA)?.getParcelable("data")
         if (data == null) throw IllegalStateException("投屏授权结果缺失")
-        // 换新会话前先释放旧的（同进程重复 getMediaProjection 不叠放）
+        // 换新会话前先释放旧幕布与旧投影（旧幕布绑定旧实例，不能跨会话复用）
+        runCatching { mirrorDisplay?.release() }
+        mirrorDisplay = null
         runCatching { projection?.stop() }
         projection = null
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -489,6 +506,21 @@ class MediaCaptureService : Service() {
         projectionHeld = true
         Timber.i("投屏会话已建立并转入保持（后续采集免确认）")
         return p
+    }
+
+    /**
+     * 获取持久镜像幕布（每面投影会话只 createVirtualDisplay 一次）。
+     * 初始无 surface，由截屏/录屏各自 [VirtualDisplay.setSurface] 挂载。
+     */
+    private fun obtainMirrorDisplay(p: MediaProjection, metrics: DisplayMetrics): VirtualDisplay {
+        mirrorDisplay?.let { return it }
+        val vd = p.createVirtualDisplay(
+            "bridge-mirror", metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, null, null, handler,
+        ) ?: throw IllegalStateException("创建投屏虚拟显示器失败")
+        mirrorDisplay = vd
+        Timber.i("镜像幕布已创建（本会话内复用，不随单次采集释放）")
+        return vd
     }
 
     private fun realDisplayMetrics(): DisplayMetrics {
@@ -538,10 +570,8 @@ class MediaCaptureService : Service() {
         runCatching { nm.notify(NOTIFICATION_ID, buildNotification()) }
     }
 
-    /** 释放单次采集资源（不动 MediaProjection 会话本身）。 */
+    /** 释放单次采集资源（幕布 mirrorDisplay 归会话所有，这里不动）。 */
     private fun releaseCaptureResources() {
-        runCatching { virtualDisplay?.release() }
-        virtualDisplay = null
         runCatching { imageReader?.close() }
         imageReader = null
         runCatching { recorder?.release() }
@@ -551,6 +581,8 @@ class MediaCaptureService : Service() {
 
     private fun releaseAll() {
         releaseCaptureResources()
+        runCatching { mirrorDisplay?.release() }
+        mirrorDisplay = null
         projectionHeld = false
         runCatching { projection?.stop() }
         projection = null

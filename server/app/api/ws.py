@@ -95,6 +95,8 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     await ws.accept()
     conn = Connection()
     conn._ws = ws  # 供顶旧回调真正关闭底层 socket
+    # 记录客户端 IP：adb 助手据此把「后台选中的设备」与「adb 已连接的手机」匹配
+    conn.ip = ws.client.host if ws.client else None
 
     # 注入发送回调：让核心层能经 Connection 主动下发消息（推送/顶旧通知）
     async def _send(raw_json: str) -> None:
@@ -139,6 +141,9 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
 
     # 2.2 记录客户端进程运行时长（供管理后台展示「APP 已运行 XX」）
     conn.uptime_seconds = hello.uptime_seconds
+    # 2.3 记录客户端本机全部 IP：adb 匹配「任一命中」+ 后台展示交叉确认
+    if hello.ips:
+        conn.ips = [ip for ip in hello.ips if ip][:16]
 
     # 3. 登记连接（顶旧）
     try:

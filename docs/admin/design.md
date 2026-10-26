@@ -157,7 +157,9 @@ admin/
 ### 5.3 需服务端补齐的改动（管理后台之外的配套）
 
 1. `config.yaml` 增加 `admin` 配置组。✅ 已实现
-2. 新增 `core/admin_auth.py`（生成/校验 admin token，内存实现）。✅ 已实现
+2. 新增 `core/admin_auth.py`（生成/校验 admin token）。✅ 已实现（初版为内存实现；后为解决「服务重启 token 全失效 → 后台 403 重连刷屏」，
+   token 已持久化到 MySQL——`core/admin_token_store.py` 建表 `admin_tokens`，AdminAuth 以内存为一级缓存、DB 写穿透/读穿透，
+   启动时预热回填；MySQL 不可达自动降级纯内存模式）
 3. 新增 `api/v1/admin.py`（`POST /api/admin/login`）。✅ 已实现
 4. 给 `/api/devices` `/api/commands` `/api/logs` `/api/push` `/api/connections` 加依赖校验（`Depends` 注入 admin token 校验）。✅ 已实现
 5. （可选）管理侧 WebSocket 通道，命令回执实时推送给管理后台。✅ 已实现（用 WebSocket `WS /api/admin/ws`）

@@ -3,6 +3,6 @@
     <string name="app_name">Bridge</string>
 
     <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏 + 静默截屏 -->
-    <string name="accessibility_service_summary">远程锁屏与静默截屏</string>
+    <string name="accessibility_service_summary">Bridge 远程锁屏与静默截屏</string>
     <string name="accessibility_service_desc">Bridge 使用本服务实现两项功能：1）模拟电源键锁屏——与手动按下电源键完全一致，不会触发强制密码验证；2）静默截屏——无需投屏授权、不显示任何通知。本服务不读取、不记录任何屏幕内容，也不会监控您的操作。</string>
 </resources>

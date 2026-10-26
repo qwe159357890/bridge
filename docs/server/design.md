@@ -602,3 +602,61 @@ POST /api/commands
 11. 客户端示例（Python 脚本，含鉴权/心跳/重连/接收推送）
 
 > 客户端的真实 WebSocket 实现（Android 端）属客户端工程，另立文档；本文档定义的是**协议与约束**，客户端必须遵循。
+
+---
+
+## 二十、ADB 一键开启无障碍（v0.1.40）
+
+**目的**：让「Bridge 辅助服务」（模拟电源键锁屏 + 静默截屏的前置开关）不需要用户到
+系统设置手动开启——管理后台设备行点「ADB开无障碍」，服务端代跑 adb 一次搞定，
+**设备端零操作，授权永久有效**（重启不掉，仅卸载重装才需重做）。
+
+**原理**（借鉴 autoxClient 的 WRITE_SECURE_SETTINGS 方案，见
+`references/autoxClient/autoxTcpServer/modules/screen_recorder.js` 的
+`_ensureAccessibility`）：
+
+1. 一次性授权：`adb shell pm grant my.bridge.com android.permission.WRITE_SECURE_SETTINGS`
+   —— 该签名级权限可经 adb 授予普通应用，重启不掉；
+2. 直写系统设置：`settings put secure enabled_accessibility_services <追加
+   my.bridge.com/my.bridge.com.access.BridgeAccessibilityService>`（保留已有服务，
+   不清除其他应用）+ `settings put secure accessibility_enabled 1`
+   —— 系统随即**自动绑定**无障碍服务。
+
+**为什么浏览器做不到、服务端可以**：浏览器沙箱无法访问 USB/adb；
+但管理后台背后是运行在用户电脑上的本服务端，由 FastAPI（`core/adb_helper.py`）
+subprocess 代跑 adb——网页按钮 → 服务端 adb → 手机，效果等同「网页一键执行」。
+
+**设备定位**（v0.1.41 修正，多 IP 上报）：WS 握手记录的客户端 IP 可能是**公网 IP**
+（手机走流量/跨网连服务端），与手机局域网 IP 不一致，不能只靠它匹配。策略：
+① **单台 adb 设备直接采用**（用户插/连的显然是目标机）——主路径；
+② 多台时用设备 hello 上报的**全部 IP**（`ips` 字段，收集 NetworkInterface 全部
+IPv4、wlan 优先）逐一比对，**任一命中**即确认，弹窗可手填 IP 兜底；
+③ 多台且无匹配 → 报错列出设备请用户只连目标机。
+弹窗顶部展示「设备确认」对照区（`GET /{device_id}/net-info`）：设备上报 IP vs
+adb 已连设备及其 IP，有交集打绿标「可放心执行」，让用户**二次确认**。
+
+**adb 版本要求**：`adb pair` 需 platform-tools ≥ 30（Windows PATH 里可能是
+`C:\Windows\adb.exe` 的 1.0.32 古董版且优先级更高）。项目自带最新版
+`tools/adb/platform-tools/`，`config.yaml adb.path` 显式指向；相对路径按服务端
+根目录解析（`resolve_adb_path`）。新版 adb 还会经 mDNS 自动发现已配对的无线
+调试设备（`adb-b<serial>-…_adb-tls-connect._tcp`），WiFi 连接常可免手动 connect。
+
+**接口**：
+- `GET /api/devices/{device_id}/net-info`（管理员鉴权）——设备网络信息：
+  `{device_ips, adb_devices:[{serial, ip?}]}`，供弹窗交叉确认；
+- `POST /api/devices/{device_id}/adb-enable-accessibility`（管理员鉴权）——直接模式，
+  前提是该手机已被 adb 识别（USB 线 / 已 connect 过）；
+- `POST /api/devices/{device_id}/adb-wifi-enable-accessibility`（管理员鉴权）——
+  **WiFi 一条龙**：请求体 `{connect_port, pair_port?, pair_code?, ip?}`（连接端口必填 =
+  手机「无线调试」主界面端口；首次使用再带配对端口+配对码），IP 缺省自动获取——
+  对设备上报的**每个候选 IP 逐个尝试** pair/connect，任一成功即确认，无需手填。
+
+两接口均返回 `{success, serial, device_ips, steps[]}`；失败时 `success=false` +
+可读 `error` + 逐步骤 `steps` + `adb_devices`（已连设备及 IP 供对照）
+（HTTP 仍 200，便于后台弹窗）。adb 路径可配
+`config.yaml adb.path`（默认 PATH 里的 `adb`）。后台入口：设备列表
+「ADB开无障碍」按钮 → 弹窗二选一模式（WiFi 无线调试 / 已用数据线连接）。
+
+**前提与边界**：手机需连到运行服务端的电脑——数据线（手机允许一次「USB 调试」）
+或 WiFi 无线调试（Android 11+ 首次需配对码；成功一次后授权永久有效，不必再连）；
+adb 未安装时错误信息给出安装指引。

@@ -39,6 +39,7 @@ class HelloData(BaseModel):
     token: Optional[str] = Field(default=None, description="鉴权 token（启用鉴权时必填）")
     device_name: Optional[str] = Field(default=None, max_length=128, description="设备昵称（可选，缺省用 device_id）")
     uptime_seconds: Optional[float] = Field(default=None, ge=0, description="客户端进程运行时长（秒），可选")
+    ips: Optional[list[str]] = Field(default=None, description="客户端本机全部 IPv4（WiFi/蜂窝等），供 adb 匹配与交叉确认", max_length=16)
 
 
 class CloseData(BaseModel):

@@ -43,17 +43,24 @@ instance.interceptors.response.use(
     if (error.response) {
       const status = error.response.status
       const detail = error.response.data?.detail
+      // grouping: true → 相同文案的提示合并为一条计数，避免轮询/重试场景刷屏
       if (status === 401) {
         clearToken()
-        ElMessage.error('登录已过期，请重新登录')
+        ElMessage.error({ message: '登录已过期，请重新登录', grouping: true })
         router.push('/login')
       } else if (status === 400) {
-        ElMessage.error(typeof detail === 'string' ? detail : '请求参数错误')
+        ElMessage.error({
+          message: typeof detail === 'string' ? detail : '请求参数错误',
+          grouping: true,
+        })
       } else {
-        ElMessage.error(typeof detail === 'string' ? detail : `请求失败（${status}）`)
+        ElMessage.error({
+          message: typeof detail === 'string' ? detail : `请求失败（${status}）`,
+          grouping: true,
+        })
       }
     } else {
-      ElMessage.error('网络错误，请检查服务端是否启动')
+      ElMessage.error({ message: '网络错误，请检查服务端是否启动', grouping: true })
     }
     return Promise.reject(error)
   },

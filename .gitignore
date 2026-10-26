@@ -51,3 +51,7 @@ gh_token.txt
 
 # 服务端更新目录中的 APK 本体不入库（12MB 级二进制，服务器运行时手动放置）
 server/data/updates/*.apk
+# 服务端运行数据（媒体文件等，运行时生成）
+server/data/media/
+# ADB platform-tools（17MB 下载的二进制，获取与放置说明见 docs/server/design.md §20）
+tools/adb/

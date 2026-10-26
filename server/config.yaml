@@ -35,6 +35,12 @@ admin:
 logging:
   level: "INFO"                  # DEBUG / INFO / WARNING / ERROR / CRITICAL
 
+adb:
+  # adb 可执行文件路径：默认从 PATH 找（可能撞上 C:\Windows 里的 1.0.32 古董版，
+  # 不支持 adb pair）。项目自带最新版 platform-tools（tools/adb/platform-tools），
+  # 此处显式指向它；换机部署时按实际路径调整
+  path: "../tools/adb/platform-tools/adb.exe"
+
 music:
   dir: "data/music"              # 音乐共享目录（play_music 裸文件名音源）
                                  # 相对路径相对 server 根目录，管理员把音乐文件放入即可下发

@@ -56,6 +56,8 @@ class BridgeWebSocketClient(
     private val tokenProvider: () -> String?,
     private val deviceNameProvider: () -> String? = { null },
     private val uptimeSecondsProvider: () -> Long? = { null },
+    /** 本机所有局域网 IPv4 列表提供者（供服务端 adb 匹配与用户交叉确认；缺省为空）。 */
+    private val localIpsProvider: () -> List<String> = { emptyList() },
     private val onBeforeHello: (suspend () -> Unit)? = null,
     private val listener: WsMessageListener? = null,
     private val commandExecutors: Map<String, CommandExecutor> = emptyMap(),
@@ -215,6 +217,12 @@ class BridgeWebSocketClient(
             // 上报进程运行时长（秒），供管理后台展示「APP 已运行 XX」
             val uptime = uptimeSecondsProvider() ?: defaultUptimeSeconds()
             addProperty("uptime_seconds", uptime)
+            // 上报本机全部 IPv4（WiFi/蜂窝/热点等）：服务端 adb 匹配任一命中即可，
+            // 同时在管理后台展示，供用户二次确认 adb 操作的是这台手机
+            val ips = localIpsProvider()
+            if (ips.isNotEmpty()) {
+                add("ips", gson.toJsonTree(ips))
+            }
         }
         val envelope = WsEnvelope.make(WsEnvelope.TYPE_HELLO, data)
         webSocket.send(envelope.toJson(gson))
