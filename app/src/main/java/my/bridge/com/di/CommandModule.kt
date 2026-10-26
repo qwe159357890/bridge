@@ -179,6 +179,12 @@ object CommandModule {
         Command.TAKE_PHOTO to CommandExecutor { command ->
             executeTakePhoto(context, deviceStore, apiClient, command)
         },
+        Command.RECORD_VIDEO to CommandExecutor { command ->
+            executeRecordVideo(context, deviceStore, apiClient, command)
+        },
+        Command.RECORD_AUDIO to CommandExecutor { command ->
+            executeRecordAudio(context, deviceStore, apiClient, command)
+        },
         Command.SHOW_TOAST to CommandExecutor { command ->
             executeShowToast(context, command)
         },
@@ -1196,6 +1202,148 @@ object CommandModule {
         return uploadCaptureFile(deviceStore, apiClient, id, name, "photo", File(capture.path))
     }
 
+    /**
+     * 执行 record_video：Camera1 + MediaRecorder 摄像头录像（借鉴 autox）。
+     *
+     * @param params.camera back（后置，默认）/ front（前置）
+     * @param params.quality low / medium（默认，720p）/ high（1080p）
+     * @param params.duration 录制秒数 3~60（默认 10）
+     * @param params.enable_audio 是否录制麦克风伴音（默认 true）
+     *
+     * 同 take_photo 走 CAMERA 类型前台服务（Android 11+ while-in-use 规则）；
+     * 启动顺序坑（unlock 前必须起虚拟预览）见 [MediaCaptureService.captureVideo]。
+     * 摄像头独占：录像/拍照互斥由采集服务单工作线程天然串行，无需额外锁。
+     */
+    private suspend fun executeRecordVideo(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return CommandResult(
+                id, name, false,
+                "缺少相机权限，请打开 App 在系统设置中授予相机权限后重试",
+            )
+        }
+        val enableAudio = command.params.get("enable_audio")
+            ?.takeIf { it.isJsonPrimitive }?.asBoolean ?: true
+        if (enableAudio &&
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return CommandResult(
+                id, name, false,
+                "enable_audio=true 但缺少麦克风权限，请打开 App 授权麦克风，或下发时关闭「录制声音」",
+            )
+        }
+        val facing = command.strParam("camera", "back")
+        if (facing !in setOf("back", "front")) {
+            return CommandResult(id, name, false, "camera 参数只支持 back/front，收到：$facing")
+        }
+        val quality = command.strParam("quality", "medium")
+        if (quality !in setOf("low", "medium", "high")) {
+            return CommandResult(id, name, false, "quality 参数只支持 low/medium/high，收到：$quality")
+        }
+        val durationSec = command.intParam("duration", 10, 3, 60)
+
+        val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
+        ScreenCaptureHolder.capture[command.commandId] = captureOutcome
+        val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
+            putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
+            putExtra(MediaCaptureService.EXTRA_MODE, MediaCaptureService.MODE_VIDEO)
+            putExtra(MediaCaptureService.EXTRA_CAMERA_FACING, facing)
+            putExtra(MediaCaptureService.EXTRA_QUALITY, quality)
+            putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+            putExtra(MediaCaptureService.EXTRA_ENABLE_AUDIO, enableAudio)
+        }
+        val started = try {
+            ContextCompat.startForegroundService(context, serviceIntent)
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "record_video：采集服务启动失败")
+            false
+        }
+        if (!started) {
+            ScreenCaptureHolder.capture.remove(command.commandId)
+            return CommandResult(id, name, false, "录像服务启动失败")
+        }
+        // 录制时长 + 授权/启动/编码缓冲
+        val done = captureOutcome.latch.await(durationSec * 1000L + 30_000, TimeUnit.MILLISECONDS)
+        val capture = captureOutcome.value
+        if (!done || capture == null) {
+            return CommandResult(id, name, false, "录像超时（相机无响应）")
+        }
+        if (!capture.success) {
+            return CommandResult(id, name, false, capture.error ?: "录像失败")
+        }
+        return uploadCaptureFile(deviceStore, apiClient, id, name, "video", File(capture.path))
+    }
+
+    /**
+     * 执行 record_audio：MediaRecorder 麦克风录音（M4A/AAC）。
+     *
+     * @param params.quality low（16kHz 语音档）/ medium（默认，44.1kHz）/ high（48kHz 立体声）
+     * @param params.duration 录制秒数 5~300（默认 30）
+     *
+     * Android 11+ 后台访问麦克风要求 MICROPHONE 类型前台服务（Manifest 已声明）。
+     */
+    private suspend fun executeRecordAudio(
+        context: Context,
+        deviceStore: DeviceStore,
+        apiClient: BridgeApiClient,
+        command: Command,
+    ): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return CommandResult(
+                id, name, false,
+                "缺少麦克风权限，请打开 App 在系统设置中授予麦克风权限后重试",
+            )
+        }
+        val quality = command.strParam("quality", "medium")
+        if (quality !in setOf("low", "medium", "high")) {
+            return CommandResult(id, name, false, "quality 参数只支持 low/medium/high，收到：$quality")
+        }
+        val durationSec = command.intParam("duration", 30, 5, 300)
+
+        val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
+        ScreenCaptureHolder.capture[command.commandId] = captureOutcome
+        val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
+            putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
+            putExtra(MediaCaptureService.EXTRA_MODE, MediaCaptureService.MODE_AUDIO)
+            putExtra(MediaCaptureService.EXTRA_QUALITY, quality)
+            putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+        }
+        val started = try {
+            ContextCompat.startForegroundService(context, serviceIntent)
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "record_audio：采集服务启动失败")
+            false
+        }
+        if (!started) {
+            ScreenCaptureHolder.capture.remove(command.commandId)
+            return CommandResult(id, name, false, "录音服务启动失败")
+        }
+        val done = captureOutcome.latch.await(durationSec * 1000L + 20_000, TimeUnit.MILLISECONDS)
+        val capture = captureOutcome.value
+        if (!done || capture == null) {
+            return CommandResult(id, name, false, "录音超时（麦克风无响应）")
+        }
+        if (!capture.success) {
+            return CommandResult(id, name, false, capture.error ?: "录音失败")
+        }
+        return uploadCaptureFile(deviceStore, apiClient, id, name, "audio", File(capture.path))
+    }
+
     /** 上传采集产物并在成功后清理本地临时文件。 */
     private suspend fun uploadCaptureFile(
         deviceStore: DeviceStore,
@@ -1208,7 +1356,11 @@ object CommandModule {
         if (!file.isFile || file.length() == 0L) {
             return CommandResult(id, name, false, "采集产物无效：${file.absolutePath}")
         }
-        val mediaType = if (file.extension == "mp4") "video/mp4" else "image/jpeg"
+        val mediaType = when (file.extension) {
+            "mp4" -> "video/mp4"
+            "m4a" -> "audio/mp4"
+            else -> "image/jpeg"
+        }
         val part = MultipartBody.Part.createFormData(
             "file", file.name, RequestBody.create(mediaType.toMediaTypeOrNull(), file),
         )
@@ -1234,6 +1386,8 @@ object CommandModule {
     private fun kindOf(mode: String): String = when (mode) {
         MediaCaptureService.MODE_RECORD -> "screen_record"
         MediaCaptureService.MODE_PHOTO -> "photo"
+        MediaCaptureService.MODE_VIDEO -> "video"
+        MediaCaptureService.MODE_AUDIO -> "audio"
         else -> "screenshot"
     }
 

@@ -3,12 +3,14 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span class="title">媒体文件（截屏 / 拍照 / 录屏）</span>
+          <span class="title">媒体文件（截屏 / 拍照 / 录屏 / 录像 / 录音）</span>
           <div class="header-right">
             <el-select v-model="kindFilter" clearable placeholder="全部类型" style="width: 120px">
               <el-option label="截屏" value="screenshot" />
               <el-option label="拍照" value="photo" />
               <el-option label="录屏" value="screen_record" />
+              <el-option label="录像" value="video" />
+              <el-option label="录音" value="audio" />
             </el-select>
             <el-button type="primary" :icon="Refresh" size="small" @click="load">刷新</el-button>
           </div>
@@ -27,7 +29,7 @@
         <el-table-column label="预览" width="140">
           <template #default="{ row }">
             <el-image
-              v-if="row.kind !== 'screen_record' && row.exists"
+              v-if="isImageKind(row.kind) && row.exists"
               :src="mediaFileUrl(row.id)"
               :preview-src-list="[mediaFileUrl(row.id)]"
               preview-teleported
@@ -38,9 +40,13 @@
                 <div class="thumb thumb-error">无法加载</div>
               </template>
             </el-image>
-            <div v-else-if="row.kind === 'screen_record' && row.exists" class="video-thumb" @click="playVideo(row)">
+            <div
+              v-else-if="(row.kind === 'screen_record' || row.kind === 'video' || row.kind === 'audio') && row.exists"
+              class="video-thumb"
+              @click="playMedia(row)"
+            >
               <el-icon><VideoPlay /></el-icon>
-              <span>播放</span>
+              <span>{{ row.kind === 'audio' ? '试听' : '播放' }}</span>
             </div>
             <div v-else class="thumb thumb-error">文件缺失</div>
           </template>
@@ -63,7 +69,7 @@
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button
-              v-if="row.kind !== 'screen_record'"
+              v-if="isImageKind(row.kind)"
               size="small"
               type="primary"
               link
@@ -86,15 +92,16 @@
       @close="viewerVisible = false"
     />
 
-    <!-- 视频播放对话框 -->
+    <!-- 视频/音频播放对话框 -->
     <el-dialog v-model="videoVisible" :title="videoTitle" width="720px" destroy-on-close>
       <video
-        v-if="videoUrl"
+        v-if="videoUrl && !videoIsAudio"
         :src="videoUrl"
         controls
         autoplay
         style="width: 100%; max-height: 60vh; background: #000; border-radius: 6px"
       />
+      <audio v-else-if="videoUrl" :src="videoUrl" controls autoplay style="width: 100%" />
     </el-dialog>
   </div>
 </template>
@@ -125,15 +132,21 @@ const viewerUrls = ref<string[]>([])
 const videoVisible = ref(false)
 const videoUrl = ref('')
 const videoTitle = ref('')
+const videoIsAudio = ref(false)
+
+function isImageKind(kind: string) {
+  return kind === 'screenshot' || kind === 'photo'
+}
 
 function previewImage(row: MediaItem) {
   viewerUrls.value = [mediaFileUrl(row.id)]
   viewerVisible.value = true
 }
 
-function playVideo(row: MediaItem) {
+function playMedia(row: MediaItem) {
   videoUrl.value = mediaFileUrl(row.id)
   videoTitle.value = row.filename
+  videoIsAudio.value = row.kind === 'audio'
   videoVisible.value = true
 }
 
@@ -164,11 +177,27 @@ async function remove(row: MediaItem) {
 }
 
 function kindIcon(kind: string) {
-  return kind === 'screenshot' ? '📸' : kind === 'photo' ? '📷' : '🎥'
+  return kind === 'screenshot'
+    ? '📸'
+    : kind === 'photo'
+      ? '📷'
+      : kind === 'screen_record'
+        ? '🎥'
+        : kind === 'video'
+          ? '🎬'
+          : '🎙️'
 }
 
 function kindTagType(kind: string) {
-  return kind === 'screenshot' ? 'primary' : kind === 'photo' ? 'success' : 'warning'
+  return kind === 'screenshot'
+    ? 'primary'
+    : kind === 'photo'
+      ? 'success'
+      : kind === 'screen_record'
+        ? 'warning'
+        : kind === 'video'
+          ? 'danger'
+          : 'info'
 }
 
 function deviceNameOf(id: string) {

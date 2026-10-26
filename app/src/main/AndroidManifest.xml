@@ -5,9 +5,11 @@
     <!-- ===================== 保活核心权限 ===================== -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <!-- 媒体采集（screenshot/record_screen 投屏 + take_photo 后台相机） -->
+    <!-- 媒体采集（screenshot/record_screen 投屏 + take_photo/record_video 后台相机
+         + record_audio 后台麦克风） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- 前台服务通知（Android 13+ 需运行时申请，否则通知被静默拦截） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 桌面角标能力声明（各厂商桌面据此把应用收进「桌面角标」管理列表；
@@ -186,11 +188,12 @@
             </intent-filter>
         </receiver>
 
-        <!-- 媒体采集前台服务：截屏/录屏（mediaProjection）+ 拍照（camera）双类型 -->
+        <!-- 媒体采集前台服务：截屏/录屏（mediaProjection）+ 拍照/录像（camera）
+             + 录音（microphone）三类型 -->
         <service
             android:name="my.bridge.com.media.MediaCaptureService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection|camera" />
+            android:foregroundServiceType="mediaProjection|camera|microphone" />
 
         <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏（GLOBAL_ACTION_LOCK_SCREEN）
              + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。

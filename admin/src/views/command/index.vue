@@ -253,7 +253,7 @@
       </el-table>
     </el-card>
 
-    <!-- 命令产物预览（截屏/拍照/录屏结果内嵌查看，免去切换到媒体文件页） -->
+    <!-- 命令产物预览（截屏/拍照/录屏/录像/录音结果内嵌查看，免去切换到媒体文件页） -->
     <el-dialog v-model="previewVisible" :title="previewTitle" width="760px" destroy-on-close>
       <div v-loading="previewLoading" class="media-preview">
         <video
@@ -262,6 +262,13 @@
           controls
           autoplay
           class="media-preview-body"
+        />
+        <audio
+          v-else-if="previewIsAudio && previewSrc"
+          :src="previewSrc"
+          controls
+          autoplay
+          style="width: 100%; margin-top: 40px"
         />
         <img v-else-if="previewSrc" :src="previewSrc" class="media-preview-body" />
       </div>
@@ -307,7 +314,7 @@ const sending = ref(false)
 // 媒体文件名两种形态：
 // ① 服务端重命名（上传落盘后的正式名，回执消息里就是这个）：20261026_210709_549381_screen_record.mp4
 // ② 客户端原始名（老回执兜底）：screen_1729980000000.mp4
-const MEDIA_FILE_RE = /((?:\d{8}_\d{6}_\d+_(?:screenshot|photo|screen_record)|(?:screenshot|photo|screen)_\d+)\.(?:jpg|mp4))/
+const MEDIA_FILE_RE = /((?:\d{8}_\d{6}_\d+_(?:screenshot|photo|screen_record|video|audio)|(?:screenshot|photo|screen|video|audio)_\d+)\.(?:jpg|mp4|m4a))/
 
 function mediaFilenameOf(row: CommandRecord): string | null {
   if (row.status !== 'success' || !row.result_message) return null
@@ -318,6 +325,7 @@ const previewVisible = ref(false)
 const previewLoading = ref(false)
 const previewSrc = ref('')
 const previewIsVideo = ref(false)
+const previewIsAudio = ref(false)
 const previewTitle = ref('')
 
 async function openMediaPreview(row: CommandRecord) {
@@ -336,6 +344,7 @@ async function openMediaPreview(row: CommandRecord) {
       return
     }
     previewIsVideo.value = filename.endsWith('.mp4')
+    previewIsAudio.value = filename.endsWith('.m4a')
     previewSrc.value = mediaFileUrl(hit.id)
   } catch (e) {
     previewVisible.value = false

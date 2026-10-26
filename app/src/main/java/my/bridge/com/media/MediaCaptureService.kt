@@ -35,9 +35,9 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * 媒体采集前台服务（screenshot / record_screen / take_photo 三模式）。
+ * 媒体采集前台服务（screenshot / record_screen / take_photo / record_video / record_audio 五模式）。
  *
- * Manifest 声明 ``foregroundServiceType="camera|mediaProjection"``：
+ * Manifest 声明 ``foregroundServiceType="mediaProjection|camera|microphone"``：
  * - 截屏/录屏：MediaProjection 授权结果经 Intent 传入，先以 MEDIA_PROJECTION
  *   类型 startForeground（Android 14+ 硬性要求，先声明再建 VirtualDisplay）；
  * - 拍照：Camera1 静音拍照（enableShutterSound(false) + 系统音量临时静音兜底），
@@ -61,11 +61,15 @@ class MediaCaptureService : Service() {
         const val MODE_SCREENSHOT = "screenshot"
         const val MODE_RECORD = "record"
         const val MODE_PHOTO = "photo"
+        const val MODE_VIDEO = "video"
+        const val MODE_AUDIO = "audio"
 
         const val EXTRA_COMMAND_ID = "command_id"
         const val EXTRA_MODE = "mode"
         const val EXTRA_DURATION_SEC = "duration_sec"
         const val EXTRA_CAMERA_FACING = "camera_facing"
+        const val EXTRA_QUALITY = "quality"
+        const val EXTRA_ENABLE_AUDIO = "enable_audio"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_CONSENT_DATA = "consent_data"
 
@@ -143,12 +147,13 @@ class MediaCaptureService : Service() {
         mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_SCREENSHOT
         finished = false
 
-        // 前台类型按模式选择：投屏类 MEDIA_PROJECTION，拍照 CAMERA。
-        // camera 类型 API 30 起才有，低于 30 用两参 startForeground（while-in-use 限制也是 30+ 才生效）
-        val type = if (mode == MODE_PHOTO) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-        } else {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        // 前台类型按模式选择：投屏类 MEDIA_PROJECTION，拍照/录像 CAMERA，录音 MICROPHONE。
+        // camera/microphone 类型 API 30 起才有，低于 30 用两参 startForeground
+        // （while-in-use 限制也是 30+ 才生效）
+        val type = when (mode) {
+            MODE_PHOTO, MODE_VIDEO -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            MODE_AUDIO -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(NOTIFICATION_ID, buildNotification(), type)
@@ -168,6 +173,8 @@ class MediaCaptureService : Service() {
             try {
                 when (mode) {
                     MODE_PHOTO -> capturePhoto(intent)
+                    MODE_VIDEO -> captureVideo(intent)
+                    MODE_AUDIO -> captureAudio(intent)
                     MODE_SCREENSHOT -> captureScreenshot(intent)
                     MODE_RECORD -> captureRecord(intent)
                 }
@@ -435,6 +442,200 @@ class MediaCaptureService : Service() {
         if (fallback < 0) throw IllegalStateException("设备没有可用摄像头")
         Timber.w("没有请求方向的摄像头，回退第一个（请求 front=%s）", front)
         return fallback
+    }
+
+    // ------------------------------------------------------------------
+    // 录像：Camera1 + MediaRecorder（借鉴 autox video_recorder.js）
+    // ------------------------------------------------------------------
+
+    /**
+     * 摄像头录像（MP4/H.264，可选麦克风伴音）。
+     *
+     * autox 踩坑的启动顺序（务必保持）：
+     * ① Camera.open → ② setPreviewTexture(虚拟预览) → ③ startPreview →
+     * ④ **unlock() 交出摄像头** → ⑤ MediaRecorder 配置（rec.setCamera）→
+     * ⑥ prepare/start。unlock 前不起预览会直接 start failed。
+     * 静音：与拍照同款临时静音系统流（录完恢复，避免提示音串进麦克风）。
+     */
+    @Suppress("DEPRECATION")
+    private fun captureVideo(intent: Intent) {
+        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 10).coerceIn(3, 60)
+        val preset = videoPreset(intent.getStringExtra(EXTRA_QUALITY) ?: "medium")
+        val enableAudio = intent.getBooleanExtra(EXTRA_ENABLE_AUDIO, true)
+        val front = intent.getStringExtra(EXTRA_CAMERA_FACING) == "front"
+        muteSystemVolume()
+
+        val w = preset.width and Int.MAX_VALUE - 1 // 取偶（H264 编码器要求）
+        val h = preset.height and Int.MAX_VALUE - 1
+
+        cameraThread = HandlerThread("bridge-video").also { it.start() }
+        val cameraHandler = Handler(cameraThread!!.looper)
+        val done = CountDownLatch(1)
+        var error: String? = null
+        var saved: File? = null
+
+        cameraHandler.post {
+            try {
+                val cameraId = pickCamera(front)
+                val cam = android.hardware.Camera.open(cameraId)
+                camera = cam
+                val info = android.hardware.Camera.CameraInfo()
+                android.hardware.Camera.getCameraInfo(cameraId, info)
+
+                // 虚拟预览（无界面取景）——必须在 unlock 之前，autox 最大的坑
+                val texture = SurfaceTexture(0)
+                previewTexture = texture
+                cam.setPreviewTexture(texture)
+                val params = cam.parameters
+                params.supportedPreviewSizes?.minByOrNull {
+                    kotlin.math.abs(it.width - w) + kotlin.math.abs(it.height - h)
+                }?.let { params.setPreviewSize(it.width, it.height) }
+                runCatching { params.setRecordingHint(true) }
+                cam.parameters = params
+                cam.startPreview()
+
+                // 录制方向（Android 官方 unlock + MediaRecorder 配方，假设当前显示旋转）
+                val degrees = try {
+                    @Suppress("DEPRECATION")
+                    val r = (getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+                        .defaultDisplay.rotation
+                    when (r) {
+                        Surface.ROTATION_90 -> 90
+                        Surface.ROTATION_180 -> 180
+                        Surface.ROTATION_270 -> 270
+                        else -> 0
+                    }
+                } catch (_: Exception) {
+                    0
+                }
+                val rotation = if (info.facing == android.hardware.Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                    (info.orientation + degrees) % 360
+                } else {
+                    (info.orientation - degrees + 360) % 360
+                }
+
+                cam.unlock() // 交出摄像头给 MediaRecorder
+                val rec = newRecorder()
+                recorder = rec
+                if (enableAudio) rec.setAudioSource(MediaRecorder.AudioSource.MIC)
+                rec.setVideoSource(MediaRecorder.VideoSource.CAMERA)
+                rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                rec.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                if (enableAudio) rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                rec.setVideoSize(w, h)
+                rec.setVideoFrameRate(preset.fps)
+                rec.setVideoEncodingBitRate(preset.bitrate)
+                if (enableAudio) {
+                    rec.setAudioSamplingRate(44100)
+                    rec.setAudioEncodingBitRate(96_000)
+                    rec.setAudioChannels(1)
+                }
+                rec.setOrientationHint(rotation)
+                val dir = mediaDir(this).apply { mkdirs() }
+                val ts = System.currentTimeMillis()
+                val tmp = File(dir, "video_$ts.tmp.mp4")
+                val target = File(dir, "video_$ts.mp4")
+                rec.setOutputFile(tmp.absolutePath)
+                rec.setCamera(cam)
+                rec.prepare()
+                rec.start()
+                Timber.i(
+                    "录像开始（%d 秒，%dx%d@%d，%d kbps，伴音=%s）",
+                    durationSec, w, h, preset.fps, preset.bitrate / 1000, enableAudio,
+                )
+                SystemClock.sleep(durationSec * 1000L)
+                try {
+                    rec.stop()
+                } catch (e: Exception) {
+                    error = "录制内容为空（摄像头无有效画面或编码失败）：${e.message}"
+                } finally {
+                    runCatching { rec.release() }
+                    recorder = null
+                }
+                if (error == null) {
+                    if (tmp.renameTo(target)) saved = target else error = "录像文件保存失败"
+                }
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                done.countDown()
+            }
+        }
+
+        try {
+            if (!done.await(durationSec * 1000L + 20_000, TimeUnit.MILLISECONDS)) {
+                throw IllegalStateException("录像超时（相机无响应）")
+            }
+        } finally {
+            restoreVolumes()
+            releaseCamera()
+        }
+        error?.let { throw IllegalStateException("录像失败：$it") }
+        complete(ScreenCaptureHolder.CaptureFile(saved?.absolutePath ?: ""))
+    }
+
+    // ------------------------------------------------------------------
+    // 录音：MediaRecorder 纯音频（借鉴 autox audio_recorder.js）
+    // ------------------------------------------------------------------
+
+    /** 麦克风录音（M4A/AAC），比录像简单得多——无相机、无预览、无 unlock。 */
+    private fun captureAudio(intent: Intent) {
+        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 30).coerceIn(5, 300)
+        val (sampleRate, bitrate, channels) = audioPreset(intent.getStringExtra(EXTRA_QUALITY) ?: "medium")
+
+        val rec = newRecorder()
+        recorder = rec
+        rec.setAudioSource(MediaRecorder.AudioSource.MIC)
+        rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+        rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+        rec.setAudioSamplingRate(sampleRate)
+        rec.setAudioEncodingBitRate(bitrate)
+        rec.setAudioChannels(channels)
+        val dir = mediaDir(this).apply { mkdirs() }
+        val ts = System.currentTimeMillis()
+        val tmp = File(dir, "audio_$ts.tmp.m4a")
+        val target = File(dir, "audio_$ts.m4a")
+        rec.setOutputFile(tmp.absolutePath)
+        rec.prepare()
+        rec.start()
+        Timber.i("录音开始（%d 秒，%dHz/%dkbps/%d 声道）", durationSec, sampleRate, bitrate / 1000, channels)
+        SystemClock.sleep(durationSec * 1000L)
+        try {
+            rec.stop()
+        } catch (e: Exception) {
+            throw IllegalStateException("录制内容为空（麦克风无有效输入或编码失败）：${e.message}")
+        } finally {
+            rec.release()
+            recorder = null
+        }
+        if (!tmp.renameTo(target)) {
+            throw IllegalStateException("录音文件保存失败")
+        }
+        complete(ScreenCaptureHolder.CaptureFile(target.absolutePath))
+    }
+
+    private fun newRecorder(): MediaRecorder =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(this)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }
+
+    /** 录像画质档位（借鉴 autox 预设：low/medium/high）。 */
+    private data class VideoPreset(val width: Int, val height: Int, val fps: Int, val bitrate: Int)
+
+    private fun videoPreset(quality: String): VideoPreset = when (quality) {
+        "low" -> VideoPreset(640, 480, 24, 800_000)
+        "high" -> VideoPreset(1920, 1080, 30, 5_000_000)
+        else -> VideoPreset(1280, 720, 30, 2_500_000)
+    }
+
+    /** 录音音质档位：(采样率 Hz, 码率 bps, 声道数)。 */
+    private fun audioPreset(quality: String): Triple<Int, Int, Int> = when (quality) {
+        "low" -> Triple(16000, 32_000, 1)
+        "high" -> Triple(48000, 192_000, 2)
+        else -> Triple(44100, 96_000, 1)
     }
 
     /** 尽力静音：临时静音系统/铃声/提示音流，结束后 [restoreVolumes] 恢复。 */

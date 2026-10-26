@@ -1,4 +1,4 @@
-# 音视频类命令（screenshot / record_screen / take_photo）
+# 音视频类命令（screenshot / record_screen / take_photo / record_video / record_audio）
 
 > 命令定义单一事实来源：`server/app/core/command_catalog.py` 的 `media` 分类。
 
@@ -63,11 +63,41 @@
 - 权限：`CAMERA` 运行时权限（首次需打开 App 授权一次，未授权回执明示）。
 - 无需投屏授权，下发即拍（无需设备端确认）。
 
+## record_video 录像（v0.1.42，借鉴 autox video_recorder.js）
+
+- 参数：
+  - `camera` = `back`（后置，默认）/ `front`（前置）；指定方向无摄像头时回退第一个；
+  - `quality` = `low`（640×480@24，800kbps）/ `medium`（720p@30，2.5Mbps，默认）/ `high`（1080p@30，5Mbps）；
+  - `duration` 秒（3~60，默认 10）；
+  - `enable_audio`（默认 true）：同时录麦克风伴音（AAC 44.1kHz/96kbps 单声道），
+    需 RECORD_AUDIO 权限，关闭则录无声视频。
+- 机制：Camera1 + MediaRecorder（MP4/H.264）。**autox 验证过的启动顺序**（务必保持）：
+  open → setPreviewTexture 虚拟预览 → startPreview → `unlock()` 交出摄像头 →
+  MediaRecorder 配置（`setCamera`）→ prepare/start——unlock 前不起预览会直接 start failed。
+- 方向：`setOrientationHint` 按 CameraInfo.orientation + 屏幕旋转补偿（Android 官方配方）。
+- 静音：同拍照——临时静音系统/铃声/提示音流，录完恢复（避免提示音串进麦克风）。
+- **互斥约束**：摄像头独占——录像/拍照由采集服务单工作线程天然串行，极端情况下
+  并发下发会在回执提示忙/失败，重试即可。
+- 权限：`CAMERA`（必需）+ `RECORD_AUDIO`（enable_audio=true 时）运行时权限。
+- 产物：`video_{时间戳}.mp4`，kind=`video`，后台媒体页可播放，回执可「查看」。
+
+## record_audio 录音（v0.1.42，借鉴 autox audio_recorder.js）
+
+- 参数：
+  - `quality` = `low`（16kHz/32kbps 语音档）/ `medium`（44.1kHz/96kbps 单声道，默认）/ `high`（48kHz/192kbps 立体声）；
+  - `duration` 秒（5~300，默认 30）。
+- 机制：MediaRecorder 纯音频（`AudioSource.MIC` + MPEG_4 容器 + AAC 编码）。
+  无相机、无预览、无 unlock，实现成本远低于录像。
+- Android 11+ 后台访问麦克风要求 **MICROPHONE 类型前台服务**
+  （Manifest `foregroundServiceType` 加 `microphone` + `FOREGROUND_SERVICE_MICROPHONE` 权限）。
+- 权限：`RECORD_AUDIO` 运行时权限（Manifest 早已声明，v0.1.42 起真正使用）。
+- 产物：`audio_{时间戳}.m4a`，kind=`audio`，后台媒体页可试听，回执可「查看」。
+
 ## 上传接口（服务端新增）
 
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
-| `POST /api/media`（kind 为 **multipart 表单字段**） | 设备头 | multipart 上传，单文件 ≤ 200 MB |
+| `POST /api/media`（kind 为 **multipart 表单字段**，白名单含 video/audio） | 设备头 | multipart 上传，单文件 ≤ 200 MB |
 | `GET /api/media` | 管理员 | 列表（倒序，含 kind_label / exists） |
 | `GET /api/media/{id}/file` | 管理员（Bearer 或 `?token=`） | 文件本体（预览/播放/下载） |
 | `DELETE /api/media/{id}` | 管理员 | 删记录 + 磁盘文件 |

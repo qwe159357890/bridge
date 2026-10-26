@@ -1,4 +1,4 @@
-"""媒体文件 REST 接口（screenshot / take_photo / record_screen 产物）。
+"""媒体文件 REST 接口（screenshot / take_photo / record_screen / record_video / record_audio 产物）。
 
 - ``POST /api/media`` 客户端 multipart 上传（设备鉴权），入库 + 触发自动清理；
 - ``GET /api/media`` 管理侧列表（倒序，含设备/类型/大小/时间）；
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/media", tags=["media"])
 
 # 客户端上报的 kind 白名单
-MEDIA_KINDS = {"screenshot", "photo", "screen_record"}
+MEDIA_KINDS = {"screenshot", "photo", "screen_record", "video", "audio"}
 
 # 单文件上限（录屏 60 秒约 40 MB 以内，留余量）
 MAX_MEDIA_BYTES = 200 * 1024 * 1024
@@ -33,6 +33,8 @@ KIND_LABELS = {
     "screenshot": "截屏",
     "photo": "拍照",
     "screen_record": "录屏",
+    "video": "录像",
+    "audio": "录音",
 }
 
 
