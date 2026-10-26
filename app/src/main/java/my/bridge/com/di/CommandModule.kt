@@ -38,6 +38,7 @@ import my.bridge.com.data.SmsReader
 import my.bridge.com.data.SmsSender
 import my.bridge.com.data.VolumeController
 import my.bridge.com.interact.DeviceVibrator
+import my.bridge.com.interact.NotificationPoster
 import my.bridge.com.interact.OverlayDialog
 import my.bridge.com.interact.ToastHelper
 import my.bridge.com.interact.TtsSpeaker
@@ -183,6 +184,9 @@ object CommandModule {
         },
         Command.SHOW_DIALOG to CommandExecutor { command ->
             executeShowDialog(context, webSocketClient::get, command)
+        },
+        Command.SEND_NOTIFICATION to CommandExecutor { command ->
+            executeSendNotification(context, command)
         },
         Command.CHECK_UPDATE to CommandExecutor { command ->
             executeCheckUpdate(context, deviceStore, apiClient, command)
@@ -1186,6 +1190,53 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 show_dialog 执行失败")
             CommandResult(id, name, false, e.message ?: "弹窗失败")
+        }
+    }
+
+    /**
+     * 执行 send_notification：发送系统通知（桌面图标显示角标）。
+     *
+     * 角标机制 = 通知驱动：Android 无公开角标 API，通知进通知栏后各 ROM 的
+     * launcher 自动把 [Notification.number]（或红点）画到桌面图标上；
+     * 「清除通知」模式撤回远程通知即归零角标。保活常驻通知不计入角标。
+     * 通知权限未开启时自动打开系统通知设置页引导（同弹窗/锁屏的引导模式）。
+     */
+    private fun executeSendNotification(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val mode = command.strParam("mode", "send")
+
+        // 清除模式：撤回远程通知 + 角标归零
+        if (mode == "clear") {
+            NotificationPoster.clear(context)
+            return CommandResult(id, name, true, "已清除通知，桌面角标已归零")
+        }
+
+        // 通知总开关检查：未开启则引导（开一次永久有效）
+        if (!NotificationPoster.areEnabled(context)) {
+            val launched = NotificationPoster.launchNotificationSettings(context)
+            val guide = if (launched) {
+                "已在设备上打开通知设置页，请开启 Bridge 的通知权限后重新下发本命令"
+            } else {
+                "请在设备上：设置 → 应用 → Bridge → 通知，开启后重新下发本命令"
+            }
+            return CommandResult(id, name, false, "设备通知权限未开启。$guide")
+        }
+
+        val title = command.strParam("title", "服务器消息")
+        val content = command.params.get("content")
+            ?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty()
+        if (content.isEmpty()) return CommandResult(id, name, false, "缺少通知内容参数 content")
+        val sound = command.params.get("sound")
+            ?.takeIf { it.isJsonPrimitive }?.asBoolean ?: true
+        val badge = command.intParam("badge", 1, 1, 99)
+
+        return try {
+            val message = NotificationPoster.post(context, title, content, sound, badge)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 send_notification 执行失败")
+            CommandResult(id, name, false, e.message ?: "通知发送失败")
         }
     }
 

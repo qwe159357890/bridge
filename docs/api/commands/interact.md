@@ -1,7 +1,7 @@
-# 交互类命令（show_toast / speak / vibrate / show_dialog）
+# 交互类命令（show_toast / speak / vibrate / show_dialog / send_notification）
 
 > 命令定义单一事实来源：`server/app/core/command_catalog.py` 的 `interact` 分类。
-> 四命令均无需 root。
+> 各命令均无需 root。
 
 ## show_toast 弹提示
 
@@ -40,3 +40,25 @@
      实时通道广播 `command_interaction` 事件——命令页即时弹提示 + 刷新历史，
      「回执信息」列可见点击结果。
 - 同一时刻只保留一个弹窗（新弹窗顶掉旧的）。
+
+## send_notification 发送通知
+
+- 参数：`title`（可选，默认「服务器消息」）+ `content`（必填）+ `sound`
+  （开关，默认开）+ `badge`（角标数字 1~99，默认 1）+ `mode`
+  （`send`=发送通知 / `clear`=清除通知并归零角标）。
+- 机制：`NotificationManager.notify` 发一条可滑除的普通通知（固定 id 2001，
+  重复下发覆盖同一条）；通知驱动角标——**Android 无公开的桌面角标 API**，
+  角标由各 ROM launcher 依据应用通知自动绘制：小米/华为/三星读取
+  `Notification.number` 显示数字（小米 MIUI12+/HyperOS 官方支持），
+  OPPO/vivo 显示红点；保活前台服务的常驻通知不计入角标（系统排除常驻通知）。
+- 提示音/震动走两个预建渠道（声音属性创建后不可变，按 `sound` 选渠道）；
+  渠道 `setShowBadge(true)`；`setAutoCancel(true)`——用户点开通知即消失，
+  角标同步归零；点开通知跳转本应用（包名 launch intent）。
+- `clear` 模式：`cancel(2001)` 撤回远程通知，角标归零（仅撤远程通知，
+  不动保活常驻通知）。
+- 权限：本应用通知总开关（API 33+ 为运行时权限 `POST_NOTIFICATIONS`）。
+  未开启时自动打开系统通知设置页引导（同弹窗/锁屏引导模式），开启一次永久有效。
+- 回执示例：
+  - 成功：`已发送通知「服务器消息」，桌面角标显示 3`
+  - 清除：`已清除通知，桌面角标已归零`
+  - 未授权：`设备通知权限未开启。已在设备上打开通知设置页，请开启…后重新下发`

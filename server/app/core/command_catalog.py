@@ -278,6 +278,23 @@ COMMANDS: list[dict[str, Any]] = [
          [_param("title", "标题", PARAM_TYPE_TEXT, placeholder="弹窗标题"),
           _param("content", "内容", PARAM_TYPE_TEXTAREA, required=True,
                  placeholder="弹窗正文")]),
+    _cmd("send_notification", "发送通知", "interact", "🔔",
+         "给设备发一条系统通知，通知进通知栏的同时，桌面 Bridge 图标显示角标数字"
+         "（Android 无独立角标 API，角标由通知驱动：小米/华为/三星显示数字，OPPO/vivo 显示红点；"
+         "保活常驻通知不计入角标）；「清除通知」模式撤回通知并归零角标；"
+         "需设备已开启本应用通知权限（未开启时自动打开通知设置页引导）",
+         [_param("title", "通知标题", PARAM_TYPE_TEXT, placeholder="服务器消息"),
+          _param("content", "通知内容", PARAM_TYPE_TEXTAREA, required=True,
+                 placeholder="通知正文", description="显示在通知栏与横幅中"),
+          _param("sound", "提示音+震动", PARAM_TYPE_SWITCH, default=True,
+                 description="通知弹出时是否提示音与震动"),
+          _param("badge", "角标数字", PARAM_TYPE_NUMBER, default=1,
+                 placeholder="默认 1（1~99）",
+                 description="显示在桌面图标右上角；小米/华为/三星显示数字，OPPO/vivo 显示红点"),
+          _param("mode", "操作模式", PARAM_TYPE_SELECT, default="send",
+                 options=[{"value": "send", "label": "发送通知（角标=数字）"},
+                          {"value": "clear", "label": "清除通知（角标归零）"}],
+                 description="清除模式会撤回本应用全部远程通知")]),
 
     # ---- 系统类 ----
     _cmd("upload_log", "上传日志", "system", "📤", "让客户端自动上传诊断日志"),

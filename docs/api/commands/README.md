@@ -50,6 +50,7 @@
 | `speak` | 语音播报 | [interact.md#speak-语音播报](interact.md#speak-语音播报) |
 | `vibrate` | 震动 | [interact.md#vibrate-震动](interact.md#vibrate-震动) |
 | `show_dialog` | 弹窗 | [interact.md#show_dialog-弹窗](interact.md#show_dialog-弹窗) |
+| `send_notification` | 发送通知 | [interact.md#send_notification-发送通知](interact.md#send_notification-发送通知) |
 
 ## ⚙️ system（系统）→ [system.md](system.md)
 

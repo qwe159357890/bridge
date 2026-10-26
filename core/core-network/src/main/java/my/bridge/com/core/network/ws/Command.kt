@@ -40,6 +40,7 @@ data class Command(
         const val SPEAK = "speak"
         const val VIBRATE = "vibrate"
         const val SHOW_DIALOG = "show_dialog"
+        const val SEND_NOTIFICATION = "send_notification"
         const val CHECK_UPDATE = "check_update"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
