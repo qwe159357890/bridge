@@ -99,8 +99,8 @@ class CommandStore:
         return record
 
     def list(self) -> list[CommandRecord]:
-        """全部命令记录（由旧到新）。"""
-        return list(self._records.values())
+        """全部命令记录（由新到旧，最新的显示在最上面）。"""
+        return list(reversed(self._records.values()))
 
     def clear(self, device_id: Optional[str] = None) -> int:
         """清空命令历史（管理后台「清空历史」按钮）。
