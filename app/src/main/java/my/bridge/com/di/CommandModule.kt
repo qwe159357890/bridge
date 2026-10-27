@@ -1556,6 +1556,7 @@ object CommandModule {
      * （Android 不允许静默安装，用户点一次「安装」）。防重复触发：下载/安装中
      * 再次下发直接拒绝并提示，见 [my.bridge.com.update.UpdateManager]。
      * mode=check_only 时只检查不下载，回执告知是否有新版本（v0.1.44）。
+     * force_download=true 时忽略本地缓存强制重下（v0.1.45：本地缓存被污染自救）。
      * 关于页「检查更新」按钮走同一入口，行为一致（自动安装）。
      */
     private suspend fun executeCheckUpdate(
@@ -1567,9 +1568,13 @@ object CommandModule {
         val id = command.commandId
         val name = command.command
         val autoInstall = command.strParam("mode", "auto_install") != "check_only"
+        val forceDownload = command.boolParam("force_download")
+        if (forceDownload && !autoInstall) {
+            return CommandResult(id, name, false, "「强制重新下载」仅在自动安装模式下有意义，请把检查模式改为自动安装")
+        }
         return try {
-            val message = my.bridge.com.update.UpdateManager.checkAndInstall(context, autoInstall)
-            Timber.i("命令 check_update（autoInstall=%s）：%s", autoInstall, message)
+            val message = my.bridge.com.update.UpdateManager.checkAndInstall(context, autoInstall, forceDownload)
+            Timber.i("命令 check_update（autoInstall=%s force=%s）：%s", autoInstall, forceDownload, message)
             CommandResult(id, name, true, message)
         } catch (e: Exception) {
             Timber.e(e, "命令 check_update 执行失败")

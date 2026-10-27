@@ -360,7 +360,9 @@ COMMANDS: list[dict[str, Any]] = [
          [_param("mode", "检查模式", PARAM_TYPE_SELECT, default="auto_install",
                  options=[{"value": "auto_install", "label": "自动安装（发现新版直接下载并弹安装页）"},
                           {"value": "check_only", "label": "仅检查（只回执是否需要更新，不下载）"}],
-                 description="仅检查模式适合巡检场景：只看设备版本是否落后，不触发下载")]),
+                 description="仅检查模式适合巡检场景：只看设备版本是否落后，不触发下载"),
+          _param("force_download", "强制重新下载", PARAM_TYPE_SWITCH, default=False,
+                 description="忽略本地缓存强制重下（md5 校验删除污染缓存的自救手段，仅自动安装模式有效）")]),
 ]
 
 

@@ -82,9 +82,15 @@ object UpdateManager {
      *
      * @param autoInstall true = 发现新版本自动下载并弹安装页（原行为）；
      *                    false = 只检查不下载，回执告知是否有新版本（命令「仅检查」模式）。
+     * @param forceDownload true = 忽略本地缓存强制重新下载（命令「强制重新下载」参数，
+     *                      用于本地缓存被污染——如假 44 实为 43——时的自救）。
      * @return 给用户看的结果说明（成功=已弹安装页 / 已是最新 / 忙 / 失败原因）
      */
-    suspend fun checkAndInstall(context: Context, autoInstall: Boolean = true): String {
+    suspend fun checkAndInstall(
+        context: Context,
+        autoInstall: Boolean = true,
+        forceDownload: Boolean = false,
+    ): String {
         // 原子锁：下载/安装中再次触发直接拒绝（防连点、防重复下发并发下载）
         if (!busy.compareAndSet(false, true)) {
             return when (phase) {
@@ -119,18 +125,48 @@ object UpdateManager {
             }
 
             val target = File(updateDir(context), latest.filename)
-            // ② 下载（缓存命中跳过：同一文件已完整下载过）
-            if (target.isFile && target.length() == latest.size_bytes && latest.size_bytes > 0) {
-                Timber.i("更新包缓存命中：%s", target.name)
+            // ② 下载（v0.1.45 起缓存命中以 md5 为准，不再信「文件名+大小」：
+            //    曾经 42/43/44 三个包大小恰好一致，假 44 实为 43 时命中错误缓存 →
+            //    永远无法更新。md5 由服务端 latest 接口现算返回）
+            val cachedOk = !forceDownload && target.isFile && md5Matches(target, latest.md5, latest.size_bytes)
+            if (cachedOk) {
+                Timber.i("更新包缓存命中（md5 校验通过）：%s", target.name)
             } else {
+                if (forceDownload && target.isFile) {
+                    Timber.i("强制重新下载：删除现有缓存 %s", target.name)
+                    target.delete()
+                }
                 phase = Phase.DOWNLOADING
                 downloadPct = -1
                 downloadReadBytes = 0
                 downloadTotalBytes = latest.size_bytes
                 try {
                     download(context, d.apiClient(), deviceId, token, latest.filename, target, latest.size_bytes)
+                    // 下载完整性校验：md5 不符 = 下载损坏/被中途替换，删掉重来才有可能恢复
+                    if (latest.md5 != null) {
+                        val actual = md5Of(target)
+                        if (actual != latest.md5) {
+                            target.delete()
+                            throw IllegalStateException(
+                                "下载校验失败（md5 不符，可能网络损坏）：已删除缓存，请重新下发检查更新",
+                            )
+                        }
+                    }
+                    // ★ 安装前版本号校验（最根本的兜底）：读 APK 清单的实际 versionName，
+                    //   防「服务器文件源头就错」（0.1.43 改名冒充 0.1.44——md5 只能防
+                    //   下载损坏，防不了源头错；清单版本号直接识破冒名顶替）
+                    val apkVersion = apkVersionName(context, target)
+                    if (apkVersion != null && apkVersion != latest.version) {
+                        target.delete()
+                        throw IllegalStateException(
+                            "服务器上的 v${latest.version} 实际是 v$apkVersion（文件可能被改名冒充），" +
+                                "已拒绝安装并删除缓存；请先修正服务器 updates 目录里的文件再重试",
+                        )
+                    }
+                    // 自动清理：只保留本次要装的最新包，防止旧版本缓存越攒越多
+                    cleanStaleCaches(context, keep = target)
                 } catch (e: Exception) {
-                    Timber.e(e, "更新包下载失败")
+                    Timber.e(e, "更新包下载/校验失败")
                     target.delete() // 清掉半截文件
                     phase = Phase.IDLE
                     return "更新包下载失败：${e.message}"
@@ -236,6 +272,99 @@ object UpdateManager {
             Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
         }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+    }
+
+    // ------------------------------------------------------------------
+    // 缓存校验与管理（v0.1.45：md5 判定 / 版本号识破 / 手动清理）
+    // ------------------------------------------------------------------
+
+    /** 计算文件 md5（ hex 小写，与服务端 _md5_of 对应）。 */
+    private fun md5Of(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("MD5")
+        file.inputStream().use { input ->
+            val buf = ByteArray(1024 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** 缓存命中判定：服务端给了 md5 就比 md5；没给（老服务端）退回大小比对。 */
+    private fun md5Matches(file: File, expectedMd5: String?, sizeBytes: Long): Boolean {
+        if (!file.isFile) return false
+        return try {
+            if (!expectedMd5.isNullOrBlank()) md5Of(file) == expectedMd5.lowercase()
+            else sizeBytes > 0 && file.length() == sizeBytes
+        } catch (e: Exception) {
+            Timber.w(e, "缓存 md5 计算失败，视为未命中")
+            false
+        }
+    }
+
+    /** 读 APK 清单的实际 versionName（安装前识破「改名冒充」）；解析失败返回 null（不阻断）。 */
+    private fun apkVersionName(context: Context, apk: File): String? = try {
+        context.packageManager
+            .getPackageArchiveInfo(apk.absolutePath, 0)
+            ?.versionName
+    } catch (e: Exception) {
+        Timber.w(e, "APK 版本号解析失败（忽略，按未知处理）")
+        null
+    }
+
+    /** 自动清理：删除更新目录里除 [keep] 外的全部 .apk（含 .tmp 半截文件）。 */
+    private fun cleanStaleCaches(context: Context, keep: File) {
+        val dir = updateDir(context)
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            if (f.absolutePath == keep.absolutePath) continue
+            if (f.isFile && (f.name.endsWith(".apk") || f.name.endsWith(".tmp"))) {
+                if (f.delete()) Timber.i("自动清理旧更新包：%s", f.name)
+            }
+        }
+    }
+
+    /** 更新缓存条目（设置页缓存管理列表用）。 */
+    data class CacheEntry(
+        val name: String,
+        val sizeBytes: Long,
+        val lastModified: Long,
+        /** APK 清单里的实际 versionName（解析不出为 null——半截文件/非 APK）。 */
+        val versionName: String?,
+    )
+
+    /** 列出更新缓存（按修改时间倒序），供设置页缓存管理展示。 */
+    fun listCache(context: Context): List<CacheEntry> {
+        val files = updateDir(context).listFiles() ?: return emptyList()
+        return files.asSequence()
+            .filter { it.isFile && it.name.endsWith(".apk") }
+            .map {
+                CacheEntry(
+                    name = it.name,
+                    sizeBytes = it.length(),
+                    lastModified = it.lastModified(),
+                    versionName = apkVersionName(context, it),
+                )
+            }
+            .sortedByDescending { it.lastModified }
+            .toList()
+    }
+
+    /**
+     * 手动删除指定缓存（按文件名白名单删，防误删整个目录）。
+     * @return 实际删除的文件数
+     */
+    fun deleteCache(context: Context, names: Collection<String>): Int {
+        if (names.isEmpty()) return 0
+        val wanted = names.toSet()
+        var deleted = 0
+        for (f in updateDir(context).listFiles() ?: emptyArray()) {
+            if (f.isFile && f.name in wanted && f.delete()) deleted++
+        }
+        Timber.i("手动删除更新缓存 %d 个：%s", deleted, wanted)
+        return deleted
     }
 
     // ------------------------------------------------------------------

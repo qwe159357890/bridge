@@ -138,6 +138,8 @@ interface BridgeApi {
         val version: String = "",
         val filename: String = "",
         val size_bytes: Long = 0,
+        /** 服务端现算的 APK md5（缓存命中判定 + 下载完整性校验；老服务端可能不返回）。 */
+        val md5: String? = null,
         val notes: String = "",
     )
 

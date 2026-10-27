@@ -33,6 +33,21 @@ router = APIRouter(prefix="/updates", tags=["updates"])
 _VERSION_RE = re.compile(r"v?(\d+(?:\.\d+)+)", re.IGNORECASE)
 
 
+def _md5_of(path: Path) -> str:
+    """现算文件 md5（用户拍板：每次请求现算，永远新鲜；18MB APK 约几十毫秒）。
+
+    用途：客户端缓存命中判定 + 下载完成后的完整性校验，防「文件名相同但
+    内容被换过」（如 0.1.43 改名冒充 0.1.44 导致客户端永远无法更新）。
+    """
+    import hashlib
+
+    h = hashlib.md5()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _updates_dir() -> Path:
     """解析更新目录（相对路径相对 server 根目录）。"""
     path = Path(get_settings().updates.dir)
@@ -87,6 +102,7 @@ def _scan_latest() -> dict | None:
         "version": ".".join(str(p) for p in version),
         "filename": path.name,
         "size_bytes": path.stat().st_size,
+        "path": path,
         "notes": notes,
     }
 
@@ -130,6 +146,7 @@ async def latest_update(
         "version": latest["version"],
         "filename": latest["filename"],
         "size_bytes": latest["size_bytes"],
+        "md5": _md5_of(latest["path"]),
         "notes": latest["notes"],
     }
 

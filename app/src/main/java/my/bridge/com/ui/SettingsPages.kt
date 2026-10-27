@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -528,6 +529,12 @@ fun AboutPage() {
         // 阶段文案与下载进度（轮询 UpdateManager 的 volatile 状态，150ms 一次足够顺滑）
         var updateStage by remember { mutableStateOf("") }
         var updatePct by remember { mutableStateOf(-2) } // -2=不显示进度条 -1=不确定式 0..100=确定式
+        // 缓存管理弹窗状态
+        var cacheVisible by remember { mutableStateOf(false) }
+        var cacheList by remember {
+            mutableStateOf(emptyList<my.bridge.com.update.UpdateManager.CacheEntry>())
+        }
+        var cacheMsg by remember { mutableStateOf("") }
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -613,7 +620,85 @@ fun AboutPage() {
                     modifier = Modifier.padding(top = 8.dp),
                     textAlign = TextAlign.Center,
                 )
+                // 缓存管理入口：列出已下载的更新包（含实际版本号），有选择地手动删除——
+                // 万一下载过「假 44 实为 43」的污染缓存，从这里删掉即可恢复正常更新
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        cacheList = my.bridge.com.update.UpdateManager.listCache(context)
+                        cacheMsg = if (cacheList.isEmpty()) "暂无缓存（检查到新版本并下载后才有）" else ""
+                        cacheVisible = true
+                    },
+                ) {
+                    Text("管理更新缓存", style = MaterialTheme.typography.bodySmall)
+                }
             }
+        }
+
+        // 更新缓存管理弹窗：列表展示（文件名/大小/日期/APK 实际版本号），
+        // 单个删除 + 全部清除——自动清理误遗留时的手动兜底
+        if (cacheVisible) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { cacheVisible = false },
+                title = { Text("更新缓存管理") },
+                text = {
+                    Column {
+                        if (cacheMsg.isNotBlank()) {
+                            Text(
+                                cacheMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 320.dp),
+                        ) {
+                            items(cacheList.size) { i ->
+                                val e = cacheList[i]
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            e.name,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                        )
+                                        val ver = e.versionName?.let { " · 实际 v$it" } ?: " · 版本未知"
+                                        Text(
+                                            "%.1f MB%s%s".format(
+                                                e.sizeBytes / 1048576.0,
+                                                ver,
+                                                " · " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+                                                    .format(java.util.Date(e.lastModified)),
+                                            ),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    androidx.compose.material3.TextButton(onClick = {
+                                        my.bridge.com.update.UpdateManager.deleteCache(context, listOf(e.name))
+                                        cacheList = my.bridge.com.update.UpdateManager.listCache(context)
+                                        if (cacheList.isEmpty()) cacheMsg = "已清空"
+                                    }) { Text("删除") }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        my.bridge.com.update.UpdateManager.deleteCache(context, cacheList.map { it.name })
+                        cacheList = emptyList()
+                        cacheMsg = "已全部清除"
+                    }) { Text("全部清除") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { cacheVisible = false }) { Text("关闭") }
+                },
+            )
         }
     }
 }
