@@ -36,7 +36,7 @@ async function run() {
 
   const ws = params.get('file')
     ? `http://127.0.0.1:18080/${params.get('file')}`
-    : `ws://127.0.0.1:${port}/api/admin/stream/${device}?token=${encodeURIComponent(token)}`;
+    : `ws://127.0.0.1:${port}/api/admin/stream/${device}?kind=video&token=${encodeURIComponent(token)}`;
   const isLive = !params.get('file');
   log(`数据源: ${ws}`);
   const player = mpegts.createPlayer({type, isLive, url: ws}, {

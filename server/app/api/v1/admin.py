@@ -136,8 +136,17 @@ async def admin_stream_ws(ws: WebSocket, device_id: str) -> None:
 
     await ws.accept()
     hub = ws.app.state.stream_hub
-    queue = await hub.subscribe(device_id)
-    logger.info("管理侧订阅设备 %s 媒体流", device_id)
+    # kind 查询参数：video/screen（FLV）→ 取对应流的对齐器，中途加入/
+    # 重建的订阅者从「流头 + 最近关键帧」无缝接入（2026-10-27 根治
+    # Invalid PrevTagSize 冻结循环）；audio（ADTS 帧自同步）无需对齐。
+    kind = ws.query_params.get("kind") or ""
+    aligner = ws.app.state.flv_aligners.get((device_id, kind)) if kind else None
+    queue = await hub.subscribe(
+        device_id,
+        join_provider=(aligner.join_bytes if aligner is not None else None),
+    )
+    joined = "关键帧接入" if aligner is not None else "直连"
+    logger.info("管理侧订阅设备 %s 媒体流（kind=%s，%s）", device_id, kind or "?", joined)
     try:
         while True:
             frame = await queue.get()

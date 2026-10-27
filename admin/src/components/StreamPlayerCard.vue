@@ -203,7 +203,9 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
 
 function streamWsUrl(): string {
   const token = getToken() || ''
-  return `${wsUrl(`/api/admin/stream/${deviceId.value}`)}?token=${encodeURIComponent(token)}`
+  // kind 参数：服务端按 (device, kind) 取 FLV 对齐器，中途加入/重建
+  // 订阅时从「流头 + 最近关键帧」无缝接入（无对齐器=audio 直连）
+  return `${wsUrl(`/api/admin/stream/${deviceId.value}`)}?kind=${kind.value}&token=${encodeURIComponent(token)}`
 }
 
 /** 音频开始收听（用户手势触发，规避自动播放限制）。 */
@@ -253,13 +255,14 @@ function createVideoPlayer() {
 
 /**
  * 视频健康监控（500ms 一查，四件事）：
- * ① 平滑追帧：画面落后实时 >1.2 秒 → playbackRate 提到 1.5 倍匀速消化积压
- *    （「跳变式 seek」体感为画面隔几秒猛跳一下，2026-10-27 实测弃用）；
- *    落后 <0.6 秒回 1 倍速。积压 >8 秒（长时间停滞）才硬 seek 一次兜底；
- * ② 诊断：把浏览器解码帧数（totalVideoFrames）显示到卡片——
+ * ① 缓冲垫管理：维持 0.4~2s 缓冲垫——垫子被网络抖动耗干是「周期性卡顿」
+ *    的主因（冻住→来数据→恢复循环）；<0.4s 降到 0.85 倍速重建垫子，
+ *    >2s 1.5 倍速消化，>8s 才硬 seek 兜底（跳变式 seek 已弃用）；
+ * ② 间隙跳跃：时间轴空洞（屏幕静止无帧/源 dts 跳变）处等待无意义，
+ *    卡住 1 秒即 seek 跨到下一段缓冲；
+ * ③ 诊断：把浏览器解码帧数（totalVideoFrames）显示到卡片——
  *    「只出首帧后冻结」时若解码帧停增即定位为 video 轨解码问题；
- * ③ 自愈：currentTime 与解码帧数连续 4 秒都不动（音流正常收帧）→
- *    自动重建播放器（服务端流头缓存保证重建后能重新初始化解码器）。
+ * ④ 重建兜底：无洞可跳仍卡 4s → 自动重建播放器（流头缓存保证可重新初始化）。
  */
 function startLatencyWatch() {
   stopLatencyWatch()
@@ -273,22 +276,44 @@ function startLatencyWatch() {
       // 诊断帧数
       const q = v.getVideoPlaybackQuality?.()
       videoFrames.value = q ? q.totalVideoFrames : Math.round(v.currentTime * 30)
-      // 平滑追帧（变速优先，跳变仅作深度积压兜底）
+      // 平滑追帧 v2：维持 0.4~2s 缓冲垫（防网络抖动饿死 = 周期性卡顿的主因）。
+      // 缓冲垫太薄（<0.4s）时降到 0.85 倍速缓慢重建垫子；太厚（>2s）1.5 倍速
+      // 消化；深度积压（>8s）才硬 seek。
       if (v.buffered.length > 0 && !v.seeking && v.readyState >= 2) {
         const tail = v.buffered.end(v.buffered.length - 1)
         const lag = tail - v.currentTime
         if (lag > 8) {
           v.currentTime = Math.max(0, tail - 0.5)
           v.playbackRate = 1.0
-        } else if (lag > 1.2) {
+        } else if (lag > 2.0) {
           v.playbackRate = 1.5
-        } else if (lag < 0.6) {
+        } else if (lag < 0.4) {
+          v.playbackRate = 0.85
+        } else {
           v.playbackRate = 1.0
         }
       }
       // 停滞检测（画面不动 + 解码帧不增 = video 轨卡死）
       if (Math.abs(v.currentTime - lastT) < 0.05 && videoFrames.value === lastF) {
         stall++
+        // 间隙跳跃：时间轴存在内容空洞（屏幕静止无帧/源 dts 跳变）时
+        // currentTime 停在空洞左缘，实时数据只会填到洞右缘——等待无意义，
+        // 卡住 1 秒即 seek 跨到下一段缓冲（空洞处本来就没有画面可放）。
+        if (stall >= 2 && v.buffered.length > 1) {
+          for (let i = 0; i < v.buffered.length - 1; i++) {
+            if (v.currentTime >= v.buffered.end(i) - 0.05) {
+              const next = v.buffered.start(i + 1)
+              if (next > v.currentTime + 0.1) {
+                console.warn(`[StreamPlayer] 跳过时间轴空洞 ${v.currentTime.toFixed(2)}→${next.toFixed(2)}`)
+                v.currentTime = next + 0.05
+                v.playbackRate = 1.0
+                stall = 0
+                break
+              }
+            }
+          }
+        }
+        // 重建兜底：无洞可跳仍卡 4s → 重建播放器（流头缓存保证可重新初始化）
         if (stall >= 8) {
           stall = 0
           console.warn('[StreamPlayer] 视频轨停滞 4s，重建播放器自愈')

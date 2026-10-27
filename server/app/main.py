@@ -111,6 +111,9 @@ def create_app() -> FastAPI:
     # TS→FLV 转封装器池（流式录像实时通道，key=(device_id, kind)，流结束清理）
     ts_to_flv_converters: dict = {}
 
+    # FLV 流对齐器池（流头 + 关键帧接入点，key=(device_id, kind)，流结束清理）
+    flv_aligners: dict = {}
+
     # 设备上报配置存储（主动周期上报开关/间隔，JSON 文件持久化）
     _data_dir = _Path("data")
     report_config_store = ReportConfigStore(
@@ -145,6 +148,7 @@ def create_app() -> FastAPI:
     app.state.music_state_store = music_state_store
     app.state.stream_hub = stream_hub
     app.state.ts_to_flv_converters = ts_to_flv_converters
+    app.state.flv_aligners = flv_aligners
     app.state.report_config_store = report_config_store
     app.state.location_store = location_store
     app.state.contacts_store = contacts_store

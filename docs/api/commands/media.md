@@ -149,12 +149,19 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
 
 ## 流式通道（服务端 + 管理后台，v0.1.49；v0.1.55 服务端统一转 FLV）
 
-- **服务端**：ws.py 收 `media_stream` 事件 → 数据分片 base64 解码后经
-  `core/stream_hub.py`（StreamHub，按 device_id 的订阅者队列，**无订阅者即丢弃**，
-  不缓存回放；订阅先补发开头 512KB 流头缓存）投递给管理后台专用流 WS；
+- **服务端**：ws.py 收 `media_stream` 事件 → 数据分片 base64 解码 →（video）
+  TS→FLV 转封装 → 经 `core/stream_hub.py`（StreamHub，按 device_id 的订阅者
+  队列，**无订阅者即丢弃**，不缓存回放）投递给管理后台专用流 WS；
   起始/结束帧额外广播 `stream_status` 轻量事件（命令页自动开/关播放卡片，
-  下发成功还即预连）。设备断连时补发 `stream_status` 结束事件。
+  下发成功即预连 + 3s 轮询兜底）。设备断连时补发 `stream_status` 结束事件。
   kind 白名单：`video`（摄像头 TS）/ `audio`（ADTS）/ `screen`（投屏 FLV）。
+- **FLV 关键帧对齐（v0.1.55 根治 Invalid PrevTagSize 冻结循环）**：旧 512KB
+  盲字节缓存会在任意字节边界截断（可切在 tag 中间），且中途加入者拿到
+  「头缓存 + 当前位置实时流」存在**字节断层**，demuxer 解析成垃圾 → 画面
+  冻结；重建自愈拿同样坏缓存 → 冻结循环。现由 `core/flv_aligner.py` 把每路
+  FLV 流解析为「prefix（header+onMetaData+seq header，<1KB）+ 自最近关键帧
+  tag 起的 tail（tag 对齐，上限 8MB≈4 个 GOP）」，订阅者（WS 带 `kind` 参数）
+  从「prefix+关键帧 tail」无缝接入，字节连续、解码器直接从 GOP 边界出画。
 - **TS→FLV 转封装（v0.1.55 关键修复）**：Android MediaMuxer 的 MPEG_2_TS 产物
   时间戳有病态缺陷（PCR 用系统 boottime、dts 非单调 818ms 跳变），mpegts.js
   播放实测「只出首帧后停滞、MSE buffered 被算成 ~1.1 亿秒」（Playwright 浏览器

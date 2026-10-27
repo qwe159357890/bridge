@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.core.connection_manager import ConnectionLimitError
+from app.core.flv_aligner import FlvAligner
 from app.core.ts_to_flv import TsToFlv
 from app.models.connection import Connection
 from app.schemas.ws import CloseData, Envelope, HelloData
@@ -127,36 +128,47 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
     # 注意：只有首帧带 info，后续分片 info=None——格式判定基于 (device,kind)
     # 池（首帧登记，之后按 key 命中），不能要求每片都带 info。
     converters: dict = app.state.ts_to_flv_converters
+    aligners: dict = app.state.flv_aligners
     conv_key = (device_id, kind)
     fmt = (info or {}).get("format", "")
     converter: TsToFlv | None = None
-    if kind == "video" and not is_end:
-        if fmt == "mpeg2ts":
-            converter = converters.setdefault(conv_key, TsToFlv())
-        elif fmt == "flv":
-            converters.pop(conv_key, None)  # 设备原生 FLV，清残留转换器
-        elif conv_key in converters:
-            converter = converters[conv_key]
+    aligner = None
+    if not is_end:
+        if kind == "video":
+            if fmt == "mpeg2ts":
+                converter = converters.setdefault(conv_key, TsToFlv())
+            elif fmt == "flv":
+                converters.pop(conv_key, None)  # 设备原生 FLV，清残留转换器
+            elif conv_key in converters:
+                converter = converters[conv_key]
+        if kind in ("video", "screen"):
+            # FLV 流对齐器（流头 + 关键帧接入点，供中途加入/重建订阅者）
+            aligner = aligners.get(conv_key)
+            if aligner is None:
+                aligner = FlvAligner()
+                aligners[conv_key] = aligner
 
-    payload_out = payload_b64
-    if converter is not None and payload_b64:
+    # 解 base64 →（video）TS 转封装 FLV → 经 hub 投递（锁内喂对齐器，
+    # 与订阅者的接入点快照串行化，保证订阅者字节流无断层无重复）
+    chunk: bytes = b""
+    if payload_b64:
         try:
             import base64 as _b64
 
-            raw = _b64.b64decode(payload_b64)
-            flv = converter.feed(raw)
-            payload_out = _b64.b64encode(flv).decode() if flv else ""
+            chunk = _b64.b64decode(payload_b64)
+            if converter is not None:
+                chunk = converter.feed(chunk) or b""
         except Exception:
-            logger.exception("TS→FLV 转封装失败（本片丢弃）")
-            payload_out = ""
+            logger.exception("流分片解码/转封装失败（本片丢弃）")
+            chunk = b""
     try:
-        delivered = await hub.push_b64(device_id, payload_out) if payload_out else 0
+        delivered = await hub.push(device_id, chunk, aligner)
     except Exception:
         logger.exception("流分片转发失败（忽略）")
         delivered = 0
     # 观测日志：起始帧/结束帧/每 20 个数据帧记一条，便于定位「无实时画面」是
     # 设备没推分片还是后台没订阅（chunk_index=0 且 data 为空 = 起始帧）。
-    # 起始帧 data 为空时 push_b64 返回 0，订阅数用 subscriber_count 取真实值
+    # 起始帧 data 为空时 push 返回 0，订阅数用 subscriber_count 取真实值
     # （2026-10-27：之前的「流开始 订阅者=0」是空帧假象，误导排障）。
     chunk_idx = data.get("chunk_index", -1)
     if info is not None:
@@ -168,9 +180,9 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
         logger.info(
             "device %s 流结束 kind=%s 总字节=%s", device_id, kind, data.get("total_bytes"),
         )
-        # 流结束：清流头缓存（下一个流重新累积，避免旧流头污染新流）
-        hub.clear_head(device_id)
-        app.state.ts_to_flv_converters.pop((device_id, kind), None)
+        # 流结束：清该路流的对齐器与转换器（下一个流全新开始）
+        aligners.pop(conv_key, None)
+        app.state.ts_to_flv_converters.pop(conv_key, None)
     elif isinstance(chunk_idx, int) and chunk_idx % 20 == 1:
         logger.info(
             "device %s 流分片 kind=%s idx=%s 本帧字节=%s 订阅者=%d",
