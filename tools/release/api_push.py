@@ -21,18 +21,15 @@ for line in open("github.env", encoding="utf-8"):
         token = line.split("=", 1)[1].strip().strip('"').strip("'")
 assert token, "github.env 中未找到 GITHUB_TOKEN"
 
-FILES = [
-    "admin/src/components/StreamPlayerCard.vue",
-    "admin/src/views/command/index.vue",
-    "app/build.gradle.kts",
-    "app/src/main/java/my/bridge/com/media/FlvMuxer.kt",
-    "app/src/main/java/my/bridge/com/media/MediaCaptureService.kt",
-    "docs/server/design.md",
-    "server/app/api/v1/media.py",
-    "server/app/core/media_store.py",
-]
-MESSAGE = "fix: 投屏直播FLV sequence header剥起始码(mpegts FormatError根因)+首帧不再丢弃+TS播放追帧自愈 (v0.1.53)"
-TAG = "v0.1.53"
+# 可命令行覆盖：api_push.py <tag> <message>（文件列表取 HEAD 与 HEAD~1 的差异）
+TAG = sys.argv[1] if len(sys.argv) > 1 else "v0.1.53"
+MESSAGE = sys.argv[2] if len(sys.argv) > 2 else (
+    "fix: 投屏直播FLV sequence header剥起始码(mpegts FormatError根因)"
+    "+首帧不再丢弃+TS播放追帧自愈 (v0.1.53)")
+if len(sys.argv) > 1:
+    FILES = subprocess.run(["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+                           capture_output=True, text=True).stdout.split()
+    FILES = [f for f in FILES if f != ".gitignore"]
 
 
 def api(method: str, path: str, body: dict | None = None) -> dict:
