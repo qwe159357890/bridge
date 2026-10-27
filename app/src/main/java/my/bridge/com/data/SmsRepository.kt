@@ -145,6 +145,12 @@ object SmsRepository {
      * 调用方先校验）。
      * @param read true=标记已读，false=标记未读
      * @return 受影响行数；失败抛异常
+     *
+     * ROM 兼容（2026-10-27 修复「标记已读不生效」）：AOSP 标准路径是带 selection
+     * 批量 update content://sms，但 ColorOS 等定制 SmsProvider 常只对**单行 URI**
+     * （content://sms/<id>）的 update 放行——批量返回 0 行且库无变化。因此批量
+     * 无效时回退「先查 _id 列表 → 逐条按 _id URI 更新」（顺序：全表 → Inbox 视图，
+     * 收到的短信都在 inbox，部分 ROM 只放行 inbox）。
      */
     fun setReadState(
         context: Context,
@@ -153,13 +159,49 @@ object SmsRepository {
         selectionArgs: Array<String>,
     ): Int {
         val values = android.content.ContentValues().apply { put("read", if (read) 1 else 0) }
-        val affected = context.contentResolver.update(
-            Telephony.Sms.CONTENT_URI, values, selection, selectionArgs,
-        )
+        val cr = context.contentResolver
+
+        // ① AOSP 标准路径：批量 update
+        var affected = try {
+            cr.update(Telephony.Sms.CONTENT_URI, values, selection, selectionArgs)
+        } catch (e: Exception) {
+            Timber.w(e, "批量标记短信已读失败（回退逐条更新）")
+            0
+        }
+        if (affected > 0) {
+            Timber.i("标记短信%s：批量 affected=%d（%s）", if (read) "已读" else "未读", affected, selection)
+            return affected
+        }
+
+        // ② 回退：查出目标 _id 列表 → 逐条单行 URI 更新（全表 URI → Inbox URI）
+        var count = 0
+        try {
+            val ids = ArrayList<Long>()
+            cr.query(
+                Telephony.Sms.CONTENT_URI, arrayOf("_id"), selection, selectionArgs, null,
+            )?.use { c ->
+                while (c.moveToNext()) ids.add(c.getLong(0))
+            }
+            Timber.i("标记短信逐条回退：命中 %d 条（%s）", ids.size, selection)
+            for (pass in 0 until 2) {
+                if (count > 0) break
+                val base = if (pass == 0) Telephony.Sms.CONTENT_URI else Telephony.Sms.Inbox.CONTENT_URI
+                for (id in ids) {
+                    count += try {
+                        cr.update(android.content.ContentUris.withAppendedId(base, id), values, null, null)
+                    } catch (e: Exception) {
+                        0
+                    }
+                }
+                if (count > 0) Timber.i("标记短信逐条回退：pass=%d（%s）生效 %d 条", pass, base, count)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "逐条标记短信已读失败")
+        }
         Timber.i(
-            "标记短信%s：affected=%d（%s）",
-            if (read) "已读" else "未读", affected, selection,
+            "标记短信%s：批量=%d 逐条=%d（%s）",
+            if (read) "已读" else "未读", affected, count, selection,
         )
-        return affected
+        return count
     }
 }

@@ -18,7 +18,12 @@ import java.util.concurrent.CountDownLatch
 object ScreenCaptureHolder {
 
     /** 采集结果：success 时 path 有效；失败时 error 有内容。 */
-    class CaptureFile(val path: String, val error: String? = null) {
+    class CaptureFile(
+        val path: String,
+        val error: String? = null,
+        /** 流式「回执上传」未开启：文件不上传，执行器收到后删除本地存档并回执说明。 */
+        val skipUpload: Boolean = false,
+    ) {
         val success: Boolean get() = error == null
     }
 

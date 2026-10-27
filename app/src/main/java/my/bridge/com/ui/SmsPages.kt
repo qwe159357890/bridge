@@ -385,14 +385,23 @@ private fun ThreadDetailPage(
 
     /** 双向标记整会话（read=true 已读 / false 未读），本地乐观更新。 */
     fun markThread(read: Boolean, current: List<SmsRepository.ThreadMessage>) {
+        if (!isDefault) {
+            toast(context, "标记已读/未读需先在上方把 Bridge 设为默认短信应用")
+            return
+        }
         scope.launch {
-            withContext(Dispatchers.IO) {
-                SmsRepository.setReadState(
-                    context, read, "thread_id = ?", arrayOf(thread.threadId),
-                )
-            }
-            messages = current.map {
-                if (it.type == 1) it.copy(read = read) else it
+            try {
+                val n = withContext(Dispatchers.IO) {
+                    SmsRepository.setReadState(
+                        context, read, "thread_id = ?", arrayOf(thread.threadId),
+                    )
+                }
+                if (n <= 0) toast(context, "未标记任何短信（可能已是该状态，或短信库拒绝写入）")
+                messages = current.map {
+                    if (it.type == 1) it.copy(read = read) else it
+                }
+            } catch (e: Exception) {
+                toast(context, "标记失败：${e.message}")
             }
         }
     }
@@ -404,10 +413,14 @@ private fun ThreadDetailPage(
             return
         }
         scope.launch {
-            withContext(Dispatchers.IO) {
-                SmsRepository.setReadState(context, !msg.read, "_id = ?", arrayOf(msg.id))
+            try {
+                withContext(Dispatchers.IO) {
+                    SmsRepository.setReadState(context, !msg.read, "_id = ?", arrayOf(msg.id))
+                }
+                messages = current.map { if (it.id == msg.id) it.copy(read = !msg.read) else it }
+            } catch (e: Exception) {
+                toast(context, "标记失败：${e.message}")
             }
-            messages = current.map { if (it.id == msg.id) it.copy(read = !msg.read) else it }
         }
     }
 

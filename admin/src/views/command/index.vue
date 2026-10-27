@@ -68,17 +68,23 @@
             该分类下暂无命令
           </div>
           <div v-else class="command-grid">
-            <div
+            <!-- 描述悬停显示（卡片只留图标+名称，避免长说明挤爆卡片） -->
+            <el-tooltip
               v-for="cmd in filteredCommands"
               :key="cmd.name"
-              class="command-card"
-              :class="{ active: selectedCommand?.name === cmd.name, blocked: isBlocked(cmd) }"
-              @click="selectCommand(cmd)"
+              :content="cmd.description"
+              placement="top"
+              :show-after="250"
             >
-              <div class="command-icon">{{ cmd.icon }}</div>
-              <div class="command-name">{{ cmd.label }}</div>
-              <div class="command-desc">{{ cmd.description }}</div>
-            </div>
+              <div
+                class="command-card"
+                :class="{ active: selectedCommand?.name === cmd.name, blocked: isBlocked(cmd) }"
+                @click="selectCommand(cmd)"
+              >
+                <div class="command-icon">{{ cmd.icon }}</div>
+                <div class="command-name">{{ cmd.label }}</div>
+              </div>
+            </el-tooltip>
           </div>
 
           <!-- 参数 + 下发按钮（右区底部） -->
@@ -139,8 +145,12 @@
                   尚未获取该设备的卡信息，下方选卡为通用选项；可先下发「📱 获取SIM卡信息」命令获取实际卡列表
                 </template>
               </div>
+              <!-- 流式模式：时长参数隐藏（0=不限时自动处理），在表单顶部说明 -->
+              <div v-if="isStreamMode" class="stream-mode-hint">
+                ⏱ 流式模式不限时：下发后一直传输，点 <b>⏹ 停止采集</b> 结束。
+              </div>
               <el-form-item
-                v-for="p in selectedCommand.params"
+                v-for="p in visibleParams"
                 :key="p.name"
                 :label="p.label"
                 :required="p.required"
@@ -199,6 +209,14 @@
                 @click="handleSend"
               >
                 下发命令
+              </el-button>
+              <el-button
+                v-if="isStreamMode && form.deviceId"
+                type="warning"
+                size="large"
+                @click="stopStreamCapture"
+              >
+                ⏹ 停止采集
               </el-button>
               <el-tooltip
                 v-if="showForceSend"
@@ -592,6 +610,38 @@ const STREAM_COMMAND_KINDS: Record<string, 'video' | 'audio' | 'screen'> = {
   record_audio: 'audio',
   screen_live: 'screen',
 }
+
+/**
+ * 流式模式（2026-10-27 用户拍板）：screen_live 天生流式；record_video/record_audio
+ * 勾选「流式模式」后进入。流式不限时——时长参数隐藏（duration=0 自动下发），
+ * 用「⏹ 停止采集」按钮结束。
+ */
+const isStreamMode = computed(() => {
+  const cmd = selectedCommand.value
+  if (!cmd) return false
+  if (cmd.name === 'screen_live') return true
+  return (cmd.name === 'record_video' || cmd.name === 'record_audio') && !!params.stream
+})
+
+/** 表单可见参数：流式模式下隐藏时长（duration=0 由 collectParams 自动下发）。 */
+const visibleParams = computed(() => {
+  const cmd = selectedCommand.value
+  if (!cmd) return []
+  if (!isStreamMode.value) return cmd.params
+  return cmd.params.filter((p) => p.name !== 'duration')
+})
+
+/** 停止当前设备的流式采集（流式模式专用按钮，等价下发 stream_stop）。 */
+async function stopStreamCapture() {
+  if (!form.deviceId) return
+  try {
+    const r = await sendCommand(form.deviceId, 'stream_stop', {})
+    ElMessage.success(`停止命令已下发（${r.command_id.slice(0, 8)}…）`)
+    await load()
+  } catch {
+    /* 失败提示已由拦截器统一弹出 */
+  }
+}
 const deviceNameMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   for (const d of devices.value) map[d.device_id] = d.device_name
@@ -784,6 +834,8 @@ function collectParams(): Record<string, any> {
       out[p.name] = v
     }
   }
+  // 流式模式：时长固定 0（不限时），表单里已隐藏该参数
+  if (isStreamMode.value) out.duration = 0
   return out
 }
 
@@ -1232,11 +1284,6 @@ onBeforeUnmount(() => {
   color: #303133;
   margin-bottom: 4px;
 }
-.command-desc {
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.4;
-}
 .empty-commands {
   text-align: center;
   color: #c0c4cc;
@@ -1267,6 +1314,15 @@ onBeforeUnmount(() => {
   color: #909399;
   font-size: 13px;
   padding: 4px 0 8px;
+}
+.stream-mode-hint {
+  font-size: 13px;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
 }
 .sim-hint {
   font-size: 12px;

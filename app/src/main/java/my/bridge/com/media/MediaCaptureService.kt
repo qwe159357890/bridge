@@ -83,6 +83,7 @@ class MediaCaptureService : Service() {
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_ENABLE_AUDIO = "enable_audio"
         const val EXTRA_STREAM = "stream"
+        const val EXTRA_UPLOAD = "upload"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_CONSENT_DATA = "consent_data"
 
@@ -459,8 +460,15 @@ class MediaCaptureService : Service() {
      * - 分片推送失败不中断直播（fire-and-forget，服务端无订阅者时分片直接丢弃）。
      */
     private fun captureScreenLive(intent: Intent) {
-        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 300).coerceIn(10, 3600)
+        // duration_sec=0 = 不限时（管理后台流式下发默认），直到 stream_stop 手动停
+        val rawSec = intent.getIntExtra(EXTRA_DURATION_SEC, 300)
+        val unlimited = rawSec <= 0
+        val durationSec = if (unlimited) 0 else rawSec.coerceIn(10, 3600)
+        // 回执上传开关（v0.1.55）：false = 直播结束即弃，不上传 FLV 存档
+        val uploadArchive = intent.getBooleanExtra(EXTRA_UPLOAD, false)
+        val startedAllAt = SystemClock.elapsedRealtime()
         val p = requireProjection(intent)
+        Timber.i("投屏打点：授权就绪 +%dms", SystemClock.elapsedRealtime() - startedAllAt)
         streamStopFlag = false
         streamActive = true
         val metrics = realDisplayMetrics()
@@ -494,6 +502,18 @@ class MediaCaptureService : Service() {
                     android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
                 )
                 setInteger(android.media.MediaFormat.KEY_BIT_RATE, 2_500_000)
+                // 显式 CBR（2026-10-27 码率失控排查）：未设 bitrate mode 时设备默认
+                // 多为 VBR（KEY_BIT_RATE 只是均值，动态画面可数倍超出——实测 22Mbps
+                // 打爆 WiFi 上行 → 发送积压爆发 → 浏览器端「断流十几秒→猛跳」）。
+                // CBR 恒定 2.5Mbps，发送速率可预测；不支持 CBR 的编码器降级回退。
+                try {
+                    setInteger(
+                        android.media.MediaFormat.KEY_BITRATE_MODE,
+                        android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR,
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "CBR 设置失败（降级默认 VBR）")
+                }
                 setInteger(android.media.MediaFormat.KEY_FRAME_RATE, 30)
                 setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 2)
                 // 静止期重复帧（2026-10-27 用户反馈根治）：Surface 无新帧时编码器
@@ -507,7 +527,21 @@ class MediaCaptureService : Service() {
             inputSurface = codec.createInputSurface()
             display.setSurface(inputSurface)
             codec.start()
-            Timber.i("投屏直播开始（最长 %d 秒，%dx%d@30，2.5 Mbps）", durationSec, w, h)
+            Timber.i(
+                "投屏打点：编码器就绪 +%dms（%dx%d@30，CBR 2.5Mbps，%s）",
+                SystemClock.elapsedRealtime() - startedAllAt, w, h,
+                if (unlimited) "不限时" else "最长 ${durationSec}s",
+            )
+            // 立即请求同步帧：屏幕静止时 Surface 无新帧 → 首帧要等下一次画面更新
+            // 才编码输出（启动黑屏 ~14s 的主要嫌疑）。request-sync 让编码器立即
+            // 重编当前 Surface 内容，首帧即刻产出（2026-10-27 启动黑屏优化）。
+            runCatching {
+                codec.setParameters(
+                    android.os.Bundle().apply {
+                        putInt(android.media.MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                    },
+                )
+            }
 
             val dir = mediaDir(this).apply { mkdirs() }
             val file = File(dir, "screen_${System.currentTimeMillis()}.flv")
@@ -526,12 +560,16 @@ class MediaCaptureService : Service() {
             var csd0: ByteArray? = null
             var csd1: ByteArray? = null
             var metadataWritten = false
+            var firstFrameLogged = false
+            var lastStatAt = 0L
+            var lastStatBytes = 0L
 
             FileOutputStream(file).use { out ->
                 val muxer = FlvMuxer(out)
                 muxer.writeHeader()
                 val startAt = SystemClock.elapsedRealtime()
-                val totalMs = durationSec * 1000L
+                // 不限时模式用 24h 上限兜底（真实停止靠 streamStopFlag）
+                val totalMs = if (unlimited) 86_400_000L else durationSec * 1000L
                 var lastPushAt = 0L
                 var lastPct = -1
 
@@ -540,6 +578,10 @@ class MediaCaptureService : Service() {
                     if (streamStopFlag || elapsed >= totalMs) break
 
                     val obi = codec.dequeueOutputBuffer(info, 10_000)
+                    if (!firstFrameLogged && obi >= 0) {
+                        firstFrameLogged = true
+                        Timber.i("投屏打点：首帧输出 +%dms", SystemClock.elapsedRealtime() - startedAllAt)
+                    }
                     when {
                         obi == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             val of = codec.outputFormat
@@ -582,10 +624,23 @@ class MediaCaptureService : Service() {
                             offset = off
                             chunkIndex = idx
                         }
-                        val pct = (minOf(elapsed, totalMs) * 100 / totalMs).toInt()
-                        if (pct != lastPct) {
-                            lastPct = pct
-                            reportCaptureProgress(pct)
+                        // 不限时模式无固定进度，只按 10s 周期打实际码率（验证 CBR 是否生效）
+                        if (unlimited) {
+                            if (now - lastStatAt >= 10_000) {
+                                val bytes = file.length()
+                                Timber.i(
+                                    "投屏码率采样：%d kbps（累计 %d KB / %d 分片）",
+                                    (bytes - lastStatBytes) * 8 / 10 / 1000, bytes / 1024, chunkIndex,
+                                )
+                                lastStatAt = now
+                                lastStatBytes = bytes
+                            }
+                        } else {
+                            val pct = (minOf(elapsed, totalMs) * 100 / totalMs).toInt()
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                reportCaptureProgress(pct)
+                            }
                         }
                     }
                 }
@@ -595,9 +650,19 @@ class MediaCaptureService : Service() {
             if (file.length() <= 0L) {
                 throw IllegalStateException("直播产物为空（屏幕无有效画面或编码器异常）")
             }
-            Timber.i("投屏直播结束（%d ms，FLV %d 字节，%d 分片）", durationSec * 1000L, file.length(), chunkIndex)
+            Timber.i(
+                "投屏直播结束（%d ms，FLV %d 字节，%d 分片，平均 %d kbps，回执上传=%b）",
+                SystemClock.elapsedRealtime() - startedAllAt, file.length(), chunkIndex,
+                file.length() * 8 / 1000 / maxOf(1, (SystemClock.elapsedRealtime() - startedAllAt) / 1000),
+                uploadArchive,
+            )
             finishStream(file, "screen", offset, chunkIndex)
-            complete(ScreenCaptureHolder.CaptureFile(file.absolutePath))
+            complete(
+                ScreenCaptureHolder.CaptureFile(
+                    file.absolutePath,
+                    skipUpload = !uploadArchive,
+                ),
+            )
         } catch (e: Exception) {
             runCatching { codec.stop() }
             // 异常路径也补一个结束标志，让后台播放器及时收尾
@@ -762,7 +827,15 @@ class MediaCaptureService : Service() {
      */
     @Suppress("DEPRECATION")
     private fun captureVideo(intent: Intent, stream: Boolean) {
-        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 10).coerceIn(3, 600)
+        // 流式模式 duration<=0 = 不限时（管理后台自动传 0），直到 stream_stop
+        val rawSec = intent.getIntExtra(EXTRA_DURATION_SEC, 10)
+        val unlimited = stream && rawSec <= 0
+        val durationSec = when {
+            unlimited -> 0
+            stream -> rawSec.coerceIn(10, 600)
+            else -> rawSec.coerceIn(3, 60)
+        }
+        val uploadArchive = intent.getBooleanExtra(EXTRA_UPLOAD, false)
         val preset = videoPreset(intent.getStringExtra(EXTRA_QUALITY) ?: "medium")
         val enableAudio = intent.getBooleanExtra(EXTRA_ENABLE_AUDIO, true)
         val front = intent.getStringExtra(EXTRA_CAMERA_FACING) == "front"
@@ -775,7 +848,8 @@ class MediaCaptureService : Service() {
         // 接管相机资源 + 领取本代 era + watchdog（与拍照同款防御，见 capturePhoto）
         val myEra = takeoverCameraResources()
         val watchdog = Runnable { watchdogTakeover(myEra) }
-        Handler(Looper.getMainLooper()).postDelayed(watchdog, durationSec * 1000L + 45_000)
+        val watchdogMs = if (unlimited) 86_400_000L + 45_000 else durationSec * 1000L + 45_000
+        Handler(Looper.getMainLooper()).postDelayed(watchdog, watchdogMs)
         val thread = HandlerThread("bridge-video").also { it.start() }
         runCatching { cameraThread?.quitSafely() }
         cameraThread = thread
@@ -866,9 +940,13 @@ class MediaCaptureService : Service() {
                 recorderRef.prepare()
                 recorderRef.start()
                 Timber.i(
-                    "录像开始（%s %d 秒，%dx%d@%d，%d kbps，伴音=%s）",
-                    if (stream) "流式" else "普通", durationSec, p.width, p.height, p.fps,
-                    p.bitrate / 1000, enableAudio,
+                    "录像开始（%s，%dx%d@%d，%d kbps，伴音=%s）",
+                    when {
+                        unlimited -> "流式不限时"
+                        stream -> "流式最长 ${durationSec} 秒"
+                        else -> "普通 ${durationSec} 秒"
+                    },
+                    p.width, p.height, p.fps, p.bitrate / 1000, enableAudio,
                 )
                 if (stream) {
                     // 流式循环：分片推送 + 停止标志轮询（间隔与分片节奏一致）
@@ -882,7 +960,8 @@ class MediaCaptureService : Service() {
                     }
                     sendStreamMessage("video", 0, "", 0, 0, false, streamInfo)
                     val startAt = SystemClock.elapsedRealtime()
-                    val totalMs = durationSec * 1000L
+                    // 流式不限时：24h 兜底（真实停止靠 streamStopFlag）
+                    val totalMs = if (unlimited) 86_400_000L else durationSec * 1000L
                     var lastPct = -1
                     while (true) {
                         val elapsed = SystemClock.elapsedRealtime() - startAt
@@ -896,10 +975,12 @@ class MediaCaptureService : Service() {
                             offset = off
                             chunkIndex = idx
                         }
-                        val pct = (minOf(SystemClock.elapsedRealtime() - startAt, totalMs) * 100 / totalMs).toInt()
-                        if (pct != lastPct) {
-                            lastPct = pct
-                            reportCaptureProgress(pct)
+                        if (!unlimited) {
+                            val pct = (minOf(SystemClock.elapsedRealtime() - startAt, totalMs) * 100 / totalMs).toInt()
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                reportCaptureProgress(pct)
+                            }
                         }
                     }
                 } else {
@@ -947,7 +1028,8 @@ class MediaCaptureService : Service() {
         }
 
         try {
-            if (!done.await(durationSec * 1000L + 20_000, TimeUnit.MILLISECONDS)) {
+            val awaitMs = if (unlimited) 86_400_000L + 20_000 else durationSec * 1000L + 20_000
+            if (!done.await(awaitMs, TimeUnit.MILLISECONDS)) {
                 throw IllegalStateException("录像超时（相机无响应）")
             }
         } finally {
@@ -957,7 +1039,12 @@ class MediaCaptureService : Service() {
             restoreVolumes()
         }
         error?.let { throw IllegalStateException("录像失败：$it") }
-        complete(ScreenCaptureHolder.CaptureFile(saved?.absolutePath ?: ""))
+        complete(
+            ScreenCaptureHolder.CaptureFile(
+                saved?.absolutePath ?: "",
+                skipUpload = stream && !uploadArchive,
+            ),
+        )
     }
 
     // ------------------------------------------------------------------
@@ -971,7 +1058,15 @@ class MediaCaptureService : Service() {
      * 后台 Web Audio 逐段解码实时出声（约 1~2 秒延迟）。
      */
     private fun captureAudio(intent: Intent, stream: Boolean) {
-        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 30).coerceIn(5, 600)
+        // 流式模式 duration<=0 = 不限时（管理后台自动传 0），直到 stream_stop
+        val rawSec = intent.getIntExtra(EXTRA_DURATION_SEC, 30)
+        val unlimited = stream && rawSec <= 0
+        val durationSec = when {
+            unlimited -> 0
+            stream -> rawSec.coerceIn(10, 600)
+            else -> rawSec.coerceIn(5, 300)
+        }
+        val uploadArchive = intent.getBooleanExtra(EXTRA_UPLOAD, false)
         val (sampleRate, bitrate, channels) = audioPreset(intent.getStringExtra(EXTRA_QUALITY) ?: "medium")
         if (stream) {
             streamStopFlag = false
@@ -1014,7 +1109,8 @@ class MediaCaptureService : Service() {
             }
             sendStreamMessage("audio", 0, "", 0, 0, false, streamInfo)
             val startAt = SystemClock.elapsedRealtime()
-            val totalMs = durationSec * 1000L
+            // 流式不限时：24h 兜底（真实停止靠 streamStopFlag）
+            val totalMs = if (unlimited) 86_400_000L else durationSec * 1000L
             var lastPct = -1
             while (true) {
                 val elapsed = SystemClock.elapsedRealtime() - startAt
@@ -1026,10 +1122,12 @@ class MediaCaptureService : Service() {
                     offset = off
                     chunkIndex = idx
                 }
-                val pct = (minOf(SystemClock.elapsedRealtime() - startAt, totalMs) * 100 / totalMs).toInt()
-                if (pct != lastPct) {
-                    lastPct = pct
-                    reportCaptureProgress(pct)
+                if (!unlimited) {
+                    val pct = (minOf(SystemClock.elapsedRealtime() - startAt, totalMs) * 100 / totalMs).toInt()
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        reportCaptureProgress(pct)
+                    }
                 }
             }
         } else {
@@ -1055,7 +1153,12 @@ class MediaCaptureService : Service() {
             throw IllegalStateException("录音文件生成失败")
         }
         if (stream) finishStream(target, "audio", offset, chunkIndex)
-        complete(ScreenCaptureHolder.CaptureFile(target.absolutePath))
+        complete(
+            ScreenCaptureHolder.CaptureFile(
+                target.absolutePath,
+                skipUpload = stream && !uploadArchive,
+            ),
+        )
     }
 
     // ------------------------------------------------------------------

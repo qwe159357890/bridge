@@ -293,12 +293,14 @@ COMMANDS: list[dict[str, Any]] = [
                  placeholder="3~60 秒", description="录制时长（秒）")]),
     _cmd("screen_live", "投屏直播", "media", "🖥️",
          "把客户端屏幕实时直播到本页（约 1 秒延迟）：下发后播放器自动弹出实时观看，"
-         "持续到最长时长结束或下发「停止流式」提前结束；授权方式同截屏"
-         "（首次需设备端点一次「立即开始」，之后免确认）；直播同时录 FLV 存档自动上传，"
-         "可在「媒体文件」页回放",
-         [_param("duration", "最长时长(秒)", PARAM_TYPE_NUMBER, default=300,
-                 placeholder="10~3600 秒",
-                 description="直播最长持续时长（秒），可随时用 stream_stop 提前结束")]),
+         "持续到点「⏹ 停止采集」或最长时长结束；授权方式同截屏"
+         "（首次需设备端点一次「立即开始」，之后免确认）；"
+         "「回执上传」开启时直播存档（FLV）结束后自动上传，可在「媒体文件」页回放",
+         [_param("duration", "最长时长(秒)", PARAM_TYPE_NUMBER, default=0,
+                 placeholder="0 = 不限时（推荐）；或 10~3600 秒",
+                 description="直播最长持续时长（秒），0 = 不限时直到手动停止"),
+          _param("upload", "回执上传", PARAM_TYPE_SWITCH, default=False,
+                 description="流结束后把完整存档（FLV）上传到服务器；默认关闭（只实时观看，结束后即弃）")]),
     _cmd("take_photo", "拍照", "media", "📷", "调用客户端摄像头静音拍照并上传（无需设备端确认；通知栏仅显示静默的「运行中」提示，属系统硬性要求）",
          [_param("camera", "摄像头", PARAM_TYPE_SELECT, default="back",
                  options=[{"value": "back", "label": "后置（默认）"},
@@ -322,11 +324,13 @@ COMMANDS: list[dict[str, Any]] = [
                  description="同时用麦克风录伴音；需麦克风权限，关闭则录无声视频"),
           _param("stream", "流式模式", PARAM_TYPE_SWITCH, default=False,
                  description="边录边推：后台实时观看（约 1~2 秒延迟），Android 8.0+ 支持；"
-                             "同时仍生成文件，流结束后照常上传。开启后 duration 仅作为"
-                             "自动停止倒计时，也可用「停止流式采集」命令手动停")]),
+                             "流式模式下时长填 0 = 不限时（后台自动处理），点「⏹ 停止采集」结束"),
+          _param("upload", "回执上传", PARAM_TYPE_SWITCH, default=False,
+                 description="流结束后把完整录像上传到服务器存档；默认关闭（只实时观看，结束后即弃）"
+                             "；非流式模式始终上传")]),
     _cmd("stream_stop", "停止流式采集", "media", "⏹️",
-         "停止客户端正在进行的流式录像/录音（流式模式），推送最后一个分片后"
-         "按正常流程上传完整文件", []),
+         "停止客户端正在进行的流式录像/录音/投屏直播，推送最后一个分片后"
+         "按「回执上传」开关决定是否上传完整文件", []),
     _cmd("record_audio", "录音", "media", "🎙️",
          "使用客户端麦克风录制一段声音并上传（借鉴 autox；M4A/AAC 编码；"
          "无需设备端确认，通知栏仅显示静默的「运行中」提示，属系统硬性要求）",
@@ -339,8 +343,10 @@ COMMANDS: list[dict[str, Any]] = [
                  placeholder="5~300 秒", description="录制时长（秒）"),
           _param("stream", "流式模式", PARAM_TYPE_SWITCH, default=False,
                  description="边录边推：后台实时收听（约 1~2 秒延迟，Web Audio 解码出声）；"
-                             "同时仍生成文件，流结束后照常上传。开启后 duration 仅作为"
-                             "自动停止倒计时，也可用「停止流式采集」命令手动停")]),
+                             "流式模式下时长填 0 = 不限时（后台自动处理），点「⏹ 停止采集」结束"),
+          _param("upload", "回执上传", PARAM_TYPE_SWITCH, default=False,
+                 description="流结束后把完整录音上传到服务器存档；默认关闭（只实时收听，结束后即弃）"
+                             "；非流式模式始终上传")]),
     _cmd("clear_media", "清理设备媒体", "media", "🧹",
          "清空客户端本地 media/ 目录的媒体残留（上传失败的孤儿文件），回执清理数量与释放空间；"
          "正常采集产物上传成功即删，无需常规清理；正在采集时拒绝执行。"

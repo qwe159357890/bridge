@@ -1100,11 +1100,16 @@ object CommandModule {
         val name = command.command
         val isRecord = mode == MediaCaptureService.MODE_RECORD
         val isLive = mode == MediaCaptureService.MODE_SCREEN_LIVE
-        // 录屏 3~60 秒；投屏直播 10~3600 秒（自动停止倒计时，stream_stop 可提前停）
+        // 录屏 3~60 秒；投屏直播 0=不限时（推荐，管理后台自动传 0）、10~3600 秒；
+        // 不限时直到 stream_stop 手动停，24h 兜底防僵尸
         val durationSec =
             if (isRecord) command.intParam("duration", 10, 3, 60)
-            else if (isLive) command.intParam("duration", 300, 10, 3600)
-            else 0
+            else if (isLive) {
+                val raw = command.params.get("duration")
+                    ?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                if (raw <= 0) 0 else raw.coerceIn(10, 3600)
+            } else 0
+        val uploadArchive = command.boolParam("upload")
         val actionLabel = when {
             isRecord -> "录屏"
             isLive -> "投屏直播"
@@ -1167,7 +1172,10 @@ object CommandModule {
         val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
             putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
             putExtra(MediaCaptureService.EXTRA_MODE, mode)
-            if (isRecord || isLive) putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+            if (isRecord || isLive) {
+                putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+                putExtra(MediaCaptureService.EXTRA_UPLOAD, uploadArchive)
+            }
             if (!reuse) {
                 putExtra(MediaCaptureService.EXTRA_RESULT_CODE, resultCode)
                 putExtra(
@@ -1187,7 +1195,12 @@ object CommandModule {
             ScreenCaptureHolder.capture.remove(command.commandId)
             return CommandResult(id, name, false, "$actionLabel 采集服务启动失败")
         }
-        val waitMs = if (isRecord || isLive) durationSec * 1000L + CAPTURE_TIMEOUT_MS else CAPTURE_TIMEOUT_MS
+        // 不限时（duration=0）：等待上限 24h 兜底，真实结束靠 stream_stop
+        val waitMs = when {
+            isLive && durationSec == 0 -> 86_400_000L + CAPTURE_TIMEOUT_MS
+            isRecord || isLive -> durationSec * 1000L + CAPTURE_TIMEOUT_MS
+            else -> CAPTURE_TIMEOUT_MS
+        }
         val done = captureOutcome.latch.await(waitMs, TimeUnit.MILLISECONDS)
         val capture = captureOutcome.value
         if (!done || capture == null) {
@@ -1195,6 +1208,11 @@ object CommandModule {
         }
         if (!capture.success) {
             return CommandResult(id, name, false, capture.error ?: "$actionLabel 失败")
+        }
+        // 流式「回执上传」未开启：删除本地存档，直接成功回执（只实时观看过，不留档）
+        if (capture.skipUpload) {
+            runCatching { File(capture.path).delete() }
+            return CommandResult(id, name, true, "$actionLabel 已停止（回执上传未开启，存档未保留）")
         }
 
         // ③ 上传
@@ -1314,10 +1332,14 @@ object CommandModule {
                 "流式录像需要 Android 8.0+（MPEG-2 TS 容器），当前系统 ${Build.VERSION.SDK_INT}，请关闭流式模式",
             )
         }
-        // 流式模式 duration 语义变为自动停止倒计时（可被 stream_stop 提前终止），上限放宽到 10 分钟
+        // 流式模式：duration 0=不限时（管理后台自动传 0），直到 stream_stop；非流式按原范围
+        val uploadArchive = command.boolParam("upload")
         val durationSec =
-            if (stream) command.intParam("duration", 60, 10, 600)
-            else command.intParam("duration", 10, 3, 60)
+            if (stream) {
+                val raw = command.params.get("duration")
+                    ?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                if (raw <= 0) 0 else raw.coerceIn(10, 600)
+            } else command.intParam("duration", 10, 3, 60)
 
         val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
         ScreenCaptureHolder.capture[command.commandId] = captureOutcome
@@ -1329,6 +1351,7 @@ object CommandModule {
             putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
             putExtra(MediaCaptureService.EXTRA_ENABLE_AUDIO, enableAudio)
             putExtra(MediaCaptureService.EXTRA_STREAM, stream)
+            putExtra(MediaCaptureService.EXTRA_UPLOAD, uploadArchive)
         }
         val started = try {
             ContextCompat.startForegroundService(context, serviceIntent)
@@ -1341,14 +1364,20 @@ object CommandModule {
             ScreenCaptureHolder.capture.remove(command.commandId)
             return CommandResult(id, name, false, "录像服务启动失败")
         }
-        // 录制时长 + 授权/启动/编码缓冲
-        val done = captureOutcome.latch.await(durationSec * 1000L + 30_000, TimeUnit.MILLISECONDS)
+        // 录制时长 + 授权/启动/编码缓冲；不限时（duration=0）等待上限 24h 兜底
+        val awaitMs = if (durationSec == 0) 86_400_000L + 30_000 else durationSec * 1000L + 30_000
+        val done = captureOutcome.latch.await(awaitMs, TimeUnit.MILLISECONDS)
         val capture = captureOutcome.value
         if (!done || capture == null) {
             return CommandResult(id, name, false, "录像超时（相机无响应）")
         }
         if (!capture.success) {
             return CommandResult(id, name, false, capture.error ?: "录像失败")
+        }
+        // 流式「回执上传」未开启：删除本地存档，直接成功回执
+        if (capture.skipUpload) {
+            runCatching { File(capture.path).delete() }
+            return CommandResult(id, name, true, "录像已停止（回执上传未开启，存档未保留）")
         }
         return uploadCaptureFile(deviceStore, apiClient, id, name, "video", File(capture.path))
     }
@@ -1382,10 +1411,14 @@ object CommandModule {
             return CommandResult(id, name, false, "quality 参数只支持 low/medium/high，收到：$quality")
         }
         val stream = command.boolParam("stream")
-        // 流式模式 duration 语义变为自动停止倒计时（可被 stream_stop 提前终止），上限放宽到 10 分钟
+        // 流式模式：duration 0=不限时（管理后台自动传 0），直到 stream_stop；非流式按原范围
+        val uploadArchive = command.boolParam("upload")
         val durationSec =
-            if (stream) command.intParam("duration", 60, 10, 600)
-            else command.intParam("duration", 30, 5, 300)
+            if (stream) {
+                val raw = command.params.get("duration")
+                    ?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                if (raw <= 0) 0 else raw.coerceIn(10, 600)
+            } else command.intParam("duration", 30, 5, 300)
 
         val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
         ScreenCaptureHolder.capture[command.commandId] = captureOutcome
@@ -1395,6 +1428,7 @@ object CommandModule {
             putExtra(MediaCaptureService.EXTRA_QUALITY, quality)
             putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
             putExtra(MediaCaptureService.EXTRA_STREAM, stream)
+            putExtra(MediaCaptureService.EXTRA_UPLOAD, uploadArchive)
         }
         val started = try {
             ContextCompat.startForegroundService(context, serviceIntent)
@@ -1407,13 +1441,19 @@ object CommandModule {
             ScreenCaptureHolder.capture.remove(command.commandId)
             return CommandResult(id, name, false, "录音服务启动失败")
         }
-        val done = captureOutcome.latch.await(durationSec * 1000L + 20_000, TimeUnit.MILLISECONDS)
+        val awaitMs = if (durationSec == 0) 86_400_000L + 20_000 else durationSec * 1000L + 20_000
+        val done = captureOutcome.latch.await(awaitMs, TimeUnit.MILLISECONDS)
         val capture = captureOutcome.value
         if (!done || capture == null) {
             return CommandResult(id, name, false, "录音超时（麦克风无响应）")
         }
         if (!capture.success) {
             return CommandResult(id, name, false, capture.error ?: "录音失败")
+        }
+        // 流式「回执上传」未开启：删除本地存档，直接成功回执
+        if (capture.skipUpload) {
+            runCatching { File(capture.path).delete() }
+            return CommandResult(id, name, true, "录音已停止（回执上传未开启，存档未保留）")
         }
         return uploadCaptureFile(deviceStore, apiClient, id, name, "audio", File(capture.path))
     }
