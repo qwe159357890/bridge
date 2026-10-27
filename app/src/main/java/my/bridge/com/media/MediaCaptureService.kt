@@ -14,6 +14,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioManager
+import android.media.CamcorderProfile
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaRecorder
@@ -353,19 +354,24 @@ class MediaCaptureService : Service() {
         val front = intent.getStringExtra(EXTRA_CAMERA_FACING) == "front"
         muteSystemVolume()
 
-        cameraThread = HandlerThread("bridge-camera").also { it.start() }
-        val cameraHandler = Handler(cameraThread!!.looper)
+        // 防御性清理：上次异常残留的相机先释放（与录像同款，autox 思路）
+        cleanupStaleCameraResources()
+        val thread = HandlerThread("bridge-camera").also { it.start() }
+        runCatching { cameraThread?.quitSafely() }
+        cameraThread = thread
+        val cameraHandler = Handler(thread.looper)
         val done = CountDownLatch(1)
         var error: String? = null
         var saved: File? = null
 
         cameraHandler.post {
+            var cam: android.hardware.Camera? = null
             try {
                 val cameraId = pickCamera(front)
-                @Suppress("DEPRECATION")
-                val cam = android.hardware.Camera.open(cameraId)
+                cam = android.hardware.Camera.open(cameraId)
                 camera = cam
-                runCatching { cam.enableShutterSound(false) }
+                val opened = cam!!
+                runCatching { opened.enableShutterSound(false) }
 
                 val info = android.hardware.Camera.CameraInfo()
                 @Suppress("DEPRECATION")
@@ -374,10 +380,10 @@ class MediaCaptureService : Service() {
                 val texture = SurfaceTexture(0)
                 previewTexture = texture
                 @Suppress("DEPRECATION")
-                cam.setPreviewTexture(texture)
+                opened.setPreviewTexture(texture)
 
                 @Suppress("DEPRECATION")
-                val params = cam.parameters
+                val params = opened.parameters
                 @Suppress("DEPRECATION")
                 params.supportedPictureSizes?.maxByOrNull { it.width * it.height }?.let { size ->
                     params.setPictureSize(size.width, size.height)
@@ -389,11 +395,12 @@ class MediaCaptureService : Service() {
                 }
                 params.setRotation(rotation)
                 @Suppress("DEPRECATION")
-                cam.parameters = params
-                cam.startPreview()
+                opened.parameters = params
+                opened.startPreview()
 
+                val jpegDone = CountDownLatch(1)
                 @Suppress("DEPRECATION")
-                cam.takePicture(null, null) { data, _ ->
+                opened.takePicture(null, null) { data, _ ->
                     try {
                         if (data != null && data.isNotEmpty()) {
                             val dir = mediaDir(this@MediaCaptureService).apply { mkdirs() }
@@ -407,17 +414,28 @@ class MediaCaptureService : Service() {
                     } catch (e: Exception) {
                         error = "照片保存失败：${e.message}"
                     } finally {
-                        done.countDown()
+                        jpegDone.countDown()
                     }
+                }
+                // 关键修复：takePicture 是异步的，必须在本线程等 JPEG 回调完成后
+                // 才进入 finally 释放相机——以前回调未到就 release，拍照竞态超时/
+                // 相机状态异常
+                if (!jpegDone.await(15, TimeUnit.SECONDS) && error == null) {
+                    error = "拍照超时（相机无响应）"
                 }
             } catch (e: Exception) {
                 Timber.e(e, "拍照异常")
-                error = e.toString() // e.message 可能为 null（如 NPE），toString 保证非空
-                done.countDown()
+                error = describeCameraError(e)
             } finally {
-                // 相机清理由相机线程自己做（主线程跨线程 release 有竞态风险）；
-                // 主线程 finally 的 releaseCamera() 此时已是 no-op（camera 已置 null）
-                releaseCamera()
+                cam?.let { c ->
+                    runCatching { c.stopPreview() }
+                    runCatching { c.release() }
+                }
+                if (camera === cam) camera = null
+                runCatching { previewTexture?.release() }
+                if (previewTexture != null) previewTexture = null
+                done.countDown()
+                runCatching { thread.quitSafely() }
             }
         }
 
@@ -427,7 +445,6 @@ class MediaCaptureService : Service() {
             }
         } finally {
             restoreVolumes()
-            releaseCamera()
         }
         error?.let { throw IllegalStateException("拍照失败：$it") }
         complete(ScreenCaptureHolder.CaptureFile(saved?.absolutePath ?: ""))
@@ -471,19 +488,24 @@ class MediaCaptureService : Service() {
         val front = intent.getStringExtra(EXTRA_CAMERA_FACING) == "front"
         muteSystemVolume()
 
-        val w = preset.width and Int.MAX_VALUE - 1 // 取偶（H264 编码器要求）
-        val h = preset.height and Int.MAX_VALUE - 1
-
-        cameraThread = HandlerThread("bridge-video").also { it.start() }
-        val cameraHandler = Handler(cameraThread!!.looper)
+        // 防御性清理（autox _cleanupAllResources 思路）：上一次异常残留的 recorder/camera
+        // 若未释放，会一直占用相机 → 本次 Camera.open 或后续系统调用报「摄像头被占用」
+        cleanupStaleCameraResources()
+        val thread = HandlerThread("bridge-video").also { it.start() }
+        runCatching { cameraThread?.quitSafely() }
+        cameraThread = thread
+        val cameraHandler = Handler(thread.looper)
         val done = CountDownLatch(1)
         var error: String? = null
         var saved: File? = null
 
         cameraHandler.post {
+            // 线程局部引用：finally 释放的就是本线程打开的实例，避免与防御清理/超时清理竞态
+            var cam: android.hardware.Camera? = null
+            var rec: MediaRecorder? = null
             try {
                 val cameraId = pickCamera(front)
-                val cam = android.hardware.Camera.open(cameraId)
+                cam = android.hardware.Camera.open(cameraId)
                 camera = cam
                 val info = android.hardware.Camera.CameraInfo()
                 android.hardware.Camera.getCameraInfo(cameraId, info)
@@ -494,7 +516,7 @@ class MediaCaptureService : Service() {
                 cam.setPreviewTexture(texture)
                 val params = cam.parameters
                 params.supportedPreviewSizes?.minByOrNull {
-                    kotlin.math.abs(it.width - w) + kotlin.math.abs(it.height - h)
+                    kotlin.math.abs(it.width - preset.width) + kotlin.math.abs(it.height - preset.height)
                 }?.let { params.setPreviewSize(it.width, it.height) }
                 runCatching { params.setRecordingHint(true) }
                 cam.parameters = params
@@ -521,59 +543,70 @@ class MediaCaptureService : Service() {
                 }
 
                 cam.unlock() // 交出摄像头给 MediaRecorder
-                val rec = newRecorder()
+                rec = newRecorder()
+                val recorderRef = rec!!
                 recorder = rec
-                if (enableAudio) rec.setAudioSource(MediaRecorder.AudioSource.MIC)
-                rec.setVideoSource(MediaRecorder.VideoSource.CAMERA)
-                rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                rec.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                if (enableAudio) rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                rec.setVideoSize(w, h)
-                rec.setVideoFrameRate(preset.fps)
-                rec.setVideoEncodingBitRate(preset.bitrate)
-                if (enableAudio) {
-                    rec.setAudioSamplingRate(44100)
-                    rec.setAudioEncodingBitRate(96_000)
-                    rec.setAudioChannels(1)
-                }
-                rec.setOrientationHint(rotation)
+                // autox 顺序：setCamera 紧跟创建、先于一切源/格式设置（放在 setOutputFile
+                // 后曾触发 start 阶段裸 IllegalStateException，部分 ROM 对顺序敏感）
+                recorderRef.setCamera(cam)
+                // 音源 CAMCORDER（autox 同款）：与相机采集绑定的麦克风源；MIC 源在部分
+                // ROM 上与视频录制组合会失败。且不再硬编码采样率/码率/声道（显式音频
+                // 参数是 start 抛裸 ISE 的另一高危因素，交给编码器默认值）
+                if (enableAudio) recorderRef.setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
+                recorderRef.setVideoSource(MediaRecorder.VideoSource.CAMERA)
+                recorderRef.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                recorderRef.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                if (enableAudio) recorderRef.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                // 参数以 CamcorderProfile（设备侧保证支持的组合）为准，硬编码 fps/码率/
+                // 分辨率组合在部分 ROM（如 ColorOS）上 prepare/start 必失败
+                val p = camcorderParams(cameraId, preset)
+                recorderRef.setVideoSize(p.width, p.height)
+                recorderRef.setVideoFrameRate(p.fps)
+                recorderRef.setVideoEncodingBitRate(p.bitrate)
+                recorderRef.setOrientationHint(rotation)
                 val dir = mediaDir(this).apply { mkdirs() }
                 val ts = System.currentTimeMillis()
                 val tmp = File(dir, "video_$ts.tmp.mp4")
                 val target = File(dir, "video_$ts.mp4")
-                rec.setOutputFile(tmp.absolutePath)
-                rec.setCamera(cam)
-                rec.prepare()
-                rec.start()
+                recorderRef.setOutputFile(tmp.absolutePath)
+                recorderRef.prepare()
+                recorderRef.start()
                 Timber.i(
                     "录像开始（%d 秒，%dx%d@%d，%d kbps，伴音=%s）",
-                    durationSec, w, h, preset.fps, preset.bitrate / 1000, enableAudio,
+                    durationSec, p.width, p.height, p.fps, p.bitrate / 1000, enableAudio,
                 )
                 SystemClock.sleep(durationSec * 1000L)
                 try {
-                    rec.stop()
+                    recorderRef.stop()
                 } catch (e: Exception) {
-                    error = "录制内容为空（摄像头无有效画面或编码失败）：${e.message}"
+                    error = "录制内容为空（摄像头无有效画面或编码失败）：${e.toString().take(120)}"
                 } finally {
-                    runCatching { rec.release() }
+                    runCatching { recorderRef.release() }
                     recorder = null
                 }
                 if (error == null) {
                     if (tmp.renameTo(target)) saved = target else error = "录像文件保存失败"
                 }
             } catch (e: Exception) {
-                // e.message 可能为 null（如 NPE）：用 toString 保证错误信息永远非空，
-                // 否则上层会把「无错误 + 无产物」误判成空路径（"采集产物无效：/"）
                 Timber.e(e, "录像采集异常")
-                error = e.toString()
+                // 带类名+首个栈帧：裸 IllegalStateException（message 为 null）也能定位失败阶段
+                error = describeCameraError(e)
             } finally {
-                // 关键清理解（v0.1.43 占用 bug）：若 prepare()/start() 抛异常，inner finally
-                // 没机会跑，MediaRecorder 会一直持有 unlock 后的相机 → 系统「摄像头被占用」，
-                // 只有打开相机 App 才能解救。这里在相机线程上统一释放 recorder 再释放相机。
-                runCatching { recorder?.release() }
-                recorder = null
-                releaseCamera()
+                // 释放顺序 = autox 同款：先 recorder 再 reconnect+release 相机。
+                // unlock 后相机归属 MediaRecorder，reconnect() 先收回再 release 才干净，
+                // 否则 MediaRecorder 侧残留会话会让系统报「摄像头被占用」
+                rec?.let { runCatching { it.release() } }
+                if (recorder === rec) recorder = null
+                cam?.let { c ->
+                    runCatching { c.stopPreview() }
+                    runCatching { c.reconnect() }
+                    runCatching { c.release() }
+                }
+                if (camera === cam) camera = null
+                runCatching { previewTexture?.release() }
+                if (previewTexture != null) previewTexture = null
                 done.countDown()
+                runCatching { thread.quitSafely() }
             }
         }
 
@@ -582,8 +615,9 @@ class MediaCaptureService : Service() {
                 throw IllegalStateException("录像超时（相机无响应）")
             }
         } finally {
+            // 不在此跨线程释放相机（竞态）：相机线程的 finally 必然执行释放；
+            // 超时极端卡死场景由 complete() 的防御性 releaseCamera() 兜底
             restoreVolumes()
-            releaseCamera()
         }
         error?.let { throw IllegalStateException("录像失败：$it") }
         complete(ScreenCaptureHolder.CaptureFile(saved?.absolutePath ?: ""))
@@ -637,13 +671,64 @@ class MediaCaptureService : Service() {
             MediaRecorder()
         }
 
-    /** 录像画质档位（借鉴 autox 预设：low/medium/high）。 */
+    /** 录像画质档位（借鉴 autox 预设：low/medium/high；实际参数以 CamcorderProfile 校准）。 */
     private data class VideoPreset(val width: Int, val height: Int, val fps: Int, val bitrate: Int)
 
     private fun videoPreset(quality: String): VideoPreset = when (quality) {
         "low" -> VideoPreset(640, 480, 24, 800_000)
         "high" -> VideoPreset(1920, 1080, 30, 5_000_000)
         else -> VideoPreset(1280, 720, 30, 2_500_000)
+    }
+
+    /**
+     * 用 CamcorderProfile 校准录制参数（设备侧保证支持的组合）。
+     * CamcorderProfile 取不到时回退硬编码 preset（仍比裸手写可靠：至少 preview 尺寸已就近匹配）。
+     */
+    @Suppress("DEPRECATION")
+    private fun camcorderParams(cameraId: Int, wanted: VideoPreset): VideoPreset {
+        val quality = when {
+            wanted.height <= 480 -> CamcorderProfile.QUALITY_480P
+            wanted.height <= 720 -> CamcorderProfile.QUALITY_720P
+            else -> CamcorderProfile.QUALITY_1080P
+        }
+        val profile = runCatching {
+            if (CamcorderProfile.hasProfile(cameraId, quality)) {
+                CamcorderProfile.get(cameraId, quality)
+            } else {
+                CamcorderProfile.get(cameraId, CamcorderProfile.QUALITY_LOW)
+            }
+        }.getOrNull() ?: return wanted
+        return VideoPreset(profile.videoFrameWidth, profile.videoFrameHeight, profile.videoFrameRate, profile.videoBitRate)
+    }
+
+    /**
+     * 防御性清理残留资源（autox _cleanupAllResources 思路）：
+     * 上一次采集异常若残留 recorder/camera（unlock 后归属 MediaRecorder），
+     * 不清理会一直占用相机。在每次拍照/录像启动前调用，宁可清理不存在的东西。
+     */
+    private fun cleanupStaleCameraResources() {
+        recorder?.let { runCatching { it.release() } }
+        recorder = null
+        camera?.let { c ->
+            runCatching { c.stopPreview() }
+            runCatching { c.reconnect() }
+            runCatching { c.release() }
+        }
+        camera = null
+        runCatching { previewTexture?.release() }
+        previewTexture = null
+    }
+
+    /**
+     * 相机类异常描述增强：类名 + message（可能为 null）+ 首个业务栈帧。
+     * MediaRecorder.start/stop 常抛「无 message 的裸 IllegalStateException」，
+     * 只给类名无法定位失败阶段（prepare 还是 start），附栈帧后回执可直接看到出处。
+     */
+    private fun describeCameraError(e: Exception): String {
+        val frame = e.stackTrace.firstOrNull()
+        val stage = frame?.let { "${it.className.substringAfterLast('.')}.${it.methodName}(${it.lineNumber})" } ?: "unknown"
+        val msg = e.message ?: "(无 message)"
+        return "${e.javaClass.simpleName}: $msg @ $stage"
     }
 
     /** 录音音质档位：(采样率 Hz, 码率 bps, 声道数)。 */
@@ -804,10 +889,18 @@ class MediaCaptureService : Service() {
         projection = null
     }
 
+    /**
+     * 兜底相机释放（防御网）：正常清理由相机线程 finally 自己做（线程局部引用），
+     * 这里只兜异常残留场景。@Synchronized 防止与相机线程并发双释放。
+     */
+    @Synchronized
     @Suppress("DEPRECATION")
     private fun releaseCamera() {
-        runCatching { camera?.stopPreview() }
-        runCatching { camera?.release() }
+        camera?.let { c ->
+            runCatching { c.stopPreview() }
+            runCatching { c.reconnect() }
+            runCatching { c.release() }
+        }
         camera = null
         runCatching { previewTexture?.release() }
         previewTexture = null
