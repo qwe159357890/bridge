@@ -12,11 +12,12 @@ export function sendCommand(
   deviceId: string,
   command: string,
   params: Record<string, any> = {},
+  force = false,
 ): Promise<SendCommandResult> {
   return request<SendCommandResult>({
     url: '/api/commands',
     method: 'post',
-    data: { device_id: deviceId, command, params },
+    data: { device_id: deviceId, command, params, force },
   })
 }
 

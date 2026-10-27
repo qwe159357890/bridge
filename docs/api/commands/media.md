@@ -8,6 +8,30 @@
 下载 / 删除），并按配置自动清理（默认保留最近 100 条且 ≤ 7 天，先到先触发，
 `config.yaml` 的 `media.max_count` / `media.max_age_days` 可调）。
 
+## 采集互斥守卫（v0.1.48）
+
+摄像头/麦克风/投屏是**独占硬件**，同一设备并发下发采集命令必然一条成功一条失败。
+三层防线（v0.1.48 起）：
+
+1. **服务端守卫**（权威）：`POST /api/commands` 对采集组
+   `{screenshot, record_screen, take_photo, record_video, record_audio}` 检查
+   同设备 15 分钟窗口内的 pending 记录——命中返回 409 并说明在途命令；
+   `force: true`（后台「强制下发」勾选或 409 确认弹窗）可越过，用于设备无响应卡
+   pending 时的解锁重发。
+2. **后台按钮联动**：目标设备有在途采集命令时，「下发命令」按钮禁用 + 提示在途
+   命令名与已等待时长；勾选「强制下发」恢复可用。
+3. **客户端兜底**：`MediaCaptureService` 收到第二条采集命令直接回执失败
+   （旧版会覆盖共享状态 `commandId/mode`，污染在途任务的回执——顺手修掉）。
+
+pending 超过 15 分钟视为僵尸（客户端崩溃回执丢失）不再拦截，守卫自动解除。
+
+## 缩略图（v0.1.48，管理后台流量优化）
+
+`GET /api/media/{id}/thumb`（鉴权同 `/file`）：仅图片类，首次访问用 Pillow 生成
+480px JPEG 缓存到 `server/data/media/thumbs/{id}{后缀}.thumb.jpg`，删原图时同步清理；
+Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走缩略图 + `el-image lazy`
+（滚动到可视区才请求），点击查看大图仍取原图。视频封面不适用（走浏览器首帧方案）。
+
 ## screenshot 截屏
 
 两级路线（v0.1.40，借鉴 autox）：

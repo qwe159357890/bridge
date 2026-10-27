@@ -30,9 +30,10 @@
           <template #default="{ row }">
             <el-image
               v-if="isImageKind(row.kind) && row.exists"
-              :src="mediaFileUrl(row.id)"
+              :src="mediaThumbUrl(row.id)"
               :preview-src-list="[mediaFileUrl(row.id)]"
               preview-teleported
+              lazy
               fit="cover"
               class="thumb"
             >
@@ -132,7 +133,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, VideoPlay } from '@element-plus/icons-vue'
-import { listMedia, mediaFileUrl, deleteMedia } from '@/api/media'
+import { listMedia, mediaFileUrl, mediaThumbUrl, deleteMedia } from '@/api/media'
 import type { MediaItem } from '@/api/media'
 import { listDevices } from '@/api/devices'
 import type { Device } from '@/types'

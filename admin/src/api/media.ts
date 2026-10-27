@@ -24,6 +24,15 @@ export function mediaFileUrl(id: number): string {
   return `${base}/api/media/${id}/file?token=${encodeURIComponent(getToken())}`
 }
 
+/**
+ * 图片缩略图 URL（仅 screenshot/photo；服务端首次访问生成 480px JPEG 缓存）。
+ * 列表预览用它省流量（缩略图 ≈ 原图的几十分之一），点击查看大图仍走 mediaFileUrl。
+ */
+export function mediaThumbUrl(id: number): string {
+  const base = instance.defaults.baseURL || ''
+  return `${base}/api/media/${id}/thumb?token=${encodeURIComponent(getToken())}`
+}
+
 export function deleteMedia(id: number): Promise<{ status: string; deleted: number }> {
   return request({ url: `/api/media/${id}`, method: 'delete' })
 }

@@ -19,9 +19,19 @@ from fastapi.responses import FileResponse
 from app.api.v1.admin import require_admin
 from app.api.v1.music import _check_device_auth
 
+try:
+    from PIL import Image
+
+    _HAS_PIL = True
+except ImportError:  # Pillow 未安装时缩略图端点降级返回原图
+    _HAS_PIL = False
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/media", tags=["media"])
+
+# 缩略图最长边（列表预览足够，流量降 90%+）
+THUMB_MAX_EDGE = 480
 
 # 客户端上报的 kind 白名单
 MEDIA_KINDS = {"screenshot", "photo", "screen_record", "video", "audio"}
@@ -133,19 +143,7 @@ async def download_media(
     鉴权双通道：标准 Bearer 头（axios 下载用）或 ``?token=`` 查询参数
     （``<img>/<video>`` 标签带不了请求头，走 query）。
     """
-    admin_auth = request.app.state.admin_auth
-    authorized = False
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer ") and admin_auth.verify(auth_header[7:]):
-        authorized = True
-    if not authorized and token and admin_auth.verify(token):
-        authorized = True
-    if not authorized:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED,
-            detail="未授权：请先登录管理后台",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    _authorize_media(request, token)
 
     store = _get_store(request)
     record = store.get(record_id)
@@ -154,17 +152,76 @@ async def download_media(
     path = store.file_path_of(record)
     if not path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="磁盘文件已不存在（可能被自动清理）")
-    media_type = (
-        "video/mp4" if record["filename"].endswith(".mp4")
-        else "image/png" if record["filename"].endswith(".png")
-        else "image/jpeg"
+    return FileResponse(path=path, filename=record["filename"], media_type=_media_type_of(record["filename"]))
+
+
+@router.get("/{record_id}/thumb", status_code=status.HTTP_200_OK)
+async def media_thumb(
+    record_id: int,
+    request: Request,
+    token: str | None = None,
+) -> FileResponse:
+    """取图片缩略图（管理后台列表预览，替代原图全量下载）。
+
+    - 仅图片类（screenshot/photo）生成缩略图；其他类型 404（前端不会请求）；
+    - 首次访问生成并缓存到媒体目录 ``thumbs/`` 子目录（删原图时同步清理）；
+    - Pillow 未安装或图片解码失败 → 降级返回原图（列表仍可用，只是不省流量）；
+    - 鉴权方式与 ``/file`` 相同：Bearer 头或 ``?token=``。
+    """
+    _authorize_media(request, token)
+    store = _get_store(request)
+    record = store.get(record_id)
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="媒体文件不存在")
+    path = store.file_path_of(record)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="磁盘文件已不存在（可能被自动清理）")
+    if record["kind"] not in ("screenshot", "photo"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="仅图片类有缩略图")
+
+    thumb_path = path.parent / "thumbs" / f"{record['id']}{path.suffix.lower()}.thumb.jpg"
+    if not _HAS_PIL:
+        return FileResponse(path=path, media_type=_media_type_of(record["filename"]))
+    if not thumb_path.is_file():
+        try:
+            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(path) as im:
+                im = im.convert("RGB") if im.mode != "RGB" else im
+                im.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE))
+                im.save(thumb_path, "JPEG", quality=82)
+            logger.info("生成缩略图：%s -> %s", path.name, thumb_path.name)
+        except Exception as e:
+            logger.warning("缩略图生成失败（降级原图）：%s，%s", path.name, e)
+            return FileResponse(path=path, media_type=_media_type_of(record["filename"]))
+    return FileResponse(path=thumb_path, media_type="image/jpeg")
+
+
+def _authorize_media(request: Request, token: str | None) -> None:
+    """媒体文件/缩略图端点的双通道鉴权（Bearer 头或 ?token= 查询参数）。"""
+    admin_auth = request.app.state.admin_auth
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer ") and admin_auth.verify(auth_header[7:]):
+        return
+    if token and admin_auth.verify(token):
+        return
+    raise HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        detail="未授权：请先登录管理后台",
+        headers={"WWW-Authenticate": "Bearer"},
     )
-    return FileResponse(path=path, filename=record["filename"], media_type=media_type)
+
+
+def _media_type_of(filename: str) -> str:
+    if filename.endswith(".mp4"):
+        return "video/mp4"
+    if filename.endswith(".png"):
+        return "image/png"
+    return "image/jpeg"
 
 
 @router.delete("/{record_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(require_admin)])
 async def delete_media(record_id: int, request: Request) -> dict:
-    """删除一条媒体记录连同磁盘文件。"""
+    """删除一条媒体记录连同磁盘文件（含缩略图缓存）。"""
     store = _get_store(request)
     if not store.delete(record_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="媒体文件不存在")

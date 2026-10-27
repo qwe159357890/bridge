@@ -191,6 +191,7 @@ class MediaStore:
                 path.unlink()
         except Exception:
             logger.warning("删除媒体文件失败（记录已删）：%s", path, exc_info=True)
+        self._remove_thumb(record)
         logger.info("媒体文件已删除：id=%s file=%s", record_id, record["filename"])
         return True
 
@@ -248,6 +249,22 @@ class MediaStore:
                     path.unlink()
             except Exception:
                 logger.warning("清理媒体文件失败（忽略）：%s", path, exc_info=True)
+            self._remove_thumb(r)
+
+    def _remove_thumb(self, row: dict[str, Any]) -> None:
+        """同步清理缩略图缓存（thumbs/{id}{后缀}.thumb.jpg；后缀未知则按通配匹配）。"""
+        thumb_dir = self._base_dir / "thumbs"
+        suffix = Path(row["filename"]).suffix.lower()
+        if suffix:
+            candidates = [thumb_dir / f"{row['id']}{suffix}.thumb.jpg"]
+        else:
+            candidates = list(thumb_dir.glob(f"{row['id']}.*.thumb.jpg"))
+        for t in candidates:
+            try:
+                if t.is_file():
+                    t.unlink()
+            except Exception:
+                logger.warning("清理缩略图失败（忽略）：%s", t, exc_info=True)
 
     @staticmethod
     def _row_to_dict(row: dict) -> dict[str, Any]:

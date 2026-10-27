@@ -112,6 +112,10 @@ class CommandRequest(BaseModel):
     device_id: str = Field(description="目标设备（精确到一个设备）")
     command: str = Field(description="命令名，如 upload_log")
     params: dict = Field(default_factory=dict, description="命令参数")
+    force: bool = Field(
+        default=False,
+        description="强制下发：跳过采集类命令互斥守卫（设备采集无响应卡 pending 时用于解锁重发）",
+    )
 
 
 class CommandResponse(BaseModel):

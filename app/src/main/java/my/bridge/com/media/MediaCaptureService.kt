@@ -173,6 +173,21 @@ class MediaCaptureService : Service() {
             if (!projectionHeld) stopSelf()
             return START_NOT_STICKY
         }
+
+        // 并发采集拒绝（三层防线的最后兜底：服务端互斥守卫 + 后台按钮禁用之后）：
+        // 截屏/录屏/拍照/录像/录音共用本服务且硬件互斥（摄像头/麦克风/投屏单实例），
+        // 第二条命令若照常处理会覆盖共享状态（commandId/mode），污染在途任务的回执。
+        if (captureBusy && !finished) {
+            val incomingId = intent.getStringExtra(EXTRA_COMMAND_ID) ?: ""
+            Timber.w("拒绝并发采集命令 %s：已有采集任务进行中（mode=%s）", incomingId, mode)
+            ScreenCaptureHolder.takeCapture(incomingId)?.complete(
+                ScreenCaptureHolder.failure(
+                    "设备正在执行其他采集任务（截屏/录屏/拍照/录像/录音互斥），请等当前任务回执后再下发",
+                ),
+            )
+            return START_NOT_STICKY
+        }
+
         commandId = intent.getStringExtra(EXTRA_COMMAND_ID) ?: ""
         mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_SCREENSHOT
         finished = false

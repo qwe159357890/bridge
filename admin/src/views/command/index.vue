@@ -435,6 +435,28 @@ const filteredCommands = computed(() => {
 const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
 
 // ---------------------------------------------------------------------------
+// 采集类命令互斥守卫（与 server commands.py CAPTURE_COMMANDS 对齐）：
+// 摄像头/麦克风/投屏是独占硬件，同设备上一条采集命令未回执时禁止再发采集命令
+// ---------------------------------------------------------------------------
+const CAPTURE_COMMANDS = ['screenshot', 'record_screen', 'take_photo', 'record_video', 'record_audio']
+const CAPTURE_GUARD_WINDOW_MS = 15 * 60 * 1000
+
+/** 目标设备在途的采集命令（15 分钟窗口内的 pending，视为正在执行；超窗视为僵尸不拦）。 */
+const pendingCapture = computed<CommandRecord | null>(() => {
+  if (!form.deviceId) return null
+  const now = Date.now()
+  return (
+    commands.value.find(
+      (r) =>
+        r.device_id === form.deviceId &&
+        r.status === 'pending' &&
+        CAPTURE_COMMANDS.includes(r.command) &&
+        now - r.created_at * 1000 <= CAPTURE_GUARD_WINDOW_MS,
+    ) ?? null
+  )
+})
+
+// ---------------------------------------------------------------------------
 // 音乐播放状态：目标设备的实时状态徽标 + 控制类命令按钮联动
 // ---------------------------------------------------------------------------
 
@@ -527,7 +549,10 @@ const forceSend = ref(false)
  */
 const showForceSend = computed(() => {
   const cmd = selectedCommand.value
-  return !!cmd && MUSIC_STATE_RULES[cmd.name] !== undefined
+  if (!cmd) return false
+  if (MUSIC_STATE_RULES[cmd.name] !== undefined) return true
+  // 采集互斥场景：目标设备有采集命令在途时，提供强制下发出口
+  return CAPTURE_COMMANDS.includes(cmd.name) && !!pendingCapture.value
 })
 
 const musicStateText = computed(() => {
@@ -566,12 +591,24 @@ function isBlocked(cmd: CommandDef): boolean {
   return !allowed.includes(state)
 }
 
-const commandBlocked = computed(() =>
-  selectedCommand.value ? isBlocked(selectedCommand.value) : false,
-)
+const commandBlocked = computed(() => {
+  const cmd = selectedCommand.value
+  if (!cmd) return false
+  if (isBlocked(cmd)) return true
+  // 采集互斥：目标设备已有采集命令在途，禁用下发（勾选强制下发可越过）
+  return CAPTURE_COMMANDS.includes(cmd.name) && !!pendingCapture.value && !forceSend.value
+})
 
 const blockHint = computed(() => {
   if (!selectedCommand.value) return ''
+  // 采集互斥提示（优先于音乐状态提示，两类不重叠）
+  if (CAPTURE_COMMANDS.includes(selectedCommand.value.name) && pendingCapture.value && !forceSend.value) {
+    const mins = Math.max(1, Math.round((Date.now() - pendingCapture.value.created_at * 1000) / 60000))
+    return `该设备正在执行「${pendingCapture.value.command}」（约 ${mins} 分钟前下发，未回执）——摄像头/麦克风/投屏互斥，并发下发会失败；确认设备无响应可勾选强制下发`
+  }
+  if (forceSend.value && CAPTURE_COMMANDS.includes(selectedCommand.value.name) && pendingCapture.value) {
+    return '强制模式：命令将直接下发，若设备确实仍在采集，会由设备端互斥兜底回执失败'
+  }
   if (!MUSIC_STATE_RULES[selectedCommand.value.name]) return ''
   if (forceSend.value) {
     return '强制模式：命令将直接下发，由设备按真实状态执行，状态不匹配会回执失败'
@@ -730,22 +767,36 @@ async function handleSend() {
     ElMessage.warning('请选择命令')
     return
   }
+  await doSend(forceSend.value)
+}
+
+/** 实际下发；force=true 越过服务端采集互斥守卫。409 时询问是否强制重发。 */
+async function doSend(force: boolean) {
+  const cmdName = selectedCommand.value!.name
   sending.value = true
   try {
-    const r = await sendCommand(
-      form.deviceId,
-      selectedCommand.value.name,
-      collectParams(),
-    )
-    ElMessage.success(`命令已下发（${r.command_id.slice(0, 8)}…）`)
+    const r = await sendCommand(form.deviceId, cmdName, collectParams(), force)
+    ElMessage.success(`命令已${force ? '强制' : ''}下发（${r.command_id.slice(0, 8)}…）`)
     // get_location：记下命令 ID 与下发时刻，等回执推送匹配后展示定位结果地图
-    if (selectedCommand.value.name === 'get_location') {
+    if (cmdName === 'get_location') {
       pendingLocationCommandId = r.command_id
       locationSentAt = Date.now()
     }
     load()
-  } catch {
-    // 错误已统一提示
+  } catch (e: any) {
+    // 409 = 服务端采集互斥守卫拦截（错误详情已由拦截器统一弹出），询问是否强制下发
+    if (e?.response?.status === 409 && CAPTURE_COMMANDS.includes(cmdName)) {
+      try {
+        await ElMessageBox.confirm(
+          '设备可能仍在执行上一条采集命令（等待回执）。并发下发会因摄像头/麦克风/投屏互斥而失败，确定要强制下发吗？',
+          '采集互斥提醒',
+          { confirmButtonText: '强制下发', cancelButtonText: '取消', type: 'warning' },
+        )
+        await doSend(true)
+      } catch {
+        // 用户取消
+      }
+    }
   } finally {
     sending.value = false
   }

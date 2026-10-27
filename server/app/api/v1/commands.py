@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -32,6 +33,14 @@ from app.schemas.ws import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/commands", tags=["commands"])
+
+# 采集类命令（互斥组）：同一设备同一时刻只允许一条在途——摄像头/麦克风/投屏
+# 都是独占硬件，并发下发必然一条成功一条失败（v0.1.46 录像裸 ISE 的诱因之一）。
+CAPTURE_COMMANDS = {"screenshot", "record_screen", "take_photo", "record_video", "record_audio"}
+
+# 互斥守卫窗口（秒）：pending 记录超过该时长视为僵尸（客户端崩溃回执丢失），
+# 不再拦截——否则一次回执丢失会锁死设备 10 分钟内的所有采集命令。
+PENDING_GUARD_WINDOW_SEC = 15 * 60
 
 
 def _get_manager(request: Request) -> ConnectionManager:
@@ -65,6 +74,33 @@ async def send_command(body: CommandRequest, request: Request) -> CommandRespons
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"不支持的命令：{body.command}（支持：{', '.join(sorted(ALLOWED_COMMANDS))}）",
         )
+
+    # 采集类互斥守卫：同设备已有采集命令在途（15 分钟窗口内的 pending）时拒绝，
+    # 避免独占硬件（摄像头/麦克风/投屏）并发冲突；勾选「强制下发」可越过。
+    if body.command in CAPTURE_COMMANDS and not body.force:
+        store = _get_store(request)
+        now = time.time()
+        active = next(
+            (
+                r
+                for r in store.list()  # 由新到旧，第一条命中即最新在途
+                if r.device_id == body.device_id
+                and r.status == "pending"
+                and r.command in CAPTURE_COMMANDS
+                and now - r.created_at <= PENDING_GUARD_WINDOW_SEC
+            ),
+            None,
+        )
+        if active is not None:
+            elapsed = int(now - active.created_at)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"该设备正在执行采集命令「{active.command}」（已等待 {elapsed} 秒，未回执）。"
+                    f"摄像头/麦克风/投屏为独占资源，并发下发会失败；"
+                    f"请等回执后再下发，若确认设备无响应可勾选「强制下发」"
+                ),
+            )
 
     manager = _get_manager(request)
     conn = manager.get(body.device_id)
