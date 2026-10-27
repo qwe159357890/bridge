@@ -87,10 +87,11 @@ const playerError = ref('') // 播放器/流通道错误提示（不再静默黑
 const chunkCount = ref(0)
 const totalBytes = ref(0)
 const startedAt = ref(0)
+const videoFrames = ref(0) // 视频解码帧数（诊断：画面冻结时看是否停增）
 const statsText = computed(() => {
   const secs = startedAt.value ? Math.round((Date.now() - startedAt.value) / 1000) : 0
   const mb = (totalBytes.value / 1048576).toFixed(1)
-  return `${secs}s · ${chunkCount.value} 片 · ${mb}MB`
+  return `${secs}s · ${chunkCount.value} 片 · ${mb}MB · 解码帧 ${videoFrames.value}`
 })
 
 // 资源句柄
@@ -115,9 +116,17 @@ function onStreamStatus(d: {
   is_end: boolean
   info?: Record<string, any> | null
 }) {
-  if (ended.value && d.is_end) return
-  if (!d.is_end && !visible.value) startStream(d.device_id, d.kind)
-  if (d.is_end) endStream()
+  if (!d.is_end) {
+    // 新流开始：已结束/未显示/设备或类型变化 都要重启
+    // （v0.1.53 修复：旧条件 !visible.value 漏掉「已结束后再次直播」→ 卡片停在已结束 0 片）
+    if (!visible.value || ended.value || deviceId.value !== d.device_id || kind.value !== d.kind) {
+      startStream(d.device_id, d.kind)
+    }
+  } else {
+    // 保护：刚启动 2 秒内且没收到任何分片的结束帧 = 旧流残尾，忽略
+    if (Date.now() - startedAt.value < 2000 && chunkCount.value === 0) return
+    endStream()
+  }
 }
 
 /**
@@ -140,7 +149,14 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
   startedAt.value = Date.now()
   recorded.value = []
   playerError.value = ''
+  videoFrames.value = 0
   visible.value = true
+  // 诊断期：mpegts 内部日志打 console（用户可 F12 取证）；类型未声明用运行时调用
+  try {
+    ;(mpegts.LoggingControl as any).enableAll?.()
+  } catch {
+    /* 忽略 */
+  }
 
   if (k !== 'audio') {
     // mpegts.js 直播：直接把专用流 WS 当数据源（服务端推裸二进制帧）
@@ -224,26 +240,75 @@ function resumeVideo() {
 }
 
 /**
- * 视频延迟监控（追帧自愈，2026-10-27）：流式录像实测「画面渐落后冻结、
- * 声音继续」——mpegts.js 内建 liveBufferLatencyChasing 默认落后 10 秒才追，
- * 体验为画面长期停滞后追一次。此处 1 秒一查：落后 >2.5 秒立即 seek 到
- * 缓冲末尾前 0.3 秒，画面始终贴近实时。
+ * 视频健康监控（1 秒一查，三件事）：
+ * ① 追帧：画面落后实时 >2.5 秒立即 seek 到缓冲末尾前 0.3 秒；
+ * ② 诊断：把浏览器解码帧数（totalVideoFrames）显示到卡片——
+ *    「只出首帧后冻结」时若解码帧停增即定位为 video 轨解码问题；
+ * ③ 自愈：currentTime 与解码帧数连续 4 秒都不动（音流正常收帧）→
+ *    自动重建播放器（服务端流头缓存保证重建后能重新初始化解码器）。
  */
 function startLatencyWatch() {
   stopLatencyWatch()
+  let lastT = -1
+  let lastF = -1
+  let stall = 0
   latencyTimer = window.setInterval(() => {
     const v = videoEl.value
     if (!v || !player || ended.value) return
     try {
-      if (v.buffered.length === 0) return
-      const tail = v.buffered.end(v.buffered.length - 1)
-      if (tail - v.currentTime > 2.5 && !v.seeking && v.readyState >= 2) {
-        v.currentTime = Math.max(0, tail - 0.3)
+      // 诊断帧数
+      const q = v.getVideoPlaybackQuality?.()
+      videoFrames.value = q ? q.totalVideoFrames : Math.round(v.currentTime * 30)
+      // 追帧
+      if (v.buffered.length > 0) {
+        const tail = v.buffered.end(v.buffered.length - 1)
+        if (tail - v.currentTime > 2.5 && !v.seeking && v.readyState >= 2) {
+          v.currentTime = Math.max(0, tail - 0.3)
+        }
       }
+      // 停滞检测（画面不动 + 解码帧不增 = video 轨卡死）
+      if (Math.abs(v.currentTime - lastT) < 0.05 && videoFrames.value === lastF) {
+        stall++
+        if (stall >= 4) {
+          stall = 0
+          console.warn('[StreamPlayer] 视频轨停滞 4s，重建播放器自愈')
+          rebuildPlayer()
+        }
+      } else {
+        stall = 0
+      }
+      lastT = v.currentTime
+      lastF = videoFrames.value
     } catch {
-      /* buffered 访问异常忽略 */
+      /* buffered/quality 访问异常忽略 */
     }
   }, 1000)
+}
+
+/** 重建播放器（流头缓存让重建后的播放器能重新初始化）。 */
+function rebuildPlayer() {
+  if (!player) return
+  destroyPlayer()
+  playerError.value = ''
+  try {
+    player = mpegts.createPlayer(
+      { type: kind.value === 'screen' ? 'flv' : 'mpegts', isLive: true, url: streamWsUrl() },
+      {
+        enableStashBuffer: false,
+        isLive: true,
+        liveBufferLatencyChasing: true,
+        lazyLoad: false,
+      },
+    )
+    player.attachMediaElement(videoEl.value!)
+    player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
+      playerError.value = `播放器错误（${type}）：${detail}`
+    })
+    player.load()
+    player.play()?.catch?.(() => {})
+  } catch (e) {
+    console.error('[StreamPlayer] 重建失败', e)
+  }
 }
 
 function stopLatencyWatch() {

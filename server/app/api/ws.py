@@ -133,6 +133,8 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
         logger.info(
             "device %s 流结束 kind=%s 总字节=%s", device_id, kind, data.get("total_bytes"),
         )
+        # 流结束：清流头缓存（下一个流重新累积，避免旧流头污染新流）
+        hub.clear_head(device_id)
     elif isinstance(chunk_idx, int) and chunk_idx % 20 == 1:
         logger.info(
             "device %s 流分片 kind=%s idx=%s 本帧字节=%s 订阅者=%d",

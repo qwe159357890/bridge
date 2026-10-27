@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 # 单订阅者队列深度上限：管理侧消费不过来时丢新帧（实时流宁丢勿积压）
 _MAX_QUEUE = 512
 
+# 流头缓存上限：每个流开头这么多字节会缓存，新订阅者先补发再接实时
+# （2026-10-27 加：TS 的 PAT/PMT/SPS/PPS 与 FLV 的 header/script/seq header 只在
+#   文件开头出现一次，播放器中途加入或重建后没有流头就永远无法初始化解码器）
+_HEAD_CACHE_LIMIT = 512 * 1024
+
 
 class StreamHub:
     """设备媒体流 → 管理侧订阅者的内存转发中心（单进程）。"""
@@ -33,14 +38,26 @@ class StreamHub:
     def __init__(self) -> None:
         # device_id -> set[asyncio.Queue[bytes]]
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        # device_id -> 流开头字节缓存（订阅先补发；流结束清空）
+        self._head: dict[str, bytearray] = {}
         self._lock = asyncio.Lock()
 
     async def subscribe(self, device_id: str) -> asyncio.Queue:
-        """登记一个订阅者，返回其专属队列（分片 binary 帧投递到这里）。"""
+        """登记一个订阅者，返回其专属队列（分片 binary 帧投递到这里）。
+
+        若该设备的流已在进行中，先把缓存的流头投进队列（播放器初始化依赖）。
+        """
         q: asyncio.Queue = asyncio.Queue(maxsize=_MAX_QUEUE)
         async with self._lock:
             self._subscribers.setdefault(device_id, set()).add(q)
+            head = self._head.get(device_id)
+            if head:
+                q.put_nowait(bytes(head))
         return q
+
+    def clear_head(self, device_id: str) -> None:
+        """流结束：清空该设备的流头缓存（下一个流重新累积）。"""
+        self._head.pop(device_id, None)
 
     async def unsubscribe(self, device_id: str, q: asyncio.Queue) -> None:
         """移除订阅者。"""
@@ -69,6 +86,13 @@ class StreamHub:
             return 0
         async with self._lock:
             subs = list(self._subscribers.get(device_id, ()))
+            # 累积流头缓存（未满上限时；供新订阅者/播放器重建补发）
+            head = self._head.get(device_id)
+            if head is None:
+                head = bytearray()
+                self._head[device_id] = head
+            if len(head) < _HEAD_CACHE_LIMIT:
+                head.extend(raw[: _HEAD_CACHE_LIMIT - len(head)])
         for q in subs:
             try:
                 q.put_nowait(raw)
