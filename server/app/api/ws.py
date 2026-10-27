@@ -76,6 +76,32 @@ async def _handle_dialog_click(app, device_id: str, data: dict) -> None:
         logger.exception("处理弹窗点击回传失败（忽略）")
 
 
+async def _handle_command_progress(app, device_id: str, data: dict) -> None:
+    """处理命令执行进度上报（WS ``message`` 通道，event=command_progress）。
+
+    客户端把耗时命令拆两阶段上报：phase=executing（录制类按时长百分比，
+    由 MediaCaptureService 上报）/ phase=uploading（按上传字节百分比，由
+    CommandModule 上报）。只经 SSE 实时转发给管理侧，**不落库**——
+    命令历史只保留最终回执。
+    """
+    command_id = data.get("command_id")
+    phase = data.get("phase")
+    if not command_id or phase not in ("executing", "uploading"):
+        return
+    try:
+        bus = app.state.admin_event_bus
+        await bus.publish("command_progress", {
+            "command_id": str(command_id),
+            "device_id": device_id,
+            "phase": phase,
+            "percent": data.get("percent"),
+            "sent_bytes": data.get("sent_bytes"),
+            "total_bytes": data.get("total_bytes"),
+        })
+    except Exception:
+        logger.exception("转发命令进度事件失败（忽略）")
+
+
 async def _clear_music_state(app, device_id: str) -> None:
     """断连时清除设备音乐状态（此后查询返回 unknown），并通知管理侧。"""
     try:
@@ -205,12 +231,14 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 offline_reason = "closed"
                 break
             elif envelope.type == "message":
-                # 业务消息：音乐播放状态 / 弹窗点击回传
+                # 业务消息：音乐播放状态 / 弹窗点击回传 / 命令进度上报
                 data = envelope.data or {}
                 if data.get("event") == "music_state":
                     await _handle_music_state_message(ws.app, device_id, data)
                 elif data.get("event") == "dialog_click":
                     await _handle_dialog_click(ws.app, device_id, data)
+                elif data.get("event") == "command_progress":
+                    await _handle_command_progress(ws.app, device_id, data)
                 else:
                     logger.debug("device %s 业务消息：%s", device_id, envelope.data)
             elif envelope.type == "command_result":

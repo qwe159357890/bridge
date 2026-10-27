@@ -315,6 +315,10 @@ COMMANDS: list[dict[str, Any]] = [
                  description="低 32kbps 单声道 / 中 96kbps 单声道 / 高 192kbps 立体声"),
           _param("duration", "时长(秒)", PARAM_TYPE_NUMBER, default=30,
                  placeholder="5~300 秒", description="录制时长（秒）")]),
+    _cmd("clear_media", "清理设备媒体", "media", "🧹",
+         "清空客户端本地 media/ 目录的媒体残留（上传失败的孤儿文件），回执清理数量与释放空间；"
+         "正常采集产物上传成功即删，无需常规清理；正在采集时拒绝执行。"
+         "服务器侧媒体请在「媒体文件」页按条删除"),
 
     # ---- 交互类 ----
     _cmd("show_toast", "弹提示", "interact", "💬", "在客户端显示一条 Toast 提示",

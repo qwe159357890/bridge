@@ -50,9 +50,6 @@ import my.bridge.com.media.ProjectionConsentActivity
 import my.bridge.com.access.BridgeAccessibilityService
 import my.bridge.com.media.ScreenCaptureHolder
 import my.bridge.com.media.MusicPlayer
-import okhttp3.MultipartBody
-import okhttp3.RequestBody
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import retrofit2.HttpException
 import timber.log.Timber
 import kotlinx.coroutines.CoroutineScope
@@ -86,10 +83,13 @@ object CommandModule {
         // dagger.Lazy 断依赖环：BridgeWebSocketClient 构造需要本执行器表，
         // 执行器表只在弹窗点击回调时才真正取用 client（运行期已装配完成）
         webSocketClient: dagger.Lazy<BridgeWebSocketClient>,
-    ): Map<String, CommandExecutor> = mapOf(
-        Command.UPLOAD_LOG to CommandExecutor { command ->
-            executeUploadLog(context, deviceStore, apiClient, command)
-        },
+    ): Map<String, CommandExecutor> = run {
+        // 注入进度上传通道（UploadProgress.kt）：dagger.Lazy 断依赖环，运行期才取用
+        UploadProgressHolder.webSocketClient = webSocketClient
+        mapOf(
+            Command.UPLOAD_LOG to CommandExecutor { command ->
+                executeUploadLog(context, deviceStore, apiClient, command)
+            },
         Command.PLAY_MUSIC to CommandExecutor { command ->
             executePlayMusic(context, deviceStore, apiClient, command)
         },
@@ -185,6 +185,9 @@ object CommandModule {
         Command.RECORD_AUDIO to CommandExecutor { command ->
             executeRecordAudio(context, deviceStore, apiClient, command)
         },
+        Command.CLEAR_MEDIA to CommandExecutor { command ->
+            executeClearMedia(context, command)
+        },
         Command.SHOW_TOAST to CommandExecutor { command ->
             executeShowToast(context, command)
         },
@@ -203,7 +206,8 @@ object CommandModule {
         Command.CHECK_UPDATE to CommandExecutor { command ->
             executeCheckUpdate(context, deviceStore, apiClient, command)
         },
-    )
+        )
+    }
 
     private suspend fun executeUploadLog(
         context: Context,
@@ -1344,41 +1348,21 @@ object CommandModule {
         return uploadCaptureFile(deviceStore, apiClient, id, name, "audio", File(capture.path))
     }
 
-    /** 上传采集产物并在成功后清理本地临时文件。 */
-    private suspend fun uploadCaptureFile(
-        deviceStore: DeviceStore,
-        apiClient: BridgeApiClient,
-        id: String,
-        name: String,
-        kind: String,
-        file: File,
-    ): CommandResult {
-        if (!file.isFile || file.length() == 0L) {
-            return CommandResult(id, name, false, "采集产物无效：${file.absolutePath}")
+    /** 执行 clear_media：清空客户端本地 media/ 目录残留（采集进行中拒绝执行）。 */
+    private fun executeClearMedia(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        if (MediaCaptureService.captureBusy) {
+            return CommandResult(id, name, false, "正在采集媒体（截屏/录像/录音等），请等采集结束后再清理")
         }
-        val mediaType = when (file.extension) {
-            "mp4" -> "video/mp4"
-            "m4a" -> "audio/mp4"
-            else -> "image/jpeg"
-        }
-        val part = MultipartBody.Part.createFormData(
-            "file", file.name, RequestBody.create(mediaType.toMediaTypeOrNull(), file),
-        )
         return try {
-            val deviceId = deviceStore.deviceId()
-            val token = runCatching { deviceStore.token() }.getOrNull()
-            val r = apiClient.uploadMedia(deviceId, token, kind, part)
-            file.delete()
-            val sizeText = if (r.size >= 1024 * 1024) "%.1f MB".format(r.size / 1048576.0)
-            else "%.0f KB".format(r.size / 1024.0)
-            Timber.i("命令 %s：%s", name, r.message)
-            CommandResult(id, name, true, "${r.message}：${r.filename}（$sizeText），点回执旁「查看」可直接预览")
+            val (count, bytes) = MediaCaptureService.clearMediaFiles(context)
+            val sizeText = if (bytes >= 1024 * 1024) "%.1f MB".format(bytes / 1048576.0)
+            else "%.0f KB".format(bytes / 1024.0)
+            CommandResult(id, name, true, "已清理 $count 个本地媒体文件（共 $sizeText）；服务器侧媒体可在「媒体文件」页单独删除")
         } catch (e: Exception) {
-            Timber.e(e, "命令 %s 上传失败", name)
-            CommandResult(
-                id, name, false,
-                "已采集（${file.name}）但上传失败：${e.message}；文件已保留在设备 media/ 目录，可重试下发",
-            )
+            Timber.e(e, "clear_media 执行失败")
+            CommandResult(id, name, false, "清理失败：${e.message}")
         }
     }
 

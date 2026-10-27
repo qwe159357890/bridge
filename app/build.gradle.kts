@@ -92,6 +92,7 @@ dependencies {
     implementation(libs.timber)
 
     // ---- 网络（NetworkModule 装配 Retrofit/Gson） ----
+    implementation(libs.okhttp)
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.gson)

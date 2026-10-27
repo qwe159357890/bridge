@@ -42,6 +42,9 @@
 | `screenshot` | 截屏 | [media.md#screenshot-截屏](media.md#screenshot-截屏) |
 | `record_screen` | 录屏 | [media.md#record_screen-录屏](media.md#record_screen-录屏) |
 | `take_photo` | 拍照 | [media.md#take_photo-拍照](media.md#take_photo-拍照) |
+| `record_video` | 录像 | [media.md#record_video-录像](media.md#record_video-录像) |
+| `record_audio` | 录音 | [media.md#record_audio-录音](media.md#record_audio-录音) |
+| `clear_media` | 清理设备媒体 | [media.md#clear_media-清理设备媒体](media.md#clear_media-清理设备媒体) |
 
 ## 💬 interact（交互）→ [interact.md](interact.md)
 

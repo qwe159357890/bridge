@@ -40,13 +40,35 @@
                 <div class="thumb thumb-error">无法加载</div>
               </template>
             </el-image>
+            <!-- 视频（录屏/录像）封面：直接加载视频首帧（#t=0.1 媒体片段 + preload=metadata，
+                 Chrome/Edge 原生支持，零后端），叠播放角标；加载失败回退纯图标 -->
             <div
-              v-else-if="(row.kind === 'screen_record' || row.kind === 'video' || row.kind === 'audio') && row.exists"
+              v-else-if="(row.kind === 'screen_record' || row.kind === 'video') && row.exists"
+              class="video-thumb video-cover"
+              @click="playMedia(row)"
+            >
+              <video
+                v-show="!videoThumbError[row.id]"
+                class="video-cover-frame"
+                :src="mediaFileUrl(row.id) + '#t=0.1'"
+                preload="metadata"
+                muted
+                @error="markVideoThumbError(row.id)"
+              />
+              <!-- 首帧加载失败：回退纯图标样式 -->
+              <template v-if="videoThumbError[row.id]">
+                <el-icon><VideoPlay /></el-icon>
+                <span>播放</span>
+              </template>
+              <span class="video-cover-badge"><el-icon><VideoPlay /></el-icon></span>
+            </div>
+            <div
+              v-else-if="row.kind === 'audio' && row.exists"
               class="video-thumb"
               @click="playMedia(row)"
             >
               <el-icon><VideoPlay /></el-icon>
-              <span>{{ row.kind === 'audio' ? '试听' : '播放' }}</span>
+              <span>试听</span>
             </div>
             <div v-else class="thumb thumb-error">文件缺失</div>
           </template>
@@ -133,6 +155,12 @@ const videoVisible = ref(false)
 const videoUrl = ref('')
 const videoTitle = ref('')
 const videoIsAudio = ref(false)
+
+// 视频封面首帧加载失败的记录（media id → true），失败回退纯播放图标
+const videoThumbError = ref<Record<number, boolean>>({})
+function markVideoThumbError(id: number) {
+  videoThumbError.value = { ...videoThumbError.value, [id]: true }
+}
 
 function isImageKind(kind: string) {
   return kind === 'screenshot' || kind === 'photo'
@@ -276,5 +304,34 @@ onMounted(async () => {
 }
 .video-thumb:hover {
   background: #409eff;
+}
+/* 视频首帧封面：video 铺满卡片 + 右下角播放角标 */
+.video-cover {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+.video-cover-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #303133;
+}
+.video-cover-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
 }
 </style>

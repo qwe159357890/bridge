@@ -1,4 +1,4 @@
-# 音视频类命令（screenshot / record_screen / take_photo / record_video / record_audio）
+# 音视频类命令（screenshot / record_screen / take_photo / record_video / record_audio / clear_media）
 
 > 命令定义单一事实来源：`server/app/core/command_catalog.py` 的 `media` 分类。
 
@@ -92,6 +92,31 @@
   （Manifest `foregroundServiceType` 加 `microphone` + `FOREGROUND_SERVICE_MICROPHONE` 权限）。
 - 权限：`RECORD_AUDIO` 运行时权限（Manifest 早已声明，v0.1.42 起真正使用）。
 - 产物：`audio_{时间戳}.m4a`，kind=`audio`，后台媒体页可试听，回执可「查看」。
+
+## clear_media 清理设备媒体（v0.1.47）
+
+- 无参数。清空客户端本地 `media/` 目录（`getExternalFilesDir("media")`）的媒体残留，
+  回执「已清理 N 个本地媒体文件（共 X MB）」。
+- **定位**：正常采集产物上传成功后客户端立即删除本地临时文件，残留基本都是
+  **上传失败的孤儿**。本命令给管理员一个主动兜底手段；另有**自动清理**——
+  每次采集完成时顺带清理（>7 天全删 + 超过 50 个只留最新 50 个，正在生成的
+  产物是最新文件天然受保护）。
+- 并发保护：有采集任务进行中（`captureBusy`）时拒绝执行并回执提示稍后再试。
+- 服务器侧媒体（media_store）与此命令无关，请在管理后台「媒体文件」页按条删除
+  （服务端另有自动清理：默认保留最近 100 条且 ≤7 天，config.yaml `media.*`）。
+
+## 采集命令两阶段进度（v0.1.47，后台「状态」列实时显示）
+
+- 耗时命令（录屏/录像/录音/截屏/拍照）执行期间，客户端经 WS `message` 通道
+  （`event=command_progress`）上报进度，服务端只做 SSE 转发（`command_progress`
+  事件）**不落库**——命令历史只保留最终回执：
+  - `phase=executing`：执行阶段。录制类（record_screen/record_video/record_audio）
+    按「参数时长 × 已耗时」每秒报百分比（`MediaCaptureService.sleepWithProgress`）；
+    截屏/拍照瞬间完成，不报此阶段；
+  - `phase=uploading`：上传阶段。按真实写到网络的字节计（OkHttp 计数 sink 包装，
+    每 300ms 或 ≥5% 节流上报，`CommandModule.ProgressRequestBody`）。
+- 后台命令页「待回执」状态下方显示「执行中 45%」/「上传中 45%（8.2/18.2MB）」，
+  最终回执到达即消失。
 
 ## 上传接口（服务端新增）
 

@@ -222,11 +222,13 @@
             {{ commandLabelOf(row.command) }}
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="150">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" size="small">
               {{ statusText(row.status) }}
             </el-tag>
+            <!-- 耗时命令两阶段进度（执行中/上传中）：SSE command_progress 实时驱动，回执后消失 -->
+            <div v-if="progressTextOf(row)" class="progress-line">{{ progressTextOf(row) }}</div>
           </template>
         </el-table-column>
         <el-table-column label="回执信息" min-width="220">
@@ -483,6 +485,31 @@ async function loadDeviceSims() {
 const locationCard = ref<any>(null)
 let pendingLocationCommandId = ''
 let locationSentAt = 0
+
+// 命令两阶段进度（SSE command_progress 实时驱动，不落库）：command_id → 最近进度。
+// 仅「待回执」状态的命令展示；最终回执到达即删除对应条目。
+interface CommandProgress {
+  phase: 'executing' | 'uploading'
+  percent?: number | null
+  sent_bytes?: number | null
+  total_bytes?: number | null
+}
+const progressMap = ref<Record<string, CommandProgress>>({})
+
+/** 「待回执」命令的进度副文案：执行中 XX% / 上传中 XX%（8.2/18.2MB）；无进度返回 null。 */
+function progressTextOf(row: { status: string; command_id: string }): string | null {
+  if (row.status === 'success' || row.status === 'failed') return null
+  const p = progressMap.value[row.command_id]
+  if (!p) return null
+  if (p.phase === 'uploading') {
+    const sent = p.sent_bytes ?? 0
+    const total = p.total_bytes ?? 0
+    const fmt = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`)
+    const pct = p.percent ?? (total > 0 ? Math.round((sent * 100) / total) : 0)
+    return `上传中 ${pct}%（${fmt(sent)}/${fmt(total)}）`
+  }
+  return `执行中 ${p.percent ?? 0}%`
+}
 
 /** 控制类命令允许下发的设备状态（播放音乐不受限，设备在线即可）。 */
 const MUSIC_STATE_RULES: Record<string, string[]> = {
@@ -745,6 +772,12 @@ function connectWS() {
       const msg = JSON.parse(event.data)
       if (msg.type === 'command_result') {
         load()
+        // 回执到达：清除该命令的两阶段进度（历史只留最终结果）
+        if (progressMap.value[msg.data.command_id]) {
+          const m = { ...progressMap.value }
+          delete m[msg.data.command_id]
+          progressMap.value = m
+        }
         // get_location 回执：成功则触发定位结果地图（按下发时记录的 command_id 精准匹配）
         if (msg.data.command_id === pendingLocationCommandId) {
           pendingLocationCommandId = ''
@@ -775,6 +808,9 @@ function connectWS() {
         // 弹窗点击回传等交互事件：刷新命令历史 + 轻提示
         load()
         ElMessage.success(`${deviceNameOf(msg.data.device_id)}：${msg.data.note}`)
+      } else if (msg.type === 'command_progress') {
+        // 命令两阶段进度（执行中/上传中）：更新进度条目，「待回执」状态列实时显示
+        progressMap.value = { ...progressMap.value, [msg.data.command_id]: msg.data }
       }
     } catch {
       // 忽略解析错误
@@ -831,6 +867,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+.progress-line {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--el-color-warning);
+  line-height: 1.2;
 }
 .receipt-text {
   flex: 1;

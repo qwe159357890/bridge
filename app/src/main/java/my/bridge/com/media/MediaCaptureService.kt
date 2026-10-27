@@ -29,11 +29,15 @@ import android.util.DisplayMetrics
 import android.view.Surface
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import com.google.gson.JsonObject
+import dagger.hilt.android.AndroidEntryPoint
 import my.bridge.com.R
+import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
 
 /**
  * 媒体采集前台服务（screenshot / record_screen / take_photo / record_video / record_audio 五模式）。
@@ -56,7 +60,11 @@ import java.util.concurrent.TimeUnit
  * 结果经 [ScreenCaptureHolder.capture]（key = commandId）回传执行器：
  * 成功为产物文件路径（App 私有 media/ 目录，上传后由执行器清理）。
  */
+@AndroidEntryPoint
 class MediaCaptureService : Service() {
+
+    @Inject
+    lateinit var wsClient: BridgeWebSocketClient
 
     companion object {
         const val MODE_SCREENSHOT = "screenshot"
@@ -79,6 +87,15 @@ class MediaCaptureService : Service() {
         private const val CHANNEL_ID = "media_capture_quiet"
         private const val NOTIFICATION_ID = 2101
 
+        /** 客户端媒体残留自动清理：孤儿文件保留最新 N 个、超过 M 天全删（正常上传成功即删，残留=失败孤儿）。 */
+        private const val MEDIA_KEEP_COUNT = 50
+        private const val MEDIA_MAX_AGE_MS = 7L * 24 * 3600 * 1000
+
+        /** 是否有采集任务进行中（clear_media 命令据此拒绝并发清理，避免误删正在生成的产物）。 */
+        @Volatile
+        var captureBusy: Boolean = false
+            private set
+
         /**
          * 投屏会话是否已保持（进程级状态，执行器据此跳过授权确认）。
          * true = MediaProjection 已持有且有效，截屏/录屏可免确认直接采集。
@@ -90,6 +107,18 @@ class MediaCaptureService : Service() {
         /** 采集目录（App 私有 media/，与上传后清理配套）。 */
         fun mediaDir(context: Context): File =
             context.getExternalFilesDir("media") ?: File(context.filesDir, "media")
+
+        /** 清空本地媒体目录（clear_media 命令）：返回 (删除数, 释放字节)。 */
+        fun clearMediaFiles(context: Context): Pair<Int, Long> {
+            var count = 0
+            var bytes = 0L
+            mediaDir(context).listFiles()?.filter { it.isFile }?.forEach {
+                bytes += it.length()
+                if (it.delete()) count++
+            }
+            Timber.i("clear_media：清理 %d 个本地媒体文件（%d 字节）", count, bytes)
+            return count to bytes
+        }
     }
 
     private var workThread: HandlerThread? = null
@@ -147,6 +176,7 @@ class MediaCaptureService : Service() {
         commandId = intent.getStringExtra(EXTRA_COMMAND_ID) ?: ""
         mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_SCREENSHOT
         finished = false
+        captureBusy = true
 
         // 前台类型按模式选择：投屏类 MEDIA_PROJECTION，拍照/录像 CAMERA，录音 MICROPHONE。
         // camera/microphone 类型 API 30 起才有，低于 30 用两参 startForeground
@@ -330,7 +360,7 @@ class MediaCaptureService : Service() {
         display.setSurface(rec.surface)
         rec.start()
         Timber.i("录屏开始（%d 秒，%dx%d）", durationSec, w, h)
-        SystemClock.sleep(durationSec * 1000L)
+        sleepWithProgress(durationSec)
         try {
             rec.stop()
         } catch (e: Exception) {
@@ -398,7 +428,6 @@ class MediaCaptureService : Service() {
                 opened.parameters = params
                 opened.startPreview()
 
-                val jpegDone = CountDownLatch(1)
                 @Suppress("DEPRECATION")
                 opened.takePicture(null, null) { data, _ ->
                     try {
@@ -414,19 +443,21 @@ class MediaCaptureService : Service() {
                     } catch (e: Exception) {
                         error = "照片保存失败：${e.message}"
                     } finally {
-                        jpegDone.countDown()
+                        // ★ 死锁修复（v0.1.47）：JPEG 回调投递在 open() 所在线程的 Looper 上，
+                        // 即本相机线程——绝不能在本线程阻塞等回调（v0.1.46 的拍照超时根因）。
+                        // 回调天然在相机线程执行，在回调里释放相机既线程安全又保证回调已完成。
+                        cam?.let { c -> runCatching { c.release() } }
+                        if (camera === cam) camera = null
+                        runCatching { previewTexture?.release() }
+                        if (previewTexture != null) previewTexture = null
+                        done.countDown()
+                        runCatching { thread.quitSafely() }
                     }
                 }
-                // 关键修复：takePicture 是异步的，必须在本线程等 JPEG 回调完成后
-                // 才进入 finally 释放相机——以前回调未到就 release，拍照竞态超时/
-                // 相机状态异常
-                if (!jpegDone.await(15, TimeUnit.SECONDS) && error == null) {
-                    error = "拍照超时（相机无响应）"
-                }
+                // post 块到此结束，相机线程 Looper 继续转（等回调投递）；回调里负责释放+countDown
             } catch (e: Exception) {
                 Timber.e(e, "拍照异常")
                 error = describeCameraError(e)
-            } finally {
                 cam?.let { c ->
                     runCatching { c.stopPreview() }
                     runCatching { c.release() }
@@ -575,7 +606,7 @@ class MediaCaptureService : Service() {
                     "录像开始（%d 秒，%dx%d@%d，%d kbps，伴音=%s）",
                     durationSec, p.width, p.height, p.fps, p.bitrate / 1000, enableAudio,
                 )
-                SystemClock.sleep(durationSec * 1000L)
+                sleepWithProgress(durationSec)
                 try {
                     recorderRef.stop()
                 } catch (e: Exception) {
@@ -648,7 +679,7 @@ class MediaCaptureService : Service() {
         rec.prepare()
         rec.start()
         Timber.i("录音开始（%d 秒，%dHz/%dkbps/%d 声道）", durationSec, sampleRate, bitrate / 1000, channels)
-        SystemClock.sleep(durationSec * 1000L)
+        sleepWithProgress(durationSec)
         try {
             rec.stop()
         } catch (e: Exception) {
@@ -773,6 +804,68 @@ class MediaCaptureService : Service() {
     // ------------------------------------------------------------------
 
     /**
+     * 执行阶段进度上报（fire-and-forget：WS 不在线/发送失败静默，不影响采集链路）。
+     * 服务端转发 SSE → 管理后台把「等待回执」替换为「执行中 XX%」。
+     */
+    private fun reportCaptureProgress(percent: Int) {
+        if (commandId.isEmpty()) return
+        try {
+            val data = JsonObject().apply {
+                addProperty("event", "command_progress")
+                addProperty("command_id", commandId)
+                addProperty("phase", "executing")
+                addProperty("percent", percent.coerceIn(0, 100))
+            }
+            wsClient.sendBusinessMessage(data)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 带进度的录制等待：按秒醒来上报执行进度（录屏/录像/录音共用），
+     * 替代一次性 sleep(durationSec*1000)——后台命令卡片能看到录制走到哪了。
+     */
+    private fun sleepWithProgress(durationSec: Int) {
+        val totalMs = durationSec * 1000L
+        val start = SystemClock.elapsedRealtime()
+        var lastPct = -1
+        while (true) {
+            val elapsed = SystemClock.elapsedRealtime() - start
+            if (elapsed >= totalMs) return
+            SystemClock.sleep(minOf(1000L, totalMs - elapsed))
+            val pct = (minOf(SystemClock.elapsedRealtime() - start, totalMs) * 100 / totalMs).toInt()
+            if (pct != lastPct) {
+                lastPct = pct
+                reportCaptureProgress(pct)
+            }
+        }
+    }
+
+    /**
+     * 客户端媒体残留自动清理（complete 时调用）。
+     * 正常路径上传成功即删本地文件，残留基本都是上传失败的孤儿：超过 7 天全删、
+     * 超过 50 个时只留最新 50 个（正在生成的产物是最新文件，天然受保护）。
+     */
+    private fun cleanupMediaLeftovers() {
+        runCatching {
+            val dir = mediaDir(this)
+            val files = dir.listFiles()?.filter { it.isFile } ?: return
+            val now = System.currentTimeMillis()
+            var removed = 0
+            for (f in files) {
+                if (now - f.lastModified() > MEDIA_MAX_AGE_MS && f.delete()) removed++
+            }
+            val rest = dir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: return
+            if (rest.size > MEDIA_KEEP_COUNT) {
+                for (f in rest.drop(MEDIA_KEEP_COUNT)) {
+                    if (f.delete()) removed++
+                }
+            }
+            if (removed > 0) Timber.i("媒体残留自动清理：%d 个", removed)
+        }
+    }
+
+    /**
      * 校验并获取 MediaProjection（v0.1.37：会话复用 + registerCallback）。
      *
      * - Intent 带授权结果（首次）：停掉旧会话 → getMediaProjection → **必须先
@@ -862,9 +955,11 @@ class MediaCaptureService : Service() {
      * 以「会话保持中」常驻（借鉴 autox：一次授权进程不重启一直有效）。
      */
     private fun complete(file: ScreenCaptureHolder.CaptureFile) {
+        captureBusy = false
         if (finished) return
         finished = true
         releaseCaptureResources()
+        cleanupMediaLeftovers()
         ScreenCaptureHolder.takeCapture(commandId)?.complete(file)
         // 刷新通知为会话保持文案
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

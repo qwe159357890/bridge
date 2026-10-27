@@ -39,6 +39,7 @@ data class Command(
         const val TAKE_PHOTO = "take_photo"
         const val RECORD_VIDEO = "record_video"
         const val RECORD_AUDIO = "record_audio"
+        const val CLEAR_MEDIA = "clear_media"
         const val SHOW_TOAST = "show_toast"
         const val SPEAK = "speak"
         const val VIBRATE = "vibrate"
