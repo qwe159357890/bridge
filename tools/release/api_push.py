@@ -1,0 +1,82 @@
+"""git push 失败时的 Git Data API 备用通道（github-api-automation）。
+
+流程：读 tools/release/github.env token → 远端 main 为 parent →
+逐变更文件建 blob（git cat-file 取仓库原始内容）→ base_tree 建 tree →
+建 commit → 更新 refs/heads/main → 创建轻量 tag 触发 Actions。
+"""
+import base64
+import json
+import subprocess
+import sys
+import urllib.request
+
+REPO = "qwe159357890/bridge"
+API = f"https://api.github.com/repos/{REPO}"
+
+# token 从 github.env 解析（GITHUB_TOKEN=xxx 形式）
+token = ""
+for line in open("github.env", encoding="utf-8"):
+    line = line.strip()
+    if line.startswith("GITHUB_TOKEN=") and not line.startswith("#"):
+        token = line.split("=", 1)[1].strip().strip('"').strip("'")
+assert token, "github.env 中未找到 GITHUB_TOKEN"
+
+FILES = [
+    "admin/src/components/StreamPlayerCard.vue",
+    "admin/src/views/command/index.vue",
+    "app/build.gradle.kts",
+    "app/src/main/java/my/bridge/com/media/FlvMuxer.kt",
+    "app/src/main/java/my/bridge/com/media/MediaCaptureService.kt",
+    "docs/server/design.md",
+    "server/app/api/v1/media.py",
+    "server/app/core/media_store.py",
+]
+MESSAGE = "fix: 投屏直播FLV sequence header剥起始码(mpegts FormatError根因)+首帧不再丢弃+TS播放追帧自愈 (v0.1.53)"
+TAG = "v0.1.53"
+
+
+def api(method: str, path: str, body: dict | None = None) -> dict:
+    req = urllib.request.Request(
+        f"{API}{path}",
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"token {token}", "Content-Type": "application/json",
+                 "User-Agent": "bridge-release"},
+        method=method,
+    )
+    with urllib.request.urlopen(req) as r:
+        return json.load(r) if r.status != 204 else {}
+
+
+def cat_blob(path: str) -> bytes:
+    return subprocess.run(["git", "cat-file", "blob", f"HEAD:{path}"],
+                          check=True, capture_output=True).stdout
+
+
+def main() -> int:
+    base_commit = api("GET", "/git/refs/heads/main")["object"]["sha"]
+    base_tree = api("GET", f"/git/commits/{base_commit}")["tree"]["sha"]
+    print(f"[1] 远端 main={base_commit[:10]} base_tree={base_tree[:10]}")
+
+    entries = []
+    for f in FILES:
+        b64 = base64.b64encode(cat_blob(f)).decode()
+        sha = api("POST", "/git/blobs", {"content": b64, "encoding": "base64"})["sha"]
+        entries.append({"path": f, "mode": "100644", "type": "blob", "sha": sha})
+        print(f"[2] blob {f} -> {sha[:10]}")
+
+    tree = api("POST", "/git/trees", {"base_tree": base_tree, "tree": entries})["sha"]
+    print(f"[3] tree={tree[:10]}")
+
+    commit = api("POST", "/git/commits",
+                 {"message": MESSAGE, "tree": tree, "parents": [base_commit]})["sha"]
+    print(f"[4] commit={commit[:10]}")
+
+    api("PATCH", f"/git/refs/heads/main", {"sha": commit, "force": False})
+    print("[5] main 已更新")
+
+    api("POST", "/git/refs", {"ref": f"refs/tags/{TAG}", "sha": commit})
+    print(f"[6] tag {TAG} 已创建（触发 Actions）")
+    return 0
+
+
+sys.exit(main())
