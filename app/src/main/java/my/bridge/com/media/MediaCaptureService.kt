@@ -187,7 +187,7 @@ class MediaCaptureService : Service() {
                     releaseAll()
                     runCatching { stopSelf() }
                 }
-                complete(ScreenCaptureHolder.failure("采集失败：${e.message}"))
+                complete(ScreenCaptureHolder.failure("采集失败：${e.toString().take(300)}"))
             } finally {
                 Timber.i("采集任务结束（mode=%s，耗时 %d ms）", mode, SystemClock.elapsedRealtime() - startedAt)
             }
@@ -411,8 +411,13 @@ class MediaCaptureService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                error = e.message
+                Timber.e(e, "拍照异常")
+                error = e.toString() // e.message 可能为 null（如 NPE），toString 保证非空
                 done.countDown()
+            } finally {
+                // 相机清理由相机线程自己做（主线程跨线程 release 有竞态风险）；
+                // 主线程 finally 的 releaseCamera() 此时已是 no-op（camera 已置 null）
+                releaseCamera()
             }
         }
 
@@ -421,6 +426,7 @@ class MediaCaptureService : Service() {
                 throw IllegalStateException("拍照超时（相机无响应）")
             }
         } finally {
+            restoreVolumes()
             releaseCamera()
         }
         error?.let { throw IllegalStateException("拍照失败：$it") }
@@ -556,8 +562,17 @@ class MediaCaptureService : Service() {
                     if (tmp.renameTo(target)) saved = target else error = "录像文件保存失败"
                 }
             } catch (e: Exception) {
-                error = e.message
+                // e.message 可能为 null（如 NPE）：用 toString 保证错误信息永远非空，
+                // 否则上层会把「无错误 + 无产物」误判成空路径（"采集产物无效：/"）
+                Timber.e(e, "录像采集异常")
+                error = e.toString()
             } finally {
+                // 关键清理解（v0.1.43 占用 bug）：若 prepare()/start() 抛异常，inner finally
+                // 没机会跑，MediaRecorder 会一直持有 unlock 后的相机 → 系统「摄像头被占用」，
+                // 只有打开相机 App 才能解救。这里在相机线程上统一释放 recorder 再释放相机。
+                runCatching { recorder?.release() }
+                recorder = null
+                releaseCamera()
                 done.countDown()
             }
         }

@@ -547,6 +547,8 @@ fun AboutPage() {
                             // 阶段轮询：检查中 / 下载中（带真实百分比）/ 拉安装页
                             val poll = launch {
                                 while (isActive) {
+                                    // 阶段文案同时刷新按钮与下方说明文字（下方文字不能
+                                    // 停在静态提示上，用户要求分阶段变化）
                                     when (my.bridge.com.update.UpdateManager.phase) {
                                         my.bridge.com.update.UpdateManager.Phase.CHECKING -> {
                                             updateStage = "正在检查服务器版本…"
@@ -571,6 +573,7 @@ fun AboutPage() {
                                         }
                                         else -> {}
                                     }
+                                    if (updateStage.isNotBlank()) updateMessage = updateStage
                                     delay(150)
                                 }
                             }
@@ -585,7 +588,7 @@ fun AboutPage() {
                     },
                     enabled = !updating,
                 ) {
-                    Text(if (updating) (updateStage.ifBlank { "更新处理中…" }) else "检查更新")
+                    Text(if (updating) "更新处理中…" else "检查更新")
                 }
                 if (updating && updatePct != -2) {
                     if (updatePct in 0..100) {
