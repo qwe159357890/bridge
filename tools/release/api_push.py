@@ -6,6 +6,7 @@
 """
 import base64
 import json
+import os
 import subprocess
 import sys
 import urllib.request
@@ -21,15 +22,18 @@ for line in open("github.env", encoding="utf-8"):
         token = line.split("=", 1)[1].strip().strip('"').strip("'")
 assert token, "github.env 中未找到 GITHUB_TOKEN"
 
-# 可命令行覆盖：api_push.py <tag> <message>（文件列表取 HEAD 与 HEAD~1 的差异）
+# 可命令行覆盖：api_push.py <tag> <message>
 TAG = sys.argv[1] if len(sys.argv) > 1 else "v0.1.53"
 MESSAGE = sys.argv[2] if len(sys.argv) > 2 else (
     "fix: 投屏直播FLV sequence header剥起始码(mpegts FormatError根因)"
     "+首帧不再丢弃+TS播放追帧自愈 (v0.1.53)")
-if len(sys.argv) > 1:
-    FILES = subprocess.run(["git", "diff", "--name-only", "HEAD~1", "HEAD"],
-                           capture_output=True, text=True).stdout.split()
-    FILES = [f for f in FILES if f != ".gitignore"]
+
+# 差异基线：默认 HEAD~1（单 commit）；本地领先远端多笔 commit 时用
+# PUSH_BASE 环境变量指定（如远端 main 对应的本地 commit）。
+BASE = os.environ.get("PUSH_BASE", "HEAD~1")
+FILES = subprocess.run(["git", "diff", "--name-only", BASE, "HEAD"],
+                       capture_output=True, text=True).stdout.split()
+FILES = [f for f in FILES if f != ".gitignore"]
 
 
 def api(method: str, path: str, body: dict | None = None) -> dict:
@@ -71,8 +75,11 @@ def main() -> int:
     api("PATCH", f"/git/refs/heads/main", {"sha": commit, "force": False})
     print("[5] main 已更新")
 
-    api("POST", "/git/refs", {"ref": f"refs/tags/{TAG}", "sha": commit})
-    print(f"[6] tag {TAG} 已创建（触发 Actions）")
+    if TAG and TAG != "-":
+        api("POST", "/git/refs", {"ref": f"refs/tags/{TAG}", "sha": commit})
+        print(f"[6] tag {TAG} 已创建（触发 Actions）")
+    else:
+        print("[6] 跳过打 tag（纯服务端/admin 改动，不触发 Actions/APK 构建）")
     return 0
 
 

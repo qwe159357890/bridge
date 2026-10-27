@@ -13,17 +13,27 @@
           <el-button v-if="ended && recorded.length > 0" size="small" type="primary" @click="download">
             下载（{{ kind === 'audio' ? '.aac' : '.flv' }}）
           </el-button>
+          <el-button
+            v-if="kind !== 'audio'"
+            :icon="FullScreen"
+            size="small"
+            circle
+            title="全屏"
+            @click="goFullscreen"
+          />
           <el-button :icon="Close" size="small" circle title="关闭" @click="hide" />
         </div>
       </div>
     </template>
 
-    <!-- 视频：mpegts.js 直播（摄像头=MPEG-2 TS / 投屏=FLV） -->
+    <!-- 视频：mpegts.js 直播（摄像头=MPEG-2 TS / 投屏=FLV）。
+         不用原生 controls：Chrome 在 waiting（缓冲耗尽，如投屏画面静止）时
+         会显示旋转 spinner + 时间停走，误导「加载中/卡死」（2026-10-27 用户
+         反馈）。直播进度条无意义，去掉后静止期就安静显示最后一帧。 -->
     <video
       v-show="kind !== 'audio'"
       ref="videoEl"
       class="stream-video"
-      controls
       autoplay
       muted
       playsinline
@@ -55,7 +65,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { Close } from '@element-plus/icons-vue'
+import { Close, FullScreen } from '@element-plus/icons-vue'
 import mpegts from 'mpegts.js'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
@@ -102,6 +112,10 @@ let audioCtx: AudioContext | null = null
 let audioNextTime = 0 // Web Audio 播放时钟
 let adtsBuf = new Uint8Array(0) // ADTS 帧切分缓冲
 let latencyTimer: number | null = null // 视频延迟监控（追帧自愈）
+let sessionKey = '' // 本次会话 (device:kind)，防僵尸 pending 反复重启（见 startManual）
+let lastStartAt = 0 // 上次 startStream 时刻（startManual 冷却用）
+let lastChunkAt = 0 // 最近一次流分片到达时刻（区分「上游无帧」与「解码停滞」）
+let lastRebuildAt = 0 // 上次播放器重建时刻（重建冷却，防 4.5s 刷屏式重建）
 const recorded = ref<BlobPart[]>([]) // 原始字节累积（下载用，响应式供下载按钮显隐）
 let blobUrl = ''
 
@@ -133,14 +147,25 @@ function onStreamStatus(d: {
  * 手动预启动（命令下发成功即调用）：不再依赖 stream_status 事件。
  * 流通道无流时静默保持，分片到达即播放——规避管理 WS 短暂断线/
  * 事件丢失导致「整段录制无实时画面」（2026-10-27 实测缺陷）。
+ *
+ * 两级守卫（2026-10-27 追加，根治「日志每 4.5s 刷一条订阅」）：
+ * - 活跃会话幂等（原有）；
+ * - 同 (device:kind) 已结束的会话 60s 内不自动重启——silentRefresh 每 3s
+ *   轮询，15 分钟窗口内的 pending 流式命令会让 ended 卡片被反复重启，
+ *   每次重建两条流 WS（服务端日志刷屏 + 无意义直连订阅）。
  */
 function startManual(id: string, k: 'video' | 'audio' | 'screen') {
   if (visible.value && !ended.value && deviceId.value === id && kind.value === k) return
+  const key = `${id}:${k}`
+  if (key === sessionKey && Date.now() - lastStartAt < 60000) return
   startStream(id, k)
 }
 
 function startStream(id: string, k: 'video' | 'audio' | 'screen') {
   stopAll() // 防重入
+  sessionKey = `${id}:${k}`
+  lastStartAt = Date.now()
+  lastChunkAt = 0
   deviceId.value = id
   kind.value = k
   ended.value = false
@@ -182,6 +207,7 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
         chunkCount.value++
         totalBytes.value += ev.data.byteLength
         recorded.value.push(ev.data)
+        lastChunkAt = Date.now()
       }
     }
   } else {
@@ -276,29 +302,38 @@ function startLatencyWatch() {
       // 诊断帧数
       const q = v.getVideoPlaybackQuality?.()
       videoFrames.value = q ? q.totalVideoFrames : Math.round(v.currentTime * 30)
-      // 平滑追帧 v2：维持 0.4~2s 缓冲垫（防网络抖动饿死 = 周期性卡顿的主因）。
-      // 缓冲垫太薄（<0.4s）时降到 0.85 倍速缓慢重建垫子；太厚（>2s）1.5 倍速
-      // 消化；深度积压（>8s）才硬 seek。
+      // 平滑追帧 v3：维持 1.2~3.5s 缓冲垫。40s 实测（2026-10-27）：上游分片
+      // 突发到达（设备端推流节奏不均），断供可达 ~1s——旧垫子 0.4s 必被吃干
+      // （waiting 时 lag=0.02s），这就是残余卡顿的来源。垫厚 1.2s 可扛 1s 断供，
+      // 代价是直播延迟多约 1s（可接受）。
       if (v.buffered.length > 0 && !v.seeking && v.readyState >= 2) {
         const tail = v.buffered.end(v.buffered.length - 1)
         const lag = tail - v.currentTime
         if (lag > 8) {
-          v.currentTime = Math.max(0, tail - 0.5)
+          v.currentTime = Math.max(0, tail - 1.2)
           v.playbackRate = 1.0
-        } else if (lag > 2.0) {
+        } else if (lag > 3.5) {
           v.playbackRate = 1.5
-        } else if (lag < 0.4) {
+        } else if (lag < 1.2) {
           v.playbackRate = 0.85
         } else {
           v.playbackRate = 1.0
         }
       }
-      // 停滞检测（画面不动 + 解码帧不增 = video 轨卡死）
+      // 停滞检测（画面不动 + 解码帧不增 = video 轨卡死）。
+      // 先排除「上游本来就没帧」：屏幕静止时设备少产帧/无帧，解码帧不增是
+      // 正常现象——分片超过 2s 没到就重置 stall（2026-10-27：之前屏幕一静止
+      // 就被误判停滞 → 4s 重建 → 关键帧对齐等待 → 用户看到周期性卡顿）。
       if (Math.abs(v.currentTime - lastT) < 0.05 && videoFrames.value === lastF) {
-        stall++
+        if (Date.now() - lastChunkAt > 2000) {
+          stall = 0
+        } else {
+          stall++
+        }
         // 间隙跳跃：时间轴存在内容空洞（屏幕静止无帧/源 dts 跳变）时
         // currentTime 停在空洞左缘，实时数据只会填到洞右缘——等待无意义，
         // 卡住 1 秒即 seek 跨到下一段缓冲（空洞处本来就没有画面可放）。
+        let jumped = false
         if (stall >= 2 && v.buffered.length > 1) {
           for (let i = 0; i < v.buffered.length - 1; i++) {
             if (v.currentTime >= v.buffered.end(i) - 0.05) {
@@ -308,16 +343,37 @@ function startLatencyWatch() {
                 v.currentTime = next + 0.05
                 v.playbackRate = 1.0
                 stall = 0
+                jumped = true
                 break
               }
             }
           }
         }
-        // 重建兜底：无洞可跳仍卡 4s → 重建播放器（流头缓存保证可重新初始化）
+        // 冻结即时追尾（2026-10-27 投屏静止卡顿根治）：屏幕静止期设备低帧率
+        // 出帧，数据到达速率≈播放消耗 → 垫子被耗干、播放头停住，旧逻辑要等
+        // lag 攒到 8s 才硬 seek（实测冻结 7s 后猛跳 = 用户看到的卡顿）。
+        // 画面本来就静止，跳变无感——垫子攒回 1.5s 即轻推到近实时恢复跟踪。
+        if (!jumped && stall >= 2 && v.readyState < 3 && v.buffered.length > 0) {
+          const tail = v.buffered.end(v.buffered.length - 1)
+          if (tail - v.currentTime > 1.5) {
+            console.warn(
+              `[StreamPlayer] 画面冻结 ${v.currentTime.toFixed(2)}，追尾到 ${(tail - 1.2).toFixed(2)}`,
+            )
+            v.currentTime = tail - 1.2
+            v.playbackRate = 1.0
+            stall = 0
+          }
+        }
+        // 重建兜底：无洞可跳仍卡 4s → 重建播放器（流头缓存保证可重新初始化）。
+        // 冷却 12s：重建=断流重连+关键帧对齐等待，本身就是一次画面中断；
+        // 无冷却时「停滞→重建→接入开销→又停滞」每 4.5s 循环刷屏。
         if (stall >= 8) {
           stall = 0
-          console.warn('[StreamPlayer] 视频轨停滞 4s，重建播放器自愈')
-          rebuildPlayer()
+          if (Date.now() - lastRebuildAt > 12000) {
+            lastRebuildAt = Date.now()
+            console.warn('[StreamPlayer] 视频轨停滞 4s，重建播放器自愈')
+            rebuildPlayer()
+          }
         }
       } else {
         stall = 0
@@ -441,6 +497,7 @@ function download() {
 function hide() {
   visible.value = false
   ended.value = true
+  sessionKey = '' // 主动关闭清除会话冷却：用户立即重发同路命令不应被拦
   stopAll()
 }
 

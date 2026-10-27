@@ -496,6 +496,12 @@ class MediaCaptureService : Service() {
                 setInteger(android.media.MediaFormat.KEY_BIT_RATE, 2_500_000)
                 setInteger(android.media.MediaFormat.KEY_FRAME_RATE, 30)
                 setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                // 静止期重复帧（2026-10-27 用户反馈根治）：Surface 无新帧时编码器
+                // 按 500ms 间隔自动重编上一帧（内容不变 P 帧近零码率）——时间轴
+                // 连续、服务端/浏览器持续有数据，管理端不再出现「静止=断流十几秒
+                // → 爆发到达 → 猛跳」的卡顿观感，也无需定义「什么算静止」。
+                // 不支持的设备会静默忽略（无害）。
+                setLong(android.media.MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 500_000L)
             }
             codec.configure(format, null, null, android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
             inputSurface = codec.createInputSurface()

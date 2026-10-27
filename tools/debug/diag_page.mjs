@@ -1,0 +1,17 @@
+import { chromium } from './.pwenv/node_modules/playwright/index.mjs'
+
+const b = await chromium.launch({ channel: 'chrome', headless: false })
+const p = await b.newPage({ viewport: { width: 1600, height: 950 } })
+await p.addInitScript((t) => localStorage.setItem('bridge_admin_token', t), '2f3047473dd2f5861fee58b655ce43e3f743b3699e6d596c46fcaa8ef747d0d3')
+await p.goto('http://localhost:5173/command', { waitUntil: 'domcontentloaded' })
+await p.waitForSelector('.command-card', { timeout: 15000 })
+await p.locator('.el-select:has-text("选择在线设备")').first().click()
+await p.waitForTimeout(800)
+await p.locator('.el-select-dropdown__item:has-text("一加 9Plus")').first().click()
+await p.waitForTimeout(500)
+await p.getByPlaceholder('搜索命令名称 / 说明…').fill('投屏')
+await p.waitForTimeout(800)
+const cards = await p.locator('.command-card .command-name').allInnerTexts()
+console.log('搜索后可见命令:', JSON.stringify(cards))
+await p.screenshot({ path: 'diag_page.png' })
+await b.close()

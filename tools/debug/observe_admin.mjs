@@ -3,38 +3,41 @@
  * → 逐 300ms 采样 .stream-video 状态 + 捕获播放器事件与 console。
  * 用法：node observe_admin.mjs <token> [观察秒数=24]
  */
-import { chromium } from 'playwright'
+import { chromium } from './.pwenv/node_modules/playwright/index.mjs'
 
 const token = process.argv[2] || ''
 const watchSec = Number(process.argv[3] || 24)
 
 const browser = await chromium.launch({
   channel: 'chrome',
-  headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'],
+  headless: false, // 有头：用户可肉眼同步观察画面卡顿
+  args: ['--autoplay-policy=no-user-gesture-required'],
 })
 const page = await browser.newPage({ viewport: { width: 1600, height: 950 } })
 const logs = []
 page.on('console', (m) => logs.push(`[console.${m.type()}] ${m.text()}`))
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`))
 
-// 预置 token 免登录
+// 预置 token 免登录（注意：不能写 ([t]) => 解构——字符串参数会被拆成首字符）
 await page.addInitScript(
-  ([t]) => localStorage.setItem('bridge_admin_token', t),
+  (t) => localStorage.setItem('bridge_admin_token', t),
   token,
 )
 await page.goto('http://localhost:5173/command', { waitUntil: 'domcontentloaded' })
-await page.waitForTimeout(2500)
+await page.waitForSelector('.command-card', { timeout: 15000 })
+await page.waitForTimeout(1000)
 
 // 1. 选目标设备
-const picker = page.locator('.top-bar-right .el-select').first()
+const picker = page.locator('.el-select:has-text("选择在线设备")').first()
 await picker.click()
-await page.waitForTimeout(600)
+await page.waitForTimeout(800)
 await page.locator('.el-select-dropdown__item:has-text("一加 9Plus")').first().click()
 await page.waitForTimeout(500)
 console.log('设备已选择')
 
-// 2. 搜索并选中命令
+// 2. 切到音视频分类，搜索并选中命令
+await page.locator('li:has-text("音视频"), [class*="category"]:has-text("音视频")').last().click()
+await page.waitForTimeout(600)
 await page.getByPlaceholder('搜索命令名称 / 说明…').fill('投屏直播')
 await page.waitForTimeout(600)
 await page.locator('.command-card:has-text("投屏直播")').first().click()
@@ -46,14 +49,18 @@ await page.evaluate(() => {
   window.__events = []
   window.__samples = []
   const ev = (t, x) => window.__events.push({ t: Date.now(), e: t, x: x ?? '' })
+  // TimeRanges 不可 spread（不可迭代），用下标转换
+  const bufs = (v) =>
+    Array.from({ length: v.buffered.length }, (_, i) => [
+      +v.buffered.start(i).toFixed(2),
+      +v.buffered.end(i).toFixed(2),
+    ])
   const hook = () => {
     const v = document.querySelector('video.stream-video')
     if (!v || v.__hooked) return false
     v.__hooked = true
     for (const name of ['waiting', 'stalled', 'playing', 'seeking', 'seeked', 'pause', 'suspend', 'emptied', 'abort']) {
-      v.addEventListener(name, () =>
-        ev(name, `cur=${v.currentTime.toFixed(2)} buf=[${[...v.buffered].map((r) => `${r.start(0).toFixed(1)}-${r.end(0).toFixed(1)}`).join(',')}]`),
-      )
+      v.addEventListener(name, () => ev(name, `cur=${v.currentTime.toFixed(2)} buf=${JSON.stringify(bufs(v))}`))
     }
     ev('hooked')
     return true
@@ -75,7 +82,7 @@ await page.evaluate(() => {
       paused: v.paused,
       frames: q.totalVideoFrames ?? -1,
       dropped: q.droppedVideoFrames ?? -1,
-      buf: [...v.buffered].map((r) => [+r.start(0).toFixed(2), +r.end(0).toFixed(2)]),
+      buf: bufs(v),
     })
   }, 300)
 })
