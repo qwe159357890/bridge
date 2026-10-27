@@ -120,17 +120,24 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("stop_music", "停止音乐", "control", "⏹️",
          "停止播放并释放播放器（播放中/暂停中有效，空闲回执失败）"),
     _cmd("set_volume", "调节音量", "control", "🔊",
-         "调节客户端指定音频流的音量（媒体/铃声/闹钟），按百分比换算设备实际档位，"
-         "设置后回读验证；免打扰模式开启时铃声/闹钟流可能被系统拒绝，回执如实说明",
+         "调节客户端指定音频流的音量（媒体/铃声/闹钟/通知/系统共 5 类），"
+         "按百分比换算设备实际档位，设置后回读验证；"
+         "免打扰模式开启时铃声/通知流可能被系统拒绝，回执如实说明",
          [_param("level", "音量值", PARAM_TYPE_NUMBER, required=True, default=50,
                  placeholder="0-100", description="音量百分比（0-100）"),
           _param("stream", "音量类型", PARAM_TYPE_SELECT, default="media",
                  options=[
                      {"value": "media", "label": "媒体音量（音乐/视频）"},
-                     {"value": "ring", "label": "铃声（来电/通知）"},
+                     {"value": "ring", "label": "铃声（来电）"},
                      {"value": "alarm", "label": "闹钟"},
+                     {"value": "notification", "label": "通知（提示音）"},
+                     {"value": "system", "label": "系统（按键/UI 提示音）"},
                  ],
-                 description="调节哪一类音量")]),
+                 description="调节哪一类音量；部分 ROM 铃声与通知联动（改一个另一个跟着变）")]),
+    _cmd("get_volume", "获取音量", "control", "🎚️",
+         "读取客户端当前全部音量状态：5 类音频流的当前值/最大值/百分比，"
+         "附铃声模式（响铃/振动/静音）与免打扰开关；"
+         "后台「命令下发」页会在回执后显示音量卡片，滑条拖动可直接反向下发调节", []),
     _cmd("lock_screen", "锁屏", "control", "🔒",
          "让客户端立即锁屏（熄屏并上锁）。首选无障碍模拟电源键（与手动锁屏一致，"
          "解锁无强制密码）；未开无障碍时走设备管理员 lockNow（重新点亮屏幕会要求输密码）。"
@@ -284,6 +291,14 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("record_screen", "录屏", "media", "🎥", "录制客户端屏幕并上传（授权方式同截屏）",
          [_param("duration", "时长(秒)", PARAM_TYPE_NUMBER, required=True, default=10,
                  placeholder="3~60 秒", description="录制时长（秒）")]),
+    _cmd("screen_live", "投屏直播", "media", "🖥️",
+         "把客户端屏幕实时直播到本页（约 1 秒延迟）：下发后播放器自动弹出实时观看，"
+         "持续到最长时长结束或下发「停止流式」提前结束；授权方式同截屏"
+         "（首次需设备端点一次「立即开始」，之后免确认）；直播同时录 FLV 存档自动上传，"
+         "可在「媒体文件」页回放",
+         [_param("duration", "最长时长(秒)", PARAM_TYPE_NUMBER, default=300,
+                 placeholder="10~3600 秒",
+                 description="直播最长持续时长（秒），可随时用 stream_stop 提前结束")]),
     _cmd("take_photo", "拍照", "media", "📷", "调用客户端摄像头静音拍照并上传（无需设备端确认；通知栏仅显示静默的「运行中」提示，属系统硬性要求）",
          [_param("camera", "摄像头", PARAM_TYPE_SELECT, default="back",
                  options=[{"value": "back", "label": "后置（默认）"},
@@ -304,7 +319,14 @@ COMMANDS: list[dict[str, Any]] = [
           _param("duration", "时长(秒)", PARAM_TYPE_NUMBER, default=10,
                  placeholder="3~60 秒", description="录制时长（秒）"),
           _param("enable_audio", "录制声音", PARAM_TYPE_SWITCH, default=True,
-                 description="同时用麦克风录伴音；需麦克风权限，关闭则录无声视频")]),
+                 description="同时用麦克风录伴音；需麦克风权限，关闭则录无声视频"),
+          _param("stream", "流式模式", PARAM_TYPE_SWITCH, default=False,
+                 description="边录边推：后台实时观看（约 1~2 秒延迟），Android 8.0+ 支持；"
+                             "同时仍生成文件，流结束后照常上传。开启后 duration 仅作为"
+                             "自动停止倒计时，也可用「停止流式采集」命令手动停")]),
+    _cmd("stream_stop", "停止流式采集", "media", "⏹️",
+         "停止客户端正在进行的流式录像/录音（流式模式），推送最后一个分片后"
+         "按正常流程上传完整文件", []),
     _cmd("record_audio", "录音", "media", "🎙️",
          "使用客户端麦克风录制一段声音并上传（借鉴 autox；M4A/AAC 编码；"
          "无需设备端确认，通知栏仅显示静默的「运行中」提示，属系统硬性要求）",
@@ -314,7 +336,11 @@ COMMANDS: list[dict[str, Any]] = [
                           {"value": "high", "label": "高（48kHz 立体声）"}],
                  description="低 32kbps 单声道 / 中 96kbps 单声道 / 高 192kbps 立体声"),
           _param("duration", "时长(秒)", PARAM_TYPE_NUMBER, default=30,
-                 placeholder="5~300 秒", description="录制时长（秒）")]),
+                 placeholder="5~300 秒", description="录制时长（秒）"),
+          _param("stream", "流式模式", PARAM_TYPE_SWITCH, default=False,
+                 description="边录边推：后台实时收听（约 1~2 秒延迟，Web Audio 解码出声）；"
+                             "同时仍生成文件，流结束后照常上传。开启后 duration 仅作为"
+                             "自动停止倒计时，也可用「停止流式采集」命令手动停")]),
     _cmd("clear_media", "清理设备媒体", "media", "🧹",
          "清空客户端本地 media/ 目录的媒体残留（上传失败的孤儿文件），回执清理数量与释放空间；"
          "正常采集产物上传成功即删，无需常规清理；正在采集时拒绝执行。"

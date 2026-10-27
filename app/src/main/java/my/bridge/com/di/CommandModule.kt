@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -164,6 +165,12 @@ object CommandModule {
         Command.SET_VOLUME to CommandExecutor { command ->
             executeSetVolume(context, command)
         },
+        Command.GET_VOLUME to CommandExecutor { command ->
+            executeGetVolume(context, command)
+        },
+        Command.STREAM_STOP to CommandExecutor { command ->
+            executeStreamStop(command)
+        },
         Command.LOCK_SCREEN to CommandExecutor { command ->
             executeLockScreen(context, command)
         },
@@ -175,6 +182,9 @@ object CommandModule {
         },
         Command.RECORD_SCREEN to CommandExecutor { command ->
             executeProjectionCapture(context, deviceStore, apiClient, command, MediaCaptureService.MODE_RECORD)
+        },
+        Command.SCREEN_LIVE to CommandExecutor { command ->
+            executeProjectionCapture(context, deviceStore, apiClient, command, MediaCaptureService.MODE_SCREEN_LIVE)
         },
         Command.TAKE_PHOTO to CommandExecutor { command ->
             executeTakePhoto(context, deviceStore, apiClient, command)
@@ -870,6 +880,41 @@ object CommandModule {
     }
 
     /**
+     * 执行 get_volume：读取全部音量状态（5 类音频流 + 铃声模式 + 免打扰）。
+     * 纯只读；后台命令页会按回执后的快照展示音量卡片（滑条可反向下发调节）。
+     */
+    private fun executeGetVolume(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val snap = VolumeController.snapshot(context)
+            val message = VolumeController.snapshotMessage(snap)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_volume 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取音量失败")
+        }
+    }
+
+    /**
+     * 执行 stream_stop：请求停止进行中的流式录像/录音。
+     * 客户端置停止标志后，采集循环在下一个分片周期（≤500ms）退出并自动走
+     * 「完整文件上传」流程；本命令立即回执（不等上传），上传回执由原
+     * record_video / record_audio 命令携带。
+     */
+    private fun executeStreamStop(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return if (MediaCaptureService.requestStreamStop()) {
+            Timber.i("命令 stream_stop：已请求停止流式采集")
+            CommandResult(id, name, true, "已请求停止流式采集（≤1 秒内生效），完整文件随后自动上传")
+        } else {
+            CommandResult(id, name, false, "当前没有进行中的流式采集（录像/录音未开流式模式，或已结束）")
+        }
+    }
+
+    /**
      * 执行 lock_screen：锁屏（熄屏并上锁）。
      *
      * 两级策略（v0.1.40）：
@@ -1054,9 +1099,17 @@ object CommandModule {
         val id = command.commandId
         val name = command.command
         val isRecord = mode == MediaCaptureService.MODE_RECORD
+        val isLive = mode == MediaCaptureService.MODE_SCREEN_LIVE
+        // 录屏 3~60 秒；投屏直播 10~3600 秒（自动停止倒计时，stream_stop 可提前停）
         val durationSec =
-            if (isRecord) command.intParam("duration", 10, 3, 60) else 0
-        val actionLabel = if (isRecord) "录屏" else "截屏"
+            if (isRecord) command.intParam("duration", 10, 3, 60)
+            else if (isLive) command.intParam("duration", 300, 10, 3600)
+            else 0
+        val actionLabel = when {
+            isRecord -> "录屏"
+            isLive -> "投屏直播"
+            else -> "截屏"
+        }
 
         // 静默截屏优先（借鉴 autox，v0.1.40）：无障碍 takeScreenshot——无投屏授权框、
         // 无前台服务通知、无屏幕拉起，全程无感；录屏无法用无障碍，仍走 MediaProjection。
@@ -1114,7 +1167,7 @@ object CommandModule {
         val serviceIntent = Intent(context, MediaCaptureService::class.java).apply {
             putExtra(MediaCaptureService.EXTRA_COMMAND_ID, command.commandId)
             putExtra(MediaCaptureService.EXTRA_MODE, mode)
-            if (isRecord) putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+            if (isRecord || isLive) putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
             if (!reuse) {
                 putExtra(MediaCaptureService.EXTRA_RESULT_CODE, resultCode)
                 putExtra(
@@ -1134,7 +1187,7 @@ object CommandModule {
             ScreenCaptureHolder.capture.remove(command.commandId)
             return CommandResult(id, name, false, "$actionLabel 采集服务启动失败")
         }
-        val waitMs = if (isRecord) durationSec * 1000L + CAPTURE_TIMEOUT_MS else CAPTURE_TIMEOUT_MS
+        val waitMs = if (isRecord || isLive) durationSec * 1000L + CAPTURE_TIMEOUT_MS else CAPTURE_TIMEOUT_MS
         val done = captureOutcome.latch.await(waitMs, TimeUnit.MILLISECONDS)
         val capture = captureOutcome.value
         if (!done || capture == null) {
@@ -1253,7 +1306,18 @@ object CommandModule {
         if (quality !in setOf("low", "medium", "high")) {
             return CommandResult(id, name, false, "quality 参数只支持 low/medium/high，收到：$quality")
         }
-        val durationSec = command.intParam("duration", 10, 3, 60)
+        val stream = command.boolParam("stream")
+        // 流式录像需要 MPEG_2_TS 容器（API 26+，Android 8.0）
+        if (stream && Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return CommandResult(
+                id, name, false,
+                "流式录像需要 Android 8.0+（MPEG-2 TS 容器），当前系统 ${Build.VERSION.SDK_INT}，请关闭流式模式",
+            )
+        }
+        // 流式模式 duration 语义变为自动停止倒计时（可被 stream_stop 提前终止），上限放宽到 10 分钟
+        val durationSec =
+            if (stream) command.intParam("duration", 60, 10, 600)
+            else command.intParam("duration", 10, 3, 60)
 
         val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
         ScreenCaptureHolder.capture[command.commandId] = captureOutcome
@@ -1264,6 +1328,7 @@ object CommandModule {
             putExtra(MediaCaptureService.EXTRA_QUALITY, quality)
             putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
             putExtra(MediaCaptureService.EXTRA_ENABLE_AUDIO, enableAudio)
+            putExtra(MediaCaptureService.EXTRA_STREAM, stream)
         }
         val started = try {
             ContextCompat.startForegroundService(context, serviceIntent)
@@ -1316,7 +1381,11 @@ object CommandModule {
         if (quality !in setOf("low", "medium", "high")) {
             return CommandResult(id, name, false, "quality 参数只支持 low/medium/high，收到：$quality")
         }
-        val durationSec = command.intParam("duration", 30, 5, 300)
+        val stream = command.boolParam("stream")
+        // 流式模式 duration 语义变为自动停止倒计时（可被 stream_stop 提前终止），上限放宽到 10 分钟
+        val durationSec =
+            if (stream) command.intParam("duration", 60, 10, 600)
+            else command.intParam("duration", 30, 5, 300)
 
         val captureOutcome = ScreenCaptureHolder.Outcome<ScreenCaptureHolder.CaptureFile>()
         ScreenCaptureHolder.capture[command.commandId] = captureOutcome
@@ -1325,6 +1394,7 @@ object CommandModule {
             putExtra(MediaCaptureService.EXTRA_MODE, MediaCaptureService.MODE_AUDIO)
             putExtra(MediaCaptureService.EXTRA_QUALITY, quality)
             putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
+            putExtra(MediaCaptureService.EXTRA_STREAM, stream)
         }
         val started = try {
             ContextCompat.startForegroundService(context, serviceIntent)
@@ -1369,6 +1439,7 @@ object CommandModule {
     /** 采集模式 → 服务端 kind 字段。 */
     private fun kindOf(mode: String): String = when (mode) {
         MediaCaptureService.MODE_RECORD -> "screen_record"
+        MediaCaptureService.MODE_SCREEN_LIVE -> "screen_live"
         MediaCaptureService.MODE_PHOTO -> "photo"
         MediaCaptureService.MODE_VIDEO -> "video"
         MediaCaptureService.MODE_AUDIO -> "audio"

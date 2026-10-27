@@ -102,6 +102,41 @@ async def _handle_command_progress(app, device_id: str, data: dict) -> None:
         logger.exception("转发命令进度事件失败（忽略）")
 
 
+async def _handle_media_stream(app, device_id: str, data: dict) -> None:
+    """处理客户端流式录像/录音分片（WS ``message`` 通道，event=media_stream）。
+
+    数据分片（data 非空）→ 解 base64 后经 StreamHub 以二进制帧投递给
+    管理后台专用流 WS（/api/admin/stream/{device_id}）的播放器；
+    起始帧（带 info）/ 结束帧（is_end=true）额外广播 ``stream_status``
+    事件给管理后台（轻量元数据，供命令页自动开/关播放卡片）。
+    """
+    kind = data.get("kind")
+    if kind not in ("video", "audio", "screen"):
+        return
+    hub = app.state.stream_hub
+    payload_b64 = data.get("data") or ""
+    try:
+        await hub.push_b64(device_id, payload_b64)
+    except Exception:
+        logger.exception("流分片转发失败（忽略）")
+
+    is_end = bool(data.get("is_end"))
+    info = data.get("info")
+    if info or is_end:
+        try:
+            bus = app.state.admin_event_bus
+            await bus.publish("stream_status", {
+                "device_id": device_id,
+                "kind": kind,
+                "command_id": data.get("command_id"),
+                "is_end": is_end,
+                "total_bytes": data.get("total_bytes"),
+                "info": info,
+            })
+        except Exception:
+            logger.exception("发布流状态事件失败（忽略）")
+
+
 async def _clear_music_state(app, device_id: str) -> None:
     """断连时清除设备音乐状态（此后查询返回 unknown），并通知管理侧。"""
     try:
@@ -185,6 +220,16 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     except Exception:
         logger.exception("记录上线事件失败（忽略）")
 
+    # 3.2 握手后下发该设备的上报配置（客户端离线期间错过的 config_update 在此兜底）
+    try:
+        cfg = ws.app.state.report_config_store.get(device_id)
+        await manager.send_to_device(
+            device_id,
+            Envelope.make("message", {"event": "config_update", **cfg}).to_json(),
+        )
+    except Exception:
+        logger.exception("握手后下发上报配置失败（忽略）")
+
     # 4. 若顶掉了旧连接，先通知旧连接（发 close 帧 + 关 socket）
     if replaced is not None:
         await manager.notify_replaced(replaced, "replaced")
@@ -239,6 +284,8 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                     await _handle_dialog_click(ws.app, device_id, data)
                 elif data.get("event") == "command_progress":
                     await _handle_command_progress(ws.app, device_id, data)
+                elif data.get("event") == "media_stream":
+                    await _handle_media_stream(ws.app, device_id, data)
                 else:
                     logger.debug("device %s 业务消息：%s", device_id, envelope.data)
             elif envelope.type == "command_result":
@@ -276,6 +323,18 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 ws.app.state.connection_event_store.record(device_id, "offline", offline_reason)
             except Exception:
                 logger.exception("记录下线事件失败（忽略）")
+            # 5.1.1 设备断连：若有流式采集在推流，通知管理侧结束（播放器收尾）
+            try:
+                await ws.app.state.admin_event_bus.publish("stream_status", {
+                    "device_id": device_id,
+                    "kind": "video",
+                    "command_id": None,
+                    "is_end": True,
+                    "total_bytes": None,
+                    "info": {"reason": "device_offline"},
+                })
+            except Exception:
+                logger.exception("发布设备下线流结束事件失败（忽略）")
             # 5.2 音乐状态随断连失效：清除记录（查询端点此后返回 unknown）并通知管理侧
             await _clear_music_state(ws.app, device_id)
         # 6. 清理：从映射表移除（仅当映射仍指向本连接时）

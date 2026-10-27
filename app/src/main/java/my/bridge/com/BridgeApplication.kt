@@ -34,6 +34,9 @@ class BridgeApplication : Application() {
     @Inject
     lateinit var musicStateReporter: my.bridge.com.media.MusicStateReporter
 
+    @Inject
+    lateinit var reportManager: my.bridge.com.report.ReportManager
+
     override fun onCreate() {
         super.onCreate()
 
@@ -53,6 +56,10 @@ class BridgeApplication : Application() {
 
         // 音乐播放状态上报（状态变化 → WS message 通道 → 管理后台实时展示/按钮联动）
         musicStateReporter.start()
+
+        // 主动上报总管：周期位置上报（服务定时+WorkManager 兜底）+ 新短信即推 +
+        // 接收服务端 config_update 推送（后台远程开关，默认双开）
+        reportManager.start()
 
         Timber.i("BridgeApplication 初始化完成")
     }

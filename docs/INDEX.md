@@ -9,6 +9,7 @@
 |---|---|
 | [directory-convention.md](architecture/directory-convention.md) | **项目目录组织规范（宪法）** |
 | [terminology.md](architecture/terminology.md) | **术语约定（三端叫法：客户端/服务端/管理后台）** |
+| [live-screen-research.md](architecture/live-screen-research.md) | 投屏实时直播调研（方案/延迟评估/实现排期，未实现） |
 | overview.md | 总体架构设计（待补充） |
 | module-map.md | 模块依赖关系图（待补充） |
 

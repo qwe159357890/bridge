@@ -660,3 +660,25 @@ adb 已连设备及其 IP，有交集打绿标「可放心执行」，让用户*
 **前提与边界**：手机需连到运行服务端的电脑——数据线（手机允许一次「USB 调试」）
 或 WiFi 无线调试（Android 11+ 首次需配对码；成功一次后授权永久有效，不必再连）；
 adb 未安装时错误信息给出安装指引。
+
+## 二十一、媒体流转发与上报配置（v0.1.49）
+
+### 媒体流转发（流式录像/录音实时通道）
+
+- 客户端流式分片（WS `message` 通道，event=`media_stream`）→ `app/core/stream_hub.py`
+  （StreamHub）→ **管理后台专用流 WS** `WS /api/admin/stream/{device_id}?token=`
+  （v1/admin.py，二进制帧转发，服务端完成 base64 解码）。
+- 语义：**实时转发不缓存**——无订阅者时分片直接丢弃；历史完整文件由命令回执后
+  的正常媒体上传兜底。多订阅者各持独立队列（多后台同看一路）。
+- 起始帧（带 info）/ 结束帧（is_end）额外经 AdminEventBus 广播 `stream_status`
+  轻量事件；设备断连时补发结束事件（播放器收尾）。
+- 消费方：视频 mpegts.js（WS 直播源）/ 音频 Web Audio 逐组解码——详见
+  `docs/api/commands/media.md`「流式通道」。
+
+### 设备上报配置（主动周期上报开关）
+
+- `app/core/report_config_store.py`：按设备 JSON 落盘 `data/report_config.json`
+  （location_enabled / location_interval_min / sms_enabled，默认全开、10 分钟）。
+- REST：`GET/PUT /api/devices/{device_id}/report-config`（管理鉴权）；
+  PUT 成功后经 WS `message` 下发 `event=config_update` 实时生效。
+- 客户端握手后服务端主动推一次当前配置（离线期间错过的推送兜底）。

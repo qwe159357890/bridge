@@ -71,6 +71,15 @@
               <el-icon><VideoPlay /></el-icon>
               <span>试听</span>
             </div>
+            <!-- 直播存档（FLV）：浏览器原生不支持内联播放，提供下载 -->
+            <div
+              v-else-if="row.kind === 'screen_live' && row.exists"
+              class="video-thumb"
+              @click="download(row)"
+            >
+              <el-icon><Download /></el-icon>
+              <span>下载</span>
+            </div>
             <div v-else class="thumb thumb-error">文件缺失</div>
           </template>
         </el-table-column>
@@ -132,7 +141,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { Download, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { listMedia, mediaFileUrl, mediaThumbUrl, deleteMedia } from '@/api/media'
 import type { MediaItem } from '@/api/media'
 import { listDevices } from '@/api/devices'
@@ -212,9 +221,11 @@ function kindIcon(kind: string) {
       ? '📷'
       : kind === 'screen_record'
         ? '🎥'
-        : kind === 'video'
-          ? '🎬'
-          : '🎙️'
+        : kind === 'screen_live'
+          ? '🖥️'
+          : kind === 'video'
+            ? '🎬'
+            : '🎙️'
 }
 
 function kindTagType(kind: string) {
@@ -224,9 +235,11 @@ function kindTagType(kind: string) {
       ? 'success'
       : kind === 'screen_record'
         ? 'warning'
-        : kind === 'video'
-          ? 'danger'
-          : 'info'
+        : kind === 'screen_live'
+          ? 'warning'
+          : kind === 'video'
+            ? 'danger'
+            : 'info'
 }
 
 function deviceNameOf(id: string) {

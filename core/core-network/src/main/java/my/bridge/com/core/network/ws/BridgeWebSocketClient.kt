@@ -65,6 +65,14 @@ class BridgeWebSocketClient(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * 全局推送监听（TYPE_MESSAGE 通道）：应用层组件（如上报配置同步）经此接收
+     * 服务端推送，与构造注入的 [listener] 并存。客户端为进程级单例，
+     * 组件在应用启动时赋值一次即可。
+     */
+    @Volatile
+    var globalPushListener: WsMessageListener? = null
+
     private val _state = MutableStateFlow(WsConnectionState.DISCONNECTED)
     val state: StateFlow<WsConnectionState> = _state.asStateFlow()
 
@@ -290,6 +298,12 @@ class BridgeWebSocketClient(
                     listener?.onMessage(envelope.data)
                 } catch (e: Exception) {
                     Timber.w(e, "推送回调异常")
+                }
+                try {
+                    // 全局推送监听（config_update 等）：应用层组件经此接收服务端推送
+                    globalPushListener?.onMessage(envelope.data)
+                } catch (e: Exception) {
+                    Timber.w(e, "全局推送回调异常")
                 }
             }
             WsEnvelope.TYPE_COMMAND -> {

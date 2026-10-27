@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -420,6 +421,136 @@ private fun CoreConfirmDialog(
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
         },
     )
+}
+
+// ============ 主动上报设置 ============
+
+/**
+ * 主动上报设置页（周期位置上报 + 新短信即推，双开关默认开）。
+ *
+ * 与服务端配置是**同一份**：这里改动立即写入本地（ReportManager 配置流即时生效）；
+ * 管理后台「上报设置」改动经 WS config_update 推送覆盖本地——两端一致，
+ * 服务端配置为准。间隔 <15 分钟时仅主级（保活协程）生效，WorkManager 兜底
+ * 仍按系统下限 15 分钟跑（UI 有说明）。
+ */
+@Composable
+fun ReportSettings() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val prefs = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            my.bridge.com.report.ReportPrefsEntryPoint::class.java,
+        ).reportPrefs()
+    }
+
+    var locationEnabled by remember { mutableStateOf(true) }
+    var intervalMin by remember { mutableIntStateOf(10) }
+    var smsEnabled by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        val cfg = prefs.current()
+        locationEnabled = cfg.locationEnabled
+        intervalMin = cfg.locationIntervalMin
+        smsEnabled = cfg.smsEnabled
+    }
+
+    fun save(loc: Boolean = locationEnabled, min: Int = intervalMin, sms: Boolean = smsEnabled) {
+        scope.launch {
+            prefs.save(my.bridge.com.report.ReportPrefs.Config(loc, min, sms))
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        item { SectionTitle("主动上报") }
+        item {
+            SettingCard {
+                SettingSwitchRow(
+                    icon = "📍",
+                    title = "周期位置上报",
+                    checked = locationEnabled,
+                    onCheckedChange = {
+                        locationEnabled = it
+                        save(loc = it)
+                        Timber.d("切换：周期位置上报 -> ${if (it) "开" else "关"}")
+                    },
+                )
+                // 间隔滑条（1~120 分钟；保活协程按此值跑，WorkManager 兜底按 ≥15 分钟）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("⏱️", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "上报间隔：$intervalMin 分钟",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        androidx.compose.material3.Slider(
+                            value = intervalMin.toFloat(),
+                            onValueChange = { intervalMin = it.toInt().coerceIn(1, 120) },
+                            onValueChangeFinished = { save() },
+                            valueRange = 1f..120f,
+                            enabled = locationEnabled,
+                        )
+                        Text(
+                            "小于 15 分钟时仅保活服务存活期间生效；进程被杀后的系统级兜底按 15 分钟跑",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            SettingCard {
+                val smsPerm = my.bridge.com.data.SmsReader.hasPermission(context)
+                SettingSwitchRow(
+                    icon = "💬",
+                    title = "新短信即推",
+                    checked = smsEnabled,
+                    onCheckedChange = {
+                        smsEnabled = it
+                        save(sms = it)
+                        Timber.d("切换：新短信即推 -> ${if (it) "开" else "关"}")
+                    },
+                )
+                val smsValue = when {
+                    smsEnabled && smsPerm -> "已开启"
+                    smsEnabled -> "缺短信权限"
+                    else -> "已关闭"
+                }
+                SettingValueRow(
+                    icon = if (smsEnabled && smsPerm) "✅" else if (smsEnabled) "⚠️" else "🔇",
+                    title = "短信读取权限",
+                    value = smsValue,
+                    onClick = {
+                        if (!smsPerm) {
+                            (context as? Activity)?.let { act ->
+                                KeepAliveUtils.requestRuntimePermissions(act)
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        item {
+            Text(
+                text = "开关与间隔可在管理后台「设备 → 上报设置」远程修改（服务端配置为准，本页改动也立即生效）。" +
+                    "位置上报复用既有轨迹存储；新短信即推通过监听系统短信库实现，无需把 Bridge 设为默认短信应用。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            )
+        }
+    }
 }
 
 // ============ 关于 ============

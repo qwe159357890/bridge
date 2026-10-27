@@ -104,6 +104,16 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
   并发下发会在回执提示忙/失败，重试即可。
 - 权限：`CAMERA`（必需）+ `RECORD_AUDIO`（enable_audio=true 时）运行时权限。
 - 产物：`video_{时间戳}.mp4`，kind=`video`，后台媒体页可播放，回执可「查看」。
+- **流式模式**（`stream=true`，v0.1.49，借鉴 autox streamVideo）：
+  - 容器改 **MPEG_2_TS**（`.ts`，TS 每包自带时间戳可边收边播），**需 Android 8.0+**
+    （执行器前置校验，低版本回执失败提示关闭流式）；TS 不支持旋转元数据，跳过
+    setOrientationHint（浏览器按原始帧播放）；
+  - start 后每 500ms 读产物文件增量 → base64 → WS `media_stream` 事件上行
+    （服务端解 base64 → StreamHub → 管理后台专用流 WS 二进制帧 → mpegts.js 实时播）；
+  - `duration` 语义变为**自动停止倒计时**（10~600 秒，默认 60），可被 `stream_stop`
+    提前终止；停止后照常走完整文件上传（`.ts` 文件可直接播放/存档）；
+  - 起始帧带 `info`（format/分辨率/时长），服务端据此向后台广播 `stream_status`
+    起始事件（命令页自动弹出实时播放卡片）。
 
 ## record_audio 录音（v0.1.42，借鉴 autox audio_recorder.js）
 
@@ -116,6 +126,61 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
   （Manifest `foregroundServiceType` 加 `microphone` + `FOREGROUND_SERVICE_MICROPHONE` 权限）。
 - 权限：`RECORD_AUDIO` 运行时权限（Manifest 早已声明，v0.1.42 起真正使用）。
 - 产物：`audio_{时间戳}.m4a`，kind=`audio`，后台媒体页可试听，回执可「查看」。
+- **流式模式**（`stream=true`，v0.1.49，借鉴 autox streamStart）：
+  - 容器改 **AAC_ADTS**（`.aac`，每帧自带头，可任意切分后累积解码——流式播放的关键）；
+  - 分片机制与录像流式一致（500ms 增量 → WS `media_stream`，kind=audio）；
+  - 后台实时出声：`StreamPlayerCard` 按 **ADTS 帧边界**切分（0xFFF 同步字 + 帧长字段，
+    分片可能切断帧边界，必须重切）→ 每 16 帧一组 `decodeAudioData` 解码 →
+    Web Audio 播放时钟无缝调度（jitter buffer 150ms），**端到端约 1~2 秒延迟**；
+  - `duration` 语义同录像流式（10~600 秒，默认 60），可被 `stream_stop` 提前终止；
+    停止后完整 `.aac` 照常上传，后台播放卡片另提供「下载（.aac）」积累文件。
+
+## stream_stop 停止流式采集（v0.1.49）
+
+- 无参数。请求停止客户端进行中的流式采集（流式录像/录音/**投屏直播**通用）：
+  置停止标志，采集循环在下一个
+  分片周期（≤500ms）退出，随后推送剩余分片 + `is_end` 收尾帧，并按正常流程
+  上传完整文件。
+- **回执立即返回**（不等上传）——「已请求停止流式采集（≤1 秒内生效），完整文件
+  随后自动上传」；上传回执由原 record_video / record_audio 命令携带。
+- 无流式进行中回执失败（非流式模式不影响：普通录像/录音与本命令无关）。
+- 客户端实现：`MediaCaptureService.requestStreamStop()`（静态标志）；
+  `complete()` 统一复位 `streamActive`，覆盖异常路径残留。
+
+## 流式通道（服务端 + 管理后台，v0.1.49）
+
+- **服务端**：ws.py 收 `media_stream` 事件 → 数据分片 base64 解码后经
+  `core/stream_hub.py`（StreamHub，按 device_id 的订阅者队列，**无订阅者即丢弃**，
+  不缓存回放）投递给管理后台专用流 WS；起始/结束帧额外广播 `stream_status`
+  轻量事件（命令页自动开/关播放卡片）。设备断连时补发 `stream_status` 结束事件。
+  kind 白名单：`video`（摄像头 TS）/ `audio`（ADTS）/ `screen`（投屏 FLV）。
+- **管理后台**：`WS /api/admin/stream/{device_id}?token=`（v1/admin.py，二进制帧转发），
+  消费方 `StreamPlayerCard.vue`：
+  - 视频：mpegts.js `type:'mpegts' isLive:true`，url 直指专用流 WS
+    （`enableStashBuffer:false` + `liveBufferLatencyChasing` 低延迟直播配置）；
+  - 投屏直播：同上但 `type:'flv'`（screen_live 命令，见其章节）；
+  - 音频：Web Audio 逐组解码实时出声（见 record_audio 流式）；
+  - 附带原始字节累积，流结束后可下载 `.ts` / `.flv` / `.aac`。
+
+## screen_live 投屏直播（v0.1.50，docs/architecture/live-screen-research.md 落地）
+
+- 实时直播客户端屏幕到管理后台（端到端延迟约 **0.6~1.5 秒**），播放器在命令页
+  自动弹出（stream_status kind=screen 驱动），持续到最长时长结束或 stream_stop。
+- **参数**：`duration`（最长直播时长秒数，默认 300，10~3600，自动停止倒计时语义）。
+- **授权**：与截屏/录屏一致——投影会话保持中免确认直接开播；未保持时弹一次
+  系统授权框（「立即开始」），之后长期有效。
+- **实现链**（复用 v0.1.41 持久镜像幕布 + v0.1.49 流式通道，增量仅客户端编码打包）：
+  幕布 surface 挂 **MediaCodec H.264 编码器输入面**（720p@30，2.5 Mbps，I 帧间隔 2s）
+  → 同步模式逐帧取 AnnexB 裸流 → `media/FlvMuxer.kt`（自研极简 FLV 复用：文件头 +
+  onMetaData + AVC sequence header + AVCC 逐帧 tag，约 200 行）落盘 FLV
+  → 每 500ms 文件增量 base64 → WS media_stream **kind=screen** → StreamHub
+  → 专用流 WS → 后台 mpegts.js `type:'flv'` 实时播放 + 累积下载。
+- **FLV 而非 TS 的原因**：TS 复用（PAT/PMT/PES）约 300~500 行，FLV 对 H.264
+  only 打包约百行；mpegts.js 两种 type 原生都支持（调研文档 §三 路线 B）。
+- **产物**：直播同时录的 `screen_{时间戳}.flv` 按 kind=`screen_live`（「直播存档」）
+  自动上传；浏览器原生不支持 FLV 内联播放，媒体页该类目提供**下载**入口。
+- **边界**：FLAG_SECURE 界面直播黑屏（系统限制）；投屏期间状态栏有系统投屏图标；
+  多后台可同时观看同一设备（StreamHub 多订阅者）。
 
 ## clear_media 清理设备媒体（v0.1.47）
 
@@ -154,3 +219,26 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
 > v0.1.37 修复：kind 此前误声明为查询参数，而客户端把 kind 放在 multipart 体里
 > （OkHttp `@Part("kind")`），FastAPI 校验直接 422——拍照/截屏/录屏上传全部失败。
 > 现改为 `Form(...)` 接收，与已发布客户端的 multipart 形态对齐。
+
+## 相机资源防御网（v0.1.51，「摄像头被占用」复现根因修复）
+
+> 现象：连续多次拍照/录像测试后，`Camera.open` 报「摄像头被占用」，直到重启进程。
+
+- **根因 = 超时路径双释放**：拍照/录像超时后 `complete()` 在工作线程释放共享
+  camera 实例，而相机线程（拍照的 JPEG 回调 / 录像卡在 `stop()` 的线程）稍后
+  在自己的 finally 里**再次 release 同一实例**——Camera1 的 `release()` 不幂等，
+  双释放打坏 native camera client 状态，此后每次 open 都被系统判定占用。
+- **修复 = era 代数令牌**（`MediaCaptureService.cameraLock/cameraEra`）：
+  每次相机类采集开始 bump 一次 era 作为本代身份；**所有释放入口**（相机线程
+  finally / JPEG 回调 → `releaseCameraOwned`，complete/onDestroy 兜底 →
+  `takeoverCameraResources`，watchdog → `watchdogTakeover`）都必须「持当前代」
+  且每代只允许一次释放（释放即作废本代）——宁可漏放（下次采集前有接管兜底），
+  绝不双放。共享字段仅在仍指向本线程实例时才清空，防覆盖新采集的引用。
+- **Camera.open 带重试**：`openCameraWithRetry`（3 次重试、间隔 400ms）——HAL
+  完全关闭有延迟，密集采集时上一次刚释放就 open 会瞬时 "Camera is being used"。
+- **相机 watchdog**：拍照 35s / 录像 duration+45s 无完成信号 = 相机线程硬卡死
+  （如 `MediaRecorder.stop()` native 卡死），主线程 `watchdogTakeover` 强制接管
+  释放（reset+release recorder → reconnect+release camera），保证**下一条**
+  采集命令还能打开相机；卡死线程稍后若醒来，其释放被 era 校验跳过。
+- **回执增强**：`describeCameraError` 对占用类错误追加可操作提示
+  （重试无效时建议强杀进程/重启手机释放相机 HAL）。

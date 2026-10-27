@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, status
@@ -27,6 +28,8 @@ from app.schemas.ws import (
 )
 
 router = APIRouter(prefix="/devices", tags=["devices"])
+
+logger = logging.getLogger(__name__)
 
 
 def _get_registry(request: Request) -> DeviceRegistry:
@@ -265,3 +268,50 @@ async def adb_wifi_enable_accessibility(
         "device_ips": candidates,
         "steps": steps,
     }
+
+
+# ---------------------------------------------------------------------------
+# 上报配置（主动周期上报的开关/间隔）：管理后台读写 + WS 实时下发客户端
+# ---------------------------------------------------------------------------
+
+
+class ReportConfigBody(BaseModel):
+    """上报配置请求体（字段缺省表示保留原值/默认）。"""
+
+    location_enabled: Optional[bool] = Field(None, description="周期位置上报总开关（默认开）")
+    location_interval_min: Optional[int] = Field(
+        None, ge=1, le=120, description="位置上报间隔（分钟，1~120，默认 10）"
+    )
+    sms_enabled: Optional[bool] = Field(None, description="新短信即推总开关（默认开）")
+
+
+@router.get("/{device_id}/report-config", dependencies=[Depends(require_admin)])
+async def get_report_config(device_id: str, request: Request) -> dict:
+    """查询设备的主动上报配置（未设置返回默认值：双开关全开、间隔 10 分钟）。"""
+    return request.app.state.report_config_store.get(device_id)
+
+
+@router.put("/{device_id}/report-config", dependencies=[Depends(require_admin)])
+async def set_report_config(device_id: str, body: ReportConfigBody, request: Request) -> dict:
+    """保存设备的主动上报配置，并经 WS ``config_update`` 消息实时下发客户端。
+
+    客户端在线：收到即生效（重排周期任务/启停短信监听）；离线：配置已持久化，
+    客户端重连（握手后拉取全量配置兜底）时生效。
+    """
+    store = request.app.state.report_config_store
+    current = store.get(device_id)
+    merged = {
+        **current,
+        **{k: v for k, v in body.model_dump().items() if v is not None},
+    }
+    saved = store.set(device_id, merged)
+    delivered = False
+    try:
+        from app.schemas.ws import Envelope
+
+        envelope = Envelope.make("message", {"event": "config_update", **saved})
+        manager = _get_manager(request)
+        delivered = await manager.send_to_device(device_id, envelope.to_json())
+    except Exception:
+        logger.exception("下发上报配置到设备失败（忽略，客户端重连后拉取兜底）")
+    return {**saved, "delivered": delivered}

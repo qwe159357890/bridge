@@ -34,7 +34,7 @@ router = APIRouter(prefix="/media", tags=["media"])
 THUMB_MAX_EDGE = 480
 
 # 客户端上报的 kind 白名单
-MEDIA_KINDS = {"screenshot", "photo", "screen_record", "video", "audio"}
+MEDIA_KINDS = {"screenshot", "photo", "screen_record", "screen_live", "video", "audio"}
 
 # 单文件上限（录屏 60 秒约 40 MB 以内，留余量）
 MAX_MEDIA_BYTES = 200 * 1024 * 1024
@@ -43,6 +43,7 @@ KIND_LABELS = {
     "screenshot": "截屏",
     "photo": "拍照",
     "screen_record": "录屏",
+    "screen_live": "直播存档",
     "video": "录像",
     "audio": "录音",
 }

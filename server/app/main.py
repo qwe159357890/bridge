@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path as _Path
 
 from fastapi import FastAPI, WebSocket
 
@@ -31,6 +32,8 @@ from app.core.sim_store import build_sim_store
 from app.core.media_store import build_media_store
 from app.core.log_store import LogStore
 from app.core.music_state_store import MusicStateStore
+from app.core.stream_hub import StreamHub
+from app.core.report_config_store import ReportConfigStore
 from app.models.connection import Connection
 from app.schemas.ws import CloseData, Envelope
 
@@ -102,6 +105,16 @@ def create_app() -> FastAPI:
 
     music_state_store = MusicStateStore()
 
+    # 媒体流转发中心（流式录像/录音 → 管理后台专用流 WS 实时播放）
+    stream_hub = StreamHub()
+
+    # 设备上报配置存储（主动周期上报开关/间隔，JSON 文件持久化）
+    _data_dir = _Path("data")
+    report_config_store = ReportConfigStore(
+        data_dir=_data_dir if _data_dir.is_absolute()
+        else _Path(__file__).resolve().parent.parent / _data_dir,  # app/main.py -> server 根
+    )
+
     location_store = build_location_store(settings.locations.mysql)
     contacts_store = build_contacts_store(settings.locations.mysql)
     sms_store = build_sms_store(settings.locations.mysql)
@@ -109,8 +122,7 @@ def create_app() -> FastAPI:
     sim_store = build_sim_store(settings.locations.mysql)
 
     # 媒体文件存储：元数据走同一 MySQL，文件本体按 media.dir 落盘
-    from pathlib import Path as _Path
-
+    # （_Path 已在模块顶部导入：from pathlib import Path as _Path）
     _media_dir = _Path(settings.media.dir)
     if not _media_dir.is_absolute():
         _media_dir = _Path(__file__).resolve().parent.parent / _media_dir  # app/main.py -> server 根
@@ -128,6 +140,8 @@ def create_app() -> FastAPI:
     app.state.admin_auth = admin_auth
     app.state.admin_event_bus = admin_event_bus
     app.state.music_state_store = music_state_store
+    app.state.stream_hub = stream_hub
+    app.state.report_config_store = report_config_store
     app.state.location_store = location_store
     app.state.contacts_store = contacts_store
     app.state.sms_store = sms_store

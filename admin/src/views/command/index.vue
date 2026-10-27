@@ -193,6 +193,12 @@
     <!-- 定位结果：get_location 回执成功后自动显示（地图 + 误差圈 + 地址） -->
     <LocationResultCard ref="locationCard" />
 
+    <!-- 音量控制：get_volume 回执成功后自动显示（5 条滑条，拖动反向下发调节） -->
+    <VolumeResultCard ref="volumeCard" />
+
+    <!-- 流式采集实时播放：stream_status 事件驱动（视频 mpegts.js / 录音 Web Audio 实时出声） -->
+    <StreamPlayerCard ref="streamCard" :device-names="deviceNameMap" />
+
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -303,6 +309,8 @@ import { wsUrl } from '@/utils/base'
 import { formatTime } from '@/utils/format'
 import DevicePicker from '@/components/DevicePicker.vue'
 import LocationResultCard from '@/components/LocationResultCard.vue'
+import VolumeResultCard from '@/components/VolumeResultCard.vue'
+import StreamPlayerCard from '@/components/StreamPlayerCard.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -508,6 +516,17 @@ const locationCard = ref<any>(null)
 let pendingLocationCommandId = ''
 let locationSentAt = 0
 
+// 音量卡片：get_volume 回执（成功且目标设备匹配）流入即解析刷新滑条
+const volumeCard = ref<any>(null)
+
+// 流式播放卡片：stream_status 起止事件驱动（分片走组件自己的专用流 WS）
+const streamCard = ref<any>(null)
+const deviceNameMap = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {}
+  for (const d of devices.value) map[d.device_id] = d.device_name
+  return map
+})
+
 // 命令两阶段进度（SSE command_progress 实时驱动，不落库）：command_id → 最近进度。
 // 仅「待回执」状态的命令展示；最终回执到达即删除对应条目。
 interface CommandProgress {
@@ -646,6 +665,7 @@ watch(
     forceSend.value = false // 切换目标设备时重置强制下发，防止残留开启误操作
     pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
     locationCard.value?.hide()
+    volumeCard.value?.hide() // 音量卡片随设备切换关闭（新设备需重新获取）
     loadMusicState()
     loadDeviceSims() // 选卡下拉按新设备的实际卡动态渲染
   },
@@ -850,6 +870,21 @@ function connectWS() {
         ) {
           loadDeviceSims()
         }
+        // get_volume 回执成功：弹出/刷新音量控制卡片（滑条可反向下发调节）
+        if (
+          msg.data.command === 'get_volume' &&
+          msg.data.success &&
+          msg.data.device_id === form.deviceId
+        ) {
+          volumeCard.value?.show(
+            msg.data.device_id,
+            deviceNameOf(msg.data.device_id),
+            msg.data.message || '',
+          )
+        }
+      } else if (msg.type === 'stream_status') {
+        // 流式采集起止：驱动实时播放卡片开/关（分片重负载不经过本通道）
+        streamCard.value?.onStreamStatus(msg.data)
       } else if (msg.type === 'music_state') {
         // 实时音乐状态推送：仅更新当前目标设备
         if (msg.data.device_id === form.deviceId) {

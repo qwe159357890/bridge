@@ -17,6 +17,18 @@
             @clear="reload"
           />
           <el-button type="primary" :disabled="!deviceId" @click="reload">查询</el-button>
+          <el-tooltip content="向设备下发「获取短信」命令拉取最新短信入库，完成后自动刷新列表" placement="top">
+            <span>
+              <el-button
+                type="success"
+                :loading="refreshing"
+                :disabled="!deviceId || refreshing"
+                @click="refreshFromDevice"
+              >
+                {{ refreshing ? '拉取中…' : '刷新设备短信' }}
+              </el-button>
+            </span>
+          </el-tooltip>
         </div>
         <div class="right">
           <el-button
@@ -86,7 +98,7 @@
           <el-empty
             :description="
               deviceId
-                ? '该设备暂无短信存档（先在「命令下发」页下发「获取短信」命令）'
+                ? '该设备暂无短信存档（点击上方「刷新设备短信」从设备拉取）'
                 : '请先选择设备'
             "
             :image-size="80"
@@ -112,6 +124,7 @@ import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
+import { sendCommand, getCommand } from '@/api/commands'
 import { listSms, deleteSms, setSmsRead, simLabel, type SmsItem } from '@/api/data'
 import type { Device } from '@/types'
 
@@ -120,6 +133,7 @@ import type { Device } from '@/types'
  * 分页用时间游标（before_ms = 已加载最旧一条的 sms_date），配合累积存档
  * 比页码翻页稳定（新数据插入不影响游标）。
  * 已读状态双向可标记（已读/未读），仅更新存档；设备端同步另发 mark_sms_read 命令。
+ * 「刷新设备短信」= 直接下发 get_sms 命令（免切到命令下发页），回执后自动重查。
  */
 
 const TYPE_NAMES: Record<number, string> = {
@@ -172,6 +186,43 @@ async function loadPage() {
 
 function loadMore() {
   loadPage()
+}
+
+// ---------------- 刷新设备短信（直发 get_sms 命令 + 自动重查） ----------------
+
+const refreshing = ref(false)
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** 下发 get_sms（收件箱为主 + 已发送，增量去重入库），轮询回执后自动刷新列表。 */
+async function refreshFromDevice() {
+  if (!deviceId.value || refreshing.value) return
+  refreshing.value = true
+  try {
+    const r = await sendCommand(deviceId.value, 'get_sms', { sms_type: 'all', limit: 200 }, true)
+    if (!r.delivered) {
+      ElMessage.warning('设备不在线，无法拉取短信（设备连上后再试）')
+      return
+    }
+    ElMessage.info('已下发采集命令，等待设备回执…')
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      await sleep(1500)
+      const c = await getCommand(r.command_id)
+      if (c.status === 'success') {
+        ElMessage.success('设备短信已拉取入库')
+        reload()
+        return
+      }
+      if (c.status === 'failed') {
+        ElMessage.error(c.result_message || '设备拉取短信失败')
+        return
+      }
+    }
+    ElMessage.warning('命令 90 秒未回执，稍后请手动点「查询」查看')
+  } finally {
+    refreshing.value = false
+  }
 }
 
 // ---------------- 标记已读/未读（双向） ----------------

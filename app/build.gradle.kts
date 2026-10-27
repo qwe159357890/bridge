@@ -20,7 +20,7 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.1.48"
+        versionName = "0.1.51"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -90,6 +90,12 @@ dependencies {
 
     // ---- 日志 ----
     implementation(libs.timber)
+
+    // ---- 后台周期任务（位置兜底上报 WorkManager）----
+    implementation(libs.androidx.work.runtime)
+
+    // ---- 上报配置持久化（ReportPrefs 直用 DataStore；此前只在 core-storage 内用）----
+    implementation(libs.datastore.preferences)
 
     // ---- 网络（NetworkModule 装配 Retrofit/Gson） ----
     implementation(libs.okhttp)

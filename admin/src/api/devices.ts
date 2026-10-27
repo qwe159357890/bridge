@@ -105,3 +105,33 @@ export function adbWifiEnableAccessibility(
     data: params,
   })
 }
+
+// ---------------------------------------------------------------------------
+// 主动上报配置（周期位置上报 / 新短信即推，双开关默认开）
+// ---------------------------------------------------------------------------
+
+export interface ReportConfig {
+  location_enabled: boolean
+  location_interval_min: number
+  sms_enabled: boolean
+  /** PUT 返回时携带：配置是否已实时下发到设备（false = 设备离线，重连后生效） */
+  delivered?: boolean
+}
+
+export function getReportConfig(deviceId: string): Promise<ReportConfig> {
+  return request<ReportConfig>({
+    url: `/api/devices/${deviceId}/report-config`,
+    method: 'get',
+  })
+}
+
+export function saveReportConfig(
+  deviceId: string,
+  cfg: Partial<Omit<ReportConfig, 'delivered'>>,
+): Promise<ReportConfig> {
+  return request<ReportConfig>({
+    url: `/api/devices/${deviceId}/report-config`,
+    method: 'put',
+    data: cfg,
+  })
+}

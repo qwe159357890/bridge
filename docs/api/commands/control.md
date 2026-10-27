@@ -292,15 +292,29 @@ App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通�
 
 实现核心 `app/.../data/VolumeController.kt`，借鉴 autoxClient `sys.js` 的三段兜底：
 
-- **参数**：`level`（0-100 百分比）+ `stream`（media 媒体 / ring 铃声 / alarm 闹钟，默认 media）。
+- **参数**：`level`（0-100 百分比）+ `stream` 五选一（`media` 媒体 / `ring` 铃声 /
+  `alarm` 闹钟 / `notification` 通知 / `system` 系统，默认 media）。
+  部分 ROM 铃声与通知联动（改一个另一个跟着变，系统行为）。
 - **权限**：无需任何运行时权限（MODIFY_AUDIO_SETTINGS 已在 Manifest，声明即可）。
 - **换算**：百分比 → 设备实际档位 `target = max × level / 100`（不同设备各流 max 不同）。
 - **三段兜底 + 回读验证**：① `setStreamVolume(stream, target, 0)` → 回读；② 不生效
   带 `FLAG_SHOW_UI` 重试 → 回读；③ 仍不生效用 `adjustStreamVolume` 逐步逼近
   （步数封顶 40 防死循环）→ 回读。三段后仍未达目标**如实回执失败**，不虚报成功。
-- **免打扰限制**：DND 开启时系统拒绝修改铃声流（SecurityException），转译为
-  可操作的失败说明（先关免打扰再重试）；媒体/闹钟流不受影响。
+- **免打扰限制**：DND 开启时系统拒绝修改铃声/通知流（SecurityException），转译为
+  可操作的失败说明（先关免打扰再重试）；媒体/闹钟/系统流不受影响。
 - 回执带实际档位，如「媒体 音量已设为 12/15（80%）」。
+
+## get_volume 获取音量
+
+- 无参数。回读全部 5 类音频流（当前值/max/百分比）+ 铃声模式（响铃/振动/静音）
+  + 免打扰开关，纯只读（实现 `VolumeController.snapshot()`）。
+- 回执文本格式（`VolumeController.snapshotMessage()`，**后台音量卡片按它解析**）：
+  `音量：媒体 8/15（53%），铃声 …；铃声模式 响铃[；免打扰已开启]`。
+- 后台联动：命令页收到本命令成功回执 → 自动弹出 `VolumeResultCard` 音量卡片，
+  5 条滑条（当前档位百分比），**拖动松手即反向下发 set_volume**，1.5 秒后自动重发
+  get_volume 拉真实档位刷新；切换目标设备时卡片自动关闭。
+- 解析约定：卡片用正则按「流名 cur/max（pct%）」逐段解析，流名五档固定
+  （媒体/铃声/闹钟/通知/系统），改 snapshotMessage 文案必须同步卡片解析。
 
 ---
 

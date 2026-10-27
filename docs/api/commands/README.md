@@ -16,6 +16,7 @@
 | `resume_music` | 继续播放 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
 | `stop_music` | 停止音乐 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
 | `set_volume` | 调节音量 | [control.md#set_volume-调节音量](control.md#set_volume-调节音量) |
+| `get_volume` | 获取音量 | [control.md#get_volume-获取音量](control.md#get_volume-获取音量) |
 | `lock_screen` | 锁屏 | [control.md#lock_screen-锁屏](control.md#lock_screen-锁屏) |
 | `restart_app` | 重启客户端 | [control.md#restart_app-重启客户端](control.md#restart_app-重启客户端) |
 | `send_sms` | 发送短信 | [control.md#send_sms-发送短信](control.md#send_sms-发送短信) |
@@ -41,9 +42,11 @@
 |---|---|---|
 | `screenshot` | 截屏 | [media.md#screenshot-截屏](media.md#screenshot-截屏) |
 | `record_screen` | 录屏 | [media.md#record_screen-录屏](media.md#record_screen-录屏) |
+| `screen_live` | 投屏直播 | [media.md#screen_live-投屏直播](media.md#screen_live-投屏直播) |
 | `take_photo` | 拍照 | [media.md#take_photo-拍照](media.md#take_photo-拍照) |
 | `record_video` | 录像 | [media.md#record_video-录像](media.md#record_video-录像) |
 | `record_audio` | 录音 | [media.md#record_audio-录音](media.md#record_audio-录音) |
+| `stream_stop` | 停止流式采集 | [media.md#stream_stop-停止流式采集](media.md#stream_stop-停止流式采集) |
 | `clear_media` | 清理设备媒体 | [media.md#clear_media-清理设备媒体](media.md#clear_media-清理设备媒体) |
 
 ## 💬 interact（交互）→ [interact.md](interact.md)

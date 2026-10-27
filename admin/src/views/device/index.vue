@@ -77,13 +77,16 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="430" fixed="right">
+        <el-table-column label="操作" width="500" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain @click="goCommand(row)">
               下发命令
             </el-button>
             <el-button size="small" @click="showLocation(row)">位置</el-button>
             <el-button size="small" @click="goLog(row)">查看日志</el-button>
+            <el-button size="small" plain type="warning" @click="openReportConfig(row)">
+              上报设置
+            </el-button>
             <el-button
               size="small"
               type="success"
@@ -286,6 +289,43 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 上报设置弹窗：周期位置上报 / 新短信即推（保存后经 WS 实时下发客户端） -->
+    <el-dialog
+      v-model="reportVisible"
+      :title="`上报设置 — ${reportDevice?.device_name || ''}`"
+      width="480px"
+    >
+      <el-form label-width="130px">
+        <el-form-item label="周期位置上报">
+          <el-switch v-model="reportForm.location_enabled" />
+        </el-form-item>
+        <el-form-item label="上报间隔（分钟）">
+          <el-input-number
+            v-model="reportForm.location_interval_min"
+            :min="1"
+            :max="120"
+            :disabled="!reportForm.location_enabled"
+          />
+        </el-form-item>
+        <el-form-item label="新短信即推">
+          <el-switch v-model="reportForm.sms_enabled" />
+        </el-form-item>
+      </el-form>
+      <el-alert type="info" :closable="false">
+        <p style="margin: 0; line-height: 1.6">
+          开关默认全开。保存后 WS 实时下发客户端（设备离线时重连后生效）；
+          间隔小于 15 分钟时仅保活服务存活期间生效，进程被杀后的系统级兜底按 15 分钟跑。
+          新短信即推通过监听系统短信库实现，无需把 Bridge 设为默认短信应用。
+        </p>
+      </el-alert>
+      <template #footer>
+        <el-button @click="reportVisible = false">取消</el-button>
+        <el-button type="primary" :loading="reportSaving" @click="saveReportConfigFor">
+          保存并下发
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -300,8 +340,10 @@ import {
   adbEnableAccessibility,
   adbWifiEnableAccessibility,
   getDeviceNetInfo,
+  getReportConfig,
+  saveReportConfig,
 } from '@/api/devices'
-import type { AdbEnableAccessibilityResult, DeviceNetInfo } from '@/api/devices'
+import type { AdbEnableAccessibilityResult, DeviceNetInfo, ReportConfig } from '@/api/devices'
 import { CONN_TYPE_LABEL } from '@/api/devices'
 import DeviceStatusTag from '@/components/DeviceStatusTag.vue'
 import LocationDialog from '@/components/LocationDialog.vue'
@@ -391,6 +433,56 @@ const adbIpMatched = computed(() => {
   const deviceIps = new Set(info.device_ips)
   return info.adb_devices.some((d) => d.ip && deviceIps.has(d.ip))
 })
+
+// ---------------------------------------------------------------------------
+// 上报设置（周期位置上报 / 新短信即推）：打开拉取当前配置，保存经 WS 下发
+// ---------------------------------------------------------------------------
+
+const reportVisible = ref(false)
+const reportDevice = ref<Device | null>(null)
+const reportSaving = ref(false)
+const reportForm = ref<ReportConfig>({
+  location_enabled: true,
+  location_interval_min: 10,
+  sms_enabled: true,
+})
+
+async function openReportConfig(device: Device) {
+  reportDevice.value = device
+  reportVisible.value = true
+  try {
+    const cfg = await getReportConfig(device.device_id)
+    reportForm.value = {
+      location_enabled: cfg.location_enabled,
+      location_interval_min: cfg.location_interval_min,
+      sms_enabled: cfg.sms_enabled,
+    }
+  } catch {
+    /* 拉取失败用默认值，保存时会覆盖 */
+  }
+}
+
+async function saveReportConfigFor() {
+  if (!reportDevice.value) return
+  reportSaving.value = true
+  try {
+    const r = await saveReportConfig(reportDevice.value.device_id, {
+      location_enabled: reportForm.value.location_enabled,
+      location_interval_min: reportForm.value.location_interval_min,
+      sms_enabled: reportForm.value.sms_enabled,
+    })
+    ElMessage.success(
+      r.delivered
+        ? '已保存并实时下发到设备（即时生效）'
+        : '已保存（设备当前离线，重新连接后自动生效）',
+    )
+    reportVisible.value = false
+  } catch {
+    /* 错误已由 axios 拦截器统一提示 */
+  } finally {
+    reportSaving.value = false
+  }
+}
 
 async function loadNetInfo(deviceId: string) {
   adbNetInfo.value = null

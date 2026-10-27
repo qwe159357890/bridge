@@ -24,6 +24,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.Surface
@@ -35,6 +36,7 @@ import my.bridge.com.R
 import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import timber.log.Timber
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -69,6 +71,7 @@ class MediaCaptureService : Service() {
     companion object {
         const val MODE_SCREENSHOT = "screenshot"
         const val MODE_RECORD = "record"
+        const val MODE_SCREEN_LIVE = "screen_live"
         const val MODE_PHOTO = "photo"
         const val MODE_VIDEO = "video"
         const val MODE_AUDIO = "audio"
@@ -79,8 +82,32 @@ class MediaCaptureService : Service() {
         const val EXTRA_CAMERA_FACING = "camera_facing"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_ENABLE_AUDIO = "enable_audio"
+        const val EXTRA_STREAM = "stream"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_CONSENT_DATA = "consent_data"
+
+        // ---- 流式采集（stream=true 的录像/录音，借鉴 autox stream* 系列）----
+        // 分片推送节奏（毫秒）：每 500ms 读一次产物文件增量，base64 后经 WS 上行
+        private const val STREAM_CHUNK_INTERVAL_MS = 500L
+
+        /** 当前是否有流式采集进行中（stream_stop 命令据此回执）。 */
+        @Volatile
+        var streamActive: Boolean = false
+            private set
+
+        /** 停止请求标志：stream_stop 命令置位，流式循环每个分片周期检查后退出。 */
+        @Volatile
+        private var streamStopFlag: Boolean = false
+
+        /**
+         * 请求停止当前流式采集（stream_stop 命令入口）。
+         * @return 是否成功请求（无流式进行中返回 false）
+         */
+        fun requestStreamStop(): Boolean {
+            if (!streamActive) return false
+            streamStopFlag = true
+            return true
+        }
 
         // v0.1.40：旧渠道 media_capture 以 IMPORTANCE_LOW 创建过（渠道创建后重要性不可变），
         // 静默化需换新渠道 id 才能生效：MIN = 无声音、无横幅、折叠在通知栏底部
@@ -144,6 +171,24 @@ class MediaCaptureService : Service() {
     private var camera: android.hardware.Camera? = null
     private var previewTexture: SurfaceTexture? = null
     private var cameraThread: HandlerThread? = null
+
+    /**
+     * 相机所有权代数（v0.1.51 防御网，「摄像头被占用」复现的根因修复）：
+     *
+     * 旧版问题：拍照/录像**超时**后 complete() 会在工作线程 releaseCamera()，
+     * 而相机线程（拍照的 JPEG 回调 / 录像卡在 stop() 的线程）稍后在自己的
+     * finally 里**再次 release 同一实例**——Camera1 的 release() 不幂等，
+     * 双释放打坏 native camera client 状态，之后每次 Camera.open 都报
+     * 「摄像头被占用」，只能重启进程才能恢复。
+     *
+     * 解法 = 代数令牌（era）：每次相机类采集开始 bump 一次 era 作为本代身份；
+     * 所有释放入口都必须「持当前代」才能执行，且每代只允许一次释放
+     * （释放成功即作废本代）。三个入口——相机线程 finally / complete 兜底 /
+     * watchdog 强制接管——天然互斥：宁可漏放（还有下次采集前的接管兜底），
+     * 绝不双放。所有相关操作都在 [cameraLock] 下串行化。
+     */
+    private val cameraLock = Any()
+    private var cameraEra = 0
 
     private var commandId = ""
     private var mode = MODE_SCREENSHOT
@@ -219,10 +264,13 @@ class MediaCaptureService : Service() {
             try {
                 when (mode) {
                     MODE_PHOTO -> capturePhoto(intent)
-                    MODE_VIDEO -> captureVideo(intent)
-                    MODE_AUDIO -> captureAudio(intent)
+                    MODE_VIDEO ->
+                        captureVideo(intent, intent.getBooleanExtra(EXTRA_STREAM, false))
+                    MODE_AUDIO ->
+                        captureAudio(intent, intent.getBooleanExtra(EXTRA_STREAM, false))
                     MODE_SCREENSHOT -> captureScreenshot(intent)
                     MODE_RECORD -> captureRecord(intent)
+                    MODE_SCREEN_LIVE -> captureScreenLive(intent)
                 }
             } catch (e: Exception) {
                 Timber.e(e, "采集失败（mode=%s）", mode)
@@ -392,6 +440,168 @@ class MediaCaptureService : Service() {
     }
 
     // ------------------------------------------------------------------
+    // 投屏直播：MediaCodec H.264 编码 + FLV 复用（边编边推，复用流式通道）
+    // ------------------------------------------------------------------
+
+    /**
+     * 投屏实时直播（screen_live 命令，方案见 docs/architecture/live-screen-research.md）。
+     *
+     * 与录屏的本质区别：不走 MediaRecorder（录完才有产物），而是把镜像幕布的
+     * surface 直接挂到 **MediaCodec 编码器输入面**——屏幕每一帧经 GPU 合成进编码器，
+     * 输出 H.264 AnnexB → [FlvMuxer] 打成 FLV 落盘 → 每 [STREAM_CHUNK_INTERVAL_MS]
+     * 读文件增量推 WS（event=media_stream，kind=screen），管理后台 mpegts.js
+     * 以 type:'flv' 实时播放，端到端延迟约 0.6~1.5 秒。
+     *
+     * - 授权：与截屏/录屏一致（复用 [requireProjection] 会话保持，首次弹一次授权）；
+     * - surface 挂/摘复用持久幕布（不触发第二次 createVirtualDisplay）；
+     * - duration = 最长直播时长倒计时（10~3600 秒），stream_stop 随时可提前停；
+     * - 停止后 FLV 存档按正常媒体上传（含完整直播内容，可回放）；
+     * - 分片推送失败不中断直播（fire-and-forget，服务端无订阅者时分片直接丢弃）。
+     */
+    private fun captureScreenLive(intent: Intent) {
+        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 300).coerceIn(10, 3600)
+        val p = requireProjection(intent)
+        streamStopFlag = false
+        streamActive = true
+        val metrics = realDisplayMetrics()
+
+        // 视频尺寸：长边压到 1280（直播分辨率不必原生，带宽与延迟优先），宽高取偶
+        var w = metrics.widthPixels
+        var h = metrics.heightPixels
+        val longest = maxOf(w, h)
+        if (longest > 1280) {
+            val scale = 1280f / longest
+            w = (w * scale).toInt() and Int.MAX_VALUE - 1
+            h = (h * scale).toInt() and Int.MAX_VALUE - 1
+        }
+        w = w and 1.inv().coerceAtLeast(2)
+        h = h and 1.inv().coerceAtLeast(2)
+
+        val codec = android.media.MediaCodec.createEncoderByType("video/avc")
+        val display = obtainMirrorDisplay(p, metrics)
+        var inputSurface: Surface? = null
+        // 流式分片游标（收尾 finishStream 要用，声明在函数作用域）
+        var offset = 0L
+        var chunkIndex = 0
+
+        try {
+            val format = android.media.MediaFormat.createVideoFormat("video/avc", w, h).apply {
+                setInteger(
+                    android.media.MediaFormat.KEY_COLOR_FORMAT,
+                    android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
+                )
+                setInteger(android.media.MediaFormat.KEY_BIT_RATE, 2_500_000)
+                setInteger(android.media.MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            }
+            codec.configure(format, null, null, android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
+            inputSurface = codec.createInputSurface()
+            display.setSurface(inputSurface)
+            codec.start()
+            Timber.i("投屏直播开始（最长 %d 秒，%dx%d@30，2.5 Mbps）", durationSec, w, h)
+
+            val dir = mediaDir(this).apply { mkdirs() }
+            val file = File(dir, "screen_${System.currentTimeMillis()}.flv")
+            val startInfo = JsonObject().apply {
+                addProperty("format", "flv")
+                addProperty("video", "h264")
+                addProperty("audio", "none")
+                addProperty("width", w)
+                addProperty("height", h)
+                addProperty("duration_sec", durationSec)
+            }
+            sendStreamMessage("screen", 0, "", 0, 0, false, startInfo)
+
+            val info = android.media.MediaCodec.BufferInfo()
+            var firstPtsUs = -1L
+            var csd0: ByteArray? = null
+            var csd1: ByteArray? = null
+            var metadataWritten = false
+
+            FileOutputStream(file).use { out ->
+                val muxer = FlvMuxer(out)
+                muxer.writeHeader()
+                val startAt = SystemClock.elapsedRealtime()
+                val totalMs = durationSec * 1000L
+                var lastPushAt = 0L
+                var lastPct = -1
+
+                while (true) {
+                    val elapsed = SystemClock.elapsedRealtime() - startAt
+                    if (streamStopFlag || elapsed >= totalMs) break
+
+                    val obi = codec.dequeueOutputBuffer(info, 10_000)
+                    when {
+                        obi == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val of = codec.outputFormat
+                            csd0 = of.getByteBuffer("csd-0")?.let { b ->
+                                ByteArray(b.remaining()).also { b.get(it) }
+                            }
+                            csd1 = of.getByteBuffer("csd-1")?.let { b ->
+                                ByteArray(b.remaining()).also { b.get(it) }
+                            }
+                        }
+                        obi >= 0 -> {
+                            val ob = runCatching { codec.getOutputBuffer(obi) }.getOrNull()
+                            if (firstPtsUs < 0) firstPtsUs = info.presentationTimeUs.coerceAtLeast(0)
+                            if (ob != null && info.size > 0 && metadataWritten) {
+                                ob.position(info.offset)
+                                ob.limit(info.offset + info.size)
+                                val frame = ByteArray(info.size).also { ob.get(it) }
+                                val isKey = info.flags and android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                                val ptsMs = ((info.presentationTimeUs - firstPtsUs.coerceAtLeast(0)) / 1000)
+                                    .coerceAtLeast(0).toInt()
+                                muxer.writeVideoFrame(frame, ptsMs, isKey)
+                            }
+                            runCatching { codec.releaseOutputBuffer(obi, false) }
+                            if (!metadataWritten && csd0 != null) {
+                                muxer.writeMetadata(w, h, 30, csd0!!, csd1)
+                                metadataWritten = true
+                            }
+                        }
+                    }
+
+                    // 周期推分片（追帧：高码率时单周期增量可能多条消息，循环到追平）
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastPushAt >= STREAM_CHUNK_INTERVAL_MS) {
+                        lastPushAt = now
+                        while (true) {
+                            val (off, idx) = pushStreamChunks(file, offset, "screen", chunkIndex)
+                            if (off == offset) break
+                            offset = off
+                            chunkIndex = idx
+                        }
+                        val pct = (minOf(elapsed, totalMs) * 100 / totalMs).toInt()
+                        if (pct != lastPct) {
+                            lastPct = pct
+                            reportCaptureProgress(pct)
+                        }
+                    }
+                }
+            }
+
+            runCatching { codec.stop() }
+            if (file.length() <= 0L) {
+                throw IllegalStateException("直播产物为空（屏幕无有效画面或编码器异常）")
+            }
+            Timber.i("投屏直播结束（%d ms，FLV %d 字节，%d 分片）", durationSec * 1000L, file.length(), chunkIndex)
+            finishStream(file, "screen", offset, chunkIndex)
+            complete(ScreenCaptureHolder.CaptureFile(file.absolutePath))
+        } catch (e: Exception) {
+            runCatching { codec.stop() }
+            // 异常路径也补一个结束标志，让后台播放器及时收尾
+            sendStreamMessage("screen", chunkIndex + 1, "", 0, offset, true)
+            throw e
+        } finally {
+            display.setSurface(null)
+            runCatching { inputSurface?.release() }
+            runCatching { codec.release() }
+            streamActive = false
+            streamStopFlag = false
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 拍照：Camera1 静默拍照（虚拟预览 + 尽力静音）
     // ------------------------------------------------------------------
 
@@ -399,8 +609,13 @@ class MediaCaptureService : Service() {
         val front = intent.getStringExtra(EXTRA_CAMERA_FACING) == "front"
         muteSystemVolume()
 
-        // 防御性清理：上次异常残留的相机先释放（与录像同款，autox 思路）
-        cleanupStaleCameraResources()
+        // 接管相机资源 + 领取本代 era：上一次残留强制释放，且旧线程/回调的
+        // 释放权从此失效（双释放免疫）；Camera.open 带重试消化 HAL 关闭延迟
+        val myEra = takeoverCameraResources()
+        // watchdog：拍照 35 秒无回调 = 相机线程硬卡死，主线程强制接管释放，
+        // 保证下一条命令还能打开相机（本条命令由执行器超时先行报错）
+        val watchdog = Runnable { watchdogTakeover(myEra) }
+        Handler(Looper.getMainLooper()).postDelayed(watchdog, 35_000)
         val thread = HandlerThread("bridge-camera").also { it.start() }
         runCatching { cameraThread?.quitSafely() }
         cameraThread = thread
@@ -411,9 +626,10 @@ class MediaCaptureService : Service() {
 
         cameraHandler.post {
             var cam: android.hardware.Camera? = null
+            var texture: SurfaceTexture? = null
             try {
                 val cameraId = pickCamera(front)
-                cam = android.hardware.Camera.open(cameraId)
+                cam = openCameraWithRetry(cameraId)
                 camera = cam
                 val opened = cam!!
                 runCatching { opened.enableShutterSound(false) }
@@ -422,7 +638,7 @@ class MediaCaptureService : Service() {
                 @Suppress("DEPRECATION")
                 android.hardware.Camera.getCameraInfo(cameraId, info)
 
-                val texture = SurfaceTexture(0)
+                texture = SurfaceTexture(0)
                 previewTexture = texture
                 @Suppress("DEPRECATION")
                 opened.setPreviewTexture(texture)
@@ -461,10 +677,9 @@ class MediaCaptureService : Service() {
                         // ★ 死锁修复（v0.1.47）：JPEG 回调投递在 open() 所在线程的 Looper 上，
                         // 即本相机线程——绝不能在本线程阻塞等回调（v0.1.46 的拍照超时根因）。
                         // 回调天然在相机线程执行，在回调里释放相机既线程安全又保证回调已完成。
-                        cam?.let { c -> runCatching { c.release() } }
-                        if (camera === cam) camera = null
-                        runCatching { previewTexture?.release() }
-                        if (previewTexture != null) previewTexture = null
+                        // v0.1.51：era 校验释放——若超时路径/watchdog 已接管，这里自动跳过
+                        // （旧版此处与 complete() 双释放同一实例，是「摄像头被占用」复现根因）
+                        releaseCameraOwned(cam, null, texture, myEra)
                         done.countDown()
                         runCatching { thread.quitSafely() }
                     }
@@ -473,13 +688,7 @@ class MediaCaptureService : Service() {
             } catch (e: Exception) {
                 Timber.e(e, "拍照异常")
                 error = describeCameraError(e)
-                cam?.let { c ->
-                    runCatching { c.stopPreview() }
-                    runCatching { c.release() }
-                }
-                if (camera === cam) camera = null
-                runCatching { previewTexture?.release() }
-                if (previewTexture != null) previewTexture = null
+                releaseCameraOwned(cam, null, texture, myEra)
                 done.countDown()
                 runCatching { thread.quitSafely() }
             }
@@ -490,6 +699,7 @@ class MediaCaptureService : Service() {
                 throw IllegalStateException("拍照超时（相机无响应）")
             }
         } finally {
+            Handler(Looper.getMainLooper()).removeCallbacks(watchdog)
             restoreVolumes()
         }
         error?.let { throw IllegalStateException("拍照失败：$it") }
@@ -518,25 +728,37 @@ class MediaCaptureService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * 摄像头录像（MP4/H.264，可选麦克风伴音）。
+     * 摄像头录像（MP4/H.264，可选麦克风伴音）；stream=true 时流式模式。
      *
      * autox 踩坑的启动顺序（务必保持）：
      * ① Camera.open → ② setPreviewTexture(虚拟预览) → ③ startPreview →
      * ④ **unlock() 交出摄像头** → ⑤ MediaRecorder 配置（rec.setCamera）→
      * ⑥ prepare/start。unlock 前不起预览会直接 start failed。
      * 静音：与拍照同款临时静音系统流（录完恢复，避免提示音串进麦克风）。
+     *
+     * 流式模式（stream=true，借鉴 autox streamVideo）：
+     * - 容器 MPEG_2_TS（TS 每包自带时间戳，可边收边播；执行器已保证 API 26+）；
+     * - start 后每 [STREAM_CHUNK_INTERVAL_MS] 读一次文件增量 → base64 → WS 上行
+     *   （event=media_stream，服务端转二进制喂给后台 mpegts.js 实时播放）；
+     * - duration 变为自动停止倒计时，管理后台 stream_stop 命令可提前停；
+     * - 停止后仍走完整文件上传（TS 文件本身即可播放/存档）。
      */
     @Suppress("DEPRECATION")
-    private fun captureVideo(intent: Intent) {
-        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 10).coerceIn(3, 60)
+    private fun captureVideo(intent: Intent, stream: Boolean) {
+        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 10).coerceIn(3, 600)
         val preset = videoPreset(intent.getStringExtra(EXTRA_QUALITY) ?: "medium")
         val enableAudio = intent.getBooleanExtra(EXTRA_ENABLE_AUDIO, true)
         val front = intent.getStringExtra(EXTRA_CAMERA_FACING) == "front"
         muteSystemVolume()
+        if (stream) {
+            streamStopFlag = false
+            streamActive = true
+        }
 
-        // 防御性清理（autox _cleanupAllResources 思路）：上一次异常残留的 recorder/camera
-        // 若未释放，会一直占用相机 → 本次 Camera.open 或后续系统调用报「摄像头被占用」
-        cleanupStaleCameraResources()
+        // 接管相机资源 + 领取本代 era + watchdog（与拍照同款防御，见 capturePhoto）
+        val myEra = takeoverCameraResources()
+        val watchdog = Runnable { watchdogTakeover(myEra) }
+        Handler(Looper.getMainLooper()).postDelayed(watchdog, durationSec * 1000L + 45_000)
         val thread = HandlerThread("bridge-video").also { it.start() }
         runCatching { cameraThread?.quitSafely() }
         cameraThread = thread
@@ -544,20 +766,24 @@ class MediaCaptureService : Service() {
         val done = CountDownLatch(1)
         var error: String? = null
         var saved: File? = null
+        // 流式分片游标（finishStream 收尾要在 stop 之后用，声明在闭包顶层）
+        var offset = 0L
+        var chunkIndex = 0
 
         cameraHandler.post {
-            // 线程局部引用：finally 释放的就是本线程打开的实例，避免与防御清理/超时清理竞态
+            // 线程局部引用：finally 释放的就是本线程打开的实例（era 校验防双释放）
             var cam: android.hardware.Camera? = null
             var rec: MediaRecorder? = null
+            var texture: SurfaceTexture? = null
             try {
                 val cameraId = pickCamera(front)
-                cam = android.hardware.Camera.open(cameraId)
+                cam = openCameraWithRetry(cameraId)
                 camera = cam
                 val info = android.hardware.Camera.CameraInfo()
                 android.hardware.Camera.getCameraInfo(cameraId, info)
 
                 // 虚拟预览（无界面取景）——必须在 unlock 之前，autox 最大的坑
-                val texture = SurfaceTexture(0)
+                texture = SurfaceTexture(0)
                 previewTexture = texture
                 cam.setPreviewTexture(texture)
                 val params = cam.parameters
@@ -569,6 +795,7 @@ class MediaCaptureService : Service() {
                 cam.startPreview()
 
                 // 录制方向（Android 官方 unlock + MediaRecorder 配方，假设当前显示旋转）
+                // 仅 MP4 有 moov 旋转元数据；TS 不支持旋转元数据（浏览器按原始帧播放，可接受）
                 val degrees = try {
                     @Suppress("DEPRECATION")
                     val r = (getSystemService(Context.WINDOW_SERVICE) as WindowManager)
@@ -600,7 +827,10 @@ class MediaCaptureService : Service() {
                 // 参数是 start 抛裸 ISE 的另一高危因素，交给编码器默认值）
                 if (enableAudio) recorderRef.setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
                 recorderRef.setVideoSource(MediaRecorder.VideoSource.CAMERA)
-                recorderRef.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                recorderRef.setOutputFormat(
+                    if (stream) MediaRecorder.OutputFormat.MPEG_2_TS
+                    else MediaRecorder.OutputFormat.MPEG_4,
+                )
                 recorderRef.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
                 if (enableAudio) recorderRef.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 // 参数以 CamcorderProfile（设备侧保证支持的组合）为准，硬编码 fps/码率/
@@ -609,19 +839,55 @@ class MediaCaptureService : Service() {
                 recorderRef.setVideoSize(p.width, p.height)
                 recorderRef.setVideoFrameRate(p.fps)
                 recorderRef.setVideoEncodingBitRate(p.bitrate)
-                recorderRef.setOrientationHint(rotation)
+                if (!stream) recorderRef.setOrientationHint(rotation)
                 val dir = mediaDir(this).apply { mkdirs() }
                 val ts = System.currentTimeMillis()
-                val tmp = File(dir, "video_$ts.tmp.mp4")
-                val target = File(dir, "video_$ts.mp4")
-                recorderRef.setOutputFile(tmp.absolutePath)
+                val ext = if (stream) "ts" else "mp4"
+                val tmp = File(dir, "video_$ts.tmp.$ext")
+                val target = File(dir, "video_$ts.$ext")
+                recorderRef.setOutputFile((if (stream) target else tmp).absolutePath)
                 recorderRef.prepare()
                 recorderRef.start()
                 Timber.i(
-                    "录像开始（%d 秒，%dx%d@%d，%d kbps，伴音=%s）",
-                    durationSec, p.width, p.height, p.fps, p.bitrate / 1000, enableAudio,
+                    "录像开始（%s %d 秒，%dx%d@%d，%d kbps，伴音=%s）",
+                    if (stream) "流式" else "普通", durationSec, p.width, p.height, p.fps,
+                    p.bitrate / 1000, enableAudio,
                 )
-                sleepWithProgress(durationSec)
+                if (stream) {
+                    // 流式循环：分片推送 + 停止标志轮询（间隔与分片节奏一致）
+                    val streamInfo = JsonObject().apply {
+                        addProperty("format", "mpeg2ts")
+                        addProperty("video", "h264")
+                        addProperty("audio", if (enableAudio) "aac" else "none")
+                        addProperty("width", p.width)
+                        addProperty("height", p.height)
+                        addProperty("duration_sec", durationSec)
+                    }
+                    sendStreamMessage("video", 0, "", 0, 0, false, streamInfo)
+                    val startAt = SystemClock.elapsedRealtime()
+                    val totalMs = durationSec * 1000L
+                    var lastPct = -1
+                    while (true) {
+                        val elapsed = SystemClock.elapsedRealtime() - startAt
+                        if (elapsed >= totalMs || streamStopFlag) break
+                        SystemClock.sleep(STREAM_CHUNK_INTERVAL_MS)
+                        if (streamStopFlag) break
+                        // 追帧推送：单周期增量可能超单条 WS 消息承载（高码率），循环直到追平
+                        while (true) {
+                            val (off, idx) = pushStreamChunks(target, offset, "video", chunkIndex)
+                            if (off == offset) break
+                            offset = off
+                            chunkIndex = idx
+                        }
+                        val pct = (minOf(SystemClock.elapsedRealtime() - startAt, totalMs) * 100 / totalMs).toInt()
+                        if (pct != lastPct) {
+                            lastPct = pct
+                            reportCaptureProgress(pct)
+                        }
+                    }
+                } else {
+                    sleepWithProgress(durationSec)
+                }
                 try {
                     recorderRef.stop()
                 } catch (e: Exception) {
@@ -631,26 +897,33 @@ class MediaCaptureService : Service() {
                     recorder = null
                 }
                 if (error == null) {
-                    if (tmp.renameTo(target)) saved = target else error = "录像文件保存失败"
+                    // TS 直接写最终名无需 rename；MP4 保持 tmp→target（moov 在停止时才写入）
+                    if (stream) {
+                        if (target.length() > 0) {
+                            saved = target
+                            finishStream(target, "video", offset, chunkIndex)
+                        } else error = "录像文件生成失败"
+                    } else if (tmp.renameTo(target)) {
+                        saved = target
+                    } else {
+                        error = "录像文件保存失败"
+                    }
                 }
             } catch (e: Exception) {
                 Timber.e(e, "录像采集异常")
                 // 带类名+首个栈帧：裸 IllegalStateException（message 为 null）也能定位失败阶段
                 error = describeCameraError(e)
             } finally {
+                if (stream) {
+                    streamActive = false
+                    streamStopFlag = false
+                }
                 // 释放顺序 = autox 同款：先 recorder 再 reconnect+release 相机。
                 // unlock 后相机归属 MediaRecorder，reconnect() 先收回再 release 才干净，
-                // 否则 MediaRecorder 侧残留会话会让系统报「摄像头被占用」
-                rec?.let { runCatching { it.release() } }
-                if (recorder === rec) recorder = null
-                cam?.let { c ->
-                    runCatching { c.stopPreview() }
-                    runCatching { c.reconnect() }
-                    runCatching { c.release() }
-                }
-                if (camera === cam) camera = null
-                runCatching { previewTexture?.release() }
-                if (previewTexture != null) previewTexture = null
+                // 否则 MediaRecorder 侧残留会话会让系统报「摄像头被占用」。
+                // v0.1.51：era 校验——超时路径 complete()/watchdog 已接管时这里自动跳过，
+                // 杜绝旧版「两处释放同一实例」的双释放（占用复现根因）
+                releaseCameraOwned(cam, rec, texture, myEra)
                 done.countDown()
                 runCatching { thread.quitSafely() }
             }
@@ -661,8 +934,9 @@ class MediaCaptureService : Service() {
                 throw IllegalStateException("录像超时（相机无响应）")
             }
         } finally {
+            Handler(Looper.getMainLooper()).removeCallbacks(watchdog)
             // 不在此跨线程释放相机（竞态）：相机线程的 finally 必然执行释放；
-            // 超时极端卡死场景由 complete() 的防御性 releaseCamera() 兜底
+            // 硬卡死场景由 watchdog（duration+45s）强制接管兜底
             restoreVolumes()
         }
         error?.let { throw IllegalStateException("录像失败：$it") }
@@ -673,28 +947,77 @@ class MediaCaptureService : Service() {
     // 录音：MediaRecorder 纯音频（借鉴 autox audio_recorder.js）
     // ------------------------------------------------------------------
 
-    /** 麦克风录音（M4A/AAC），比录像简单得多——无相机、无预览、无 unlock。 */
-    private fun captureAudio(intent: Intent) {
-        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 30).coerceIn(5, 300)
+    /**
+     * 麦克风录音（M4A/AAC），比录像简单得多——无相机、无预览、无 unlock。
+     * stream=true 流式模式：AAC_ADTS 容器（每帧自带头，可累积实时解码播放），
+     * 每 [STREAM_CHUNK_INTERVAL_MS] 读文件增量 → base64 → WS 上行；
+     * 后台 Web Audio 逐段解码实时出声（约 1~2 秒延迟）。
+     */
+    private fun captureAudio(intent: Intent, stream: Boolean) {
+        val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 30).coerceIn(5, 600)
         val (sampleRate, bitrate, channels) = audioPreset(intent.getStringExtra(EXTRA_QUALITY) ?: "medium")
+        if (stream) {
+            streamStopFlag = false
+            streamActive = true
+        }
+        // 流式分片游标（finishStream 收尾要用，声明在函数作用域）
+        var offset = 0L
+        var chunkIndex = 0
 
         val rec = newRecorder()
         recorder = rec
         rec.setAudioSource(MediaRecorder.AudioSource.MIC)
-        rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+        rec.setOutputFormat(
+            if (stream) MediaRecorder.OutputFormat.AAC_ADTS
+            else MediaRecorder.OutputFormat.MPEG_4,
+        )
         rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
         rec.setAudioSamplingRate(sampleRate)
         rec.setAudioEncodingBitRate(bitrate)
         rec.setAudioChannels(channels)
         val dir = mediaDir(this).apply { mkdirs() }
         val ts = System.currentTimeMillis()
-        val tmp = File(dir, "audio_$ts.tmp.m4a")
-        val target = File(dir, "audio_$ts.m4a")
-        rec.setOutputFile(tmp.absolutePath)
+        val ext = if (stream) "aac" else "m4a"
+        val tmp = File(dir, "audio_$ts.tmp.$ext")
+        val target = File(dir, "audio_$ts.$ext")
+        rec.setOutputFile((if (stream) target else tmp).absolutePath)
         rec.prepare()
         rec.start()
-        Timber.i("录音开始（%d 秒，%dHz/%dkbps/%d 声道）", durationSec, sampleRate, bitrate / 1000, channels)
-        sleepWithProgress(durationSec)
+        Timber.i(
+            "录音开始（%s %d 秒，%dHz/%dkbps/%d 声道）",
+            if (stream) "流式" else "普通", durationSec, sampleRate, bitrate / 1000, channels,
+        )
+        if (stream) {
+            val streamInfo = JsonObject().apply {
+                addProperty("format", "aac_adts")
+                addProperty("sample_rate", sampleRate)
+                addProperty("bit_rate", bitrate)
+                addProperty("channels", channels)
+                addProperty("duration_sec", durationSec)
+            }
+            sendStreamMessage("audio", 0, "", 0, 0, false, streamInfo)
+            val startAt = SystemClock.elapsedRealtime()
+            val totalMs = durationSec * 1000L
+            var lastPct = -1
+            while (true) {
+                val elapsed = SystemClock.elapsedRealtime() - startAt
+                if (elapsed >= totalMs || streamStopFlag) break
+                SystemClock.sleep(STREAM_CHUNK_INTERVAL_MS)
+                if (streamStopFlag) break
+                val (off, idx) = pushStreamChunks(target, offset, "audio", chunkIndex)
+                if (off > offset) {
+                    offset = off
+                    chunkIndex = idx
+                }
+                val pct = (minOf(SystemClock.elapsedRealtime() - startAt, totalMs) * 100 / totalMs).toInt()
+                if (pct != lastPct) {
+                    lastPct = pct
+                    reportCaptureProgress(pct)
+                }
+            }
+        } else {
+            sleepWithProgress(durationSec)
+        }
         try {
             rec.stop()
         } catch (e: Exception) {
@@ -702,11 +1025,91 @@ class MediaCaptureService : Service() {
         } finally {
             rec.release()
             recorder = null
+            if (stream) {
+                streamActive = false
+                streamStopFlag = false
+            }
         }
-        if (!tmp.renameTo(target)) {
+        // TS/ADTS 直接写最终名无需 rename；MP4 保持 tmp→target
+        if (!stream && !tmp.renameTo(target)) {
             throw IllegalStateException("录音文件保存失败")
         }
+        if (stream && target.length() <= 0L) {
+            throw IllegalStateException("录音文件生成失败")
+        }
+        if (stream) finishStream(target, "audio", offset, chunkIndex)
         complete(ScreenCaptureHolder.CaptureFile(target.absolutePath))
+    }
+
+    // ------------------------------------------------------------------
+    // 流式分片推送（借鉴 autox streamStart/_pushStreamChunk）
+    // ------------------------------------------------------------------
+
+    /**
+     * 读取产物文件 [fromOffset, len) 的增量字节，base64 后经 WS 上行
+     * （event=media_stream，服务端解 base64 后以二进制帧转发给后台播放器）。
+     *
+     * @return 新的 (读偏移, 分片序号)；文件无增量返回原值（不发送）
+     */
+    private fun pushStreamChunks(
+        file: File,
+        fromOffset: Long,
+        kind: String,
+        fromIndex: Int,
+    ): Pair<Long, Int> {
+        var offset = fromOffset
+        var index = fromIndex
+        try {
+            val len = file.length()
+            if (len > offset) {
+                val buf = ByteArray((len - offset).toInt())
+                java.io.RandomAccessFile(file, "r").use { raf ->
+                    raf.seek(offset)
+                    raf.readFully(buf)
+                }
+                val b64 = android.util.Base64.encodeToString(buf, android.util.Base64.NO_WRAP)
+                offset += buf.size
+                index++
+                sendStreamMessage(kind, index, b64, buf.size.toLong(), offset, false)
+            }
+        } catch (e: Exception) {
+            // 分片失败不中断录制：服务端文件仍在，结束后还有完整文件上传兜底
+            Timber.w(e, "流式分片推送失败（忽略，继续录制）")
+        }
+        return offset to index
+    }
+
+    /** 发送流式 WS 消息（fire-and-forget：WS 不在线/失败静默，不影响采集链路）。 */
+    private fun sendStreamMessage(
+        kind: String,
+        chunkIndex: Int,
+        data: String,
+        bytes: Long,
+        totalBytes: Long,
+        isEnd: Boolean,
+        info: JsonObject? = null,
+    ) {
+        try {
+            val payload = JsonObject().apply {
+                addProperty("event", "media_stream")
+                addProperty("kind", kind)
+                addProperty("command_id", commandId)
+                addProperty("chunk_index", chunkIndex)
+                addProperty("data", data)
+                addProperty("bytes", bytes)
+                addProperty("total_bytes", totalBytes)
+                addProperty("is_end", isEnd)
+                if (info != null) add("info", info)
+            }
+            wsClient.sendBusinessMessage(payload)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 流式结束收尾：推送剩余分片 + 结束标志（is_end=true，供后台收尾下载/停止播放）。 */
+    private fun finishStream(file: File, kind: String, offset: Long, index: Int) {
+        val (off, idx) = pushStreamChunks(file, offset, kind, index)
+        sendStreamMessage(kind, idx + 1, "", 0, off, true)
     }
 
     private fun newRecorder(): MediaRecorder =
@@ -747,13 +1150,49 @@ class MediaCaptureService : Service() {
         return VideoPreset(profile.videoFrameWidth, profile.videoFrameHeight, profile.videoFrameRate, profile.videoBitRate)
     }
 
+    // ------------------------------------------------------------------
+    // 相机资源所有权（era 代数令牌 + 强制接管 + open 重试，v0.1.51 防御网）
+    // ------------------------------------------------------------------
+
     /**
-     * 防御性清理残留资源（autox _cleanupAllResources 思路）：
-     * 上一次采集异常若残留 recorder/camera（unlock 后归属 MediaRecorder），
-     * 不清理会一直占用相机。在每次拍照/录像启动前调用，宁可清理不存在的东西。
+     * Camera.open 带重试：摄像头 HAL 完全关闭有延迟（几百 ms 级），上一次采集
+     * 刚释放就立刻开下一次，open 可能瞬时报 "Camera is being used by another
+     * process"——密集采集（连拍/连续录像/测试）时必现。固定重试消化该延迟。
      */
-    private fun cleanupStaleCameraResources() {
-        recorder?.let { runCatching { it.release() } }
+    private fun openCameraWithRetry(
+        cameraId: Int,
+        retries: Int = 3,
+        delayMs: Long = 400,
+    ): android.hardware.Camera {
+        var last: Exception? = null
+        repeat(retries + 1) { attempt ->
+            try {
+                return android.hardware.Camera.open(cameraId)
+            } catch (e: Exception) {
+                last = e
+                if (attempt < retries) {
+                    Timber.w("Camera.open 第 %d 次失败（%s），%d ms 后重试", attempt + 1, e.message, delayMs)
+                    SystemClock.sleep(delayMs)
+                }
+            }
+        }
+        throw last ?: IllegalStateException("Camera.open 失败（无异常信息）")
+    }
+
+    /**
+     * 强制接管相机资源：**无条件** bump 代数（使旧线程/回调持有的一切释放权失效）
+     * 并安全释放共享引用，返回接管后的新 era。
+     *
+     * 调用时机：① 相机类采集启动前（清上一代残留 + 领取新代）；
+     * ② complete() 兜底（含超时路径——接管后卡死线程稍后的释放会被 era 校验跳过）；
+     * ③ onDestroy。
+     */
+    private fun takeoverCameraResources(): Int = synchronized(cameraLock) {
+        cameraEra++
+        recorder?.let { r ->
+            runCatching { r.reset() }
+            runCatching { r.release() }
+        }
         recorder = null
         camera?.let { c ->
             runCatching { c.stopPreview() }
@@ -763,18 +1202,80 @@ class MediaCaptureService : Service() {
         camera = null
         runCatching { previewTexture?.release() }
         previewTexture = null
+        cameraEra
+    }
+
+    /**
+     * watchdog 强制接管（相机线程硬卡死场景）：仅当采集仍在「当前代」（即没有
+     * 其他入口已接管/已正常释放）时才执行，否则静默跳过——与线程 finally、
+     * complete 兜底互斥，保证同一代只释放一次。
+     */
+    private fun watchdogTakeover(expectedEra: Int) {
+        synchronized(cameraLock) {
+            if (expectedEra != cameraEra) return
+            cameraEra++
+            recorder?.let { r ->
+                runCatching { r.reset() }
+                runCatching { r.release() }
+            }
+            recorder = null
+            camera?.let { c ->
+                runCatching { c.stopPreview() }
+                runCatching { c.reconnect() }
+                runCatching { c.release() }
+            }
+            camera = null
+            runCatching { previewTexture?.release() }
+            previewTexture = null
+        }
+        Timber.e("相机 watchdog 触发（era=%d）：相机线程无响应，已强制接管释放相机资源", expectedEra)
+    }
+
+    /**
+     * 相机线程侧释放（拍照/录像的线程 finally 与 JPEG 回调用）：
+     * 持 [myEra] 校验 + 释放权一次性消费。era 不匹配 = 已被 complete 兜底 /
+     * watchdog / 下一次采集接管，**直接跳过**——这就是双释放免疫的关键。
+     * 共享字段仅在仍指向本线程实例时才清空（避免覆盖新采集的引用）。
+     */
+    private fun releaseCameraOwned(
+        cam: android.hardware.Camera?,
+        rec: MediaRecorder?,
+        texture: SurfaceTexture?,
+        myEra: Int,
+    ) {
+        synchronized(cameraLock) {
+            if (myEra != cameraEra) return
+            cameraEra++ // 本代释放权已消费，同代任何后续释放（含本线程重复调用）全部失效
+            if (recorder != null && recorder === rec) recorder = null
+            if (camera === cam) camera = null
+            if (previewTexture === texture) previewTexture = null
+        }
+        // 释放在锁外执行（release 可能阻塞数百 ms，勿持锁）
+        rec?.let { runCatching { it.release() } }
+        cam?.let { c ->
+            runCatching { c.stopPreview() }
+            runCatching { c.reconnect() }
+            runCatching { c.release() }
+        }
+        runCatching { texture?.release() }
     }
 
     /**
      * 相机类异常描述增强：类名 + message（可能为 null）+ 首个业务栈帧。
      * MediaRecorder.start/stop 常抛「无 message 的裸 IllegalStateException」，
      * 只给类名无法定位失败阶段（prepare 还是 start），附栈帧后回执可直接看到出处。
+     * 占用类错误追加可操作提示（v0.1.51：open 已带 3 次重试，仍失败才走到这）。
      */
     private fun describeCameraError(e: Exception): String {
         val frame = e.stackTrace.firstOrNull()
         val stage = frame?.let { "${it.className.substringAfterLast('.')}.${it.methodName}(${it.lineNumber})" } ?: "unknown"
         val msg = e.message ?: "(无 message)"
-        return "${e.javaClass.simpleName}: $msg @ $stage"
+        val hint = if (e.message?.contains("being used", ignoreCase = true) == true ||
+            e.message?.contains("Camera is in use", ignoreCase = true) == true
+        ) {
+            "（相机被占用且重试无效：若反复出现，请强杀 Bridge 进程或重启手机释放相机 HAL）"
+        } else ""
+        return "${e.javaClass.simpleName}: $msg @ $stage$hint"
     }
 
     /** 录音音质档位：(采样率 Hz, 码率 bps, 声道数)。 */
@@ -971,6 +1472,9 @@ class MediaCaptureService : Service() {
      */
     private fun complete(file: ScreenCaptureHolder.CaptureFile) {
         captureBusy = false
+        // 流式状态复位（覆盖异常路径残留，正常路径在各自 finally 已复位）
+        streamActive = false
+        streamStopFlag = false
         if (finished) return
         finished = true
         releaseCaptureResources()
@@ -981,13 +1485,16 @@ class MediaCaptureService : Service() {
         runCatching { nm.notify(NOTIFICATION_ID, buildNotification()) }
     }
 
-    /** 释放单次采集资源（幕布 mirrorDisplay 归会话所有，这里不动）。 */
+    /**
+     * 释放单次采集资源（幕布 mirrorDisplay 归会话所有，这里不动）。
+     * 相机/recorder 走 **era 接管**（bump 代数 + 释放残留）：正常路径相机线程
+     * finally 已释放（共享字段为 null，此处为无操作）；超时/异常路径相机线程
+     * 可能还活着，接管使其后续释放自动失效——v0.1.51 起不再与线程并发双释放。
+     */
     private fun releaseCaptureResources() {
         runCatching { imageReader?.close() }
         imageReader = null
-        runCatching { recorder?.release() }
-        recorder = null
-        releaseCamera()
+        takeoverCameraResources()
     }
 
     private fun releaseAll() {
@@ -997,22 +1504,5 @@ class MediaCaptureService : Service() {
         projectionHeld = false
         runCatching { projection?.stop() }
         projection = null
-    }
-
-    /**
-     * 兜底相机释放（防御网）：正常清理由相机线程 finally 自己做（线程局部引用），
-     * 这里只兜异常残留场景。@Synchronized 防止与相机线程并发双释放。
-     */
-    @Synchronized
-    @Suppress("DEPRECATION")
-    private fun releaseCamera() {
-        camera?.let { c ->
-            runCatching { c.stopPreview() }
-            runCatching { c.reconnect() }
-            runCatching { c.release() }
-        }
-        camera = null
-        runCatching { previewTexture?.release() }
-        previewTexture = null
     }
 }

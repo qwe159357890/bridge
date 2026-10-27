@@ -216,3 +216,39 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
 - Android Geocoder（坐标转地址）依赖 Google 后端服务，国产机不可靠——v1 不做逆地理编码。
 - `LocationListener` 用 SAM lambda 时内部 `this` 指向外部类而非监听器，
   注销监听须用 `object : LocationListener` 表达式。
+
+## 主动周期上报：位置 + 新短信（v0.1.49，可开关，默认开）
+
+> 非命令：客户端**主动**上报能力，免每次手动下发命令。开关/间隔由服务端按设备
+> 配置（`core/report_config_store.py`，JSON 文件 `data/report_config.json`），
+> 管理后台「设备 → 上报设置」弹窗读写，保存经 WS `config_update` 消息实时下发；
+> 客户端握手后服务端再推一次当前配置（离线期间错过的推送在此兜底）。
+
+### 周期位置上报（两级策略）
+
+- **主级**：`ReportManager` 协程定时循环（间隔 1~120 分钟可配，默认 10）——
+  保活服务活着就稳定跑；每次 `LocationHelper.getLocation(coarse, 30s)` →
+  `POST /api/locations`（provider 标注「周期上报」），失败只记日志不重试。
+- **兜底**：WorkManager 周期任务 `LocationReportWorker`（系统级 ≥15 分钟，
+  Doze 可跑）——进程被杀后兜底；依赖经静态 Deps 注入（不引 hilt-work）。
+- 开关关闭：取消循环 + `cancelUniqueWork`；间隔变化：REPLACE 重排。
+- 设备端设置页新增「上报」Tab（`ui/SettingsPages.kt` `ReportSettings()`），
+  与后台改的是**同一份配置**（本地 DataStore ⇄ 服务端 config_update 双向同步）。
+
+### 新短信即推（ContentObserver 方案）
+
+- **不要求默认短信应用**：注册 `ContentObserver` 监听 `content://sms`——系统默认
+  短信应用把新短信写库的瞬间回调（READ_SMS 权限即可，App 启动时已申请）。
+  Bridge 恰好是默认应用时 SMS_DELIVER 写库同样触发，服务端按 sms_key 去重，双链路无副作用。
+- 去重：本地 DataStore 水位 `sms_last_pushed_date`，只推比它新的收件箱短信
+  （每次 ≤20 条，防风暴）；上报失败只记日志（get_sms 全量拉取可兜底补齐）。
+- 800ms 聚合延迟：等长短信分段全部入库再查，避免碎片推送。
+- 无 READ_SMS 权限：静默不注册（设置页有权限状态行 + 去授权入口）。
+
+### 相关文件
+
+| 端 | 文件 |
+|---|---|
+| 服务端 | `app/core/report_config_store.py`、`api/v1/devices.py`（GET/PUT report-config）、`api/ws.py`（config_update 下发） |
+| 客户端 | `app/.../report/`（ReportPrefs / ReportManager / SmsPushObserver / LocationReportWorker）、`ui/SettingsPages.kt`（上报 Tab） |
+| 管理后台 | `views/device/index.vue`（上报设置弹窗）、`api/devices.ts`（getReportConfig/saveReportConfig） |

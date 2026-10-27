@@ -108,3 +108,46 @@ async def admin_ws(ws: WebSocket) -> None:
         await bus.disconnect(ws)
 
 
+@router.websocket("/stream/{device_id}")
+async def admin_stream_ws(ws: WebSocket, device_id: str) -> None:
+    """管理侧媒体流专用通道（流式录像/录音实时播放，二进制帧）。
+
+    数据源：客户端流式分片经 StreamHub 投递（服务端已解 base64，
+    这里转发的是裸 MPEG-2 TS（视频）/ AAC ADTS（音频）二进制帧）。
+
+    消费方：
+    - 视频：mpegts.js 以 ``url: ws://…/api/admin/stream/{id}`` 当直播流直接播放；
+    - 音频：管理后台 Web Audio 逐段解码实时出声。
+
+    鉴权与 /admin/ws 一致（Authorization header 或 ?token= query）。
+    无流时本连接静默保持（客户端只在流式采集期间推分片）。
+    """
+    admin_auth: AdminAuth = ws.app.state.admin_auth
+
+    header_token: str | None = None
+    auth_header = ws.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        header_token = auth_header[7:].strip()
+    query_token = ws.query_params.get("token")
+
+    if not (admin_auth.verify(query_token) or admin_auth.verify(header_token)):
+        await ws.close(code=4401, reason="unauthorized")
+        return
+
+    await ws.accept()
+    hub = ws.app.state.stream_hub
+    queue = await hub.subscribe(device_id)
+    logger.info("管理侧订阅设备 %s 媒体流", device_id)
+    try:
+        while True:
+            frame = await queue.get()
+            await ws.send_bytes(frame)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.exception("管理侧流通道异常（device=%s）", device_id)
+    finally:
+        await hub.unsubscribe(device_id, queue)
+        logger.info("管理侧取消订阅设备 %s 媒体流", device_id)
+
+
