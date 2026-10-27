@@ -11,7 +11,7 @@
           </el-tag>
           <span class="stream-stats">{{ statsText }}</span>
           <el-button v-if="ended && recorded.length > 0" size="small" type="primary" @click="download">
-            下载（{{ kind === 'video' ? '.ts' : kind === 'screen' ? '.flv' : '.aac' }}）
+            下载（{{ kind === 'audio' ? '.aac' : '.flv' }}）
           </el-button>
           <el-button :icon="Close" size="small" circle title="关闭" @click="hide" />
         </div>
@@ -160,10 +160,11 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
 
   if (k !== 'audio') {
     // mpegts.js 直播：直接把专用流 WS 当数据源（服务端推裸二进制帧）
-    // 摄像头流=MPEG-2 TS；投屏直播=FLV（客户端 MediaCodec+FlvMuxer 打包）
+    // 统一 FLV：摄像头流由服务端 TS→FLV 转封装（Android MediaMuxer 的 TS
+    // 时间戳缺陷会让 mpegts.js 解码停滞，2026-10-27 浏览器复现根因），投屏=FLV
     if (mpegts.getFeatureList().mseLivePlayback) {
       player = mpegts.createPlayer(
-        { type: k === 'screen' ? 'flv' : 'mpegts', isLive: true, url: streamWsUrl() },
+        { type: 'flv', isLive: true, url: streamWsUrl() },
         {
           enableStashBuffer: false,
           isLive: true,
@@ -292,7 +293,7 @@ function rebuildPlayer() {
   playerError.value = ''
   try {
     player = mpegts.createPlayer(
-      { type: kind.value === 'screen' ? 'flv' : 'mpegts', isLive: true, url: streamWsUrl() },
+      { type: 'flv', isLive: true, url: streamWsUrl() },
       {
         enableStashBuffer: false,
         isLive: true,
@@ -394,8 +395,8 @@ function endStream() {
 function download() {
   if (recorded.value.length === 0) return
   if (blobUrl) URL.revokeObjectURL(blobUrl)
-  const mime = kind.value === 'video' ? 'video/mp2t' : kind.value === 'screen' ? 'video/x-flv' : 'audio/aac'
-  const ext = kind.value === 'video' ? 'ts' : kind.value === 'screen' ? 'flv' : 'aac'
+  const mime = kind.value === 'audio' ? 'audio/aac' : 'video/x-flv'
+  const ext = kind.value === 'audio' ? 'aac' : 'flv'
   const blob = new Blob(recorded.value, { type: mime })
   blobUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')

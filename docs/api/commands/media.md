@@ -147,20 +147,28 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
 - 客户端实现：`MediaCaptureService.requestStreamStop()`（静态标志）；
   `complete()` 统一复位 `streamActive`，覆盖异常路径残留。
 
-## 流式通道（服务端 + 管理后台，v0.1.49）
+## 流式通道（服务端 + 管理后台，v0.1.49；v0.1.55 服务端统一转 FLV）
 
 - **服务端**：ws.py 收 `media_stream` 事件 → 数据分片 base64 解码后经
   `core/stream_hub.py`（StreamHub，按 device_id 的订阅者队列，**无订阅者即丢弃**，
-  不缓存回放）投递给管理后台专用流 WS；起始/结束帧额外广播 `stream_status`
-  轻量事件（命令页自动开/关播放卡片）。设备断连时补发 `stream_status` 结束事件。
+  不缓存回放；订阅先补发开头 512KB 流头缓存）投递给管理后台专用流 WS；
+  起始/结束帧额外广播 `stream_status` 轻量事件（命令页自动开/关播放卡片，
+  下发成功还即预连）。设备断连时补发 `stream_status` 结束事件。
   kind 白名单：`video`（摄像头 TS）/ `audio`（ADTS）/ `screen`（投屏 FLV）。
+- **TS→FLV 转封装（v0.1.55 关键修复）**：Android MediaMuxer 的 MPEG_2_TS 产物
+  时间戳有病态缺陷（PCR 用系统 boottime、dts 非单调 818ms 跳变），mpegts.js
+  播放实测「只出首帧后停滞、MSE buffered 被算成 ~1.1 亿秒」（Playwright 浏览器
+  复现 + ffmpeg 金标准对照定位）。服务端 `core/ts_to_flv.py` 把 kind=video 的
+  TS 分片流式转封装 FLV（PES PTS/DTS 归一化 + dts 单调化 + B 帧 composition
+  offset），前端统一 `type:'flv'` 播放；**媒体上传的 .ts 存档也自动转 .flv**
+  （media_store.save，转换失败保留原 TS 降级）。
 - **管理后台**：`WS /api/admin/stream/{device_id}?token=`（v1/admin.py，二进制帧转发），
   消费方 `StreamPlayerCard.vue`：
-  - 视频：mpegts.js `type:'mpegts' isLive:true`，url 直指专用流 WS
+  - 视频/投屏直播：mpegts.js `type:'flv' isLive:true`，url 直指专用流 WS
     （`enableStashBuffer:false` + `liveBufferLatencyChasing` 低延迟直播配置）；
-  - 投屏直播：同上但 `type:'flv'`（screen_live 命令，见其章节）；
   - 音频：Web Audio 逐组解码实时出声（见 record_audio 流式）；
-  - 附带原始字节累积，流结束后可下载 `.ts` / `.flv` / `.aac`。
+  - 附带原始字节累积，流结束后可下载 `.flv` / `.aac`；媒体页 FLV/TS 存档
+    也走 mpegts.js VOD 预览（浏览器原生不支持 FLV 容器）。
 
 ## screen_live 投屏直播（v0.1.50，docs/architecture/live-screen-research.md 落地）
 

@@ -55,3 +55,4 @@ server/data/updates/*.apk
 server/data/media/
 # ADB platform-tools（17MB 下载的二进制，获取与放置说明见 docs/server/design.md §20）
 tools/adb/
+tools/debug/.pwenv/

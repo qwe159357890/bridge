@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>流式播放复现实验</title>
+<script src="./mpegts.js"></script>
+<style>body{font-family:monospace;font-size:14px;margin:12px}video{width:480px;background:#000}#log{white-space:pre-wrap;color:#333;max-height:300px;overflow:auto;border:1px solid #ccc;padding:6px}</style>
+</head>
+<body>
+<h3 id="status">初始化…</h3>
+<video id="v" muted autoplay playsinline controls></video>
+<div id="stats">-</div>
+<div id="log"></div>
+<script>
+const params = new URLSearchParams(location.search);
+const port = params.get('port') || '15999';
+const device = params.get('device') || 'mock-stream-1';
+const type = params.get('type') || 'mpegts'; // mpegts | flv
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent += `[${(performance.now()/1000).toFixed(1)}s] ${msg}\n`;
+  console.log('[TEST]', msg);
+}
+
+async function run() {
+  document.getElementById('status').textContent = `实验中 type=${type} device=${device}`;
+  // token 从 URL 直传（file:// 页面无法 fetch 跨域登录）
+  const token = params.get('token') || '';
+  log('使用 token=' + token.slice(0, 8) + '…');
+
+  // 深度诊断：mpegts.js 全量内部日志 + video/MSE 事件
+  try {
+    mpegts.LoggingControl.getInstance().onAll((type, logmsg) => log(`[mpegts:${type}] ${logmsg}`));
+  } catch (e) { log('LoggingControl 不可用: ' + e.message); }
+
+  const ws = params.get('file')
+    ? `http://127.0.0.1:18080/${params.get('file')}`
+    : `ws://127.0.0.1:${port}/api/admin/stream/${device}?token=${encodeURIComponent(token)}`;
+  const isLive = !params.get('file');
+  log(`数据源: ${ws}`);
+  const player = mpegts.createPlayer({type, isLive, url: ws}, {
+    enableStashBuffer: false, isLive, liveBufferLatencyChasing: isLive, lazyLoad: false
+  });
+  player.on(mpegts.Events.ERROR, (t, d, extra) => log(`播放器ERROR: ${t} ${d} ${JSON.stringify(extra||'')}`));
+  player.on(mpegts.Events.LOADING_COMPLETE, () => log('LOADING_COMPLETE'));
+  player.on(mpegts.Events.RECOVERED_EARLY_EOF, () => log('RECOVERED_EARLY_EOF'));
+  player.attachMediaElement(document.getElementById('v'));
+  const v = document.getElementById('v');
+  v.addEventListener('error', () => log(`video.error: ${v.error?.code} ${v.error?.message}`));
+  v.addEventListener('stalled', () => log('video stalled'));
+  v.addEventListener('waiting', () => log('video waiting'));
+  player.load();
+  player.play().catch(e => log('play() 被拦: ' + e.message));
+
+  window.__mpegtsPlayer = player;
+  // 每 500ms 汇报统计
+  window.__stats = [];
+  setInterval(() => {
+    const v = document.getElementById('v');
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+    const s = {
+      t: (performance.now()/1000).toFixed(1),
+      decoded: q.totalVideoFrames ?? -1,
+      dropped: q.droppedVideoFrames ?? -1,
+      cur: v.currentTime.toFixed(2),
+      bufLen: v.buffered.length,
+      bufEnd: v.buffered.length ? v.buffered.end(v.buffered.length-1).toFixed(2) : '-',
+      ready: v.readyState, paused: v.paused
+    };
+    window.__stats.push(s);
+    document.getElementById('stats').textContent = JSON.stringify(s);
+    // 每秒打一条日志
+    if (window.__stats.length % 2 === 0) log(`解码帧=${s.decoded} 掉帧=${s.dropped} cur=${s.cur} bufEnd=${s.bufEnd} ready=${s.ready}`);
+  }, 500);
+}
+run().catch(e => { log('启动失败: ' + e.message); document.getElementById('status').textContent = '失败: ' + e.message; });
+</script>
+</body>
+</html>

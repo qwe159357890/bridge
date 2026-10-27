@@ -24,20 +24,30 @@ import java.io.OutputStream
  */
 internal class FlvMuxer(private val out: OutputStream) {
 
-    /** FLV 文件头 + PreviousTagSize0（video only，无音频轨）。 */
-    fun writeHeader() {
-        // 'F' 'L' 'V' | version 1 | flags 0x01(video) | DataOffset=9 | PreviousTagSize0=0
-        out.write(byteArrayOf(0x46, 0x4C, 0x56, 1, 1, 0, 0, 0, 9, 0, 0, 0, 0))
+    /** FLV 文件头 + PreviousTagSize0。@param hasAudio 是否含音频轨（影响 flags）。 */
+    fun writeHeader(hasAudio: Boolean = false) {
+        // 'F' 'L' 'V' | version 1 | flags 0x01(video)/0x05(video+audio) | DataOffset=9 | PrevSize0
+        val flags = if (hasAudio) 0x05 else 0x01
+        out.write(byteArrayOf(0x46, 0x4C, 0x56, 1, flags.toByte(), 0, 0, 0, 9, 0, 0, 0, 0))
     }
 
     /**
      * 写 onMetaData + AVC sequence header（首帧视频前必须就位，解码器初始化依赖）。
      * @param csd0 编码器输出格式的 csd-0（AnnexB 的 SPS，带起始码）
      * @param csd1 csd-1（AnnexB 的 PPS），可能为 null（极少数编码器合并进 csd-0）
+     * @param audioAsc AAC 的 AudioSpecificConfig（MediaCodec csd-0），null=无音轨
      */
-    fun writeMetadata(width: Int, height: Int, fps: Int, csd0: ByteArray, csd1: ByteArray?) {
-        writeScriptTag(width, height, fps)
+    fun writeMetadata(
+        width: Int,
+        height: Int,
+        fps: Int,
+        csd0: ByteArray,
+        csd1: ByteArray?,
+        audioAsc: ByteArray? = null,
+    ) {
+        writeScriptTag(width, height, fps, audioAsc != null)
         writeVideoTag(avcSequenceHeader(csd0, csd1), 0, keyFrame = true, avcPacketType = 0)
+        audioAsc?.let { writeAudioTag(it, 0, aacPacketType = 0) }
     }
 
     /** 写一帧视频（MediaCodec 输出的 AnnexB 裸流，内部转 AVCC 长度前缀）。 */
@@ -45,9 +55,29 @@ internal class FlvMuxer(private val out: OutputStream) {
         writeVideoTag(avccFromAnnexB(annexB), ptsMs, keyFrame, avcPacketType = 1)
     }
 
+    /** 写一帧 AAC 裸数据（MediaCodec AAC 输出，无 ADTS 头；ASC 已随 metadata 写入）。 */
+    fun writeAudioFrame(aacRaw: ByteArray, ptsMs: Int) {
+        writeAudioTag(aacRaw, ptsMs, aacPacketType = 1)
+    }
+
     // ------------------------------------------------------------------
     // 内部：tag 组装
     // ------------------------------------------------------------------
+
+    /**
+     * AudioTagBody：AudioTagHeader + AAC 数据。
+     * AAC（soundFormat=10）时 AudioTagHeader 为 2 字节：
+     * byte0 = soundFormat(10)<<4 | soundRate(3,44kHz 占位)<<2 | soundSize(1)<<1 | soundType(1)
+     * （AAC 时后 3 字段被 ASC 覆盖，惯例填 44kHz/16bit/stereo 占位）
+     * byte1 = AACPacketType（0=seq header 即 ASC，1=raw 帧）
+     */
+    private fun writeAudioTag(aac: ByteArray, ptsMs: Int, aacPacketType: Int) {
+        val body = ByteArray(2 + aac.size)
+        body[0] = ((10 shl 4) or (3 shl 2) or (1 shl 1) or 1).toByte()
+        body[1] = aacPacketType.toByte()
+        System.arraycopy(aac, 0, body, 2, aac.size)
+        writeTag(0x08, body, ptsMs)
+    }
 
     /** VideoTagBody：FrameType|CodecID + AVCPacketType + composition offset(0) + data。 */
     private fun writeVideoTag(data: ByteArray, ptsMs: Int, keyFrame: Boolean, avcPacketType: Int) {
@@ -60,16 +90,21 @@ internal class FlvMuxer(private val out: OutputStream) {
     }
 
     /** onMetaData 脚本 tag（AMF0：字符串 + ECMA 数组）。 */
-    private fun writeScriptTag(width: Int, height: Int, fps: Int) {
-        val d = ByteArrayOutputStream(96)
+    private fun writeScriptTag(width: Int, height: Int, fps: Int, hasAudio: Boolean) {
+        val d = ByteArrayOutputStream(128)
         d.write(0x02) // AMF0 string marker
         writeAmfString(d, "onMetaData")
         d.write(0x08) // ECMA array marker
-        writeU32(d, 4) // entry count
+        writeU32(d, if (hasAudio) 7 else 4) // entry count
         amfNumber(d, "duration", 0.0)
         amfNumber(d, "width", width.toDouble())
         amfNumber(d, "height", height.toDouble())
         amfNumber(d, "framerate", fps.toDouble())
+        if (hasAudio) {
+            amfNumber(d, "audiocodecid", 10.0) // AAC
+            amfNumber(d, "audiosamplerate", 44100.0)
+            amfNumber(d, "stereo", 1.0)
+        }
         d.write(0); d.write(0); d.write(9) // object end marker
         writeTag(0x12, d.toByteArray(), 0)
     }

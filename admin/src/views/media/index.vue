@@ -125,12 +125,20 @@
     />
 
     <!-- 视频/音频播放对话框 -->
-    <el-dialog v-model="videoVisible" :title="videoTitle" width="720px" destroy-on-close>
+    <el-dialog v-model="videoVisible" :title="videoTitle" width="720px" destroy-on-close @closed="closePlayer">
       <video
-        v-if="videoUrl && !videoIsAudio"
+        v-if="videoUrl && !videoIsAudio && !needsMpegts"
+        ref="nativeVideoEl"
         :src="videoUrl"
         controls
         autoplay
+        style="width: 100%; max-height: 60vh; background: #000; border-radius: 6px"
+      />
+      <!-- FLV/TS：浏览器原生不支持，mpegts.js VOD 播放（HTTP 直拉文件 URL） -->
+      <video
+        v-else-if="videoUrl && !videoIsAudio"
+        ref="mpegtsVideoEl"
+        controls
         style="width: 100%; max-height: 60vh; background: #000; border-radius: 6px"
       />
       <audio v-else-if="videoUrl" :src="videoUrl" controls autoplay style="width: 100%" />
@@ -139,9 +147,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import mpegts from 'mpegts.js'
 import { listMedia, mediaFileUrl, mediaThumbUrl, deleteMedia } from '@/api/media'
 import type { MediaItem } from '@/api/media'
 import { listDevices } from '@/api/devices'
@@ -181,12 +190,54 @@ function previewImage(row: MediaItem) {
   viewerVisible.value = true
 }
 
+// FLV/TS 存档：浏览器原生 <video> 不支持，用 mpegts.js VOD 播放
+// （2026-10-27：流式录像存档统一 FLV；存量 TS 也能播）
+const mpegtsVideoEl = ref<HTMLVideoElement>()
+const nativeVideoEl = ref<HTMLVideoElement>()
+let previewPlayer: any = null
+const needsMpegts = ref(false)
+
 function playMedia(row: MediaItem) {
   videoUrl.value = mediaFileUrl(row.id)
   videoTitle.value = row.filename
   videoIsAudio.value = row.kind === 'audio'
+  const name = row.filename.toLowerCase()
+  needsMpegts.value = !videoIsAudio.value && (name.endsWith('.flv') || name.endsWith('.ts'))
   videoVisible.value = true
+  if (needsMpegts.value) {
+    // 等 dialog 里的 video 元素渲染完成
+    setTimeout(() => {
+      const el = mpegtsVideoEl.value
+      if (!el || !mpegts.getFeatureList().msePlayback) return
+      try {
+        previewPlayer?.destroy()
+      } catch {
+        /* 忽略 */
+      }
+      previewPlayer = mpegts.createPlayer({
+        type: name.endsWith('.flv') ? 'flv' : 'mpegts',
+        isLive: false,
+        url: videoUrl.value,
+      })
+      previewPlayer.attachMediaElement(el)
+      previewPlayer.load()
+      previewPlayer.play()?.catch?.(() => {})
+    }, 200)
+  }
 }
+
+function closePlayer() {
+  try {
+    previewPlayer?.destroy()
+  } catch {
+    /* 忽略 */
+  }
+  previewPlayer = null
+  videoUrl.value = ''
+  needsMpegts.value = false
+}
+
+onBeforeUnmount(closePlayer)
 
 function download(row: MediaItem) {
   const a = document.createElement('a')

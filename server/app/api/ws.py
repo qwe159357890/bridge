@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.core.connection_manager import ConnectionLimitError
+from app.core.ts_to_flv import TsToFlv
 from app.models.connection import Connection
 from app.schemas.ws import CloseData, Envelope, HelloData
 
@@ -117,8 +118,39 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
     payload_b64 = data.get("data") or ""
     is_end = bool(data.get("is_end"))
     info = data.get("info")
+
+    # 流式录像（kind=video）的设备产物是 MPEG-2 TS，Android MediaMuxer 的 TS
+    # 时间戳有病态缺陷（PCR/boottime、dts 非单调）——mpegts.js 播放会「只出
+    # 首帧后停滞」（2026-10-27 实测+浏览器复现根因）。服务端统一转封装 FLV
+    # （时间戳归一化）再投递，播放端 type:'flv'。转换器按 (device, kind) 保持
+    # 流式状态（跨分片的 PES 重组），流结束清理。
+    # 注意：只有首帧带 info，后续分片 info=None——格式判定基于 (device,kind)
+    # 池（首帧登记，之后按 key 命中），不能要求每片都带 info。
+    converters: dict = app.state.ts_to_flv_converters
+    conv_key = (device_id, kind)
+    fmt = (info or {}).get("format", "")
+    converter: TsToFlv | None = None
+    if kind == "video" and not is_end:
+        if fmt == "mpeg2ts":
+            converter = converters.setdefault(conv_key, TsToFlv())
+        elif fmt == "flv":
+            converters.pop(conv_key, None)  # 设备原生 FLV，清残留转换器
+        elif conv_key in converters:
+            converter = converters[conv_key]
+
+    payload_out = payload_b64
+    if converter is not None and payload_b64:
+        try:
+            import base64 as _b64
+
+            raw = _b64.b64decode(payload_b64)
+            flv = converter.feed(raw)
+            payload_out = _b64.b64encode(flv).decode() if flv else ""
+        except Exception:
+            logger.exception("TS→FLV 转封装失败（本片丢弃）")
+            payload_out = ""
     try:
-        delivered = await hub.push_b64(device_id, payload_b64)
+        delivered = await hub.push_b64(device_id, payload_out) if payload_out else 0
     except Exception:
         logger.exception("流分片转发失败（忽略）")
         delivered = 0
@@ -135,6 +167,7 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
         )
         # 流结束：清流头缓存（下一个流重新累积，避免旧流头污染新流）
         hub.clear_head(device_id)
+        app.state.ts_to_flv_converters.pop((device_id, kind), None)
     elif isinstance(chunk_idx, int) and chunk_idx % 20 == 1:
         logger.info(
             "device %s 流分片 kind=%s idx=%s 本帧字节=%s 订阅者=%d",

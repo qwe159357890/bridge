@@ -130,6 +130,31 @@ class MediaStore:
         filename = f"{stamp}_{kind}{ext}"
         target = device_dir / filename
         shutil.move(str(src_file), str(target))
+
+        # 流式录像 TS 存档转 FLV（Android MediaMuxer TS 时间戳缺陷，浏览器无法
+        # 正常播放；转 FLV 后 mpegts.js/媒体页预览全通，2026-10-27）。转换失败
+        # 保留 TS 原文件（降级不丢数据）。
+        if ext == ".ts":
+            try:
+                from app.core.ts_to_flv import TsToFlv
+
+                data = target.read_bytes()
+                conv = TsToFlv()
+                flv = bytearray()
+                CH = 512 * 1024
+                for i in range(0, len(data), CH):
+                    flv += conv.feed(data[i : i + CH])
+                flv += conv.feed(b"")
+                if len(flv) > 1024:  # 转换结果太小视为失败，保留原文件
+                    flv_target = target.with_suffix(".flv")
+                    flv_target.write_bytes(bytes(flv))
+                    target.unlink()
+                    target = flv_target
+                    filename = flv_target.name
+                    ext = ".flv"
+                    logger.info("TS 存档已转 FLV：%s（%d 字节）", filename, len(flv))
+            except Exception:
+                logger.exception("TS→FLV 存档转换失败（保留原 TS）")
         size = target.stat().st_size
 
         conn = self._connection()
