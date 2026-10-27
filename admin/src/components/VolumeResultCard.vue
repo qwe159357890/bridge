@@ -35,29 +35,15 @@ import { ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { sendCommand } from '@/api/commands'
+import { parseVolumeMessage, type VolumeStreamSnapshot } from '@/utils/volume'
 
 /**
  * 音量控制卡片（命令下发页用）。
  *
  * 数据流：父页 WS 收到 get_volume 成功回执 → [show]/[onResult] 传回执文本 →
- * 本组件解析「媒体 8/15（53%）」快照渲染 5 条滑条；拖动松手即反向下发
- * set_volume，并延时重发 get_volume 刷新（回执文本经父页 WS 再次流入）。
+ * 本组件解析快照渲染 5 条滑条；拖动松手即反向下发 set_volume，并延时重发
+ * get_volume 刷新（回执文本经父页 WS 再次流入）。
  */
-interface VolumeStream {
-  key: string
-  name: string
-  current: number
-  max: number
-  pct: number
-}
-
-const NAME_TO_KEY: Record<string, string> = {
-  媒体: 'media',
-  铃声: 'ring',
-  闹钟: 'alarm',
-  通知: 'notification',
-  系统: 'system',
-}
 
 const visible = ref(false)
 const deviceName = ref('')
@@ -65,7 +51,7 @@ const deviceId = ref('')
 const ringer = ref('')
 const dnd = ref(false)
 const applying = ref(false)
-const streams = ref<VolumeStream[]>([])
+const streams = ref<VolumeStreamSnapshot[]>([])
 
 defineExpose({ show, onResult, hide })
 
@@ -77,29 +63,19 @@ function show(id: string, name: string, message: string) {
   onResult(message)
 }
 
-/** 解析 get_volume 回执文本，刷新滑条。格式：媒体 8/15（53%），…；铃声模式 响铃[；免打扰已开启] */
+/** 解析 get_volume 回执文本，刷新滑条。 */
 function onResult(message: string) {
   if (!visible.value) return
-  const re = /(媒体|铃声|闹钟|通知|系统) (\d+)\/(\d+)（(\d+)%）/g
-  const parsed: VolumeStream[] = []
-  let m: RegExpExecArray | null
-  while ((m = re.exec(message)) !== null) {
-    parsed.push({
-      key: NAME_TO_KEY[m[1]] ?? m[1],
-      name: m[1],
-      current: Number(m[2]),
-      max: Number(m[3]),
-      pct: Number(m[4]),
-    })
+  const snap = parseVolumeMessage(message)
+  if (snap) {
+    streams.value = snap.streams
+    ringer.value = snap.ringer
+    dnd.value = snap.dnd
   }
-  if (parsed.length > 0) streams.value = parsed
-  const ringerMatch = message.match(/铃声模式 (\S+)/)
-  if (ringerMatch) ringer.value = ringerMatch[1]
-  dnd.value = message.includes('免打扰已开启')
 }
 
 /** 滑条松手：按百分比下发 set_volume，随后重发 get_volume 刷新真实档位。 */
-async function apply(s: VolumeStream, pct: number) {
+async function apply(s: VolumeStreamSnapshot, pct: number) {
   if (applying.value) return
   applying.value = true
   try {

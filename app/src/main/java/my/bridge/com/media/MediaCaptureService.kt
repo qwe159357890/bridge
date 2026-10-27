@@ -465,17 +465,20 @@ class MediaCaptureService : Service() {
         streamActive = true
         val metrics = realDisplayMetrics()
 
-        // 视频尺寸：长边压到 1280（直播分辨率不必原生，带宽与延迟优先），宽高取偶
+        // 视频尺寸：长边压到 1280（直播分辨率不必原生，带宽与延迟优先），宽高取偶。
+        // v0.1.52 修复：旧写法 `w and 1.inv().coerceAtLeast(2)` 因运算优先级实际是
+        // `w and 2`——把宽高清成 0，MediaCodec.configure 直接抛 IllegalArgumentException
+        // （「每次都让授权」的连带根因：首次失败释放投影会话 → 下次 projectionHeld=false）
         var w = metrics.widthPixels
         var h = metrics.heightPixels
         val longest = maxOf(w, h)
         if (longest > 1280) {
             val scale = 1280f / longest
-            w = (w * scale).toInt() and Int.MAX_VALUE - 1
-            h = (h * scale).toInt() and Int.MAX_VALUE - 1
+            w = (w * scale).toInt()
+            h = (h * scale).toInt()
         }
-        w = w and 1.inv().coerceAtLeast(2)
-        h = h and 1.inv().coerceAtLeast(2)
+        w = maxOf(2, w - (w % 2)) // 取偶（H.264 要求）且至少 2px
+        h = maxOf(2, h - (h % 2))
 
         val codec = android.media.MediaCodec.createEncoderByType("video/avc")
         val display = obtainMirrorDisplay(p, metrics)
@@ -591,6 +594,12 @@ class MediaCaptureService : Service() {
             runCatching { codec.stop() }
             // 异常路径也补一个结束标志，让后台播放器及时收尾
             sendStreamMessage("screen", chunkIndex + 1, "", 0, offset, true)
+            // 空消息异常（如编码器参数问题）补上下文，回执可直接定位阶段
+            if (e.message.isNullOrBlank()) {
+                val frame = e.stackTrace.firstOrNull()
+                val stage = frame?.let { "${it.className.substringAfterLast('.')}.${it.methodName}(${it.lineNumber})" } ?: "unknown"
+                throw IllegalStateException("${e.javaClass.simpleName}（无消息）@ $stage，直播参数 w=$w h=$h", e)
+            }
             throw e
         } finally {
             display.setSurface(null)

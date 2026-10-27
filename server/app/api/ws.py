@@ -115,13 +115,30 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
         return
     hub = app.state.stream_hub
     payload_b64 = data.get("data") or ""
-    try:
-        await hub.push_b64(device_id, payload_b64)
-    except Exception:
-        logger.exception("流分片转发失败（忽略）")
-
     is_end = bool(data.get("is_end"))
     info = data.get("info")
+    try:
+        delivered = await hub.push_b64(device_id, payload_b64)
+    except Exception:
+        logger.exception("流分片转发失败（忽略）")
+        delivered = 0
+    # 观测日志：起始帧/结束帧/每 20 个数据帧记一条，便于定位「无实时画面」是
+    # 设备没推分片还是后台没订阅（chunk_index=0 且 data 为空 = 起始帧）
+    chunk_idx = data.get("chunk_index", -1)
+    if info is not None:
+        logger.info(
+            "device %s 流开始 kind=%s 订阅者=%d 信息=%s", device_id, kind, delivered, info,
+        )
+    elif is_end:
+        logger.info(
+            "device %s 流结束 kind=%s 总字节=%s", device_id, kind, data.get("total_bytes"),
+        )
+    elif isinstance(chunk_idx, int) and chunk_idx % 20 == 1:
+        logger.info(
+            "device %s 流分片 kind=%s idx=%s 本帧字节=%s 订阅者=%d",
+            device_id, kind, chunk_idx, data.get("bytes"), delivered,
+        )
+
     if info or is_end:
         try:
             bus = app.state.admin_event_bus
@@ -302,6 +319,7 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                     bus = ws.app.state.admin_event_bus
                     await bus.publish("command_result", {
                         "command_id": command_id,
+                        "command": data.get("command", ""),
                         "device_id": device_id,
                         "success": bool(success),
                         "message": message or "",

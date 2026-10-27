@@ -146,7 +146,7 @@ class LocationStore:
         # 先不带库名连接，建库后重连（库可能尚未创建）
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
-            password=self._password, charset="utf8mb4",
+            password=self._password, database=self._database, charset="utf8mb4",
             connect_timeout=10,
         )
         with conn.cursor() as cur:

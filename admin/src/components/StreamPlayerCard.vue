@@ -31,6 +31,13 @@
     <div v-if="kind !== 'audio' && playBlocked" class="stream-resume">
       <el-button type="primary" size="small" @click="resumeVideo">点击播放</el-button>
     </div>
+    <el-alert
+      v-if="playerError"
+      :title="playerError"
+      type="error"
+      :closable="false"
+      style="margin-top: 8px"
+    />
 
     <!-- 音频：Web Audio 实时出声（无可视化，用状态文案替代） -->
     <div v-if="kind === 'audio'" class="stream-audio">
@@ -74,6 +81,7 @@ const ended = ref(false)
 const videoEl = ref<HTMLVideoElement>()
 const playBlocked = ref(false)
 const audioStarted = ref(false)
+const playerError = ref('') // 播放器/流通道错误提示（不再静默黑屏）
 
 // 统计
 const chunkCount = ref(0)
@@ -120,6 +128,7 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
   totalBytes.value = 0
   startedAt.value = Date.now()
   recorded.value = []
+  playerError.value = ''
   visible.value = true
 
   if (k !== 'audio') {
@@ -136,14 +145,23 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
         },
       )
       player.attachMediaElement(videoEl.value!)
+      player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
+        playerError.value = `播放器错误（${type}）：${detail} —— 请确认设备正在推流、未被我防火墙/代理拦截`
+        console.error('[StreamPlayer] mpegts error:', type, detail)
+      })
       player.load()
       player.play()?.catch?.(() => {
         playBlocked.value = true
       })
+    } else {
+      playerError.value = '当前浏览器不支持 MSE 直播（建议 Chrome/Edge）'
     }
     // 录制累积通道：再开一条 WS 收原始字节（与播放解耦）
     recWs = new WebSocket(streamWsUrl())
     recWs.binaryType = 'arraybuffer'
+    recWs.onerror = () => {
+      playerError.value = playerError.value || '流通道连接失败（检查服务器地址与登录状态）'
+    }
     recWs.onmessage = (ev) => {
       if (ev.data instanceof ArrayBuffer) {
         chunkCount.value++
@@ -155,6 +173,9 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
     // 音频：组件自持 WS，ADTS 切帧 → Web Audio
     recWs = new WebSocket(streamWsUrl())
     recWs.binaryType = 'arraybuffer'
+    recWs.onerror = () => {
+      playerError.value = playerError.value || '音频流通道连接失败（检查服务器地址与登录状态）'
+    }
     recWs.onmessage = (ev) => {
       if (!(ev.data instanceof ArrayBuffer)) return
       chunkCount.value++

@@ -95,6 +95,31 @@
             </div>
             <el-form v-else label-width="110px" class="param-form">
               <div
+                v-if="selectedCommand.name === 'set_volume' || selectedCommand.name === 'get_volume'"
+                class="sim-hint"
+                :class="{ 'sim-hint-empty': !volumeSnapshot }"
+              >
+                <template v-if="volumeSnapshot">
+                  <span style="margin-right: 8px">设备当前音量：</span>
+                  <span
+                    v-for="s in volumeSnapshot.streams"
+                    :key="s.key"
+                    style="margin-right: 10px"
+                  >{{ s.name }} <b>{{ s.current }}/{{ s.max }}</b>（{{ s.pct }}%）</span>
+                  <span style="margin-right: 10px; color: var(--el-text-color-secondary)">
+                    铃声模式：{{ volumeSnapshot.ringer || '未知' }}
+                  </span>
+                  <span
+                    v-if="volumeSnapshot.dnd"
+                    style="color: var(--el-color-warning)"
+                  >免打扰开启</span>
+                  <el-button type="primary" link size="small" @click="refreshVolumeSnapshot">
+                    刷新
+                  </el-button>
+                </template>
+                <template v-else>正在查询设备当前音量…</template>
+              </div>
+              <div
                 v-if="selectedCommand.params.some((p) => p.name === 'sim')"
                 class="sim-hint"
                 :class="{ 'sim-hint-empty': deviceSims.length === 0 }"
@@ -149,6 +174,10 @@
                     :value="o.value"
                   />
                 </el-select>
+                <span
+                  v-if="p.name === 'stream' && volumeSnapshot"
+                  class="stream-current"
+                >当前：{{ volumeCurrentText(volumeSnapshot, params.stream) }}</span>
                 <el-input
                   v-else-if="p.type === 'textarea'"
                   v-model="params[p.name]"
@@ -310,6 +339,7 @@ import { formatTime } from '@/utils/format'
 import DevicePicker from '@/components/DevicePicker.vue'
 import LocationResultCard from '@/components/LocationResultCard.vue'
 import VolumeResultCard from '@/components/VolumeResultCard.vue'
+import { parseVolumeMessage, volumeCurrentText, type VolumeSnapshot } from '@/utils/volume'
 import StreamPlayerCard from '@/components/StreamPlayerCard.vue'
 import type {
   CommandCategory,
@@ -519,6 +549,40 @@ let locationSentAt = 0
 // 音量卡片：get_volume 回执（成功且目标设备匹配）流入即解析刷新滑条
 const volumeCard = ref<any>(null)
 
+// 音量实时快照（参数区联动）：get_volume 回执解析后存这里，
+// 供「调节音量/获取音量」参数区显示设备当前音量（顶部条 + stream 下拉旁）
+const volumeSnapshot = ref<VolumeSnapshot | null>(null)
+let volumeQueryKey = '' // 已自动查询过的 设备:命令 组合（防重复下发）
+
+/** 选中音量类命令 + 已选设备时自动下发一次 get_volume 拉实时快照。 */
+const volumeAutoKey = computed(() => {
+  const cmd = selectedCommand.value?.name
+  const isVol = cmd === 'set_volume' || cmd === 'get_volume'
+  return isVol && form.deviceId ? `${form.deviceId}:${cmd}` : ''
+})
+
+watch(volumeAutoKey, (key) => {
+  if (!key || key === volumeQueryKey) return
+  volumeQueryKey = key
+  refreshVolumeSnapshot()
+})
+
+/** 下发 get_volume 拉当前音量快照（回执经 WS 流入 onVolumeResult）。 */
+function refreshVolumeSnapshot() {
+  if (!form.deviceId) return
+  sendCommand(form.deviceId, 'get_volume', {}).catch(() => {})
+}
+
+// 切换「音量类型」下拉时，自动把「音量值」带入该流当前百分比（可手动修改）
+watch(
+  () => params.stream,
+  (stream) => {
+    if (selectedCommand.value?.name !== 'set_volume') return
+    const s = volumeSnapshot.value?.streams.find((x) => x.key === stream)
+    if (s) params.level = s.pct
+  },
+)
+
 // 流式播放卡片：stream_status 起止事件驱动（分片走组件自己的专用流 WS）
 const streamCard = ref<any>(null)
 const deviceNameMap = computed<Record<string, string>>(() => {
@@ -666,6 +730,7 @@ watch(
     pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
     locationCard.value?.hide()
     volumeCard.value?.hide() // 音量卡片随设备切换关闭（新设备需重新获取）
+    volumeSnapshot.value = null // 参数区实时音量同步失效（音量命令选中时自动重查）
     loadMusicState()
     loadDeviceSims() // 选卡下拉按新设备的实际卡动态渲染
   },
@@ -876,6 +941,7 @@ function connectWS() {
           msg.data.success &&
           msg.data.device_id === form.deviceId
         ) {
+          volumeSnapshot.value = parseVolumeMessage(msg.data.message || '') // 参数区联动
           volumeCard.value?.show(
             msg.data.device_id,
             deviceNameOf(msg.data.device_id),
@@ -1166,6 +1232,11 @@ onBeforeUnmount(() => {
   color: #909399;
   background: #f4f4f5;
   border-color: #e9e9eb;
+}
+.stream-current {
+  margin-left: 10px;
+  font-size: 13px;
+  color: #409eff;
 }
 .param-form {
   max-width: 520px;
