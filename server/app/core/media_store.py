@@ -22,7 +22,10 @@ import pymysql
 logger = logging.getLogger(__name__)
 
 # 允许入库的扩展名白名单（与客户端上传类型对应）
-MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".m4a"}
+# - 常规采集：jpg/png（图片）、mp4（录像/录屏）、m4a（录音）
+# - 流式采集产物（2026-10-27 补）：flv（投屏直播 FLV）、ts（流式录像 MPEG-2 TS）、
+#   aac（流式录音 AAC ADTS）——此前缺失导致流式结束后上传 500「不支持的媒体格式」
+MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".m4a", ".flv", ".ts", ".aac"}
 
 
 class MediaStore:

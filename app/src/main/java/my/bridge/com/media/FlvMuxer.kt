@@ -75,7 +75,12 @@ internal class FlvMuxer(private val out: OutputStream) {
     }
 
     /** AVCDecoderConfigurationRecord（FLV 的 AVC sequence header）。 */
-    private fun avcSequenceHeader(sps: ByteArray, pps: ByteArray?): ByteArray {
+    private fun avcSequenceHeader(spsIn: ByteArray, ppsIn: ByteArray?): ByteArray {
+        // v0.1.53 修复：MediaCodec 的 csd 是 AnnexB（带 00 00 00 01 起始码），
+        // 而 Record 里必须放**裸 NALU**——此前起始码原样写入导致 profile/level
+        // 取错字节（0x00）且 NALU 头变成非法 0x00，mpegts.js 解析直接 FormatError
+        val sps = stripStartCode(spsIn)
+        val pps = ppsIn?.takeIf { it.isNotEmpty() }?.let { stripStartCode(it) }
         val d = ByteArrayOutputStream(32 + sps.size + (pps?.size ?: 0))
         d.write(1) // configurationVersion
         d.write(sps[1].toInt() and 0xFF) // AVCProfileIndication
@@ -85,7 +90,7 @@ internal class FlvMuxer(private val out: OutputStream) {
         d.write(0xE0 or 0x01) // numOfSequenceParameterSets=1
         writeU16(d, sps.size)
         d.write(sps, 0, sps.size)
-        if (pps != null && pps.isNotEmpty()) {
+        if (pps != null) {
             d.write(1) // numOfPictureParameterSets=1
             writeU16(d, pps.size)
             d.write(pps, 0, pps.size)
@@ -93,6 +98,17 @@ internal class FlvMuxer(private val out: OutputStream) {
             d.write(0)
         }
         return d.toByteArray()
+    }
+
+    /** 剥掉 NALU 头的 AnnexB 起始码（4 字节 00 00 00 01 或 3 字节 00 00 01）。 */
+    private fun stripStartCode(nalu: ByteArray): ByteArray {
+        if (nalu.size >= 4 && nalu[0] == 0.toByte() && nalu[1] == 0.toByte() &&
+            nalu[2] == 0.toByte() && nalu[3] == 1.toByte()
+        ) return nalu.copyOfRange(4, nalu.size)
+        if (nalu.size >= 3 && nalu[0] == 0.toByte() && nalu[1] == 0.toByte() &&
+            nalu[2] == 1.toByte()
+        ) return nalu.copyOfRange(3, nalu.size)
+        return nalu
     }
 
     /**

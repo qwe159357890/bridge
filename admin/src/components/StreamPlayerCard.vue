@@ -100,10 +100,11 @@ let recWs: WebSocket | null = null // 录制累积 WS（视频）/ 数据 WS（�
 let audioCtx: AudioContext | null = null
 let audioNextTime = 0 // Web Audio 播放时钟
 let adtsBuf = new Uint8Array(0) // ADTS 帧切分缓冲
+let latencyTimer: number | null = null // 视频延迟监控（追帧自愈）
 const recorded = ref<BlobPart[]>([]) // 原始字节累积（下载用，响应式供下载按钮显隐）
 let blobUrl = ''
 
-defineExpose({ onStreamStatus })
+defineExpose({ onStreamStatus, startManual })
 
 const deviceName = computed(() => props.deviceNames[deviceId.value] || deviceId.value)
 
@@ -117,6 +118,16 @@ function onStreamStatus(d: {
   if (ended.value && d.is_end) return
   if (!d.is_end && !visible.value) startStream(d.device_id, d.kind)
   if (d.is_end) endStream()
+}
+
+/**
+ * 手动预启动（命令下发成功即调用）：不再依赖 stream_status 事件。
+ * 流通道无流时静默保持，分片到达即播放——规避管理 WS 短暂断线/
+ * 事件丢失导致「整段录制无实时画面」（2026-10-27 实测缺陷）。
+ */
+function startManual(id: string, k: 'video' | 'audio' | 'screen') {
+  if (visible.value && !ended.value && deviceId.value === id && kind.value === k) return
+  startStream(id, k)
 }
 
 function startStream(id: string, k: 'video' | 'audio' | 'screen') {
@@ -153,6 +164,7 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
       player.play()?.catch?.(() => {
         playBlocked.value = true
       })
+      startLatencyWatch()
     } else {
       playerError.value = '当前浏览器不支持 MSE 直播（建议 Chrome/Edge）'
     }
@@ -208,6 +220,36 @@ function resumeVideo() {
     if (videoEl.value) videoEl.value.muted = false
   } catch {
     /* 忽略 */
+  }
+}
+
+/**
+ * 视频延迟监控（追帧自愈，2026-10-27）：流式录像实测「画面渐落后冻结、
+ * 声音继续」——mpegts.js 内建 liveBufferLatencyChasing 默认落后 10 秒才追，
+ * 体验为画面长期停滞后追一次。此处 1 秒一查：落后 >2.5 秒立即 seek 到
+ * 缓冲末尾前 0.3 秒，画面始终贴近实时。
+ */
+function startLatencyWatch() {
+  stopLatencyWatch()
+  latencyTimer = window.setInterval(() => {
+    const v = videoEl.value
+    if (!v || !player || ended.value) return
+    try {
+      if (v.buffered.length === 0) return
+      const tail = v.buffered.end(v.buffered.length - 1)
+      if (tail - v.currentTime > 2.5 && !v.seeking && v.readyState >= 2) {
+        v.currentTime = Math.max(0, tail - 0.3)
+      }
+    } catch {
+      /* buffered 访问异常忽略 */
+    }
+  }, 1000)
+}
+
+function stopLatencyWatch() {
+  if (latencyTimer !== null) {
+    window.clearInterval(latencyTimer)
+    latencyTimer = null
   }
 }
 
@@ -270,6 +312,7 @@ function decodeAndPlay(ab: ArrayBuffer) {
 /** 流结束：停播放器、出下载链接。 */
 function endStream() {
   ended.value = true
+  stopLatencyWatch()
   destroyPlayer()
   if (recWs) {
     recWs.close()
@@ -306,6 +349,7 @@ function hide() {
 }
 
 function stopAll() {
+  stopLatencyWatch()
   destroyPlayer()
   if (playWs) {
     playWs.close()

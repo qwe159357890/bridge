@@ -547,6 +547,12 @@ class MediaCaptureService : Service() {
                         obi >= 0 -> {
                             val ob = runCatching { codec.getOutputBuffer(obi) }.getOrNull()
                             if (firstPtsUs < 0) firstPtsUs = info.presentationTimeUs.coerceAtLeast(0)
+                            // v0.1.53 修复：metadata 必须写在首帧前——旧顺序第一个 IDR
+                            // 输出时 metadataWritten 还是 false 被丢弃，前端要再等数秒
+                            if (!metadataWritten && csd0 != null) {
+                                muxer.writeMetadata(w, h, 30, csd0!!, csd1)
+                                metadataWritten = true
+                            }
                             if (ob != null && info.size > 0 && metadataWritten) {
                                 ob.position(info.offset)
                                 ob.limit(info.offset + info.size)
@@ -557,10 +563,6 @@ class MediaCaptureService : Service() {
                                 muxer.writeVideoFrame(frame, ptsMs, isKey)
                             }
                             runCatching { codec.releaseOutputBuffer(obi, false) }
-                            if (!metadataWritten && csd0 != null) {
-                                muxer.writeMetadata(w, h, 30, csd0!!, csd1)
-                                metadataWritten = true
-                            }
                         }
                     }
 

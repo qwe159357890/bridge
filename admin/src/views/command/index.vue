@@ -585,6 +585,13 @@ watch(
 
 // 流式播放卡片：stream_status 起止事件驱动（分片走组件自己的专用流 WS）
 const streamCard = ref<any>(null)
+
+// 流式采集命令 → 播放通道类型（下发成功即预连，见 doSend 内注释）
+const STREAM_COMMAND_KINDS: Record<string, 'video' | 'audio' | 'screen'> = {
+  record_video: 'video',
+  record_audio: 'audio',
+  screen_live: 'screen',
+}
 const deviceNameMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   for (const d of devices.value) map[d.device_id] = d.device_name
@@ -862,6 +869,13 @@ async function doSend(force: boolean) {
   try {
     const r = await sendCommand(form.deviceId, cmdName, collectParams(), force)
     ElMessage.success(`命令已${force ? '强制' : ''}下发（${r.command_id.slice(0, 8)}…）`)
+    // 流式采集命令：下发成功即预连实时播放通道（不等 stream_status 事件）。
+    // 规避管理 WS 短暂断线/事件丢失导致整段录制无实时画面（2026-10-27 实测缺陷）
+    const streamKind = STREAM_COMMAND_KINDS[cmdName]
+    if (streamKind && form.deviceId) {
+      const isStreamMode = streamKind === 'screen' || !!params.stream
+      if (isStreamMode) streamCard.value?.startManual(form.deviceId, streamKind)
+    }
     // get_location：记下命令 ID 与下发时刻，等回执推送匹配后展示定位结果地图
     if (cmdName === 'get_location') {
       pendingLocationCommandId = r.command_id

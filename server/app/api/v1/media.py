@@ -217,6 +217,12 @@ def _media_type_of(filename: str) -> str:
         return "video/mp4"
     if filename.endswith(".png"):
         return "image/png"
+    if filename.endswith(".ts"):
+        return "video/mp2t"
+    if filename.endswith(".flv"):
+        return "video/x-flv"
+    if filename.endswith(".aac"):
+        return "audio/aac"
     return "image/jpeg"
 
 

@@ -672,6 +672,14 @@ adb 未安装时错误信息给出安装指引。
   的正常媒体上传兜底。多订阅者各持独立队列（多后台同看一路）。
 - 起始帧（带 info）/ 结束帧（is_end）额外经 AdminEventBus 广播 `stream_status`
   轻量事件；设备断连时补发结束事件（播放器收尾）。
+- **订阅时机双保险（2026-10-27）**：① `stream_status` 事件驱动开卡片（原有）；
+  ② 命令页下发流式命令（record_video/record_audio 开 stream、screen_live）成功后
+  **立即预连**流 WS（`StreamPlayerCard.startManual`）——实测管理 WS 短暂断线/
+  事件丢失会导致整段录制无实时画面（设备日志订阅者=0），预连不再依赖事件通道
+  （分片走专用流 WS，与事件通道解耦）。事件通道正常时 `onStreamStatus` 与
+  预连幂等互不冲突。
+- 流式产物（flv/ts/aac）流结束后照常走 `POST /api/media` 上传，媒体扩展名
+  白名单已含（`media_store.MEDIA_EXTENSIONS`）；MIME 映射见 media.py `_media_type_of`。
 - 消费方：视频 mpegts.js（WS 直播源）/ 音频 Web Audio 逐组解码——详见
   `docs/api/commands/media.md`「流式通道」。
 
