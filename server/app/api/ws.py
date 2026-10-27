@@ -155,11 +155,14 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
         logger.exception("流分片转发失败（忽略）")
         delivered = 0
     # 观测日志：起始帧/结束帧/每 20 个数据帧记一条，便于定位「无实时画面」是
-    # 设备没推分片还是后台没订阅（chunk_index=0 且 data 为空 = 起始帧）
+    # 设备没推分片还是后台没订阅（chunk_index=0 且 data 为空 = 起始帧）。
+    # 起始帧 data 为空时 push_b64 返回 0，订阅数用 subscriber_count 取真实值
+    # （2026-10-27：之前的「流开始 订阅者=0」是空帧假象，误导排障）。
     chunk_idx = data.get("chunk_index", -1)
     if info is not None:
         logger.info(
-            "device %s 流开始 kind=%s 订阅者=%d 信息=%s", device_id, kind, delivered, info,
+            "device %s 流开始 kind=%s 订阅者=%d 信息=%s",
+            device_id, kind, hub.subscriber_count(device_id), info,
         )
     elif is_end:
         logger.info(

@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import mpegts from 'mpegts.js'
 import { getToken } from '@/api/request'
@@ -159,33 +159,19 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
   }
 
   if (k !== 'audio') {
-    // mpegts.js 直播：直接把专用流 WS 当数据源（服务端推裸二进制帧）
-    // 统一 FLV：摄像头流由服务端 TS→FLV 转封装（Android MediaMuxer 的 TS
-    // 时间戳缺陷会让 mpegts.js 解码停滞，2026-10-27 浏览器复现根因），投屏=FLV
-    if (mpegts.getFeatureList().mseLivePlayback) {
-      player = mpegts.createPlayer(
-        { type: 'flv', isLive: true, url: streamWsUrl() },
-        {
-          enableStashBuffer: false,
-          isLive: true,
-          liveBufferLatencyChasing: true,
-          lazyLoad: false,
-        },
-      )
-      player.attachMediaElement(videoEl.value!)
-      player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
-        playerError.value = `播放器错误（${type}）：${detail} —— 请确认设备正在推流、未被我防火墙/代理拦截`
-        console.error('[StreamPlayer] mpegts error:', type, detail)
-      })
-      player.load()
-      player.play()?.catch?.(() => {
-        playBlocked.value = true
-      })
-      startLatencyWatch()
-    } else {
-      playerError.value = '当前浏览器不支持 MSE 直播（建议 Chrome/Edge）'
-    }
-    // 录制累积通道：再开一条 WS 收原始字节（与播放解耦）
+    // ⚠️ 必须等 nextTick：页面刚加载后首次预连时 visible 刚置 true，
+    // video 元素还没渲染出来，同步访问 videoEl 是 null → attachMediaElement
+    // 抛异常被调用方吞掉 → 流 WS 根本不建立（2026-10-27「投屏首次无实时画面」根因）
+    nextTick(() => {
+      // 会话守卫：期间可能已被 stopAll/新 startStream 重置，过期回调直接丢弃
+      if (!visible.value || ended.value || deviceId.value !== id || kind.value !== k) return
+      if (mpegts.getFeatureList().mseLivePlayback) {
+        createVideoPlayer()
+      } else {
+        playerError.value = '当前浏览器不支持 MSE 直播（建议 Chrome/Edge）'
+      }
+    })
+    // 录制累积通道：再开一条 WS 收原始字节（与播放解耦，无 DOM 依赖可立即连）
     recWs = new WebSocket(streamWsUrl())
     recWs.binaryType = 'arraybuffer'
     recWs.onerror = () => {
@@ -240,9 +226,36 @@ function resumeVideo() {
   }
 }
 
+/** 创建 mpegts.js 播放器并挂到 video 元素（须在 nextTick 后调用）。 */
+function createVideoPlayer() {
+  // 统一 FLV：摄像头流由服务端 TS→FLV 转封装（Android MediaMuxer 的 TS
+  // 时间戳缺陷会让 mpegts.js 解码停滞，2026-10-27 浏览器复现根因），投屏=FLV
+  player = mpegts.createPlayer(
+    { type: 'flv', isLive: true, url: streamWsUrl() },
+    {
+      enableStashBuffer: false,
+      isLive: true,
+      liveBufferLatencyChasing: false, // 追帧由 startLatencyWatch 平滑变速处理（内建是跳变式 seek）
+      lazyLoad: false,
+    },
+  )
+  player.attachMediaElement(videoEl.value!)
+  player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
+    playerError.value = `播放器错误（${type}）：${detail} —— 请确认设备正在推流、未被我防火墙/代理拦截`
+    console.error('[StreamPlayer] mpegts error:', type, detail)
+  })
+  player.load()
+  player.play()?.catch?.(() => {
+    playBlocked.value = true
+  })
+  startLatencyWatch()
+}
+
 /**
- * 视频健康监控（1 秒一查，三件事）：
- * ① 追帧：画面落后实时 >2.5 秒立即 seek 到缓冲末尾前 0.3 秒；
+ * 视频健康监控（500ms 一查，四件事）：
+ * ① 平滑追帧：画面落后实时 >1.2 秒 → playbackRate 提到 1.5 倍匀速消化积压
+ *    （「跳变式 seek」体感为画面隔几秒猛跳一下，2026-10-27 实测弃用）；
+ *    落后 <0.6 秒回 1 倍速。积压 >8 秒（长时间停滞）才硬 seek 一次兜底；
  * ② 诊断：把浏览器解码帧数（totalVideoFrames）显示到卡片——
  *    「只出首帧后冻结」时若解码帧停增即定位为 video 轨解码问题；
  * ③ 自愈：currentTime 与解码帧数连续 4 秒都不动（音流正常收帧）→
@@ -260,17 +273,23 @@ function startLatencyWatch() {
       // 诊断帧数
       const q = v.getVideoPlaybackQuality?.()
       videoFrames.value = q ? q.totalVideoFrames : Math.round(v.currentTime * 30)
-      // 追帧
-      if (v.buffered.length > 0) {
+      // 平滑追帧（变速优先，跳变仅作深度积压兜底）
+      if (v.buffered.length > 0 && !v.seeking && v.readyState >= 2) {
         const tail = v.buffered.end(v.buffered.length - 1)
-        if (tail - v.currentTime > 2.5 && !v.seeking && v.readyState >= 2) {
-          v.currentTime = Math.max(0, tail - 0.3)
+        const lag = tail - v.currentTime
+        if (lag > 8) {
+          v.currentTime = Math.max(0, tail - 0.5)
+          v.playbackRate = 1.0
+        } else if (lag > 1.2) {
+          v.playbackRate = 1.5
+        } else if (lag < 0.6) {
+          v.playbackRate = 1.0
         }
       }
       // 停滞检测（画面不动 + 解码帧不增 = video 轨卡死）
       if (Math.abs(v.currentTime - lastT) < 0.05 && videoFrames.value === lastF) {
         stall++
-        if (stall >= 4) {
+        if (stall >= 8) {
           stall = 0
           console.warn('[StreamPlayer] 视频轨停滞 4s，重建播放器自愈')
           rebuildPlayer()
@@ -283,7 +302,7 @@ function startLatencyWatch() {
     } catch {
       /* buffered/quality 访问异常忽略 */
     }
-  }, 1000)
+  }, 500)
 }
 
 /** 重建播放器（流头缓存让重建后的播放器能重新初始化）。 */
@@ -292,21 +311,7 @@ function rebuildPlayer() {
   destroyPlayer()
   playerError.value = ''
   try {
-    player = mpegts.createPlayer(
-      { type: 'flv', isLive: true, url: streamWsUrl() },
-      {
-        enableStashBuffer: false,
-        isLive: true,
-        liveBufferLatencyChasing: true,
-        lazyLoad: false,
-      },
-    )
-    player.attachMediaElement(videoEl.value!)
-    player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
-      playerError.value = `播放器错误（${type}）：${detail}`
-    })
-    player.load()
-    player.play()?.catch?.(() => {})
+    createVideoPlayer()
   } catch (e) {
     console.error('[StreamPlayer] 重建失败', e)
   }

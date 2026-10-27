@@ -811,6 +811,38 @@ async function load() {
   } finally {
     loading.value = false
   }
+  ensureStreamPreconnect()
+}
+
+/**
+ * 流式命令兜底预连（第三重保险）：发现选中设备的流式命令在途而卡片没在播
+ * 同路流 → 主动预连。覆盖「下发时预连异常」「stream_status 事件丢失」等场景。
+ * 在途 = 15 分钟窗口内的 pending（与服务端采集互斥守卫同窗，僵尸命令不拦）。
+ */
+function ensureStreamPreconnect() {
+  const now = Date.now()
+  const running = commands.value.find((r) => {
+    const k = STREAM_COMMAND_KINDS[r.command]
+    if (!k || r.status !== 'pending' || now - r.created_at * 1000 > CAPTURE_GUARD_WINDOW_MS)
+      return false
+    // 只兜底当前选中设备的命令：避免劫持正在播放的其他设备流卡片
+    if (r.device_id !== form.deviceId) return false
+    return k === 'screen' || !!r.params?.stream
+  })
+  if (running) {
+    streamCard.value?.startManual(running.device_id, STREAM_COMMAND_KINDS[running.command])
+  }
+}
+
+/** 静默刷新命令历史 + 流式兜底（不触发 loading 态）。 */
+async function silentRefresh() {
+  if (document.hidden) return
+  try {
+    commands.value = await listCommands()
+    ensureStreamPreconnect()
+  } catch {
+    /* 轮询失败忽略（网络恢复后自动续上） */
+  }
 }
 
 /** 清空命令历史（二次确认；当前选中的设备存在时只清该设备，否则清空全部）。 */
@@ -1013,16 +1045,21 @@ function scheduleReconnect() {
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY)
 }
 
+let refreshTimer: number | null = null // 命令历史静默轮询（3s，兼流式兜底预连）
+
 onMounted(() => {
   loadDevices()
   load()
   loadCatalog()
   connectWS()
+  refreshTimer = window.setInterval(silentRefresh, 3000)
 })
 
 onBeforeUnmount(() => {
   if (reconnectTimer) window.clearTimeout(reconnectTimer)
   reconnectTimer = null
+  if (refreshTimer !== null) window.clearInterval(refreshTimer)
+  refreshTimer = null
   ws?.close()
 })
 </script>

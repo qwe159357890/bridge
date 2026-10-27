@@ -72,6 +72,10 @@ class StreamHub:
         """该设备是否有管理侧订阅者（服务端日志用）。"""
         return bool(self._subscribers.get(device_id))
 
+    def subscriber_count(self, device_id: str) -> int:
+        """该设备当前订阅者数量（日志观测用；空起始帧也报真实值）。"""
+        return len(self._subscribers.get(device_id, ()))
+
     async def push_b64(self, device_id: str, data_b64: str) -> int:
         """接收客户端分片（base64），解码后投递给该设备全部订阅者。
 
