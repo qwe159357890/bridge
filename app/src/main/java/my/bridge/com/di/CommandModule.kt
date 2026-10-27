@@ -1555,7 +1555,8 @@ object CommandModule {
      * 完整闭环（v0.1.37 起）：检查 → 自动下载 APK（进度通知）→ 拉起系统安装页
      * （Android 不允许静默安装，用户点一次「安装」）。防重复触发：下载/安装中
      * 再次下发直接拒绝并提示，见 [my.bridge.com.update.UpdateManager]。
-     * 关于页「检查更新」按钮走同一入口，行为一致。
+     * mode=check_only 时只检查不下载，回执告知是否有新版本（v0.1.44）。
+     * 关于页「检查更新」按钮走同一入口，行为一致（自动安装）。
      */
     private suspend fun executeCheckUpdate(
         context: Context,
@@ -1565,9 +1566,10 @@ object CommandModule {
     ): CommandResult {
         val id = command.commandId
         val name = command.command
+        val autoInstall = command.strParam("mode", "auto_install") != "check_only"
         return try {
-            val message = my.bridge.com.update.UpdateManager.checkAndInstall(context)
-            Timber.i("命令 check_update：%s", message)
+            val message = my.bridge.com.update.UpdateManager.checkAndInstall(context, autoInstall)
+            Timber.i("命令 check_update（autoInstall=%s）：%s", autoInstall, message)
             CommandResult(id, name, true, message)
         } catch (e: Exception) {
             Timber.e(e, "命令 check_update 执行失败")

@@ -356,7 +356,11 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("check_update", "检查更新", "system", "🔎",
          "让客户端检查应用更新（服务器 updates 目录版，不依赖 GitHub）；"
          "开发者把最新 APK（文件名含版本号，如 bridge-v0.1.32.apk，可选配 update.json "
-         "写更新说明）放到服务器 data/updates/ 目录即可"),
+         "写更新说明）放到服务器 data/updates/ 目录即可",
+         [_param("mode", "检查模式", PARAM_TYPE_SELECT, default="auto_install",
+                 options=[{"value": "auto_install", "label": "自动安装（发现新版直接下载并弹安装页）"},
+                          {"value": "check_only", "label": "仅检查（只回执是否需要更新，不下载）"}],
+                 description="仅检查模式适合巡检场景：只看设备版本是否落后，不触发下载")]),
 ]
 
 

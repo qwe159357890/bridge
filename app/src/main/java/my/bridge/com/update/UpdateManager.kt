@@ -80,9 +80,11 @@ object UpdateManager {
     /**
      * 检查并执行更新全流程（阻塞调用方协程直至出结果或弹安装页）。
      *
+     * @param autoInstall true = 发现新版本自动下载并弹安装页（原行为）；
+     *                    false = 只检查不下载，回执告知是否有新版本（命令「仅检查」模式）。
      * @return 给用户看的结果说明（成功=已弹安装页 / 已是最新 / 忙 / 失败原因）
      */
-    suspend fun checkAndInstall(context: Context): String {
+    suspend fun checkAndInstall(context: Context, autoInstall: Boolean = true): String {
         // 原子锁：下载/安装中再次触发直接拒绝（防连点、防重复下发并发下载）
         if (!busy.compareAndSet(false, true)) {
             return when (phase) {
@@ -109,6 +111,12 @@ object UpdateManager {
             }
             if (!latest.found) return "服务器暂无更新包（updates 目录为空），当前版本 v$current"
             if (!latest.available) return "已是最新版本 v$current"
+
+            // 仅检查模式：有新版本即返回，不下载不安装（命令参数 mode=check_only）
+            if (!autoInstall) {
+                return "发现新版本 v${latest.version}（当前 v$current，" +
+                    "%.1f MB），下发 check_update（自动安装模式）即可升级".format(latest.size_bytes / 1048576.0)
+            }
 
             val target = File(updateDir(context), latest.filename)
             // ② 下载（缓存命中跳过：同一文件已完整下载过）
