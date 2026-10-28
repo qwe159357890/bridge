@@ -41,7 +41,7 @@
             title="全屏"
             @click="goFullscreen"
           />
-          <el-button :icon="Close" size="small" circle title="关闭" @click="hide()" />
+          <el-button :icon="Close" size="small" circle title="关闭" @click="onCloseClick" />
         </div>
       </div>
     </template>
@@ -134,6 +134,10 @@ import { wsUrl } from '@/utils/base'
  * 父页 WS 只传轻量控制事件（stream_status 起止），分片重负载不走父页通道。
  */
 const props = defineProps<{ deviceNames: Record<string, string> }>()
+
+// 播放中点「关闭」：通知父页走「停止采集」全流程（下发 stream_stop 结束
+// 设备端采集 + 断 WS + 封锁重启 + 销毁控件），与切卡/切页同语义（2026-10-28 用户拍板）
+const emit = defineEmits<{ (e: 'requestStop'): void }>()
 
 const visible = ref(false)
 const deviceId = ref('')
@@ -726,6 +730,13 @@ function applyVolume() {
     videoMuted.value = false
     v.muted = false
   }
+}
+
+/** 头部「关闭」按钮：播放中 → 通知父页走停止采集全流程（同切卡/切页语义）；
+ *  已结束 → 直接关闭卡片。 */
+function onCloseClick() {
+  if (visible.value && !ended.value) emit('requestStop')
+  else hide()
 }
 
 function hide(keepStopBlock = false) {

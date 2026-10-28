@@ -246,7 +246,7 @@
     <VolumeResultCard ref="volumeCard" />
 
     <!-- 流式采集实时播放：stream_status 事件驱动（视频 mpegts.js / 录音 Web Audio 实时出声） -->
-    <StreamPlayerCard ref="streamCard" :device-names="deviceNameMap" />
+    <StreamPlayerCard ref="streamCard" :device-names="deviceNameMap" @request-stop="stopActiveCapture" />
 
     <el-card class="list-card">
       <template #header>
