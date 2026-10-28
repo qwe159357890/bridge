@@ -125,13 +125,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
 import { sendCommand, getCommand } from '@/api/commands'
 import { listSms, deleteSms, setSmsRead, simLabel, type SmsItem } from '@/api/data'
 import type { Device } from '@/types'
+import { useTargetDeviceStore } from '@/stores/targetDevice'
 
 /**
  * 短信页：短信存档查询（2026-10-28 起默认聚合模式——显示所有设备的短信，
@@ -155,6 +156,12 @@ const PAGE_SIZE = 100
 
 const devices = ref<Device[]>([])
 const deviceId = ref('')
+// 短信页默认聚合（''），但用户**主动选了具体设备**时写回全局目标设备——
+// 其它页面（命令下发/通话记录/通讯录）随之保持；聚合视图不清全局
+const targetStore = useTargetDeviceStore()
+watch(deviceId, (v) => {
+  if (v) targetStore.set(v)
+})
 const smsType = ref<number | undefined>(undefined)
 const keyword = ref('')
 const items = ref<SmsItem[]>([])

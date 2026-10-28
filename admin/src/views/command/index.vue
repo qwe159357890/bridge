@@ -356,6 +356,7 @@ import { getDeviceSims } from '@/api/data'
 import type { DeviceSim } from '@/api/data'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
+import { useTargetDeviceStore } from '@/stores/targetDevice'
 import { formatTime } from '@/utils/format'
 import DevicePicker from '@/components/DevicePicker.vue'
 import LocationResultCard from '@/components/LocationResultCard.vue'
@@ -469,9 +470,18 @@ const wsDotClass = computed(() => {
   }
 })
 
+const targetStore = useTargetDeviceStore()
 const form = reactive({
-  deviceId: (route.query.deviceId as string) || '',
+  // 目标设备接全局 store（跨页面保持，刷新不丢）；深链 query 优先
+  deviceId: (route.query.deviceId as string) || targetStore.deviceId || '',
 })
+// 用户在命令页切换设备时写回全局（其它页面随之保持）
+watch(
+  () => form.deviceId,
+  (v) => {
+    if (v) targetStore.set(v)
+  },
+)
 
 // 当前分类下的命令（未搜索时）
 const categoryCommands = computed(() => {
@@ -851,6 +861,32 @@ function selectCommand(cmd: CommandDef) {
       params[p.name] = p.type === 'switch' ? false : ''
     }
   }
+  // 参数持久化记忆（2026-10-28 用户需求）：用户上次对该命令「下发成功」时
+  // 填写的参数自动回填，无记忆时保持 catalog 默认值
+  try {
+    const saved = localStorage.getItem(`bridge_cmd_params:${cmd.name}`)
+    if (saved) {
+      const memo = JSON.parse(saved) as Record<string, unknown>
+      for (const p of cmd.params) {
+        if (p.name in memo && memo[p.name] !== null) params[p.name] = memo[p.name]
+      }
+    }
+  } catch {
+    /* 记忆损坏时静默回退默认值 */
+  }
+}
+
+/** 下发成功后按命令名持久化本次填写的参数（下次选中自动回填）。 */
+function memorizeParams(cmdName: string) {
+  const cmd = selectedCommand.value
+  if (!cmd || cmd.name !== cmdName) return
+  const memo: Record<string, unknown> = {}
+  for (const p of cmd.params) memo[p.name] = params[p.name] ?? null
+  try {
+    localStorage.setItem(`bridge_cmd_params:${cmdName}`, JSON.stringify(memo))
+  } catch {
+    /* 存储满/隐私模式忽略 */
+  }
 }
 
 function collectParams(): Record<string, any> {
@@ -985,6 +1021,7 @@ async function doSend(force: boolean) {
       localStorage.setItem('bridge_stream_low_latency', params.low_latency ? '1' : '0')
     }
     const r = await sendCommand(form.deviceId, cmdName, collectParams(), force)
+    memorizeParams(cmdName) // 下发成功即记忆本次参数（2026-10-28 用户需求）
     ElMessage.success(`命令已${force ? '强制' : ''}下发（${r.command_id.slice(0, 8)}…）`)
     // 流式采集命令：下发成功即预连实时播放通道（不等 stream_status 事件）。
     // 规避管理 WS 短暂断线/事件丢失导致整段录制无实时画面（2026-10-27 实测缺陷）

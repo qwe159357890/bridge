@@ -13,21 +13,25 @@
           <el-button v-if="ended && recorded.length > 0" size="small" type="primary" @click="download">
             下载（{{ kind === 'audio' ? '.aac' : '.flv' }}）
           </el-button>
-          <!-- 画中画按钮用 el-tooltip（原生 title 悬停 1s 才出现且无样式，用户
-               反馈注意不到）；限制说明写在这里，200ms 快速弹出 -->
+          <!-- 画中画按钮：始终显示（不支持 Document PiP 的浏览器置灰+提示升级，
+               此前 v-if 整个隐藏，用户以为没有这个功能）。el-tooltip 200ms 弹出
+               限制说明；原生 title 悬停 1s 才出现且无样式（用户反馈注意不到） -->
           <el-tooltip
+            v-if="kind !== 'audio'"
             placement="top-end"
             effect="dark"
             popper-class="pip-limit-tip"
-            content="画中画窗口：拖拽边角可调大小。浏览器限制：最大约屏幕80%、最小300×300（引擎硬限制无法突破）；需要更大画面请点旁边「全屏」按钮"
+            :content="pipTipText"
           >
-            <el-button
-              v-if="kind !== 'audio' && pipSupported"
-              :icon="Monitor"
-              size="small"
-              circle
-              @click="togglePip"
-            />
+            <span class="pip-btn-wrap">
+              <el-button
+                :icon="Monitor"
+                size="small"
+                circle
+                :disabled="!pipSupported"
+                @click="togglePip"
+              />
+            </span>
           </el-tooltip>
           <el-button
             v-if="kind !== 'audio'"
@@ -51,7 +55,17 @@
          pagehide 时按原位搬回 host，不破坏 Vue 模板结构。 -->
     <div v-show="kind !== 'audio'" ref="videoHost" class="stream-video-host">
       <div ref="videoBox" class="stream-video-box">
-        <video ref="videoEl" class="stream-video" autoplay muted playsinline />
+        <!-- disablepictureinpicture：禁掉 Chrome 悬停 video 时弹的原生画中画
+             按钮（tooltip 只有「画中画」三个字，窗口尺寸限制更死且无任何说明，
+             用户误以为这就是我们的画中画）——统一走卡片头部的 Document PiP 按钮 -->
+        <video
+          ref="videoEl"
+          class="stream-video"
+          autoplay
+          muted
+          playsinline
+          disablepictureinpicture
+        />
         <!-- 音量控件：去原生 controls 后自绘（静音切换 + 音量滑条），非全屏/全屏均可见 -->
         <div class="volume-ctrl" @click.stop>
           <el-button
@@ -601,6 +615,13 @@ const pipSupported = computed(
   () => typeof (window as any)?.documentPictureInPicture?.requestWindow === 'function',
 )
 const pipActive = computed(() => !!pipWindow.value)
+
+/** 按钮悬停说明：支持/不支持两种文案（不支持时引导升级浏览器）。 */
+const pipTipText = computed(() =>
+  pipSupported.value
+    ? '画中画窗口：拖拽边角可调大小。浏览器限制：最大约屏幕80%、最小300×300（引擎硬限制无法突破）；需要更大画面请点旁边「全屏」按钮'
+    : '当前浏览器不支持画中画窗口（需要 Chrome/Edge ≥ 116 或 Firefox ≥ 151），请升级浏览器；「全屏」按钮不受限制',
+)
 
 /** 打开/关闭画中画窗口（窗口边角可自由拖拽调整大小，浏览器原生能力）。 */
 async function togglePip() {

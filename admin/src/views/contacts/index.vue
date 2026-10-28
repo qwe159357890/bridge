@@ -76,17 +76,23 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
 import { listContacts, deleteContacts, type ContactItem } from '@/api/data'
 import type { Device } from '@/types'
+import { useTargetDeviceStore } from '@/stores/targetDevice'
 
 /** 通讯录页：按设备查看联系人快照（数据来自「获取通讯录」命令上报）。 */
 
 const devices = ref<Device[]>([])
-const deviceId = ref('')
+// 目标设备接全局 store（跨页面保持，刷新不丢；2026-10-28 用户需求）
+const targetStore = useTargetDeviceStore()
+const deviceId = computed({
+  get: () => targetStore.deviceId,
+  set: (v: string) => targetStore.set(v),
+})
 const keyword = ref('')
 const items = ref<ContactItem[]>([])
 const total = ref(0)

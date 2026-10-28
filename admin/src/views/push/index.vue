@@ -108,12 +108,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
 import { listDevices } from '@/api/devices'
 import { pushMessage, type PushResult } from '@/api/push'
 import type { Device } from '@/types'
+import { useTargetDeviceStore } from '@/stores/targetDevice'
 
 interface PushHistoryItem {
   time: string
@@ -131,6 +132,16 @@ const form = reactive({
   deviceIds: [] as string[],
   payloadText: '{"title": "测试消息", "body": "你好"}',
 })
+
+// 目标设备联动（2026-10-28 用户需求：跨页面保持，主动切换才变）：
+// 进页时全局设备预填进多选框；恰好单选时写回全局（多选/清空不动全局）
+const targetStore = useTargetDeviceStore()
+watch(
+  () => form.deviceIds,
+  (ids) => {
+    if (ids.length === 1) targetStore.set(ids[0])
+  },
+)
 
 const totalTargets = computed(() => history.value.reduce((s, h) => s + h.total, 0))
 const totalDelivered = computed(() => history.value.reduce((s, h) => s + h.delivered, 0))
@@ -180,7 +191,13 @@ function resetStats() {
   history.value = []
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  // 全局目标设备预填进多选框（未手动选过时；2026-10-28 用户需求）
+  if (form.deviceIds.length === 0 && targetStore.deviceId) {
+    form.deviceIds = [targetStore.deviceId]
+  }
+})
 </script>
 
 <style scoped>
