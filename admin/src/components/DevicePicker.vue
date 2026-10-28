@@ -1,15 +1,15 @@
 <template>
   <el-select
-    :model-value="modelValue"
+    :model-value="displayValue"
     :placeholder="placeholder"
     filterable
-    @update:model-value="(v: string) => $emit('update:modelValue', v)"
+    @update:model-value="(v: string) => $emit('update:modelValue', v === ALL ? '' : v)"
   >
     <el-option
       v-if="withAll"
       key="__all__"
       label="📋 全部设备（聚合）"
-      :value="''"
+      :value="ALL"
     />
     <el-option
       v-for="d in devices"
@@ -22,16 +22,24 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { Device } from '@/types'
 
-defineProps<{
+const props = defineProps<{
   devices: Device[]
   modelValue: string
   placeholder?: string
   onlyOnline?: boolean
-  /** 顶部加「全部设备（聚合）」选项（value=''），短信页聚合模式用 */
+  /** 顶部加「全部设备（聚合）」选项，对外 v-model 契约：'' = 全部设备 */
   withAll?: boolean
 }>()
 
 defineEmits<{ (e: 'update:modelValue', value: string): void }>()
+
+/** 哨兵值：el-select 把空串 modelValue 视为「未选中」（只显示 placeholder），
+ * 不显示「全部设备」选项文案——故对外 '' 在内部映射为哨兵值。 */
+const ALL = '__all__'
+const displayValue = computed(() =>
+  props.withAll && props.modelValue === '' ? ALL : props.modelValue,
+)
 </script>

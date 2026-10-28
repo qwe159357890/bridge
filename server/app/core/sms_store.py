@@ -13,8 +13,10 @@
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pymysql
 
@@ -24,7 +26,13 @@ SMS_TYPE_NAMES = {1: "收件箱", 2: "已发送", 3: "草稿", 4: "发送中", 5
 
 
 class SmsStore:
-    """MySQL 短信存储（累积 + (device_id, sms_key) 去重）。"""
+    """MySQL 短信存储（累积 + (device_id, sms_key) 去重）。
+
+    连接策略：**每次操作独立连接**。早期版本共享单连接，FastAPI 线程池并发
+    访问（如 APK 每 3~5s 轮询聚合端点与管理后台请求同时到达）会导致 MySQL
+    协议错乱——``Packet sequence number wrong`` / ``utf-8 codec can't decode``。
+    本存储数据量与 QPS 都很小，逐连接开销可忽略。
+    """
 
     def __init__(self, host: str, port: int, user: str, password: str, database: str) -> None:
         self._host = host
@@ -32,7 +40,7 @@ class SmsStore:
         self._user = user
         self._password = password
         self._database = database
-        self._conn: Optional[pymysql.connections.Connection] = None
+        self._schema_lock = threading.Lock()  # 建库建表迁移互斥
 
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS sms_messages (
@@ -63,55 +71,59 @@ class SmsStore:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        if self._conn is not None:
+        """建库建表 + 列迁移（main.py 启动时调用一次）。"""
+        with self._schema_lock:
+            # 裸连接（不选库）：库可能尚未创建
+            conn = pymysql.connect(
+                host=self._host, port=self._port, user=self._user,
+                password=self._password, charset="utf8mb4", connect_timeout=10,
+            )
             try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("短信存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"CREATE DATABASE IF NOT EXISTS `{self._database}` "
+                        "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+                conn.select_db(self._database)
+                with conn.cursor() as cur:
+                    cur.execute(self._CREATE_TABLE_SQL)
+                    for col, ddl in self._MIGRATE_COLUMNS:
+                        try:
+                            cur.execute(f"ALTER TABLE sms_messages ADD COLUMN {col} {ddl}")
+                            logger.info("短信表迁移：新增列 %s", col)
+                        except pymysql.err.OperationalError as e:
+                            if e.args and e.args[0] == 1060:  # Duplicate column：已存在
+                                pass
+                            else:
+                                raise
+                conn.commit()
+            finally:
+                conn.close()
+        logger.info("短信存储 schema 就绪：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
 
+    def _new_connection(self) -> pymysql.connections.Connection:
+        # 不带 database 参数连接：connect() 建库前也能连上（建库后 select_db）
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
-            password=self._password, database=self._database, charset="utf8mb4",
-            connect_timeout=10,
+            password=self._password, charset="utf8mb4", connect_timeout=10,
         )
-        with conn.cursor() as cur:
-            cur.execute(
-                f"CREATE DATABASE IF NOT EXISTS `{self._database}` "
-                "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-            )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-            for col, ddl in self._MIGRATE_COLUMNS:
-                try:
-                    cur.execute(f"ALTER TABLE sms_messages ADD COLUMN {col} {ddl}")
-                    logger.info("短信表迁移：新增列 %s", col)
-                except pymysql.err.OperationalError as e:
-                    if e.args and e.args[0] == 1060:  # Duplicate column：已存在
-                        pass
-                    else:
-                        raise
-        conn.commit()
-        self._conn = conn
-        logger.info("短信存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
+        return conn
 
-    def _connection(self) -> pymysql.connections.Connection:
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每次操作独立连接（线程安全），用完即关。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 写入（批量去重）
@@ -128,7 +140,6 @@ class SmsStore:
         """
         if not messages:
             return {"received": 0, "inserted": 0, "updated": 0}
-        conn = self._connection()
         sync_dt = datetime.now()
         rows = []
         for m in messages:
@@ -148,7 +159,7 @@ class SmsStore:
                     sync_dt,
                 )
             )
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             # 精确区分新增/更新：executemany 对 ON DUPLICATE 的受影响行数语义
             # 模糊（更新计 2），改用前后 COUNT 差值
             cur.execute(
@@ -197,7 +208,6 @@ class SmsStore:
         ``before_ms``：时间游标分页——取该时刻**之前**的记录（前端把上一页
         最旧一条的 sms_date 传回来即可翻页），对多批次累积数据比 offset 稳。
         """
-        conn = self._connection()
         conds, args = [], []
         if device_id:
             conds.append("device_id = %s")
@@ -213,7 +223,7 @@ class SmsStore:
             conds.append("sms_date < %s")
             args.append(datetime.fromtimestamp(before_ms / 1000.0))
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS n FROM sms_messages {where}", args)
             total = int(cur.fetchone()["n"])
             cur.execute(
@@ -233,7 +243,6 @@ class SmsStore:
         会话键 = (device_id, address)；每会话返回最新一条消息、未读数、总条数，
         按最新消息时间倒序。keyword 匹配号码 / 设备 ID / 会话内任意正文。
         """
-        conn = self._connection()
         having = ""
         args: list = []
         if keyword.strip():
@@ -260,10 +269,11 @@ class SmsStore:
             " AND CONCAT(m.sms_date, '|', LPAD(m.id, 20, '0')) = t.last_key "
             f"{having} ORDER BY t.last_key DESC LIMIT %s"
         )
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(sql, (*args, limit))
             rows = cur.fetchall()
-            cur.execute("SELECT COUNT(DISTINCT device_id, address) FROM sms_messages")
+            # 别名 n 必须显式给：DictCursor 的键是列名（曾漏 AS n → KeyError 'n' → 503）
+            cur.execute("SELECT COUNT(DISTINCT device_id, address) AS n FROM sms_messages")
             total = int(cur.fetchone()["n"])
         items = []
         for r in rows:
@@ -290,13 +300,12 @@ class SmsStore:
         limit: int = 100,
     ) -> tuple[list[dict[str, Any]], int]:
         """某会话（设备+号码）的消息分页（倒序），聚合详情页用。"""
-        conn = self._connection()
         conds, args = ["device_id = %s", "address = %s"], [device_id, address]
         if before_ms is not None:
             conds.append("sms_date < %s")
             args.append(datetime.fromtimestamp(before_ms / 1000.0))
         where = "WHERE " + " AND ".join(conds)
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS n FROM sms_messages {where}", args)
             total = int(cur.fetchone()["n"])
             cur.execute(
@@ -308,8 +317,7 @@ class SmsStore:
 
     def delete(self, device_id: str, row_id: Optional[int] = None) -> int:
         """手动清理：删某设备全部（或指定一条）。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             if row_id is not None:
                 n = cur.execute(
                     "DELETE FROM sms_messages WHERE device_id=%s AND id=%s",
@@ -328,9 +336,8 @@ class SmsStore:
         """
         if not ids:
             return 0
-        conn = self._connection()
         placeholders = ", ".join(["%s"] * len(ids))
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             n = cur.execute(
                 f"UPDATE sms_messages SET read_flag = %s "
                 f"WHERE device_id = %s AND id IN ({placeholders})",

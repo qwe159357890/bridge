@@ -18,7 +18,7 @@
             :icon="Monitor"
             size="small"
             circle
-            title="画中画窗口（可自由调整大小）"
+            title="画中画窗口（可拖拽调整大小，受浏览器限制：最大≈屏幕80%、最小300×300）"
             @click="togglePip"
           />
           <el-button
@@ -63,7 +63,11 @@
           />
         </div>
       </div>
-      <div v-if="pipActive" class="pip-hint">画面正在画中画窗口中播放（窗口可自由拖拽调整大小）</div>
+      <div v-if="pipActive" class="pip-hint">
+        画面正在画中画窗口中播放。窗口可拖拽边角调整大小，但受浏览器硬限制：
+        最小 300×300、最大约屏幕的 80%（Chrome/Edge 引擎限制，无法突破）——
+        需要更大的画面请关闭画中画后点「全屏」按钮。
+      </div>
     </div>
     <div v-if="kind !== 'audio' && playBlocked" class="stream-resume">
       <el-button type="primary" size="small" @click="resumeVideo">点击播放</el-button>
@@ -601,7 +605,17 @@ async function togglePip() {
   const box = videoBox.value
   if (!box) return
   try {
-    const w = await api.requestWindow({ width: 640, height: 400 })
+    // Chromium 对 Document PiP 窗口有硬限制（picture_in_picture_window_manager.cc）：
+    // 最小 300×300，最大 = 屏幕工作区的 80%（kMaxWindowSizeRatio）——任何网页都无法
+    // 突破。初始尺寸按上限自适应给大，给足用户可用的最大画面。
+    const scrW = window.screen?.availWidth || 1280
+    const scrH = window.screen?.availHeight || 720
+    const maxW = Math.floor(scrW * 0.8)
+    const maxH = Math.floor(scrH * 0.8)
+    const initW = Math.min(maxW, 1024)
+    // 高度按 16:9 估算并夹到上限内
+    const initH = Math.min(maxH, Math.round((initW * 9) / 16))
+    const w = await api.requestWindow({ width: initW, height: initH })
     pipWindow.value = w
     // 复制页面全部样式表：scoped 样式靠 data-v 属性选择器，元素带属性走，
     // 音量控件/视频在 PiP 文档里照常渲染

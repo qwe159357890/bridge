@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -122,6 +123,8 @@ fun KeepAliveSettings() {
     var showResourceSheet by remember { mutableStateOf(false) }
     // 核心项二次确认：非空时表示「用户正试图关闭某核心项」
     var pendingCoreOff by remember { mutableStateOf<ResourceOption?>(null) }
+    // 弹窗刷新键：核心项经二次确认写盘不经过弹窗的 toggle 路径，需主动触发同步
+    var sheetRefresh by remember { mutableIntStateOf(0) }
 
     fun update(key: String, value: Boolean) {
         KeepAlivePrefs.setBoolean(context, key, value)
@@ -275,6 +278,7 @@ fun KeepAliveSettings() {
     if (showResourceSheet) {
         ResourceSheet(
             options = resourceOptions,
+            refreshKey = sheetRefresh,
             onToggle = { opt ->
                 if (opt.core && KeepAlivePrefs.getBoolean(context, opt.key)) {
                     // 核心项当前为开，本次是「关闭」→ 需要二次确认
@@ -298,6 +302,7 @@ fun KeepAliveSettings() {
                 update(coreOpt.key, false)
                 Timber.d("核心项「${coreOpt.name}」已二次确认关闭")
                 pendingCoreOff = null
+                sheetRefresh++ // 弹窗开关状态同步（确认写盘不走 toggle 路径）
             },
         )
     }
@@ -342,8 +347,18 @@ private fun ResourceSheet(
     options: List<ResourceOption>,
     onToggle: (ResourceOption) -> Unit,
     onDismiss: () -> Unit,
+    refreshKey: Int = 0,
 ) {
     val context = LocalContext.current
+    // 开关状态提升为 Compose 可观察状态（mutableStateMapOf）。此前在组合期直接
+    // 读 SharedPreferences 是普通读取（无重组订阅）：点开关只写盘不触发重组，
+    // Switch UI 不动，要重开弹窗（重新组合）才显示新值（2026-10-28 用户反馈）。
+    // refreshKey 变化（核心项二次确认写盘）时重建状态映射完成同步。
+    val states = remember(options, refreshKey) {
+        mutableStateMapOf<String, Boolean>().apply {
+            options.forEach { put(it.key, KeepAlivePrefs.getBoolean(context, it.key)) }
+        }
+    }
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -359,11 +374,17 @@ private fun ResourceSheet(
                 modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
             )
             options.forEach { opt ->
-                val checked = KeepAlivePrefs.getBoolean(context, opt.key)
+                val checked = states[opt.key] ?: false
+                // 切换后立即回读落盘值刷新状态（含核心项二次确认路径：确认关闭
+                // 后 onToggle 才真正写盘，这里回读保证两种路径都同步 UI）
+                fun toggleAndSync() {
+                    onToggle(opt)
+                    states[opt.key] = KeepAlivePrefs.getBoolean(context, opt.key)
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onToggle(opt) }
+                        .clickable { toggleAndSync() }
                         .padding(vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -391,7 +412,7 @@ private fun ResourceSheet(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(checked = checked, onCheckedChange = { onToggle(opt) })
+                    Switch(checked = checked, onCheckedChange = { toggleAndSync() })
                 }
             }
         }
