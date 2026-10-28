@@ -30,10 +30,28 @@ MESSAGE = sys.argv[2] if len(sys.argv) > 2 else (
 
 # 差异基线：默认 HEAD~1（单 commit）；本地领先远端多笔 commit 时用
 # PUSH_BASE 环境变量指定（如远端 main 对应的本地 commit）。
+# 带 --name-status 区分增/改/删/改名的路径：D 与改名的旧路径需要从远端树中
+# 删除（Trees API base_tree 模式下 sha=None 即删除），此前不支持会 cat-file 报错。
 BASE = os.environ.get("PUSH_BASE", "HEAD~1")
-FILES = subprocess.run(["git", "diff", "--name-only", BASE, "HEAD"],
-                       capture_output=True, text=True).stdout.split()
-FILES = [f for f in FILES if f != ".gitignore"]
+_raw = subprocess.run(["git", "diff", "--name-status", BASE, "HEAD"],
+                      capture_output=True, text=True).stdout.splitlines()
+FILES: list[str] = []
+DELETED: list[str] = []
+for _line in _raw:
+    parts = _line.split("\t")
+    if len(parts) < 2:
+        continue
+    status, path = parts[0][0], parts[-1]
+    if path == ".gitignore":
+        continue
+    if status == "D":
+        DELETED.append(path)
+    elif status == "R":
+        # 改名：新路径上传，旧路径删除
+        FILES.append(path)
+        DELETED.append(parts[1])
+    else:
+        FILES.append(path)
 
 
 def api(method: str, path: str, body: dict | None = None) -> dict:
@@ -64,6 +82,11 @@ def main() -> int:
         sha = api("POST", "/git/blobs", {"content": b64, "encoding": "base64"})["sha"]
         entries.append({"path": f, "mode": "100644", "type": "blob", "sha": sha})
         print(f"[2] blob {f} -> {sha[:10]}")
+
+    # 删除：base_tree 模式下 sha=None 即从远端树移除该路径
+    for f in DELETED:
+        entries.append({"path": f, "mode": "100644", "type": "blob", "sha": None})
+        print(f"[2] delete {f}")
 
     tree = api("POST", "/git/trees", {"base_tree": base_tree, "tree": entries})["sha"]
     print(f"[3] tree={tree[:10]}")
