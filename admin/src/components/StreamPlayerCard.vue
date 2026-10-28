@@ -41,7 +41,7 @@
             title="全屏"
             @click="goFullscreen"
           />
-          <el-button :icon="Close" size="small" circle title="关闭" @click="hide" />
+          <el-button :icon="Close" size="small" circle title="关闭" @click="hide()" />
         </div>
       </div>
     </template>
@@ -197,7 +197,15 @@ function onManualStop() {
   endStream()
 }
 
-defineExpose({ onStreamStatus, startManual, onManualStop, hide, isStreaming })
+defineExpose({
+  onStreamStatus,
+  startManual,
+  onManualStop,
+  hide,
+  isStreaming,
+  // 当前播放的设备 ID：父页切卡/切页时据此向设备下发 stream_stop（结束采集）
+  currentDeviceId: computed(() => deviceId.value),
+})
 
 const deviceName = computed(() => props.deviceNames[deviceId.value] || deviceId.value)
 
@@ -649,12 +657,16 @@ async function togglePip() {
     copyStylesTo(w)
     w.document.body.style.margin = '0'
     w.document.body.style.background = '#000'
-    // PiP 文档专属布局：容器铺满窗口（仅作用于 PiP 文档，搬回页面无副作用）
+    // PiP 文档专属布局：容器铺满窗口（仅作用于 PiP 文档，搬回页面无副作用）。
+    // 注意 !important 必须加：复制进来的 scoped 样式带 [data-v-xxx] 属性选择器
+    // （特异性 0,2,0），裸类名覆盖（0,1,0）会输——此前 .stream-video 的
+    // max-height:420px 在 PiP 里仍生效，内容铺不满窗口也不跟随缩放。
     const st = w.document.createElement('style')
     st.textContent = [
-      'body{display:flex;align-items:center;justify-content:center;overflow:hidden}',
-      '.stream-video-box{width:100vw;height:100vh}',
-      '.stream-video{width:100%;height:100%;max-height:100vh;object-fit:contain;border-radius:0}',
+      'body{margin:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000}',
+      '.stream-video-box{position:relative;width:100vw!important;height:100vh!important;max-height:none!important}',
+      '.stream-video{display:block;width:100%!important;height:100%!important;max-height:100vh!important;object-fit:contain!important;border-radius:0!important}',
+      '.volume-ctrl{bottom:12px!important;right:12px!important}',
     ].join('\n')
     w.document.head.appendChild(st)
     w.document.body.append(box)
@@ -716,14 +728,17 @@ function applyVolume() {
   }
 }
 
-function hide() {
+function hide(keepStopBlock = false) {
   // 用户主动关掉卡片：记住会话，自动兜底预连不再弹回（重新下发命令/
   // 真实新流开始时解除）。含已结束会话——切走即销毁，不该被 auto 拉回。
   userClosedKey = sessionKey || userClosedKey
   visible.value = false
   ended.value = true
   sessionKey = '' // 主动关闭清除会话冷却：用户立即重发同路命令不应被拦
-  manualStopKey = '' // 关闭卡片同时解除手动停止封锁（重新下发即可重启）
+  // keepStopBlock=true：父页「切走即停采集」路径——onManualStop 刚设置了
+  // 15min 封锁防 silentRefresh 自动重启，此处不能清掉；普通手动关闭仍解除
+  // 封锁（重新下发即可重启）。真实新流开始事件优先级更高，会清封锁。
+  if (!keepStopBlock) manualStopKey = ''
   stopAll()
 }
 

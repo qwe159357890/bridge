@@ -847,12 +847,34 @@ function selectCategory(key: string) {
   // 切换分类时若已选命令不属于该分类，则保留原选中（用户可能只是想浏览）
 }
 
+/** 切换命令卡片 / 离开命令页时：若正在实时播放（投屏/流式录像/录音），
+ *  立即**结束设备端采集**（2026-10-28 用户拍板，很重要——只断前端 WS 的话
+ *  设备会继续采集上行）+ 断本地全部流 WS + 保留 15min 封锁防自动重启。 */
+async function stopActiveCapture() {
+  const card = streamCard.value
+  if (!card?.isStreaming) return
+  const dev: string = card.currentDeviceId
+  card.onManualStop() // 同步：立即断本地全部流 WS（不等设备 is_end）
+  if (dev) {
+    try {
+      await sendCommand(dev, 'stream_stop', {})
+      ElMessage.success('切走时已自动停止设备端采集')
+    } catch {
+      /* 失败提示已由拦截器统一弹出 */
+    }
+  }
+  card.hide(true) // 销毁控件并保留停止封锁（hide 默认会清封锁，此处要留）
+}
+
 function selectCommand(cmd: CommandDef) {
   selectedCommand.value = cmd
-  // 切换命令卡片即销毁实时画面控件（2026-10-28 用户拍板）：断开全部连接、
-  // 控件从页面移除；hide 会记住会话，silentRefresh 的自动兜底不会把卡片弹回。
-  // 下次下发采集命令/真实新流开始时卡片才重新挂载。
-  if (streamCard.value?.isStreaming) streamCard.value?.hide()
+  // 切换命令卡片即销毁实时画面控件（2026-10-28 用户拍板）；若正在实时播放，
+  // 先结束设备端采集（stream_stop）再销毁——只断前端 WS 设备会继续采。
+  if (streamCard.value?.isStreaming) {
+    void stopActiveCapture()
+  } else {
+    streamCard.value?.hide()
+  }
   // 重置参数：按 default 或类型给初值
   for (const p of cmd.params) {
     if (p.default !== undefined && p.default !== null) {
@@ -1201,9 +1223,14 @@ onBeforeUnmount(() => {
   ws?.close()
 })
 
-/** 切走选项卡（离开本页）时关闭实时卡片：组件虽会随路由卸载自清 WS，此处显式兜底。 */
+/** 切走选项卡（离开本页）时：若正在实时播放，先向设备下发 stream_stop 结束
+ *  采集（异步不阻塞导航，请求已发出），再销毁卡片；未在播放则仅销毁。 */
 onBeforeRouteLeave(() => {
-  streamCard.value?.hide()
+  if (streamCard.value?.isStreaming) {
+    void stopActiveCapture()
+  } else {
+    streamCard.value?.hide()
+  }
 })
 </script>
 
