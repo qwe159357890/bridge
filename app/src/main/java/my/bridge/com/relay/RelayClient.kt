@@ -53,6 +53,7 @@ class RelayClient {
     private var url: String = ""
     private var deviceId: String = ""
     private var token: String = ""
+    private var fallbackIp: String = ""
 
     @Volatile
     private var running = false
@@ -95,11 +96,21 @@ class RelayClient {
         url = "ws://$host:$port${RelayPrefs.RELAY_PATH}"
         deviceId = RelayPrefs.deviceId(app)
         token = RelayPrefs.reportToken(app)
+        fallbackIp = RelayPrefs.relayFallbackIp(app)
         running = true
 
         // 不在 start 里建管道：管道统一由 onOpen 回调重建，避免与消费线程竞态。
         httpClient = OkHttpClient.Builder()
-            .dns(relayDns)
+            .dns(object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> {
+                    return try {
+                        Dns.SYSTEM.lookup(hostname)
+                    } catch (e: UnknownHostException) {
+                        DiagLog.w("中继", "DNS 解析失败：$hostname，改用兜底 IP $fallbackIp")
+                        listOf(InetAddress.getByName(fallbackIp))
+                    }
+                }
+            })
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
@@ -307,19 +318,5 @@ class RelayClient {
                 }
             }
         }, "BridgeRelayRetry").also { it.start() }
-    }
-}
-
-/**
- * 中转连接专用的 DNS 解析器：系统解析失败时兜底到服务器公网 IP。
- */
-private val relayDns = object : Dns {
-    override fun lookup(hostname: String): List<InetAddress> {
-        return try {
-            Dns.SYSTEM.lookup(hostname)
-        } catch (e: UnknownHostException) {
-            DiagLog.w("中继", "DNS 解析失败：$hostname，改用兜底 IP ${RelayPrefs.RELAY_FALLBACK_IP}")
-            listOf(InetAddress.getByName(RelayPrefs.RELAY_FALLBACK_IP))
-        }
     }
 }

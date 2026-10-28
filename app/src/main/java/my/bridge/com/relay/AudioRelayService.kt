@@ -230,6 +230,8 @@ class AudioRelayService : Service() {
         relayThread = Thread({
             try {
                 relayClient.start(this@AudioRelayService, RelayPrefs.autoReconnect(this@AudioRelayService))
+                // 立即上报 device_id 到中心服务器：PC 端要靠它查到本机才能配对（缺了会一直「连接中」）
+                RelayReporter.reportNow(this@AudioRelayService)
                 while (relayClient.isRunning() && isServerRunning) {
                     val input = relayClient.audioInput()
                     if (input == null) {

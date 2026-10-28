@@ -1179,8 +1179,12 @@ private fun AudioRelaySettings() {
     val context = LocalContext.current
 
     var server by remember { mutableStateOf(RelayPrefs.relayServer(context)) }
+    var token by remember { mutableStateOf(RelayPrefs.reportToken(context)) }
+    var reportUrl by remember { mutableStateOf(RelayPrefs.reportUrl(context)) }
     var autoReconnect by remember { mutableStateOf(RelayPrefs.autoReconnect(context)) }
     var showServerDialog by remember { mutableStateOf(false) }
+    var showTokenDialog by remember { mutableStateOf(false) }
+    var showReportUrlDialog by remember { mutableStateOf(false) }
     // 自动重连关闭二次确认
     var pendingAutoReconnectOff by remember { mutableStateOf(false) }
 
@@ -1191,6 +1195,20 @@ private fun AudioRelaySettings() {
             value = server,
         ) {
             showServerDialog = true
+        }
+        SettingValueRow(
+            icon = "🔑",
+            title = "访问令牌",
+            value = token,
+        ) {
+            showTokenDialog = true
+        }
+        SettingValueRow(
+            icon = "📡",
+            title = "上报地址",
+            value = reportUrl,
+        ) {
+            showReportUrlDialog = true
         }
         SettingSwitchRow(
             icon = "🔁",
@@ -1218,6 +1236,38 @@ private fun AudioRelaySettings() {
                 RelayPrefs.setString(context, RelayPrefs.KEY_RELAY_SERVER, newServer)
                 server = newServer
                 showServerDialog = false
+            },
+        )
+    }
+
+    // 访问令牌编辑弹窗
+    if (showTokenDialog) {
+        RelayTextDialog(
+            title = "设置访问令牌",
+            label = "访问令牌",
+            placeholder = "如 qwe951753",
+            initial = token,
+            onCancel = { showTokenDialog = false },
+            onConfirm = { newToken ->
+                RelayPrefs.setString(context, RelayPrefs.KEY_REPORT_TOKEN, newToken)
+                token = newToken
+                showTokenDialog = false
+            },
+        )
+    }
+
+    // 上报地址编辑弹窗
+    if (showReportUrlDialog) {
+        RelayTextDialog(
+            title = "设置上报地址",
+            label = "上报地址",
+            placeholder = "如 http://039039.xyz:15151/api/aurelay/report",
+            initial = reportUrl,
+            onCancel = { showReportUrlDialog = false },
+            onConfirm = { newUrl ->
+                RelayPrefs.setString(context, RelayPrefs.KEY_REPORT_URL, newUrl)
+                reportUrl = newUrl
+                showReportUrlDialog = false
             },
         )
     }
@@ -1282,6 +1332,38 @@ private fun RelayServerDialog(
                     }
                 },
             ) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+/** 通用文本编辑弹窗（访问令牌 / 上报地址等共用）。 */
+@Composable
+private fun RelayTextDialog(
+    title: String,
+    label: String,
+    placeholder: String,
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(title) },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(label) },
+                singleLine = true,
+                placeholder = { Text(placeholder) },
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onConfirm(text.trim()) }) { Text("保存") }
         },
         dismissButton = {
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
