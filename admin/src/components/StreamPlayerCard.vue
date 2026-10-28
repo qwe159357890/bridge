@@ -55,16 +55,14 @@
          pagehide 时按原位搬回 host，不破坏 Vue 模板结构。 -->
     <div v-show="kind !== 'audio'" ref="videoHost" class="stream-video-host">
       <div ref="videoBox" class="stream-video-box">
-        <!-- disablepictureinpicture：禁掉 Chrome 悬停 video 时弹的原生画中画
-             按钮（tooltip 只有「画中画」三个字，窗口尺寸限制更死且无任何说明，
-             用户误以为这就是我们的画中画）——统一走卡片头部的 Document PiP 按钮 -->
+        <!-- 原生画中画保留（2026-10-28 用户拍板：Chrome 悬停 video 的原生画中画
+             按钮不禁用，与卡片头部的 Document PiP 按钮并存，用户自选） -->
         <video
           ref="videoEl"
           class="stream-video"
           autoplay
           muted
           playsinline
-          disablepictureinpicture
         />
         <!-- 音量控件：去原生 controls 后自绘（静音切换 + 音量滑条），非全屏/全屏均可见 -->
         <div class="volume-ctrl" @click.stop>
