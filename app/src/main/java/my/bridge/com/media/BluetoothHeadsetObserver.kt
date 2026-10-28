@@ -44,6 +44,19 @@ import javax.inject.Singleton
  * 声明了对应 ACTION（如 ACTION_PLAY_PAUSE）时才把该媒体按键路由给它。本类设置
  * 一个静态 PlaybackState（含 PLAY/PAUSE/PLAY_PAUSE/NEXT/PREV/STOP 等 action）。
  *
+ * **关键 3（本版核心，实现「无论何时都正常」）：激进焦点保持 + 周期自愈巡检**。
+ * 用户要求「无论当前运行什么 App，Bridge 都必须能拿到耳机按键，不能依赖结束
+ * Aurelay」。因此本类不再「被动等待焦点回调」，而是：
+ *   1. 焦点变化回调里，`AUDIOFOCUS_LOSS` / `LOSS_TRANSIENT` / `CAN_DUCK` 一律
+ *      视为「失去焦点」，立即（或极短延迟）重新请求持久焦点，绝不主动 abandon；
+ *   2. 后台一个周期巡检协程（默认 2 秒）持续核对 `hasFocus` 状态，一旦发现焦点
+ *      被其它 App 静默抢走（例如 Aurelay 播放时请求焦点、Bridge 未收到明确回调、
+ *      或应用切前台/切后台导致焦点被系统回收），立即重新抢占。
+ *  这样 Bridge 会像一台「永远在播放」的媒体设备一样，持续跟其它 App 争夺焦点，
+ *  从而尽量保证任何时候按耳机键都能路由到 Bridge。代价：会频繁打断 Aurelay 等
+ *  其它播放器，且焦点可能反复易主（这是 Android 焦点机制的固有限制，无法做到
+ *  绝对垄断，只能「尽力而为 + 快速抢回」）。
+ *
  * 收到按键后：① Toast 展示动作；② 经 WS 业务通道上报 ``media_button`` 事件给
  * 服务端（供服务端日志记录 + 管理后台实时展示，便于远程排查「收没收到按键」）。
  *
@@ -51,8 +64,10 @@ import javax.inject.Singleton
  * 1. 仅能收到「标准媒体键」：播放/暂停/播放暂停切换/上一首/下一首/快进/快退/
  *    停止/录音等。耳机的「触摸滑动（音量触控条）」「佩戴检测」「单击/双击手势」
  *    等是耳机私有协议，Android 不开放，收不到。
- * 2. 持有持久焦点会打断其它 App 播放；其它 App 请求焦点时 Bridge 会收到
- *    AUDIOFOCUS_LOSS，本类会自动重新请求以尽量保持接收能力。
+ * 2. 持有持久焦点会打断其它 App 播放；Android 的音频焦点是「一对一」的，系统在
+ *    任意时刻只会把媒体按键路由给一个焦点持有者。本类通过「快速重抢」尽量保证
+ *    Bridge 始终是那个持有者，但无法做到 100% 垄断（其它 App 请求焦点时焦点会
+ *    短暂易主，直到本类下一轮巡检/回调把它抢回）。
  */
 @Singleton
 class BluetoothHeadsetObserver @Inject constructor(
@@ -63,7 +78,15 @@ class BluetoothHeadsetObserver @Inject constructor(
     private var mediaSession: MediaSession? = null
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
+    @Volatile
     private var hasFocus = false
+
+    /** 是否正在请求焦点（防止重入/重复并发请求导致焦点抖动）。 */
+    @Volatile
+    private var focusRequestInFlight = false
+
+    /** 巡检间隔（毫秒）。 */
+    private val watchdogIntervalMs = 2000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -145,6 +168,8 @@ class BluetoothHeadsetObserver @Inject constructor(
             )
             // 请求持久音频焦点：这是稳定收到媒体按键的前提
             requestPersistentFocus()
+            // 启动焦点自愈巡检：周期核对 hasFocus，被抢走就立即重抢，保证「无论何时」都尽量持有
+            startFocusWatchdog()
             // 监听 WS 握手完成：握手后再补报 started 状态（onCreate 里直接上报会因
             // handshakeReady=false 被 sendBusinessMessage 静默丢弃，导致服务端看不到）
             scope.launch {
@@ -178,36 +203,37 @@ class BluetoothHeadsetObserver @Inject constructor(
         }
     }
 
-    /** 请求持久音频焦点（成为媒体按键接收者，持续持有）。 */
+    /** 请求持久音频焦点（幂等，可被巡检/回调反复调用；成为媒体按键接收者，持续持有）。 */
     private fun requestPersistentFocus() {
         val am = audioManager ?: return
+        if (focusRequestInFlight) {
+            Timber.d("BluetoothHeadsetObserver：焦点请求进行中，跳过本次")
+            return
+        }
+        focusRequestInFlight = true
         try {
             val focusResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                // 复用同一个 focusRequest，避免每次 new 覆盖旧 listener 导致回调失效
+                val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
+                    // 接受延迟焦点：当 Aurelay 等 App 正在播放时，系统会返回 DELAYED，
+                    // 只有 setAcceptsDelayedFocusGain(true) 才能在对方停止播放后自动获得焦点
+                    .setAcceptsDelayedFocusGain(true)
                     .setOnAudioFocusChangeListener { change ->
                         Timber.i("BluetoothHeadsetObserver：音频焦点变化 %d", change)
                         when (change) {
                             AudioManager.AUDIOFOCUS_GAIN -> hasFocus = true
-                            AudioManager.AUDIOFOCUS_LOSS -> {
-                                // 永久失去焦点（如被电话/系统占用）：放弃，等下次 start 或用户操作再请求
-                                hasFocus = false
-                                abandonFocus()
-                            }
+                            // 任何形式的失去焦点都视为「被抢走」，立即重新抢占，绝不主动 abandon
+                            AudioManager.AUDIOFOCUS_LOSS,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                                // 暂时失去焦点（其它 App 播放）：标记失去，稍后尝试重新抢占
                                 hasFocus = false
-                                // 短暂延迟后重新请求，尽量保持接收能力
-                                scope.launch {
-                                    kotlinx.coroutines.delay(1000)
-                                    if (mediaSession != null) requestPersistentFocus()
-                                }
+                                scheduleRefocus()
                             }
                         }
                     }
@@ -221,17 +247,11 @@ class BluetoothHeadsetObserver @Inject constructor(
                         Timber.i("BluetoothHeadsetObserver：音频焦点变化 %d", change)
                         when (change) {
                             AudioManager.AUDIOFOCUS_GAIN -> hasFocus = true
-                            AudioManager.AUDIOFOCUS_LOSS -> {
-                                hasFocus = false
-                                abandonFocus()
-                            }
+                            AudioManager.AUDIOFOCUS_LOSS,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                                 hasFocus = false
-                                scope.launch {
-                                    kotlinx.coroutines.delay(1000)
-                                    if (mediaSession != null) requestPersistentFocus()
-                                }
+                                scheduleRefocus()
                             }
                         }
                     },
@@ -244,8 +264,48 @@ class BluetoothHeadsetObserver @Inject constructor(
                 "BluetoothHeadsetObserver：请求持久焦点结果=%d（granted=%s）",
                 focusResult, hasFocus,
             )
+            // 延迟授予：说明有其它 App 正在播放（如 Aurelay），系统会在其停止后回调
+            // AUDIOFOCUS_GAIN。此时 hasFocus 仍为 false，交给巡检周期继续尝试即可。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                focusResult == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
+            ) {
+                Timber.i("BluetoothHeadsetObserver：焦点延迟授予，等待其它播放器释放")
+            }
         } catch (e: Exception) {
             Timber.w(e, "BluetoothHeadsetObserver 请求音频焦点失败")
+            hasFocus = false
+        } finally {
+            focusRequestInFlight = false
+        }
+    }
+
+    /** 失去焦点后短延迟重新抢占（延迟是为了避开其它 App 正在播放导致的瞬时竞争）。 */
+    private fun scheduleRefocus() {
+        if (mediaSession == null) return
+        scope.launch {
+            kotlinx.coroutines.delay(300)
+            requestPersistentFocus()
+        }
+    }
+
+    /**
+     * 焦点自愈巡检：周期核对 `hasFocus`，一旦发现焦点丢失（例如被 Aurelay 等其它
+     * App 静默抢走、应用切前后台导致系统回收、或请求返回 DELAYED/失败），立即重抢。
+     * 这是「无论什么时候都正常」的最后一道兜底。
+     */
+    private fun startFocusWatchdog() {
+        scope.launch {
+            while (mediaSession != null) {
+                try {
+                    if (!hasFocus) {
+                        Timber.d("BluetoothHeadsetObserver：巡检发现焦点丢失，重新抢占")
+                        requestPersistentFocus()
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "BluetoothHeadsetObserver 巡检异常")
+                }
+                kotlinx.coroutines.delay(watchdogIntervalMs)
+            }
         }
     }
 

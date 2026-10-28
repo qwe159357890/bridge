@@ -56,3 +56,7 @@ server/data/media/
 # ADB platform-tools（17MB 下载的二进制，获取与放置说明见 docs/server/design.md §20）
 tools/adb/
 tools/debug/.pwenv/
+# 服务端运行时配置/数据（report_config_store 等生成）
+server/data/report_config.json
+# 临时诊断产物
+tools/debug/diag_page.png
