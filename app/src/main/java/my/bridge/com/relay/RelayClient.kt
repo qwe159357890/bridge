@@ -58,6 +58,12 @@ class RelayClient {
     @Volatile
     private var running = false
 
+    // 会话代次：每次 start() 自增。所有异步回调（onOpen/onMessage/onFailure/onClosed）
+    // 都携带发起连接时的代次，回调落地时若代次已过期则丢弃，避免「停止→启动」后
+    // 旧连接的残留回调污染新会话状态。
+    @Volatile
+    private var generation = 0L
+
     // 是否允许断线自动重连（由服务层从 RelayPrefs 读入；关闭后断线即彻底停止）
     @Volatile
     private var autoReconnect = true
@@ -84,6 +90,8 @@ class RelayClient {
     @Synchronized
     fun start(context: Context, autoReconnect: Boolean = true) {
         if (running) return
+        // 会话代次自增：作废所有旧连接的残留回调
+        generation++
         this.autoReconnect = autoReconnect
         val app = context.applicationContext
         val server = RelayPrefs.relayServer(app)
@@ -124,6 +132,8 @@ class RelayClient {
     fun stop() {
         if (!running) return
         running = false
+        // 会话代次自增：作废所有在途回调（含 onFailure/onClosed 的重连判断）
+        generation++
         closeWebSocket()
         closePipe()
         httpClient = null
@@ -174,10 +184,15 @@ class RelayClient {
     /** 建立一次 WebSocket 连接。 */
     private fun connectOnce() {
         val client = httpClient ?: return
+        val myGen = generation
         notifyState(State.CONNECTING, "正在连接中转服务器")
         val request = Request.Builder().url(url).build()
         client.newWebSocket(request, object : WebSocketListener() {
+            /** 当前回调是否仍属于本代次（过期则丢弃，防止污染新会话）。 */
+            private fun isStale(): Boolean = !running || generation != myGen
+
             override fun onOpen(socket: WebSocket, response: Response) {
+                if (isStale()) { try { socket.close(1000, "stale") } catch (e: Exception) {}; return }
                 webSocket = socket
                 lastAliveAt = System.currentTimeMillis()
                 rebuildPipe()
@@ -191,14 +206,14 @@ class RelayClient {
             }
 
             override fun onMessage(socket: WebSocket, text: String) {
+                if (isStale()) return
                 lastAliveAt = System.currentTimeMillis()
                 handleControl(text)
             }
 
             override fun onMessage(socket: WebSocket, bytes: okio.ByteString) {
+                if (isStale()) return
                 lastAliveAt = System.currentTimeMillis()
-                // 必须先判 running：stop() 会把管道置空，但已排队的数据帧仍会回调到这里。
-                if (!running) return
                 val data = bytes.toByteArray()
                 try {
                     val out = synchronized(this@RelayClient) { pipeOut }
@@ -215,6 +230,7 @@ class RelayClient {
             }
 
             override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
+                if (isStale()) return
                 DiagLog.e("中继", "中转连接异常：${t.message}", t)
                 notifyState(State.ERROR, "连接异常：${t.message ?: "未知"}")
                 webSocket = null
@@ -223,6 +239,7 @@ class RelayClient {
             }
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+                if (isStale()) return
                 DiagLog.i("中继", "中转连接已关闭：code=$code reason=$reason")
                 webSocket = null
                 closePipe()
@@ -300,11 +317,12 @@ class RelayClient {
             DiagLog.i("中继", "自动重连已关闭，断线后不重连")
             return
         }
+        val myGen = generation
         val existing = retryThread
         if (existing != null && existing.isAlive) return
         retryThread = Thread({
             var attempt = 0
-            while (running && webSocket == null) {
+            while (running && generation == myGen && webSocket == null) {
                 val index = attempt.coerceAtMost(RelayProtocol.BACKOFF_MS.size - 1)
                 val delay = RelayProtocol.BACKOFF_MS[index]
                 attempt++
@@ -313,7 +331,7 @@ class RelayClient {
                 } catch (e: InterruptedException) {
                     break
                 }
-                if (!running || webSocket != null) break
+                if (!running || generation != myGen || webSocket != null) break
                 DiagLog.i("中继", "第 $attempt 次重连")
                 connectOnce()
                 try {

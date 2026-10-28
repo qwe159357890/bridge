@@ -228,6 +228,13 @@ class AudioRelayService : Service() {
 
     private fun startRelay() {
         if (isServerRunning) return
+        // 兜底：若上次停止遗留的消费线程还在，先终结，避免新旧线程并发消费同一管道
+        val oldThread = relayThread
+        if (oldThread != null && oldThread.isAlive) {
+            DiagLog.w("中继", "发现上一次遗留的消费线程，先终结")
+            oldThread.interrupt()
+            relayThread = null
+        }
         isServerRunning = true
         relayState = RelayClient.State.CONNECTING
         stateListener?.onState(RelayClient.State.CONNECTING, "正在连接中转服务器")
@@ -273,7 +280,11 @@ class AudioRelayService : Service() {
     }
 
     private fun stopRelay() {
+        // 先置停止标记，让所有读流线程（readHeader/readFully/scanRelayMagic）立即退出
         isServerRunning = false
+        // 先解绑 listener：停止阶段不再让 RelayClient 的状态回调刷新通知/UI，
+        // 避免 stop() 内部 notifyState(IDLE) 把中继通知重新弹出来（最终仍会被移除）。
+        relayClient.listener = null
         try {
             relayClient.stop()
         } catch (e: Exception) {

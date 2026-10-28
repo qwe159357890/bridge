@@ -98,12 +98,16 @@ fun AudioRelayPage() {
         }
     }
 
-    // 周期刷新运行态（服务在后台可能被系统重启）
+    // 仅当页面重新进入、服务仍在运行时同步一次运行态；
+    // 之后完全由监听器驱动，避免周期轮询覆盖监听器刚更新的状态值。
     LaunchedEffect(Unit) {
-        while (true) {
-            running = AudioRelayService.isRunning()
-            state = AudioRelayService.currentState()
-            kotlinx.coroutines.delay(1000)
+        running = AudioRelayService.isRunning()
+        state = AudioRelayService.currentState()
+        // 停止接收后清空波形与接收标记，避免残留上次的波形形状
+        if (!running) {
+            levels = List(24) { 0f }
+            receiving = false
+            stateDetail = ""
         }
     }
 
@@ -197,10 +201,18 @@ fun AudioRelayPage() {
                 onClick = {
                     if (running) {
                         AudioRelayService.stop(context)
+                        // 本地立即收敛为停止态，避免依赖异步回调
                         running = false
+                        state = RelayClient.State.IDLE
+                        stateDetail = "已停止"
+                        levels = List(24) { 0f }
+                        receiving = false
                     } else {
                         AudioRelayService.start(context)
                         running = true
+                        state = RelayClient.State.CONNECTING
+                        stateDetail = "正在连接中转服务器"
+                        receiving = false
                     }
                 },
                 modifier = Modifier
