@@ -11,9 +11,11 @@ const router = createRouter({
       meta: { title: '登录' },
     },
     {
+      // 根路径不配 redirect：由 beforeEach 守卫在首跳时恢复「上次停留的 tab」
+      // （无记忆回退 /dashboard）。若配置 redirect，守卫看到的 to 已是目标页，
+      // 无法区分「打开后台首页」与「刷新/直达具体页面」。
       path: '/',
       component: () => import('@/layout/index.vue'),
-      redirect: '/dashboard',
       children: [
         {
           path: 'dashboard',
@@ -95,7 +97,9 @@ function savedTabUsable(saved: string | null): saved is string {
   }
 }
 
-// 登录守卫：未登录跳登录页；登录后/首次落地默认页时恢复上次停留的 tab
+// 登录守卫：未登录跳登录页；**首次导航**落地默认页时恢复上次停留的 tab
+// （_from.matched.length===0 表示刷新/新开的首跳；不能对所有 /dashboard 导航
+//  恢复——否则用户主动点「仪表盘」菜单会被永久弹回记忆页，2026-10-28 实测踩坑）
 router.beforeEach((to, _from, next) => {
   const token = getToken()
   if (to.path !== '/login' && !token) {
@@ -104,10 +108,11 @@ router.beforeEach((to, _from, next) => {
     // 登录页访问但已登录：恢复上次 tab（无记忆回退仪表盘）
     const saved = localStorage.getItem(LAST_TAB_KEY)
     next(savedTabUsable(saved) ? saved : '/dashboard')
-  } else if (to.path === '/' || to.path === '/dashboard') {
-    // 刷新/新开落在默认落地页时恢复；用户主动点其它菜单（to 非默认页）不拦
+  } else if (to.path === '/' && _from.matched.length === 0) {
+    // 仅首跳落地根路径 / 时恢复（打开管理后台的入口）；刷新/直达具体页面
+    // （含 /dashboard）以 URL 为准留在原地，不弹回记忆页
     const saved = localStorage.getItem(LAST_TAB_KEY)
-    next(saved && saved !== to.path && savedTabUsable(saved) ? saved : to.path)
+    next(saved && savedTabUsable(saved) ? saved : '/dashboard')
   } else {
     next()
   }
