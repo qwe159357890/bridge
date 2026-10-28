@@ -323,7 +323,6 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     # 2.3 记录客户端本机全部 IP：adb 匹配「任一命中」+ 后台展示交叉确认
     if hello.ips:
         conn.ips = [ip for ip in hello.ips if ip][:16]
-
     # 3. 登记连接（顶旧）
     try:
         replaced = await manager.register(device_id, conn)
@@ -352,7 +351,10 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     if replaced is not None:
         await manager.notify_replaced(replaced, "replaced")
 
-    logger.info("device %s 连接建立成功", device_id)
+    logger.info(
+        "device %s 连接建立成功（version=%s）",
+        device_id, hello.app_version or "unknown",
+    )
 
     # 离线原因追踪：主循环里区分各种断开原因，供上下线记录用
     offline_reason = "closed"

@@ -11,8 +11,13 @@ import android.os.Build
 import android.view.KeyEvent
 import com.google.gson.JsonObject
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import my.bridge.com.interact.ToastHelper
+import my.bridge.com.BuildConfig
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -53,6 +58,8 @@ class BluetoothHeadsetObserver @Inject constructor(
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
     private var hasFocus = false
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** 注册 MediaSession 并请求瞬时音频焦点（应用启动时调用一次）。 */
     fun start() {
@@ -122,9 +129,15 @@ class BluetoothHeadsetObserver @Inject constructor(
             )
             // 请求瞬时音频焦点：这是收到媒体按键的前提
             requestTransientFocus()
-            // 上报启动状态：让服务端日志能确认 MediaSession 是否激活、焦点是否授予，
-            // 便于远程排查「蓝牙按键收不到」问题
-            reportToServer(-1, "started")
+            // 监听 WS 握手完成：握手后再补报 started 状态（onCreate 里直接上报会因
+            // handshakeReady=false 被 sendBusinessMessage 静默丢弃，导致服务端看不到）
+            scope.launch {
+                webSocketClient.handshakeReady.collect { ready ->
+                    if (ready) {
+                        reportToServer(-1, "started")
+                    }
+                }
+            }
         } catch (e: Exception) {
             Timber.w(e, "BluetoothHeadsetObserver 注册失败")
             mediaSession = null
@@ -140,6 +153,7 @@ class BluetoothHeadsetObserver @Inject constructor(
                 addProperty("action", label)
                 addProperty("has_focus", hasFocus)
                 addProperty("session_active", mediaSession?.isActive == true)
+                addProperty("app_version", BuildConfig.VERSION_NAME)
             }
             val sent = webSocketClient.sendBusinessMessage(data)
             Timber.i("蓝牙按键上报：keyCode=%d label=%s sent=%s", keyCode, label, sent)

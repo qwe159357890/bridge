@@ -59,6 +59,8 @@ class BridgeWebSocketClient(
     private val uptimeSecondsProvider: () -> Long? = { null },
     /** 本机所有局域网 IPv4 列表提供者（供服务端 adb 匹配与用户交叉确认；缺省为空）。 */
     private val localIpsProvider: () -> List<String> = { emptyList() },
+    /** 客户端版本号提供者（写入 hello，供服务端日志/后台展示；缺省为空）。 */
+    private val appVersionProvider: () -> String? = { null },
     private val onBeforeHello: (suspend () -> Unit)? = null,
     private val listener: WsMessageListener? = null,
     private val commandExecutors: Map<String, CommandExecutor> = emptyMap(),
@@ -232,6 +234,8 @@ class BridgeWebSocketClient(
             if (ips.isNotEmpty()) {
                 add("ips", gson.toJsonTree(ips))
             }
+            // 上报客户端版本号：服务端日志/后台可直接确认设备运行版本，避免版本怀疑
+            appVersionProvider()?.let { addProperty("app_version", it) }
         }
         val envelope = WsEnvelope.make(WsEnvelope.TYPE_HELLO, data)
         webSocket.send(envelope.toJson(gson))

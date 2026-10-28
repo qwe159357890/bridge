@@ -69,6 +69,8 @@ object NetworkModule {
             },
             // 上报本机全部 IPv4（供服务端 adb 匹配任一命中 + 后台展示供用户交叉确认）
             localIpsProvider = ::collectLocalIpv4Addresses,
+            // 上报客户端版本号：服务端日志/后台可直接确认设备运行版本，避免版本怀疑
+            appVersionProvider = { my.bridge.com.BuildConfig.VERSION_NAME },
             // 每次连接成功、发 hello 前先注册设备（幂等）：服务端重启后注册表清空，
             // 重连时借此自动补注册，保证「在线」与「已注册」一致。
             // 直接读 deviceStore（而非 identity），避免 provider 惰性初始化时序问题。
