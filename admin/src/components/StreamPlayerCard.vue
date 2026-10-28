@@ -13,14 +13,22 @@
           <el-button v-if="ended && recorded.length > 0" size="small" type="primary" @click="download">
             下载（{{ kind === 'audio' ? '.aac' : '.flv' }}）
           </el-button>
-          <el-button
-            v-if="kind !== 'audio' && pipSupported"
-            :icon="Monitor"
-            size="small"
-            circle
-            title="画中画窗口（可拖拽调整大小，受浏览器限制：最大≈屏幕80%、最小300×300）"
-            @click="togglePip"
-          />
+          <!-- 画中画按钮用 el-tooltip（原生 title 悬停 1s 才出现且无样式，用户
+               反馈注意不到）；限制说明写在这里，200ms 快速弹出 -->
+          <el-tooltip
+            placement="top-end"
+            effect="dark"
+            popper-class="pip-limit-tip"
+            content="画中画窗口：拖拽边角可调大小。浏览器限制：最大约屏幕80%、最小300×300（引擎硬限制无法突破）；需要更大画面请点旁边「全屏」按钮"
+          >
+            <el-button
+              v-if="kind !== 'audio' && pipSupported"
+              :icon="Monitor"
+              size="small"
+              circle
+              @click="togglePip"
+            />
+          </el-tooltip>
           <el-button
             v-if="kind !== 'audio'"
             :icon="FullScreen"
@@ -840,5 +848,14 @@ onBeforeUnmount(stopAll)
   color: #909399;
   line-height: 1.5;
   margin-top: 8px;
+}
+</style>
+
+<!-- 画中画按钮 tooltip：teleport 到 body，scoped 不生效，须非 scoped -->
+<style>
+.pip-limit-tip.el-popper {
+  max-width: 300px;
+  white-space: normal;
+  line-height: 1.55;
 }
 </style>
