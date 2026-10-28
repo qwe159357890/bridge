@@ -40,10 +40,9 @@
         </el-menu-item>
         <el-menu-item index="/sms" title="短信">
           <el-badge
-            v-if="unreadSms > 0"
             :value="unreadSms"
             :max="99"
-            :hidden="false"
+            :hidden="unreadSms === 0"
             class="sms-badge"
           >
             <el-icon><ChatDotRound /></el-icon>
@@ -98,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { Fold, Expand } from '@element-plus/icons-vue'
@@ -250,6 +249,16 @@ onMounted(() => {
   }
   connectWS()
 })
+
+// 进入短信页即视为「已读」：清零未读角标（无需刷新页面）
+watch(
+  () => route.path,
+  (path) => {
+    if (path === '/sms') {
+      unreadSms.value = 0
+    }
+  },
+)
 
 onBeforeUnmount(() => {
   if (reconnectTimer) window.clearTimeout(reconnectTimer)

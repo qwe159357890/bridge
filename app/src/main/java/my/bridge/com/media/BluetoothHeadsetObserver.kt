@@ -6,9 +6,12 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Build
 import android.view.KeyEvent
+import com.google.gson.JsonObject
 import dagger.hilt.android.qualifiers.ApplicationContext
+import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import my.bridge.com.interact.ToastHelper
 import timber.log.Timber
 import javax.inject.Inject
@@ -23,14 +26,16 @@ import javax.inject.Singleton
  * （API 21+，minSdk 24 满足，零第三方依赖）并在
  * [MediaSession.Callback.onMediaButtonEvent] 里解析按键。
  *
- * **关键：必须请求音频焦点**。Android 的媒体按键（AVRCP）只会路由给「当前持有
+ * **关键 1：必须请求音频焦点**。Android 的媒体按键（AVRCP）只会路由给「当前持有
  * 音频焦点的 MediaSession」。只 setActive(true) 而不 requestAudioFocus 时，媒体
- * 焦点在别的 App（音乐/视频播放器）手里，Bridge 永远收不到按键——这是早期
- * 版本「收不到任何通知」的根因。
+ * 焦点在别的 App 手里，Bridge 永远收不到按键。
  *
- * 本实现用 [AudioManager.AUDIOFOCUS_GAIN_TRANSIENT]（瞬时焦点）：请求成功后
- * 立即成为媒体按键接收者，收到一次按键后马上 abandonAudioFocus 把焦点还回去，
- * 对其它播放器的干扰降到最低（短暂抢占，不长期霸占）。
+ * **关键 2：必须设置 PlaybackState**。系统只在 MediaSession 的 [PlaybackState]
+ * 声明了对应 ACTION（如 ACTION_PLAY_PAUSE）时才把该媒体按键路由给它。本类设置
+ * 一个静态 PlaybackState（含 PLAY/PAUSE/PLAY_PAUSE/NEXT/PREV/STOP 等 action）。
+ *
+ * 收到按键后：① Toast 展示动作；② 经 WS 业务通道上报 ``media_button`` 事件给
+ * 服务端（供服务端日志记录 + 管理后台实时展示，便于远程排查「收没收到按键」）。
  *
  * 局限（如实说明）：
  * 1. 仅能收到「标准媒体键」：播放/暂停/播放暂停切换/上一首/下一首/快进/快退/
@@ -41,6 +46,7 @@ import javax.inject.Singleton
 @Singleton
 class BluetoothHeadsetObserver @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val webSocketClient: BridgeWebSocketClient,
 ) {
 
     private var mediaSession: MediaSession? = null
@@ -76,23 +82,37 @@ class BluetoothHeadsetObserver @Inject constructor(
                             KeyEvent.keyCodeToString(keyEvent.keyCode),
                             keyEvent.action,
                         )
-                        // 只处理按下（ACTION_DOWN），避免重复 Toast
+                        // 只处理按下（ACTION_DOWN），避免重复 Toast/上报
                         if (keyEvent.action != KeyEvent.ACTION_DOWN) {
                             return super.onMediaButtonEvent(mediaButtonIntent)
                         }
                         val label = labelFor(keyEvent.keyCode)
                         if (label != null) {
                             showToast("检测到蓝牙耳机按键：$label")
+                            reportToServer(keyEvent.keyCode, label)
                         } else {
                             Timber.d("BluetoothHeadsetObserver：忽略非媒体键 keyCode=%d", keyEvent.keyCode)
                         }
-                        // 收到按键后立即放弃焦点，把媒体焦点还给其它播放器
-                        abandonFocus()
                         // 返回 true 表示已消费按键，避免继续分发给其它媒体应用
                         return label != null || super.onMediaButtonEvent(mediaButtonIntent)
                     }
                 })
                 setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
+                // 关键 2：声明可处理的媒体 action，系统才把对应按键路由到本会话
+                setPlaybackState(
+                    PlaybackState.Builder()
+                        .setActions(
+                            PlaybackState.ACTION_PLAY
+                                or PlaybackState.ACTION_PAUSE
+                                or PlaybackState.ACTION_PLAY_PAUSE
+                                or PlaybackState.ACTION_SKIP_TO_NEXT
+                                or PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                                or PlaybackState.ACTION_FAST_FORWARD
+                                or PlaybackState.ACTION_REWIND
+                                or PlaybackState.ACTION_STOP
+                        )
+                        .build()
+                )
                 isActive = true
             }
             mediaSession = session
@@ -102,9 +122,29 @@ class BluetoothHeadsetObserver @Inject constructor(
             )
             // 请求瞬时音频焦点：这是收到媒体按键的前提
             requestTransientFocus()
+            // 上报启动状态：让服务端日志能确认 MediaSession 是否激活、焦点是否授予，
+            // 便于远程排查「蓝牙按键收不到」问题
+            reportToServer(-1, "started")
         } catch (e: Exception) {
             Timber.w(e, "BluetoothHeadsetObserver 注册失败")
             mediaSession = null
+        }
+    }
+
+    /** 上报媒体按键事件到服务端（供远程排查 + 后台展示）。 */
+    private fun reportToServer(keyCode: Int, label: String) {
+        try {
+            val data = JsonObject().apply {
+                addProperty("event", "media_button")
+                addProperty("key_code", keyCode)
+                addProperty("action", label)
+                addProperty("has_focus", hasFocus)
+                addProperty("session_active", mediaSession?.isActive == true)
+            }
+            val sent = webSocketClient.sendBusinessMessage(data)
+            Timber.i("蓝牙按键上报：keyCode=%d label=%s sent=%s", keyCode, label, sent)
+        } catch (e: Exception) {
+            Timber.w(e, "蓝牙按键上报失败")
         }
     }
 
