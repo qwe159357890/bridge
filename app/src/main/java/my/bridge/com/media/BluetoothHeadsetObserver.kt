@@ -3,7 +3,6 @@ package my.bridge.com.media
 import android.content.Context
 import android.content.Intent
 import android.media.session.MediaSession
-import android.media.session.PlaybackState
 import android.view.KeyEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
 import my.bridge.com.interact.ToastHelper
@@ -40,18 +39,31 @@ class BluetoothHeadsetObserver @Inject constructor(
 
     /** 注册 MediaSession 并开始监听媒体按键（应用启动时调用一次）。 */
     fun start() {
-        if (mediaSession != null) return
+        if (mediaSession != null) {
+            Timber.i("BluetoothHeadsetObserver.start：已注册，跳过")
+            return
+        }
         try {
             val session = MediaSession(context, "BridgeMediaSession").apply {
                 setCallback(object : MediaSession.Callback() {
                     override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
                         val intent = mediaButtonIntent
+                        Timber.d("BluetoothHeadsetObserver.onMediaButtonEvent：action=%s", intent.action)
                         if (intent.action != Intent.ACTION_MEDIA_BUTTON) {
                             return super.onMediaButtonEvent(mediaButtonIntent)
                         }
                         val keyEvent =
                             intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
-                                ?: return super.onMediaButtonEvent(mediaButtonIntent)
+                        if (keyEvent == null) {
+                            Timber.w("BluetoothHeadsetObserver：媒体按键事件缺少 EXTRA_KEY_EVENT")
+                            return super.onMediaButtonEvent(mediaButtonIntent)
+                        }
+                        Timber.i(
+                            "BluetoothHeadsetObserver：收到媒体按键 keyCode=%d(%s) action=%d",
+                            keyEvent.keyCode,
+                            KeyEvent.keyCodeToString(keyEvent.keyCode),
+                            keyEvent.action,
+                        )
                         // 只处理按下（ACTION_DOWN），避免重复 Toast
                         if (keyEvent.action != KeyEvent.ACTION_DOWN) {
                             return super.onMediaButtonEvent(mediaButtonIntent)
@@ -59,17 +71,24 @@ class BluetoothHeadsetObserver @Inject constructor(
                         val label = labelFor(keyEvent.keyCode)
                         if (label != null) {
                             showToast("检测到蓝牙耳机按键：$label")
+                        } else {
+                            Timber.d("BluetoothHeadsetObserver：忽略非媒体键 keyCode=%d", keyEvent.keyCode)
                         }
                         // 返回 true 表示已消费按键，避免继续分发给其它媒体应用
                         return label != null || super.onMediaButtonEvent(mediaButtonIntent)
                     }
                 })
-                // 标记本会话可处理媒体按键（FLAG_HANDLES_MEDIA_BUTTONS 等价能力）；
-                // 不 setActive 抢焦点——最小验证，不干扰其它 App 正常播放
+                // 标记本会话可处理媒体按键
                 setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
+                // 最小验证：setActive(true) 让会话进入活动态，媒体按键才可能路由到本会话；
+                // 不额外调用 requestAudioFocus 抢焦点（不打断其它 App 播放）
+                isActive = true
             }
             mediaSession = session
-            Timber.i("BluetoothHeadsetObserver：MediaSession 已注册（媒体按键监听开启）")
+            Timber.i(
+                "BluetoothHeadsetObserver：MediaSession 已注册并激活（isActive=%s）",
+                session.isActive,
+            )
         } catch (e: Exception) {
             Timber.w(e, "BluetoothHeadsetObserver 注册失败")
             mediaSession = null
@@ -80,7 +99,9 @@ class BluetoothHeadsetObserver @Inject constructor(
     fun stop() {
         try {
             mediaSession?.release()
-        } catch (_: Exception) {
+            Timber.i("BluetoothHeadsetObserver.stop：MediaSession 已释放")
+        } catch (e: Exception) {
+            Timber.w(e, "BluetoothHeadsetObserver 释放失败")
         }
         mediaSession = null
     }
@@ -102,6 +123,7 @@ class BluetoothHeadsetObserver @Inject constructor(
     private fun showToast(text: String) {
         try {
             ToastHelper.show(context, text)
+            Timber.i("BluetoothHeadsetObserver：已 Toast 展示「%s」", text)
         } catch (e: Exception) {
             Timber.w(e, "Toast 展示失败")
         }

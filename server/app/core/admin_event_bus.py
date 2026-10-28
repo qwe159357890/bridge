@@ -51,6 +51,7 @@ class AdminEventBus:
         payload = json.dumps({"type": event_type, "data": data}, ensure_ascii=False)
         async with self._lock:
             connections = list(self._connections)
+        logger.info("事件总线广播：type=%s 目标连接数=%d", event_type, len(connections))
         for ws in connections:
             try:
                 await ws.send_text(payload)

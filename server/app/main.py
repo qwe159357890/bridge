@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import time
 from pathlib import Path as _Path
 
@@ -70,6 +71,29 @@ def create_app() -> FastAPI:
         level=getattr(logging, settings.logging.level),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # 日志文件落盘（TimedRotatingFileHandler：按天轮转，保留最近 7 份）。
+    # 让服务端日志可被直接读取排查（此前 basicConfig 只有控制台输出、不落盘）。
+    # 目录相对 server 根（app/main.py -> server 根），绝对路径原样使用。
+    _log_dir = _Path("logs")
+    if not _log_dir.is_absolute():
+        _log_dir = _Path(__file__).resolve().parent.parent / _log_dir
+    try:
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        _file_handler = logging.handlers.TimedRotatingFileHandler(
+            _log_dir / "server.log",
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+        )
+        _file_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        _root_logger = logging.getLogger()
+        _root_logger.addHandler(_file_handler)
+        logger.info("日志文件 handler 已启用：%s", _log_dir / "server.log")
+    except Exception:
+        logger.exception("日志文件 handler 启用失败（仅控制台输出）")
 
     app = FastAPI(title="Bridge Server", version="0.1.0")
 

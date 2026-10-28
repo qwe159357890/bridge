@@ -163,6 +163,7 @@ function playBeep() {
 }
 
 function notifyNewSms(data: any) {
+  console.log('[Bridge] 收到新短信事件:', data)
   unreadSms.value += 1
   const body = (data.body || '').slice(0, 40)
   ElNotification({
@@ -180,26 +181,38 @@ function notifyNewSms(data: any) {
 
 function connectWS() {
   const token = getToken()
-  if (!token) return
+  if (!token) {
+    console.warn('[Bridge] 无 admin token，跳过 WS 连接')
+    return
+  }
   let url = wsUrl('/api/admin/ws')
   url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+  console.log('[Bridge] 连接管理 WS:', url.replace(/token=[^&]+/, 'token=***'))
   ws = new WebSocket(url)
   ws.onopen = () => {
+    console.log('[Bridge] 管理 WS 已连接')
     wsFailCount = 0
     reconnectDelay = 3000
   }
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
+      console.log('[Bridge] 管理 WS 收到事件:', msg.type)
       if (msg.type === 'new_sms') {
         notifyNewSms(msg.data)
       }
     } catch {
-      /* 忽略解析错误 */
+      console.warn('[Bridge] 管理 WS 消息解析失败:', event.data)
     }
   }
-  ws.onclose = () => scheduleReconnect()
-  ws.onerror = () => ws?.close()
+  ws.onclose = (e) => {
+    console.warn('[Bridge] 管理 WS 已断开:', e.code, e.reason, '将在稍后重连')
+    scheduleReconnect()
+  }
+  ws.onerror = () => {
+    console.error('[Bridge] 管理 WS 连接错误')
+    ws?.close()
+  }
 }
 
 function scheduleReconnect() {
