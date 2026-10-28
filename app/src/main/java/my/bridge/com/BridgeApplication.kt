@@ -37,9 +37,6 @@ class BridgeApplication : Application() {
     @Inject
     lateinit var reportManager: my.bridge.com.report.ReportManager
 
-    @Inject
-    lateinit var bluetoothHeadsetObserver: my.bridge.com.media.BluetoothHeadsetObserver
-
     override fun onCreate() {
         super.onCreate()
 
@@ -63,9 +60,6 @@ class BridgeApplication : Application() {
         // 主动上报总管：周期位置上报（服务定时+WorkManager 兜底）+ 新短信即推 +
         // 接收服务端 config_update 推送（后台远程开关，默认双开）
         reportManager.start()
-
-        // 蓝牙耳机按键监听（最小验证版）：注册 MediaSession，收到媒体键时 Toast 展示
-        bluetoothHeadsetObserver.start()
 
         Timber.i("BridgeApplication 初始化完成")
     }

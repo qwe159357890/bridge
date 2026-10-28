@@ -11,7 +11,7 @@
 
 1. 【管理后台】侧边栏 tab 收缩/展开功能（收缩态不占位、不影响交互）。✅ 已实现（layout/index.vue，未实测浏览器交互）
 2. 【管理后台】新短信实时提醒：全局冒泡 + 声音 + 侧边栏未读角标。✅ 已实现（服务端 data.py + 前端 layout/index.vue，未实测端到端）
-3. 【客户端】蓝牙耳机按键监听（最小验证版 MediaSession + Toast）。✅ 已实现（BluetoothHeadsetObserver.kt，编译通过，未真机验证）
+3. 【客户端】蓝牙耳机按键监听（最小验证版 MediaSession + Toast）。❌ 已剥离（2026-10-28 18:53 因 Android 焦点竞争无法抢过出声中的其它 App，用户决定移除；经验教训见 docs/keepalive/design.md）
 
 ## 打包记录（2026-10-28 14:58）
 - 已打包 v0.1.60（API 通道推送 + tag + dispatch 触发 CI，构建成功）。
@@ -60,3 +60,12 @@
 - 已打包 v0.1.64（API 通道推送 + tag + dispatch，构建 #126 success）。
 - APK：releases/app-debug-v0.1.64.apk（sha256=e57602d9… 与 digest 一致，AXML versionName=0.1.64）。已同步 server/data/updates/bridge-v0.1.64.apk。
 - **下一步验证**：装 v0.1.64 + 重启服务端，日志应出现「连接建立成功（version=0.1.64）」+「蓝牙耳机按键上报：key_code=-1 action=started has_focus=...」。
+
+## 蓝牙按键功能剥离（2026-10-28 18:53）
+- 用户决定：因 Android 音频焦点「一对一」竞争，Bridge 无法抢过**正在出声**的其它媒体 App（如 Aurelay），按键监听功能无法达到「无论何时都正常」的目标，故**彻底剥离**该功能。
+- 剥离范围（已全部完成）：
+  - 客户端：删除 `app/.../media/BluetoothHeadsetObserver.kt`；`BridgeApplication.kt` 移除 `bluetoothHeadsetObserver` 注入与 `start()` 调用。
+  - 服务端：`server/app/api/ws.py` 删除 `_handle_media_button()` 函数与 `event == "media_button"` 分支。
+  - **保留**（与蓝牙按键无关，勿误删）：保活 `SilentPlayer`（无声播放锚点，受「后台资源占用→无声播放」开关控制）、保活 BLE 扫描（`ResourceHolder`）、版本上报 `app_version`（hello/日志/崩溃通用）。
+- 经验教训已沉淀到 `docs/keepalive/design.md` 附录。
+- 编译校验：`:app:compileDebugKotlin` BUILD SUCCESSFUL；`ws.py` 语法 OK。

@@ -46,3 +46,63 @@
 ## 五、代码位置
 
 `core/core-keepalive/src/main/java/my/bridge/com/keepalive/`，共 9 个类。
+
+---
+
+## 附录：蓝牙耳机按键监听（已剥离，2026-10-28）
+
+> 本节记录「蓝牙耳机媒体按键监听」功能的完整调研结论与经验教训。该功能已按用户决策
+> **彻底剥离**（删除客户端 `BluetoothHeadsetObserver.kt` + 服务端 `media_button` 处理），
+> 保留本节纯作经验沉淀，避免后人重踩。**注意：本节讲的是「耳机按键监听」，与保活的
+> 「无声播放 `SilentPlayer`」「蓝牙 BLE 扫描 `ResourceHolder`」无关，二者功能独立、勿混淆。**
+
+### 1. 目标与结论
+
+需求：客户端 APP 接收蓝牙耳机「播放/暂停/上一首/下一首」等按键，先 Toast 展示动作。
+
+**最终结论（不可达成的部分）**：Android 的蓝牙媒体按键（AVRCP）是**一对一的音频焦点
+竞争**——按键永远只路由给「当前持有音频焦点的那个 MediaSession」。当同机其它媒体 App
+（如 Aurelay）**正在出声播放**时，它持续持有焦点，系统会拒绝/延迟 Bridge 的焦点请求
+（`requestAudioFocus` 返回 `FAILED`/`DELAYED`），**任何 App 都无法强行打断另一个正在
+出声的 App 的焦点**。因此「无论其它 App 是否在出声，Bridge 都稳定拿到按键」这个目标，
+在 Android 机制下**物理上无法达成**，只能「其它 App 不出声时 Bridge 能拿到」。这是
+功能被剥离的根本原因，不是代码缺陷。
+
+### 2. 能拿到按键的必要条件（四条件缺一不可）
+
+实测逐步定位，每一条都是「收不到按键」的一个真实根因：
+
+1. **`MediaSession.isActive = true`**——只 `setFlags(FLAG_HANDLES_MEDIA_BUTTONS)` 不
+   active，媒体按键永不路由过来。
+2. **`PlaybackState.setState(非 STATE_NONE)`**——必须 `setState(STATE_PLAYING, 0L, 1f)`
+   （position 传 0 而非 UNKNOWN）。只 `setActions` 不 `setState` 会停在 STATE_NONE，
+   系统媒体中心认为「没在播放」根本不路由按键。
+3. **`requestAudioFocus(AUDIOFOCUS_GAIN)` 持久焦点**——`AUDIOFOCUS_GAIN_TRANSIENT`
+   （瞬时焦点）在 Bridge 不实际出声时会被系统几百毫秒内静默收回，按耳机键那一刻焦点
+   已不在 Bridge。
+4. **焦点回调里遇 LOSS 立即重抢、绝不 abandonFocus**——早期实现 LOSS 时 `abandonFocus()`
+   等于主动退出竞争，是抢不过 Aurelay 的直接原因。
+
+### 3. 关键认知与坑
+
+- **媒体按键只跟「音频焦点」走，跟蓝牙连接状态无关**。耳机连上不等于能收按键。
+- **排查神器**：`adb shell dumpsys media_session` 看 `Media button session is com.xxx`
+  指向谁（按键就给谁）；`adb shell input keyevent KEYCODE_MEDIA_PLAY_PAUSE` 模拟按键。
+  蓝牙耳机按键的 keyCode：126 播放 / 127 暂停 / 87 下一首 / 88 上一首。
+- **「启动即上报」必须等 WS 握手**：`onCreate` 里直接 `sendBusinessMessage` 会因
+  `handshakeReady=false` 被静默丢弃，须监听 `handshakeReady.collect` 握手后补报。
+- **静音播放 ≠ 抢焦点**：`SilentPlayer`（保活「无声播放」开关）只占 AudioTrack 输出、
+  **不申请 AudioFocus**，它帮不上抢焦点；反之，抢焦点本身也不能让系统认为「正在出声」。
+  二者是独立机制，不能互相替代（这曾导致两轮误判）。
+- **结论性边界**：焦点竞争偏向「正在实际出声」的 App。Bridge 即便「持久焦点 + 静音锚点
+  + 500ms 巡检刷新会话活跃」，也只能在其它 App **不出声**时稳定拿到按键；对方出声时
+  系统焦点判给它，无法打破。
+
+### 4. 剥离清单（供将来若需恢复时对照）
+
+- 客户端：`app/src/main/java/my/bridge/com/media/BluetoothHeadsetObserver.kt`（已删）；
+  `BridgeApplication.kt` 中的注入 + `start()`（已移除）。
+- 服务端：`server/app/api/ws.py` 中 `_handle_media_button()` 与 `event == "media_button"`
+  分支（已删除）。
+- **保留**（勿误删）：保活 `SilentPlayer` / `ResourceHolder` BLE 扫描 / `app_version` 版本上报。
+
