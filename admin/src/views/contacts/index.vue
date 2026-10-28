@@ -13,6 +13,9 @@
             @clear="load(0)"
           />
           <el-button type="primary" :disabled="!deviceId" @click="load(0)">查询</el-button>
+          <el-button :loading="refreshing" :disabled="!deviceId" @click="refreshFromDevice">
+            {{ refreshing ? '拉取中…' : '🔄 从设备刷新' }}
+          </el-button>
         </div>
         <el-button
           type="danger"
@@ -80,6 +83,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DevicePicker from '@/components/DevicePicker.vue'
 import { listDevices } from '@/api/devices'
+import { sendCommand, getCommand } from '@/api/commands'
 import { listContacts, deleteContacts, type ContactItem } from '@/api/data'
 import type { Device } from '@/types'
 import { useTargetDeviceStore } from '@/stores/targetDevice'
@@ -100,6 +104,48 @@ const syncTime = ref<string | null>(null)
 const loading = ref(false)
 const queryLimit = 500
 const page = ref(0)
+
+// ---------------- 从设备刷新（直发 get_contacts 命令 + 自动重查，照短信页模式） ----------------
+
+const refreshing = ref(false)
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** 下发 get_contacts（全量覆盖该设备快照），轮询回执后自动刷新列表。 */
+async function refreshFromDevice() {
+  if (!deviceId.value || refreshing.value) return
+  refreshing.value = true
+  try {
+    const r = await sendCommand(
+      deviceId.value,
+      'get_contacts',
+      { only_with_phones: true, limit: 2000 },
+      true,
+    )
+    if (!r.delivered) {
+      ElMessage.warning('设备不在线，无法拉取通讯录（设备连上后再试）')
+      return
+    }
+    ElMessage.info('已下发采集命令，等待设备回执…')
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      await sleep(1500)
+      const c = await getCommand(r.command_id)
+      if (c.status === 'success') {
+        ElMessage.success('设备通讯录已拉取入库')
+        load(0)
+        return
+      }
+      if (c.status === 'failed') {
+        ElMessage.error(c.result_message || '设备拉取通讯录失败')
+        return
+      }
+    }
+    ElMessage.warning('命令 90 秒未回执，稍后请手动点「查询」查看')
+  } finally {
+    refreshing.value = false
+  }
+}
 
 onMounted(async () => {
   devices.value = await listDevices()
