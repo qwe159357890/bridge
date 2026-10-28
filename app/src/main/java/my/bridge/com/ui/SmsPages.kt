@@ -35,11 +35,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,11 +52,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import my.bridge.com.core.network.api.BridgeApi
 import my.bridge.com.data.SmsDefaultHelper
 import my.bridge.com.data.SmsReader
 import my.bridge.com.data.SmsRepository
@@ -87,6 +91,14 @@ private val timeFmtDate = SimpleDateFormat("MM-dd", Locale.getDefault())
 fun SmsConversationsPage() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 数据源（2026-10-28 拍板：默认聚合 = 服务端存档里所有设备的短信）
+    var source by rememberSaveable { mutableStateOf("archive") } // archive | local
+    var openArchiveThread by remember { mutableStateOf<BridgeApi.SmsThreadItem?>(null) }
+    val archiveVm: SmsArchiveViewModel = hiltViewModel()
+    val archiveThreads by archiveVm.threads.collectAsState()
+    val archiveError by archiveVm.error.collectAsState()
+    val selfDeviceId by archiveVm.selfDeviceId.collectAsState()
 
     var hasPermission by remember { mutableStateOf(SmsReader.hasPermission(context)) }
     var isDefault by remember { mutableStateOf(SmsDefaultHelper.isDefault(context)) }
@@ -146,6 +158,11 @@ fun SmsConversationsPage() {
         }
     }
 
+    // 聚合模式：进页/切到聚合/回页刷新时拉取服务端存档
+    LaunchedEffect(source, refreshKey) {
+        if (source == "archive") archiveVm.loadThreads()
+    }
+
     // 从系统确认弹窗返回时刷新默认身份与列表（切换后立即生效）
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -160,9 +177,28 @@ fun SmsConversationsPage() {
     }
 
     // 系统返回键/手势：详情页返回列表，而不是退出应用
-    BackHandler(enabled = openThread != null) {
-        openThread = null
+    BackHandler(enabled = openArchiveThread != null || openThread != null) {
+        if (openArchiveThread != null) {
+            openArchiveThread = null
+        } else {
+            openThread = null
+        }
         refreshKey++ // 返回后刷新未读数
+    }
+
+    // 聚合详情优先（两级详情互不共存，谁先打开谁优先）
+    val archiveThread = openArchiveThread
+    if (archiveThread != null) {
+        ArchiveThreadDetail(
+            vm = archiveVm,
+            thread = archiveThread,
+            selfDeviceId = selfDeviceId,
+            onBack = {
+                openArchiveThread = null
+                refreshKey++
+            },
+        )
+        return
     }
 
     val thread = openThread
@@ -200,7 +236,26 @@ fun SmsConversationsPage() {
             },
         )
 
+        // ===== 数据源切换（聚合 = 服务端存档所有设备；本机 = 本机短信库） =====
+        DataSourceSwitch(source = source, onSelect = { source = it })
+
         when {
+            source == "archive" -> {
+                val threads = archiveThreads
+                when {
+                    threads == null -> CenterHint("加载中…")
+                    archiveError != null && threads.isEmpty() ->
+                        CenterHint(archiveError ?: "拉取失败")
+                    threads.isEmpty() -> CenterHint(
+                        "存档暂无任何设备的短信\n（管理后台下发「获取短信」采集后出现在这里）",
+                    )
+                    else -> ArchiveThreadList(
+                        threads = threads,
+                        selfDeviceId = selfDeviceId,
+                        onOpen = { openArchiveThread = it },
+                    )
+                }
+            }
             !hasPermission -> CenterHint("短信权限未授予\n请在 设置→应用→Bridge→权限 中开启「短信」")
             conversations == null -> CenterHint("加载中…")
             conversations!!.isEmpty() -> CenterHint("暂无短信")
@@ -362,6 +417,281 @@ private fun ConversationList(
                 }
             }
         }
+    }
+}
+
+// ============ 数据源切换（聚合 / 本机） ============
+@Composable
+private fun DataSourceSwitch(source: String, onSelect: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SourceChip("聚合（所有设备）", source == "archive") { onSelect("archive") }
+        Spacer(Modifier.width(8.dp))
+        SourceChip("本机", source == "local") { onSelect("local") }
+    }
+}
+
+@Composable
+private fun SourceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        fontSize = 13.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .background(
+                if (selected) BrandBlue else Color(0xFFF0F1F4),
+                RoundedCornerShape(16.dp),
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+    )
+}
+
+// ============ 聚合会话列表（服务端存档，所有设备） ============
+@Composable
+private fun ArchiveThreadList(
+    threads: List<BridgeApi.SmsThreadItem>,
+    selfDeviceId: String,
+    onOpen: (BridgeApi.SmsThreadItem) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = 12.dp, vertical = 6.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(threads, key = { "${it.device_id}|${it.address}" }) { t ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpen(t) },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(text = t.address.take(1).ifBlank { "?" })
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                t.address,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (t.unread > 0) FontWeight.SemiBold
+                                else FontWeight.Normal,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                t.last_date,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // 设备来源标记：本机绿点 + 其它设备灰字 ID
+                            val isSelf = t.device_id == selfDeviceId
+                            Text(
+                                if (isSelf) "本机" else t.device_id.take(8),
+                                fontSize = 10.sp,
+                                color = if (isSelf) GreenOk else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                t.last_body,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (t.unread > 0) {
+                                Spacer(Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .background(UnreadRed, RoundedCornerShape(9.dp))
+                                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                                ) {
+                                    Text(
+                                        if (t.unread > 99) "99+" else "${t.unread}",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============ 聚合会话详情（服务端存档，只读） ============
+@Composable
+private fun ArchiveThreadDetail(
+    vm: SmsArchiveViewModel,
+    thread: BridgeApi.SmsThreadItem,
+    selfDeviceId: String,
+    onBack: () -> Unit,
+) {
+    var messages by remember { mutableStateOf<List<BridgeApi.SmsArchiveMessage>?>(null) }
+    var total by remember { mutableIntStateOf(0) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    // 首拉（倒序取最新 200 条 → 正序展示）
+    LaunchedEffect(thread.device_id, thread.address) {
+        val r = vm.loadMessages(thread.device_id, thread.address, limit = 200)
+        if (r == null) {
+            loadError = "拉取失败，请返回后重试"
+            messages = emptyList()
+        } else {
+            messages = r.items.asReversed()
+            total = r.total
+        }
+    }
+
+    /** 加载更早的消息（时间游标 = 当前最旧一条）。 */
+    fun loadOlder() {
+        val cur = messages ?: return
+        if (cur.isEmpty() || loadingMore || cur.size >= total) return
+        loadingMore = true
+        scope.launch {
+            val oldest = cur.first()
+            val beforeMs = runCatching {
+                timeFmtFull.parse(oldest.sms_date)?.time
+            }.getOrNull()
+            val r = vm.loadMessages(thread.device_id, thread.address, beforeMs = beforeMs)
+            messages = r?.let { it.items.asReversed() + cur } ?: cur
+            loadingMore = false
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // 顶栏：返回 + 号码 + 设备来源
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    thread.address,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "存档 · ${if (thread.device_id == selfDeviceId) "本机" else thread.device_id.take(10)}"
+                        + " · 共 $total 条",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // 只读提示（标记已读/删除在管理后台）
+        Text(
+            "聚合存档只读；标记已读 / 删除请到管理后台「短信」页",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFF7F8FA))
+                .padding(horizontal = 14.dp, vertical = 5.dp),
+        )
+        val list = messages
+        when {
+            list == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            list.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    loadError ?: "该会话暂无存档消息",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 12.dp, vertical = 8.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        if (list.size < total) {
+                            Text(
+                                if (loadingMore) "加载中…" else "↓ 加载更早的消息（已显示 ${list.size}/$total）",
+                                fontSize = 12.sp,
+                                color = BrandBlue,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { if (!loadingMore) loadOlder() }
+                                    .padding(vertical = 6.dp),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                        }
+                    }
+                    items(list, key = { it.id }) { m ->
+                        ArchiveBubble(message = m)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchiveBubble(message: BridgeApi.SmsArchiveMessage) {
+    val incoming = message.sms_type == 1 // 1=收件箱（对端发来），其余为本机发出
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (incoming) Alignment.Start else Alignment.End,
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .background(
+                    if (incoming) BubbleIn else BrandBlue,
+                    RoundedCornerShape(14.dp),
+                )
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(
+                message.body,
+                color = if (incoming) Color(0xFF1F2430) else Color.White,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+            )
+        }
+        Text(
+            "${message.sms_date}${if (message.read) "" else "  · 未读"}"
+                + if (!incoming) "  · ${message.sms_type_name}" else "",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
     }
 }
 

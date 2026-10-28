@@ -45,6 +45,9 @@ music:
   dir: "data/music"              # 音乐共享目录（play_music 裸文件名音源）
                                  # 相对路径相对 server 根目录，管理员把音乐文件放入即可下发
 
+connection_events:
+  retention_days: 90             # 设备上下线记录保留天数（MySQL 表，超龄自动清理；0=永不清理）
+
 locations:
   mysql:
     host: "127.0.0.1"            # MySQL 主机（get_location 上报持久化）

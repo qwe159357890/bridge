@@ -176,4 +176,29 @@ class BridgeApiClient(
         deviceId: String,
         token: String?,
     ): ResponseBody = api().downloadUpdate(filename, deviceId, token)
+
+    /**
+     * 跨设备聚合会话列表（APK 短信页聚合模式，2026-10-28）。
+     * 失败抛异常（服务端不可达 / 存档库不可用），由调用方处理。
+     */
+    suspend fun getSmsThreads(
+        deviceId: String,
+        token: String?,
+        keyword: String? = null,
+        limit: Int = 200,
+    ): BridgeApi.SmsThreadsResponse = api().getSmsThreads(deviceId, token, keyword, limit)
+
+    /**
+     * 某聚合会话（设备+号码）的消息分页（倒序）。失败抛异常，由调用方处理。
+     */
+    suspend fun getSmsMessages(
+        deviceId: String,
+        token: String?,
+        threadDeviceId: String,
+        address: String,
+        beforeMs: Long? = null,
+        limit: Int = 100,
+    ): BridgeApi.SmsMessagesResponse = api().getSmsMessages(
+        deviceId, token, threadDeviceId, address, beforeMs, limit,
+    )
 }

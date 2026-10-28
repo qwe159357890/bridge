@@ -224,6 +224,67 @@ interface BridgeApi {
         @Query("current_version") currentVersion: String,
     ): LatestUpdateResponse
 
+    // ---- 短信聚合（APK 短信页聚合模式，2026-10-28） ----
+
+    /** 聚合会话条目（会话键 = 设备+号码，来自服务端短信存档）。 */
+    data class SmsThreadItem(
+        val device_id: String,
+        val address: String,
+        val last_body: String = "",
+        val last_type: Int = 1,
+        val last_type_name: String = "",
+        val last_date: String = "",
+        val read: Boolean = false,
+        val unread: Int = 0,
+        val total: Int = 0,
+    )
+
+    data class SmsThreadsResponse(
+        val total: Int = 0,
+        val items: List<SmsThreadItem> = emptyList(),
+    )
+
+    /** 存档消息（服务端 sms_messages 表一行）。 */
+    data class SmsArchiveMessage(
+        val id: Long = 0,
+        val device_id: String = "",
+        val sms_key: String = "",
+        val address: String = "",
+        val body: String = "",
+        val sms_type: Int = 1,
+        val sms_type_name: String = "",
+        val read: Boolean = false,
+        val sim_slot: Int = -1,
+        val sim_number: String = "",
+        val sms_date: String = "",
+        val sync_time: String = "",
+    )
+
+    data class SmsMessagesResponse(
+        val total: Int = 0,
+        val items: List<SmsArchiveMessage> = emptyList(),
+    )
+
+    /** 跨设备聚合会话列表（按最新消息倒序）。 */
+    @GET("api/device/sms_threads")
+    suspend fun getSmsThreads(
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+        @Query("keyword") keyword: String?,
+        @Query("limit") limit: Int,
+    ): SmsThreadsResponse
+
+    /** 某聚合会话（设备+号码）的消息分页（倒序，before_ms 时间游标）。 */
+    @GET("api/device/sms_messages")
+    suspend fun getSmsMessages(
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+        @Query("device_id") threadDeviceId: String,
+        @Query("address") address: String,
+        @Query("before_ms") beforeMs: Long?,
+        @Query("limit") limit: Int,
+    ): SmsMessagesResponse
+
     /**
      * 下载更新 APK（check_update 自动更新，服务器自身直链，不依赖 GitHub）。
      * 404 = 服务端 updates 目录无此文件；调用方负责关闭响应体并写盘。

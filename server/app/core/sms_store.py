@@ -223,6 +223,89 @@ class SmsStore:
             )
             return [self._row_to_dict(r) for r in cur.fetchall()], total
 
+    def list_threads(
+        self,
+        keyword: str = "",
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """聚合会话列表（跨设备，2026-10-28 客户端 APK 聚合模式用）。
+
+        会话键 = (device_id, address)；每会话返回最新一条消息、未读数、总条数，
+        按最新消息时间倒序。keyword 匹配号码 / 设备 ID / 会话内任意正文。
+        """
+        conn = self._connection()
+        having = ""
+        args: list = []
+        if keyword.strip():
+            like = f"%{keyword.strip()}%"
+            having = (
+                "HAVING t.address LIKE %s OR t.device_id LIKE %s "
+                "OR EXISTS (SELECT 1 FROM sms_messages s2 "
+                "WHERE s2.device_id = t.device_id AND s2.address = t.address "
+                "AND s2.body LIKE %s)"
+            )
+            args = [like, like, like]
+        sql = (
+            "SELECT t.device_id, t.address, t.unread, t.total, "
+            "SUBSTRING_INDEX(t.last_key, '|', 1) AS last_date, m.body AS last_body, "
+            "m.sms_type AS last_type "
+            "FROM ("
+            "  SELECT device_id, address,"
+            "         SUM(CASE WHEN read_flag = 0 THEN 1 ELSE 0 END) AS unread,"
+            "         COUNT(*) AS total,"
+            "         MAX(CONCAT(sms_date, '|', LPAD(id, 20, '0'))) AS last_key"
+            "  FROM sms_messages GROUP BY device_id, address"
+            ") t JOIN sms_messages m"
+            "  ON m.device_id = t.device_id AND m.address = t.address"
+            " AND CONCAT(m.sms_date, '|', LPAD(m.id, 20, '0')) = t.last_key "
+            f"{having} ORDER BY t.last_key DESC LIMIT %s"
+        )
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(sql, (*args, limit))
+            rows = cur.fetchall()
+            cur.execute("SELECT COUNT(DISTINCT device_id, address) FROM sms_messages")
+            total = int(cur.fetchone()["n"])
+        items = []
+        for r in rows:
+            items.append(
+                {
+                    "device_id": r["device_id"],
+                    "address": r["address"],
+                    "last_body": r["last_body"] or "",
+                    "last_type": int(r["last_type"]),
+                    "last_type_name": SMS_TYPE_NAMES.get(int(r["last_type"]), "未知"),
+                    "last_date": str(r["last_date"]),  # CONCAT 派生，已是 'YYYY-MM-DD HH:MM:SS'
+                    "read": int(r["unread"]) == 0,
+                    "unread": int(r["unread"]),
+                    "total": int(r["total"]),
+                }
+            )
+        return items, total
+
+    def list_messages(
+        self,
+        device_id: str,
+        address: str,
+        before_ms: Optional[int] = None,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """某会话（设备+号码）的消息分页（倒序），聚合详情页用。"""
+        conn = self._connection()
+        conds, args = ["device_id = %s", "address = %s"], [device_id, address]
+        if before_ms is not None:
+            conds.append("sms_date < %s")
+            args.append(datetime.fromtimestamp(before_ms / 1000.0))
+        where = "WHERE " + " AND ".join(conds)
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(f"SELECT COUNT(*) AS n FROM sms_messages {where}", args)
+            total = int(cur.fetchone()["n"])
+            cur.execute(
+                f"SELECT * FROM sms_messages {where} "
+                "ORDER BY sms_date DESC, id DESC LIMIT %s",
+                (*args, limit),
+            )
+            return [self._row_to_dict(r) for r in cur.fetchall()], total
+
     def delete(self, device_id: str, row_id: Optional[int] = None) -> int:
         """手动清理：删某设备全部（或指定一条）。"""
         conn = self._connection()

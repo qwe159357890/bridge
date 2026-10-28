@@ -22,7 +22,7 @@ from app.core.admin_event_bus import AdminEventBus
 from app.core.admin_token_store import AdminTokenStore
 from app.core.command_store import CommandStore
 from app.core.connection_manager import ConnectionManager
-from app.core.connection_event_store import ConnectionEventStore
+from app.core.connection_event_store import build_connection_event_store
 from app.core.device_registry import DeviceRegistry
 from app.core.location_store import build_location_store
 from app.core.contacts_store import build_contacts_store
@@ -82,7 +82,10 @@ def create_app() -> FastAPI:
 
     command_store = CommandStore()
 
-    connection_event_store = ConnectionEventStore()
+    # 上下线记录（MySQL 持久化 + 保留天数清理，MySQL 不可用自动降级内存）
+    connection_event_store = build_connection_event_store(
+        settings.locations.mysql, settings.connection_events.retention_days,
+    )
 
     # 管理员 token 持久层（MySQL）：重启后已签发 token 仍有效，
     # 持久层不可达时 AdminAuth 自动降级为纯内存模式

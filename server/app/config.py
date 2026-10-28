@@ -169,6 +169,14 @@ class LocationsConfig(BaseModel):
     amap: AmapConfig = AmapConfig()
 
 
+class ConnectionEventsConfig(BaseModel):
+    """设备上下线记录持久化配置（2026-10-28 拍板 MySQL 表 + 保留天数）。"""
+
+    retention_days: int = Field(
+        default=90, ge=0, description="事件保留天数，超龄定期清理（0 = 永不清理）",
+    )
+
+
 class LoggingConfig(BaseModel):
     """日志配置。"""
 
@@ -189,6 +197,7 @@ class Settings(BaseModel):
     media: MediaConfig = MediaConfig()
     updates: UpdatesConfig = UpdatesConfig()
     locations: LocationsConfig = LocationsConfig()
+    connection_events: ConnectionEventsConfig = ConnectionEventsConfig()
     adb: AdbConfig = AdbConfig()
 
 

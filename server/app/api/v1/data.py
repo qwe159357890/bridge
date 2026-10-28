@@ -282,6 +282,52 @@ def set_sms_read(body: SmsReadRequest, request: Request) -> SmsReadResponse:
 
 
 # ----------------------------------------------------------------------
+# 短信聚合（客户端 APK 用，设备认证；2026-10-28 拍板：APK 短信页默认聚合
+# 显示所有设备的存档，可切回本机视图）
+# ----------------------------------------------------------------------
+
+
+@router.get("/device/sms_threads")
+def device_sms_threads(
+    request: Request,
+    keyword: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=1000),
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+) -> dict:
+    """跨设备聚合会话列表（会话键 = 设备+号码），按最新消息倒序。"""
+    _check_device_auth(request, x_device_id, x_device_token)
+    try:
+        items, total = _get_stores(request)[1].list_threads(
+            keyword=keyword, limit=limit,
+        )
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return {"total": total, "items": items}
+
+
+@router.get("/device/sms_messages")
+def device_sms_messages(
+    request: Request,
+    device_id: str = Query(min_length=1),
+    address: str = Query(min_length=1),
+    before_ms: Optional[int] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+) -> dict:
+    """某会话（设备+号码）的消息分页（倒序），聚合详情页用。"""
+    _check_device_auth(request, x_device_id, x_device_token)
+    try:
+        items, total = _get_stores(request)[1].list_messages(
+            device_id=device_id, address=address, before_ms=before_ms, limit=limit,
+        )
+    except Exception as e:
+        raise _store_unavailable(e) from e
+    return {"total": total, "items": items}
+
+
+# ----------------------------------------------------------------------
 # 通话记录
 # ----------------------------------------------------------------------
 
