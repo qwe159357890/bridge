@@ -221,13 +221,13 @@ private fun BridgeBottomBar(
 fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         BridgeTabRow(
-            titles = listOf("短信", "通讯录", "发现"),
+            titles = listOf("短信", "音频中继", "发现"),
             currentTab = currentTab,
             onTabChange = onTabChange,
         )
         when (currentTab) {
             0 -> SmsConversationsPage() // 真实短信页（v0.1.34，原假数据骨架）
-            1 -> ContactList()
+            1 -> AudioRelayPage() // 音频中继页（手机放音，原通讯录占位已移除）
             2 -> DiscoverList()
         }
     }

@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge · 音频中继（集成 Aurelay）UI 原型 v4</title>
+<style>
+  :root {
+    --brand: #1A6EE8;
+    --brand-soft: #EAF2FE;
+    --inactive: #8A919F;
+    --bg: #F5F6F8;
+    --card: #FFFFFF;
+    --text: #1F2329;
+    --text-sub: #6B7280;
+    --green: #2E9E5B;
+    --red: #E5484D;
+    --border: #E5E7EB;
+    --phone-w: 375px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    padding: 32px 20px 60px;
+  }
+  h1 { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+  .subtitle { text-align: center; color: var(--text-sub); font-size: 14px; margin-bottom: 8px; }
+  .meta {
+    max-width: 860px; margin: 0 auto 28px; padding: 14px 18px;
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--text-sub);
+  }
+  .meta b { color: var(--text); }
+  .meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 14px; padding-left: 10px; border-left: 4px solid var(--brand); }
+  .grid { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start; }
+  .scene { flex: 1 1 360px; max-width: 460px; min-width: 320px; }
+  .scene-title { text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .scene-desc { text-align: center; font-size: 12px; color: var(--text-sub); margin-bottom: 12px; }
+  .phone { width: var(--phone-w); margin: 0 auto; background: #fff; border-radius: 30px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.10); border: 1px solid var(--border); }
+  .phone svg { display: block; width: 100%; height: auto; }
+  .note { max-width: 860px; margin: 36px auto 0; padding: 16px 20px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 12px; font-size: 13px; color: #92400E; }
+  .note b { color: #78350F; }
+  ul.clean { margin: 8px 0 0 18px; }
+  ul.clean li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>Bridge · 音频中继 UI 原型 <span style="font-size:14px;color:var(--text-sub)">v4</span></h1>
+<div class="subtitle">集成 Aurelay 中继模式 — 修正配对机制 + 音量/波形归位</div>
+
+<div class="meta">
+  <div style="margin-bottom:6px">
+    <span class="tag">路线 A</span><span class="tag">复用 Aurelay 中转服务器 039039.xyz:15151</span>
+    <span class="tag">OkHttp 4.12.0 已具备</span>
+  </div>
+  <div><b>本版修正（相对 v3）：</b></div>
+  <div>① <b>中转服务器可编辑</b> —— 点击「中转服务器」行弹出输入框（复用项目已有的「服务地址」编辑弹窗样式），可改服务器地址并持久化。</div>
+  <div>② <b>自动重连默认开 + 可持久化 + 关闭需二次确认</b> —— 复用项目已有的 <code>CoreConfirmDialog</code> 机制与样式（⚠️ 图标 + 「确认关闭」红色按钮 + 「取消」）。</div>
+  <div>③ <b>音量文案修正</b>：「本机音量」→「中继音量」，明确这是<b>程序自身 AudioTrack 的软增益</b>（0~1 浮点），只影响中继播放，<b>不动系统媒体音量</b>（与 Aurelay 源码 <code>audioTrack.setVolume()</code> 一致）。</div>
+  <div style="margin-top:6px"><b>后端对接硬约束</b>：<b>严格复用 Aurelay 现有协议，后端零改动</b> —— 客户端原样复刻 <code>ARLY</code> 中转帧格式（魔数 + type + length + payload）与 <code>HELLO</code> 握手（ver+role+device_id+token+port），走 <code>039039.xyz:15151</code> 的 <code>/api/aurelay/relay</code>。Bridge 与 Aurelay 原版 App <b>可同时共存连同一服务器</b>，互不影响。</div>
+</div>
+
+<h2>改动点 ①：主页「通讯录」→「音频中继」（含音量 + 波形）</h2>
+<div class="grid">
+  <!-- 停止态 -->
+  <div class="scene">
+    <div class="scene-title">停止态</div>
+    <div class="scene-desc">短信 · 音频中继 · 发现 —— 未开始，波形静止，音量可调</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8"/>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle">音频中继</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle">发现</text>
+
+        <!-- 状态卡 -->
+        <rect x="16" y="98" width="343" height="120" rx="14" fill="#1A6EE8"/>
+        <circle cx="187" cy="145" r="26" fill="#fff"/>
+        <text x="187" y="152" font-size="18" fill="#1A6EE8" text-anchor="middle">▶</text>
+        <text x="187" y="190" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">音频中继已停止</text>
+        <text x="187" y="208" font-size="12" fill="rgba(255,255,255,0.8)" text-anchor="middle">点下方按钮接收电脑声音</text>
+
+        <!-- 波形（静止） -->
+        <rect x="16" y="228" width="343" height="100" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="250" font-size="12" fill="#6B7280">音频波形</text>
+        <!-- 静止：24 根短柱，中心点 -->
+        <g fill="#D5DCE6">
+          <rect x="40"  y="292" width="3" height="10" rx="1.5"/><rect x="55"  y="292" width="3" height="10" rx="1.5"/>
+          <rect x="70"  y="292" width="3" height="10" rx="1.5"/><rect x="85"  y="292" width="3" height="10" rx="1.5"/>
+          <rect x="100" y="292" width="3" height="10" rx="1.5"/><rect x="115" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="130" y="292" width="3" height="10" rx="1.5"/><rect x="145" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="160" y="292" width="3" height="10" rx="1.5"/><rect x="175" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="190" y="292" width="3" height="10" rx="1.5"/><rect x="205" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="220" y="292" width="3" height="10" rx="1.5"/><rect x="235" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="250" y="292" width="3" height="10" rx="1.5"/><rect x="265" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="280" y="292" width="3" height="10" rx="1.5"/><rect x="295" y="292" width="3" height="10" rx="1.5"/>
+          <rect x="310" y="292" width="3" height="10" rx="1.5"/><rect x="325" y="292" width="3" height="10" rx="1.5"/>
+        </g>
+        <text x="187" y="318" font-size="11" fill="#B0B6C0" text-anchor="middle">等待音频流</text>
+
+        <!-- 音量滑块 -->
+        <rect x="16" y="340" width="343" height="66" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="360" font-size="13" fill="#1F2329" font-weight="600">中继音量</text>
+        <text x="32" y="398" font-size="10" fill="#B0B6C0">仅调整中继播放音量，不影响系统音量</text>
+        <rect x="32" y="372" width="311" height="4" rx="2" fill="#E5E7EB"/>
+        <rect x="32" y="372" width="200" height="4" rx="2" fill="#1A6EE8"/>
+        <circle cx="232" cy="374" r="9" fill="#fff" stroke="#1A6EE8" stroke-width="2"/>
+        <text x="343" y="360" font-size="13" fill="#6B7280" text-anchor="end">64%</text>
+
+        <!-- 开始按钮 -->
+        <rect x="52" y="420" width="271" height="52" rx="26" fill="#1A6EE8"/>
+        <text x="187" y="451" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">开始中继</text>
+
+        <!-- 说明卡 -->
+        <rect x="16" y="486" width="343" height="96" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="510" font-size="13" fill="#1F2329" font-weight="600">如何使用</text>
+        <text x="32" y="530" font-size="12" fill="#6B7280">1. 电脑打开桌面端，登录同一账号</text>
+        <text x="32" y="550" font-size="12" fill="#6B7280">2. 手机点「开始中继」即自动配对连接</text>
+        <text x="32" y="570" font-size="12" fill="#6B7280">3. 无需手动填写配对码</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 运行态 -->
+  <div class="scene">
+    <div class="scene-title">运行态（播放中）</div>
+    <div class="scene-desc">已连接中转 · 波形实时跳动 · 音量可调</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8"/>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle">音频中继</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle">发现</text>
+
+        <!-- 状态卡（绿） -->
+        <rect x="16" y="98" width="343" height="120" rx="14" fill="#2E9E5B"/>
+        <circle cx="187" cy="145" r="26" fill="#fff"/>
+        <text x="187" y="153" font-size="16" fill="#2E9E5B" text-anchor="middle">⏸</text>
+        <text x="187" y="190" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">正在播放电脑声音</text>
+        <text x="187" y="208" font-size="12" fill="rgba(255,255,255,0.85)" text-anchor="middle">已连接中转服务器 · 自动配对</text>
+
+        <!-- 波形（跳动） -->
+        <rect x="16" y="228" width="343" height="100" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="250" font-size="12" fill="#6B7280">音频波形</text>
+        <!-- 24 根上下对称柱，不同高度 + 中心点 -->
+        <g>
+          <line x1="40"  y1="316" x2="40"  y2="276" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="55"  y1="315" x2="55"  y2="286" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="70"  y1="312" x2="70"  y2="278" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="85"  y1="317" x2="85"  y2="290" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="100" y1="310" x2="100" y2="272" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="115" y1="315" x2="115" y2="283" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="130" y1="308" x2="130" y2="270" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="145" y1="313" x2="145" y2="279" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="160" y1="304" x2="160" y2="266" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="175" y1="311" x2="175" y2="275" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="190" y1="300" x2="190" y2="264" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="205" y1="309" x2="205" y2="271" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="220" y1="302" x2="220" y2="268" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="235" y1="312" x2="235" y2="280" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="250" y1="306" x2="250" y2="270" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="265" y1="314" x2="265" y2="284" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="280" y1="310" x2="280" y2="274" stroke="#1A6EE8" stroke-width="3" stroke-linecap="3"/>
+          <line x1="295" y1="315" x2="295" y2="287" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="310" y1="308" x2="310" y2="272" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="325" y1="313" x2="325" y2="281" stroke="#1A6EE8" stroke-width="3" stroke-linecap="round"/>
+        </g>
+        <!-- 中心点 -->
+        <g fill="#1A6EE8">
+          <circle cx="40" cy="296" r="2"/><circle cx="70" cy="295" r="2"/><circle cx="100" cy="291" r="2"/><circle cx="130" cy="289" r="2"/><circle cx="160" cy="285" r="2"/><circle cx="190" cy="282" r="2"/><circle cx="220" cy="285" r="2"/><circle cx="250" cy="288" r="2"/><circle cx="280" cy="292" r="2"/><circle cx="310" cy="290" r="2"/><circle cx="325" cy="297" r="2"/>
+        </g>
+
+        <!-- 音量滑块 -->
+        <rect x="16" y="340" width="343" height="66" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="360" font-size="13" fill="#1F2329" font-weight="600">中继音量</text>
+        <text x="32" y="398" font-size="10" fill="#B0B6C0">仅调整中继播放音量，不影响系统音量</text>
+        <rect x="32" y="372" width="311" height="4" rx="2" fill="#E5E7EB"/>
+        <rect x="32" y="372" width="200" height="4" rx="2" fill="#1A6EE8"/>
+        <circle cx="232" cy="374" r="9" fill="#fff" stroke="#1A6EE8" stroke-width="2"/>
+        <text x="343" y="360" font-size="13" fill="#6B7280" text-anchor="end">64%</text>
+
+        <!-- 停止按钮 -->
+        <rect x="52" y="420" width="271" height="52" rx="26" fill="#E5484D"/>
+        <text x="187" y="451" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">停止中继</text>
+
+        <!-- 连接信息 -->
+        <rect x="16" y="486" width="343" height="96" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="510" font-size="13" fill="#1F2329" font-weight="600">连接信息</text>
+        <text x="32" y="530" font-size="12" fill="#6B7280">中转服务器：039039.xyz:15151</text>
+        <text x="32" y="550" font-size="12" fill="#6B7280">链路：中继 relay · 编解码：Opus</text>
+        <text x="32" y="570" font-size="12" fill="#6B7280">配对：设备标识 + 令牌（自动）</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<h2>改动点 ②：设置「连接」页 → 新增「音频中继」分区</h2>
+<div class="grid">
+  <div class="scene">
+    <div class="scene-title">改造后（连接页，音量已移出）</div>
+    <div class="scene-desc">后端连接分区下方新增音频中继服务器设置</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8"/>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle">通用</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle">连接</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle">保活</text>
+
+        <text x="20" y="118" font-size="13" fill="#6B7280" font-weight="600">后端连接</text>
+        <rect x="12" y="128" width="351" height="176" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="158" font-size="14" fill="#1F2329">🔌 连接状态</text>
+        <text x="343" y="158" font-size="13" fill="#2E9E5B" text-anchor="end">已连接</text>
+        <line x1="32" y1="170" x2="343" y2="170" stroke="#F0F1F3"/>
+        <text x="32" y="194" font-size="14" fill="#1F2329">🆔 设备标识</text>
+        <text x="343" y="194" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">a3f8…9c</text>
+        <line x1="32" y1="206" x2="343" y2="206" stroke="#F0F1F3"/>
+        <text x="32" y="230" font-size="14" fill="#1F2329">🏷️ 设备昵称</text>
+        <text x="343" y="230" font-size="13" fill="#6B7280" text-anchor="end">办公手机</text>
+        <line x1="32" y1="242" x2="343" y2="242" stroke="#F0F1F3"/>
+        <text x="32" y="266" font-size="14" fill="#1F2329">🌐 服务地址</text>
+        <text x="343" y="266" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">bridge.example:15160</text>
+
+        <text x="20" y="334" font-size="13" fill="#6B7280" font-weight="600">音频中继</text>
+        <rect x="12" y="344" width="351" height="96" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <rect x="323" y="344" width="40" height="20" rx="10" fill="#EAF2FE"/>
+        <text x="343" y="358" font-size="10" fill="#1A6EE8" text-anchor="middle" font-weight="600">新增</text>
+        <text x="32" y="376" font-size="14" fill="#1F2329">📡 中转服务器</text>
+        <text x="300" y="376" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">039039.xyz:15151</text>
+        <text x="343" y="376" font-size="13" fill="#1A6EE8" text-anchor="end">›</text>
+        <line x1="32" y1="388" x2="343" y2="388" stroke="#F0F1F3"/>
+        <text x="32" y="412" font-size="14" fill="#1F2329">🔄 自动重连</text>
+        <rect x="304" y="400" width="39" height="22" rx="11" fill="#1A6EE8"/>
+        <circle cx="325" cy="411" r="9" fill="#fff"/>
+        <text x="343" y="412" font-size="13" fill="#2E9E5B" text-anchor="end">开</text>
+
+        <text x="20" y="466" font-size="12" fill="#6B7280">音频中继走 Aurelay 中转服务器，独立于 Bridge 后端连接。</text>
+        <text x="20" y="486" font-size="12" fill="#6B7280">配对自动完成（设备标识 + 令牌），音量与波形在主页面内调节。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#8A919F" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 编辑服务器弹窗 -->
+  <div class="scene">
+    <div class="scene-title">点击「中转服务器」→ 编辑弹窗</div>
+    <div class="scene-desc">复用项目已有「服务地址」输入弹窗样式（host + port）</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8"/>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle">通用</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle">连接</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle">保活</text>
+
+        <text x="20" y="118" font-size="13" fill="#6B7280" font-weight="600">后端连接</text>
+        <rect x="12" y="128" width="351" height="176" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="158" font-size="14" fill="#1F2329">🔌 连接状态</text>
+        <text x="343" y="158" font-size="13" fill="#2E9E5B" text-anchor="end">已连接</text>
+        <line x1="32" y1="170" x2="343" y2="170" stroke="#F0F1F3"/>
+        <text x="32" y="194" font-size="14" fill="#1F2329">🆔 设备标识</text>
+        <text x="343" y="194" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">a3f8…9c</text>
+        <line x1="32" y1="206" x2="343" y2="206" stroke="#F0F1F3"/>
+        <text x="32" y="230" font-size="14" fill="#1F2329">🏷️ 设备昵称</text>
+        <text x="343" y="230" font-size="13" fill="#6B7280" text-anchor="end">办公手机</text>
+        <line x1="32" y1="242" x2="343" y2="242" stroke="#F0F1F3"/>
+        <text x="32" y="266" font-size="14" fill="#1F2329">🌐 服务地址</text>
+        <text x="343" y="266" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">bridge.example:15160</text>
+
+        <text x="20" y="334" font-size="13" fill="#6B7280" font-weight="600">音频中继</text>
+        <rect x="12" y="344" width="351" height="96" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="376" font-size="14" fill="#1F2329">📡 中转服务器</text>
+        <text x="300" y="376" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">039039.xyz:15151</text>
+        <text x="343" y="376" font-size="13" fill="#1A6EE8" text-anchor="end">›</text>
+        <line x1="32" y1="388" x2="343" y2="388" stroke="#F0F1F3"/>
+        <text x="32" y="412" font-size="14" fill="#1F2329">🔄 自动重连</text>
+        <rect x="304" y="400" width="39" height="22" rx="11" fill="#1A6EE8"/>
+        <circle cx="325" cy="411" r="9" fill="#fff"/>
+        <text x="343" y="412" font-size="13" fill="#2E9E5B" text-anchor="end">开</text>
+
+        <!-- 遮罩 -->
+        <rect x="0" y="88" width="375" height="579" fill="#000" opacity="0.4"/>
+        <!-- 弹窗 -->
+        <rect x="48" y="236" width="279" height="196" rx="16" fill="#fff"/>
+        <text x="187" y="270" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle">修改中转服务器</text>
+        <text x="60" y="300" font-size="12" fill="#6B7280">服务器地址</text>
+        <rect x="60" y="308" width="255" height="40" rx="8" fill="#F5F6F8" stroke="#1A6EE8" stroke-width="1.5"/>
+        <text x="72" y="333" font-size="14" fill="#1F2329" font-family="monospace">039039.xyz:15151</text>
+        <line x1="60" y1="368" x2="315" y2="368" stroke="#F0F1F3"/>
+        <line x1="187" y1="368" x2="187" y2="432" stroke="#F0F1F3"/>
+        <text x="93" y="404" font-size="15" fill="#1A6EE8" text-anchor="middle" font-weight="600">取消</text>
+        <text x="280" y="404" font-size="15" fill="#1A6EE8" text-anchor="middle" font-weight="600">保存</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#8A919F" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 关闭自动重连二次确认 -->
+  <div class="scene">
+    <div class="scene-title">关闭「自动重连」→ 二次确认弹窗</div>
+    <div class="scene-desc">复用 CoreConfirmDialog 样式：⚠️ 图标 + 红色「确认关闭」+「取消」</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8"/>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle">通用</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle">连接</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle">保活</text>
+
+        <text x="20" y="118" font-size="13" fill="#6B7280" font-weight="600">后端连接</text>
+        <rect x="12" y="128" width="351" height="176" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="158" font-size="14" fill="#1F2329">🔌 连接状态</text>
+        <text x="343" y="158" font-size="13" fill="#2E9E5B" text-anchor="end">已连接</text>
+        <line x1="32" y1="170" x2="343" y2="170" stroke="#F0F1F3"/>
+        <text x="32" y="194" font-size="14" fill="#1F2329">🆔 设备标识</text>
+        <text x="343" y="194" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">a3f8…9c</text>
+        <line x1="32" y1="206" x2="343" y2="206" stroke="#F0F1F3"/>
+        <text x="32" y="230" font-size="14" fill="#1F2329">🏷️ 设备昵称</text>
+        <text x="343" y="230" font-size="13" fill="#6B7280" text-anchor="end">办公手机</text>
+        <line x1="32" y1="242" x2="343" y2="242" stroke="#F0F1F3"/>
+        <text x="32" y="266" font-size="14" fill="#1F2329">🌐 服务地址</text>
+        <text x="343" y="266" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">bridge.example:15160</text>
+
+        <text x="20" y="334" font-size="13" fill="#6B7280" font-weight="600">音频中继</text>
+        <rect x="12" y="344" width="351" height="96" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="376" font-size="14" fill="#1F2329">📡 中转服务器</text>
+        <text x="300" y="376" font-size="13" fill="#6B7280" text-anchor="end" font-family="monospace">039039.xyz:15151</text>
+        <text x="343" y="376" font-size="13" fill="#1A6EE8" text-anchor="end">›</text>
+        <line x1="32" y1="388" x2="343" y2="388" stroke="#F0F1F3"/>
+        <text x="32" y="412" font-size="14" fill="#1F2329">🔄 自动重连</text>
+        <rect x="304" y="400" width="39" height="22" rx="11" fill="#1A6EE8"/>
+        <circle cx="325" cy="411" r="9" fill="#fff"/>
+        <text x="343" y="412" font-size="13" fill="#2E9E5B" text-anchor="end">开</text>
+
+        <!-- 遮罩 -->
+        <rect x="0" y="88" width="375" height="579" fill="#000" opacity="0.4"/>
+        <!-- 弹窗 -->
+        <rect x="48" y="232" width="279" height="206" rx="16" fill="#fff"/>
+        <text x="187" y="276" font-size="30" text-anchor="middle">⚠️</text>
+        <text x="187" y="312" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle">关闭「自动重连」？</text>
+        <text x="187" y="336" font-size="12" fill="#6B7280" text-anchor="middle">自动重连关闭后，网络波动或</text>
+        <text x="187" y="354" font-size="12" fill="#6B7280" text-anchor="middle">中转掉线将不会自动恢复连接。</text>
+        <line x1="48" y1="372" x2="327" y2="372" stroke="#F0F1F3"/>
+        <line x1="187" y1="372" x2="187" y2="438" stroke="#F0F1F3"/>
+        <text x="93" y="406" font-size="15" fill="#6B7280" text-anchor="middle">取消</text>
+        <text x="280" y="406" font-size="15" fill="#E5484D" text-anchor="middle" font-weight="600">确认关闭</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#8A919F" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>设计要点与待确认项：</b>
+  <ul class="clean">
+    <li><b>中转服务器可编辑</b>：点击行弹出「修改中转服务器」输入框（复用项目已有「服务地址」编辑弹窗样式，host + port），保存后写入持久化（DataStore/SharedPreferences），下次连接生效。</li>
+    <li><b>自动重连默认开 + 持久化 + 关闭二次确认</b>：复用项目已有 <code>CoreConfirmDialog</code>（<code>SettingsPages.kt</code> 422-445 行）的机制与样式 —— ⚠️ 大图标 + 标题「关闭「自动重连」？」+ 说明文案 + 红色「确认关闭」按钮 + 「取消」按钮。关闭后持久化，避免误触导致中转掉线不恢复。</li>
+    <li><b>配对机制（已按源码修正）</b>：Aurelay 用 <code>device_id + token</code> 握手，<b>无房间码/配对码</b>。token 是客户端内部自动管理的身份凭证，<b>不暴露在设置页</b>，用户点「开始中继」即自动连接。</li>
+    <li><b>后端对接（硬约束）</b>：严格复用 Aurelay 现有协议、<b>后端零改动</b>，保证 Aurelay 原版 App 继续可用、与 Bridge 同时共存。客户端只复刻 <code>RelayProtocol</code>（ARLY 帧）+ <code>RelayClient</code>（出站 WS 连 <code>039039.xyz:15151/api/aurelay/relay</code>）+ <code>OpusDecoder</code>，绝不触碰服务端。</li>
+    <li><b>音量语义</b>：「中继音量」= 程序自身 AudioTrack 的软增益（<code>setVolume(0~1f)</code>），只影响中继播放，不动系统媒体音量（与 Aurelay 一致）。</li>
+    <li><b>音量归位</b>：音量滑块在主页面「音频中继」内，与波形同屏（对应 Aurelay 原版的「可视化条 + 音量滑块」中间区）。</li>
+    <li><b>波形</b>：还原 Aurelay <code>RealAudioVisualizer</code> —— 24 根上下对称柱 + 中心圆点，实时频段跳动，数据来自 <code>AudioRelayService</code> 的 <code>ACTION_AUDIO_LEVEL</code> 广播（24 维 float 数组）。波形下方不放多余文案，避免与柱子重叠。</li>
+    <li><b>音量环</b>：确认不加（仅保留柱状波形）。</li>
+  </ul>
+</div>
+
+</body>
+</html>

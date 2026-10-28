@@ -195,6 +195,13 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection|camera|microphone" />
 
+        <!-- 音频中继接收服务：手机放音（中转服务器 → WebSocket → Opus 解码 → 播放）。
+             mediaPlayback 前台类型；后端零改动，复用 Aurelay 中心服务器。 -->
+        <service
+            android:name="my.bridge.com.relay.AudioRelayService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
         <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏（GLOBAL_ACTION_LOCK_SCREEN）
              + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。
              用户在系统设置 → 无障碍中开启；命令路径见 CommandModule 的降级链。 -->

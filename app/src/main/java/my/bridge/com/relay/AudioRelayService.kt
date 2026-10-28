@@ -1,0 +1,905 @@
+package my.bridge.com.relay
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
+import android.os.Build
+import android.os.IBinder
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import java.io.InputStream
+import java.io.PushbackInputStream
+import java.util.Locale
+import my.bridge.com.core.common.DiagLog
+import my.bridge.com.keepalive.SilentPlayer
+
+/**
+ * 音频中继接收服务（手机放音：只保留中转链路，砍掉局域网直连/电脑放音/TLS）。
+ *
+ * 完整链路：中转服务器（039039.xyz:15151，后端零改动）→ WebSocket 出站 → 收到
+ * AURL 字节流 → 解析 8 字节包头判定编码 → Opus 解码（或裸 PCM）→ AudioTrack 播放。
+ *
+ * 作为 mediaPlayback 类型前台服务常驻，通知栏显示「正在接收电脑声音」。
+ * 播放期间让位 Bridge 的 SilentPlayer 无声锚点（避免底噪混入）。
+ *
+ * 自研流协议（AURL，与 Aurelay 完全一致）：
+ *   包头（8 字节）：[0..3]="AURL" [4]=版本1 [5]=编码(0=PCM,1=Opus)
+ *                    [6]=声道(1/2) [7]=采样率代码(0=44100,1=48000)
+ *   包头之后：每帧 = 4 字节大端长度 + 帧数据
+ */
+class AudioRelayService : Service() {
+
+    private val relayClient = RelayClient()
+    private var relayThread: Thread? = null
+
+    @Volatile
+    private var isServerRunning = false
+
+    private var audioTrack: AudioTrack? = null
+
+    // 当前 AudioTrack 采用的采样率与声道数（流协商结果，用于判断是否需要重建）
+    private var currentSampleRate: Int = 0
+    private var currentOutChannels: Int = 0
+    private var currentBufferBytes: Int = 0
+
+    // 最近一次设置的音量：新建 AudioTrack 时恢复，避免重建后音量被重置为 1.0
+    @Volatile
+    private var currentVolume: Float = 1.0f
+
+    // 音频会话代次：每开始一路新的流处理 +1（旧会话 finally 不得暂停新会话音轨）
+    @Volatile
+    private var sessionGeneration: Long = 0
+
+    // 中转链路「扫描魔数失败」的连续次数与最近一次触发重连的时间戳
+    @Volatile
+    private var relayHeaderMissCount: Int = 0
+    @Volatile
+    private var relayLastForceReconnectAt: Long = 0L
+    @Volatile
+    private var relayHeaderEof: Boolean = false
+
+    // readHeader 因「包头没读够就超时」而放弃时置位
+    @Volatile
+    private var headerIncomplete: Boolean = false
+
+    // 波形与状态监听器（供 UI 订阅）
+    @Volatile
+    private var stateListener: RelayListener? = null
+    @Volatile
+    private var levelsListener: AudioLevelsListener? = null
+
+    /** 中继状态监听器 */
+    interface RelayListener {
+        fun onState(state: RelayClient.State, detail: String)
+    }
+
+    /** 24 柱波形监听器 */
+    interface AudioLevelsListener {
+        fun onLevels(levels: FloatArray)
+    }
+
+    companion object {
+        const val ACTION_START = "my.bridge.com.relay.START"
+        const val ACTION_STOP = "my.bridge.com.relay.STOP"
+        const val ACTION_SET_VOLUME = "my.bridge.com.relay.SET_VOLUME"
+        const val EXTRA_VOLUME = "volume"
+
+        const val NOTIFICATION_ID = 2001
+        const val CHANNEL_ID = "audioRelayChannel"
+
+        // 音频接收端口（上报约定用，中转链路下仅作日志占位）
+        const val AUDIO_PORT = 5000
+
+        // 自研流协议常量（与 Aurelay 一致）
+        const val STREAM_MAGIC = "AURL"
+        const val STREAM_VERSION = 1
+        const val CODEC_PCM = 0
+        const val CODEC_OPUS = 1
+        const val RATE_44100 = 0
+        const val RATE_48000 = 1
+        const val HEADER_SIZE = 8
+
+        private const val IDLE_TIMEOUT_MS = 10_000L
+
+        // 单例访问（UI 通过它订阅状态/波形、控制启停）
+        @Volatile
+        private var instance: AudioRelayService? = null
+
+        fun instance(): AudioRelayService? = instance
+
+        /** 是否正在运行（供 UI 判断按钮状态）。 */
+        fun isRunning(): Boolean = instance?.isServerRunning == true
+
+        /** 当前中继状态（供 UI 初值）。 */
+        fun currentState(): RelayClient.State = instance?.relayState ?: RelayClient.State.IDLE
+
+        /** 启动中继（startForegroundService）。 */
+        fun start(context: Context) {
+            val intent = Intent(context, AudioRelayService::class.java).apply { action = ACTION_START }
+            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** 停止中继。 */
+        fun stop(context: Context) {
+            val intent = Intent(context, AudioRelayService::class.java).apply { action = ACTION_STOP }
+            context.startService(intent)
+        }
+
+        /** 设置中继播放音量（0~1）。 */
+        fun setVolume(context: Context, volume: Float) {
+            val intent = Intent(context, AudioRelayService::class.java).apply {
+                action = ACTION_SET_VOLUME
+                putExtra(EXTRA_VOLUME, volume)
+            }
+            context.startService(intent)
+        }
+
+        /** 订阅中继状态。 */
+        fun setStateListener(listener: RelayListener?) { instance?.stateListener = listener }
+
+        /** 订阅 24 柱波形。 */
+        fun setLevelsListener(listener: AudioLevelsListener?) { instance?.levelsListener = listener }
+    }
+
+    // 记录上一次中继状态（供 UI 订阅初值）
+    @Volatile
+    private var relayState: RelayClient.State = RelayClient.State.IDLE
+
+    // 单次接收会话的诊断统计
+    private class DiagSession(val branch: String) {
+        var frames = 0L
+        var bytes = 0L
+        var packets = 0L
+        var maxChunk = 0
+        var peak = 0
+        var startedAt = System.currentTimeMillis()
+        var firstChunkLogged = false
+        var firstPacketLogged = false
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        createNotificationChannel()
+        // 先挂常驻前台通知（mediaPlayback 类型）
+        startForegroundCompat(buildNotification("声音中继已开启 · 点此管理"))
+        DiagLog.i("中继", "音频中继接收服务已创建")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopRelay()
+                return START_NOT_STICKY
+            }
+            ACTION_SET_VOLUME -> {
+                val volume = intent.getFloatExtra(EXTRA_VOLUME, 0.8f)
+                setVolumeInternal(volume)
+                return START_NOT_STICKY
+            }
+            else -> {
+                startRelay()
+                return START_NOT_STICKY
+            }
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopRelay()
+        releaseAudioTrack()
+        instance = null
+        DiagLog.i("中继", "音频中继接收服务已销毁")
+    }
+
+    // ------------------------------------------------------------------
+    // 链路控制
+    // ------------------------------------------------------------------
+
+    private fun startRelay() {
+        if (isServerRunning) return
+        isServerRunning = true
+        relayState = RelayClient.State.CONNECTING
+        stateListener?.onState(RelayClient.State.CONNECTING, "正在连接中转服务器")
+
+        // 从 RelayPrefs 读音量与自动重连开关
+        currentVolume = RelayPrefs.volume(this)
+
+        relayClient.listener = object : RelayClient.Listener {
+            override fun onStateChanged(state: RelayClient.State, detail: String) {
+                relayState = state
+                stateListener?.onState(state, detail)
+            }
+
+            override fun onAudioData(size: Int) {
+                // 波形由解码后的 PCM 计算，这里不处理
+            }
+        }
+
+        relayThread = Thread({
+            try {
+                relayClient.start(this@AudioRelayService, RelayPrefs.autoReconnect(this@AudioRelayService))
+                while (relayClient.isRunning() && isServerRunning) {
+                    val input = relayClient.audioInput()
+                    if (input == null) {
+                        try { Thread.sleep(100) } catch (e: InterruptedException) { break }
+                        continue
+                    }
+                    handleStream(input, "中转服务器")
+                }
+            } catch (e: Exception) {
+                DiagLog.e("中继", "中转接收异常", e)
+            }
+        }, "BridgeRelayStream").also { it.start() }
+        DiagLog.i("中继", "已选择服务器中转：主动出站连接中转服务器")
+    }
+
+    private fun stopRelay() {
+        isServerRunning = false
+        try {
+            relayClient.stop()
+        } catch (e: Exception) {
+            DiagLog.w("中继", "停止中转客户端失败：${e.message}")
+        }
+        relayThread?.interrupt()
+        relayThread = null
+        // 让位结束：恢复无声锚点
+        SilentPlayer.setScenarioAllowed(this, true)
+        // 暂停并清空音轨（不 release，下次复用会重新 play）
+        try {
+            audioTrack?.pause()
+            audioTrack?.flush()
+        } catch (e: Exception) { }
+        relayState = RelayClient.State.IDLE
+        stateListener?.onState(RelayClient.State.IDLE, "已停止")
+        stopSelf()
+    }
+
+    // ------------------------------------------------------------------
+    // 流处理（AURL 解析 + Opus 解码 + AudioTrack 播放）
+    // ------------------------------------------------------------------
+
+    private fun handleStream(rawInput: InputStream, peerLabel: String) {
+        var decoder: OpusDecoder? = null
+        var session: DiagSession? = null
+        val myGeneration = ++sessionGeneration
+        DiagLog.i("中继", "开始处理来自 $peerLabel 的音频流（会话代次 #$myGeneration）")
+
+        // 真实音频开始播放，无声播放锚点让位（避免底噪混入输出）
+        SilentPlayer.setScenarioAllowed(this, false)
+        refreshNotification("正在接收电脑声音 · 点此管理")
+
+        try {
+            val input = PushbackInputStream(rawInput, HEADER_SIZE)
+            headerIncomplete = false
+            relayHeaderEof = false
+
+            val isRelayPeer = peerLabel == "中转服务器"
+            val header = readHeader(input, isRelayPeer)
+            if (header == null && headerIncomplete) {
+                DiagLog.w("中继", "流包头未收全，放弃本次会话（不按裸 PCM 处理）")
+                if (isRelayPeer) onRelayHeaderMissed()
+                return
+            }
+
+            var framed = false
+            var codec = CODEC_PCM
+            var streamChannels = 2
+            var streamSampleRate = 44100
+
+            if (header != null) {
+                if (isRelayPeer) relayHeaderMissCount = 0
+                framed = true
+                codec = header[5].toInt() and 0xFF
+                streamChannels = if ((header[6].toInt() and 0xFF) == 1) 1 else 2
+                streamSampleRate = if ((header[7].toInt() and 0xFF) == RATE_48000) 48000 else 44100
+                DiagLog.i("中继", "收到自研 AURL 包头：" +
+                    "编码=${if (codec == CODEC_OPUS) "Opus" else "裸PCM"} " +
+                    "声道=$streamChannels 采样率=$streamSampleRate")
+            } else {
+                DiagLog.i("中继", "未检测到 AURL 包头，按官方裸 PCM 流处理（44100Hz / 立体声）")
+            }
+
+            val isOpus = framed && codec == CODEC_OPUS
+            val playbackRate = if (isOpus) 48000 else streamSampleRate
+
+            val outChannels = if (supportsStereo(playbackRate)) 2 else 1
+            val track = ensureAudioTrack(playbackRate, outChannels)
+            if (track == null) {
+                DiagLog.e("音轨", "AudioTrack 创建失败，本次连接无法出声音，主动断开")
+                return
+            }
+
+            if (isOpus) {
+                decoder = OpusDecoder(streamChannels, playbackRate)
+                if (!decoder.start()) {
+                    DiagLog.e("解码", "Opus 解码器初始化失败，断开本次连接")
+                    return
+                }
+            }
+
+            val currentSession = DiagSession(branchName(framed, isOpus))
+            session = currentSession
+            DiagLog.i("中继", "本次接收分支：「${currentSession.branch}」，输出采样率=$playbackRate 输出声道=$outChannels")
+
+            if (framed) {
+                if (isOpus) {
+                    streamFramedOpus(input, track, decoder, outChannels, streamChannels * 2, currentSession)
+                } else {
+                    streamFramedPcm(input, track, outChannels, currentSession)
+                }
+            } else {
+                streamRawPcm(input, track, outChannels, currentSession)
+            }
+        } catch (e: Exception) {
+            DiagLog.e("中继", "客户端会话异常：${e.message}", e)
+        } finally {
+            try { decoder?.stop() } catch (e: Exception) { }
+            val finished = session
+            if (finished != null) {
+                DiagLog.i("中继", "接收结束：${sessionSummary(finished)}")
+            }
+            // 只暂停并清空缓冲、不释放音轨；仅当本会话仍是最新代次才暂停
+            if (myGeneration == sessionGeneration) {
+                try {
+                    audioTrack?.pause()
+                    audioTrack?.flush()
+                } catch (e: Exception) { }
+            }
+            val isLatest = myGeneration == sessionGeneration
+            if (isLatest) {
+                SilentPlayer.setScenarioAllowed(this, true)
+                refreshNotification("声音中继已开启 · 点此管理")
+            }
+        }
+    }
+
+    /** 中转链路扫描魔数失败时，受控触发一次中转重连（让 PC 重新发包头）。 */
+    private fun onRelayHeaderMissed() {
+        if (!relayClient.isRunning()) return
+        if (relayHeaderEof) {
+            DiagLog.w("中继", "中转管道已读到 EOF（对端断开），静默等待自动重连重建管道")
+            return
+        }
+        val now = System.currentTimeMillis()
+        relayHeaderMissCount++
+        val minIntervalMs = 5000L
+        val needReconnect = relayHeaderMissCount >= 1 && (now - relayLastForceReconnectAt) >= minIntervalMs
+        if (!needReconnect) {
+            DiagLog.w("中继", "中转包头缺失计数 ${relayHeaderMissCount}，距上次重连过近，暂不重连")
+            return
+        }
+        relayHeaderMissCount = 0
+        relayLastForceReconnectAt = now
+        DiagLog.w("中继", "中转链路扫描不到 AURL 包头，触发受控重连让 PC 重新发包头")
+        try {
+            relayClient.forceReconnect()
+        } catch (e: Exception) {
+            DiagLog.e("中继", "触发中转重连失败：${e.message}", e)
+        }
+    }
+
+    /** 读取 8 字节流包头。 */
+    private fun readHeader(input: PushbackInputStream, isRelayPeer: Boolean = false): ByteArray? {
+        val header = ByteArray(HEADER_SIZE)
+        var filled = 0
+        var idleMillis = 0L
+        while (filled < HEADER_SIZE) {
+            if (!isServerRunning) {
+                headerIncomplete = true
+                return null
+            }
+            try {
+                val n = input.read(header, filled, HEADER_SIZE - filled)
+                if (n < 0) {
+                    if (filled > 0) input.unread(header, 0, filled)
+                    headerIncomplete = true
+                    return null
+                }
+                filled += n
+                idleMillis = 0
+            } catch (e: java.net.SocketTimeoutException) {
+                idleMillis += 100
+                if (idleMillis >= IDLE_TIMEOUT_MS) {
+                    if (filled > 0) input.unread(header, 0, filled)
+                    headerIncomplete = true
+                    return null
+                }
+            }
+        }
+        val magic = String(header, 0, 4, Charsets.US_ASCII)
+        if (magic == STREAM_MAGIC && (header[4].toInt() and 0xFF) == STREAM_VERSION) {
+            return header
+        }
+        // 中转：极可能是「旧会话残留帧」或「包头被 WebSocket 帧边界拆散」，扫描魔数
+        if (isRelayPeer) {
+            return scanRelayMagic(input, header)
+        }
+        DiagLog.w("中继", "未检测到 AURL 包头，按官方裸 PCM 处理")
+        input.unread(header, 0, HEADER_SIZE)
+        return null
+    }
+
+    /** 中转链路上扫描 AURL 魔数：逐字节跳过残留，直到找到合法包头或超时放弃。 */
+    private fun scanRelayMagic(input: PushbackInputStream, first: ByteArray): ByteArray? {
+        input.unread(first, 0, first.size)
+        val win = ByteArray(4)
+        var winLen = 0
+        var skipped = 0
+        var idleMillis = 0L
+        val maxSkip = 64 * 1024
+        while (skipped < maxSkip) {
+            if (!isServerRunning) {
+                headerIncomplete = true
+                return null
+            }
+            val b: Int
+            try {
+                b = input.read()
+            } catch (e: java.net.SocketTimeoutException) {
+                idleMillis += 100
+                if (idleMillis >= IDLE_TIMEOUT_MS) {
+                    headerIncomplete = true
+                    return null
+                }
+                continue
+            }
+            if (b < 0) {
+                headerIncomplete = true
+                relayHeaderEof = true
+                return null
+            }
+            idleMillis = 0
+            skipped++
+            if (winLen < 4) {
+                win[winLen] = b.toByte()
+                winLen++
+            } else {
+                win[0] = win[1]
+                win[1] = win[2]
+                win[2] = win[3]
+                win[3] = b.toByte()
+            }
+            if (winLen == 4 && win[0] == 'A'.code.toByte() && win[1] == 'U'.code.toByte() &&
+                win[2] == 'R'.code.toByte() && win[3] == 'L'.code.toByte()
+            ) {
+                val rest = ByteArray(4)
+                var filled = 0
+                while (filled < 4) {
+                    if (!isServerRunning) {
+                        headerIncomplete = true
+                        return null
+                    }
+                    try {
+                        val n = input.read(rest, filled, 4 - filled)
+                        if (n < 0) {
+                            headerIncomplete = true
+                            return null
+                        }
+                        filled += n
+                    } catch (e: java.net.SocketTimeoutException) {
+                        idleMillis += 100
+                        if (idleMillis >= IDLE_TIMEOUT_MS) {
+                            headerIncomplete = true
+                            return null
+                        }
+                    }
+                }
+                val full = ByteArray(HEADER_SIZE)
+                System.arraycopy("AURL".toByteArray(Charsets.US_ASCII), 0, full, 0, 4)
+                System.arraycopy(rest, 0, full, 4, 4)
+                if ((full[4].toInt() and 0xFF) == STREAM_VERSION) {
+                    if (skipped > 4) {
+                        DiagLog.i("中继", "中转链路跳过 ${skipped - 4} 字节残留后定位到 AURL 包头")
+                    }
+                    return full
+                }
+                winLen = 0
+            }
+        }
+        DiagLog.e("中继", "中转链路扫描 $maxSkip 字节仍未找到 AURL 包头，放弃本次会话")
+        headerIncomplete = true
+        return null
+    }
+
+    /** 官方裸 PCM 流：直接写 AudioTrack。 */
+    private fun streamRawPcm(input: InputStream, track: AudioTrack, outChannels: Int, session: DiagSession) {
+        val buffer = ByteArray(4096)
+        var read: Int
+        var frameCount = 0
+        var consecutiveErrors = 0
+        val frameSize = 4
+        while (isServerRunning && consecutiveErrors < 5) {
+            try {
+                read = input.read(buffer)
+                if (read == -1) break
+                consecutiveErrors = 0
+                if (read > 0) {
+                    recordChunk(session, buffer, read)
+                    writeToTrack(track, buffer, read, frameSize, outChannels)
+                    if (++frameCount % 5 == 0) {
+                        levelsListener?.onLevels(calculateAudioLevels(buffer, read))
+                    }
+                }
+            } catch (e: java.net.SocketTimeoutException) {
+                continue
+            } catch (e: java.io.IOException) {
+                consecutiveErrors++
+                DiagLog.w("接收", "裸 PCM 读取失败 $consecutiveErrors/5：${e.message}")
+            }
+        }
+    }
+
+    /** 自研分帧 PCM 流：每帧 = 4 字节大端长度 + PCM 数据。 */
+    private fun streamFramedPcm(input: PushbackInputStream, track: AudioTrack, outChannels: Int, session: DiagSession) {
+        val frameSize = outChannels * 2
+        var frameCount = 0
+        while (isServerRunning) {
+            val payload = readFrame(input) ?: break
+            if (payload.isEmpty()) continue
+            recordChunk(session, payload, payload.size)
+            writeToTrack(track, payload, payload.size, frameSize, outChannels)
+            if (++frameCount % 5 == 0) {
+                levelsListener?.onLevels(calculateAudioLevels(payload, payload.size))
+            }
+        }
+    }
+
+    /** 自研分帧 Opus 流：每帧为 1 个 Opus 包，解码后写 AudioTrack。 */
+    private fun streamFramedOpus(
+        input: PushbackInputStream,
+        track: AudioTrack,
+        decoder: OpusDecoder?,
+        outChannels: Int,
+        inputFrameSize: Int,
+        session: DiagSession,
+    ) {
+        if (decoder == null) return
+        var frameCount = 0
+        while (isServerRunning) {
+            val packet = readFrame(input) ?: break
+            if (packet.isEmpty()) continue
+            session.packets++
+            if (!session.firstPacketLogged) {
+                session.firstPacketLogged = true
+                val preview = packet.take(minOf(packet.size, 16)).joinToString(" ") { "%02x".format(it) }
+                DiagLog.i("接收", "首个 Opus 包已到达：长度=${packet.size} 字节，前 ${minOf(packet.size, 16)} 字节=[$preview]")
+            }
+            decoder.decode(packet, packet.size) { pcm, size ->
+                recordChunk(session, pcm, size)
+                writeToTrack(track, pcm, size, inputFrameSize, outChannels)
+                if (++frameCount % 5 == 0) {
+                    levelsListener?.onLevels(calculateAudioLevels(pcm, size))
+                }
+            }
+        }
+    }
+
+    /** 读取一个音频帧：4 字节大端长度 + 数据；流结束返回 null。 */
+    private fun readFrame(input: PushbackInputStream): ByteArray? {
+        while (true) {
+            val lenBuf = ByteArray(4)
+            if (!readFully(input, lenBuf, 4)) return null
+            val length = ((lenBuf[0].toInt() and 0xFF) shl 24) or
+                ((lenBuf[1].toInt() and 0xFF) shl 16) or
+                ((lenBuf[2].toInt() and 0xFF) shl 8) or
+                (lenBuf[3].toInt() and 0xFF)
+            // 若这 4 字节恰好是 AURL 魔数，说明 PC 端在推流中途重连并重发了新包头
+            val isAurlMagic = lenBuf[0] == 'A'.code.toByte() && lenBuf[1] == 'U'.code.toByte() &&
+                lenBuf[2] == 'R'.code.toByte() && lenBuf[3] == 'L'.code.toByte()
+            if (isAurlMagic) {
+                DiagLog.w("中继", "帧流中检测到新 AURL 包头（PC 重连重发），跳过包头继续解析后续帧")
+                val rest = ByteArray(4)
+                if (!readFully(input, rest, 4)) return null
+                continue
+            }
+            if (length <= 0 || length > 1024 * 1024) {
+                Log.w("AudioRelay", "非法帧长度 $length，结束本次流")
+                return null
+            }
+            val payload = ByteArray(length)
+            if (!readFully(input, payload, length)) return null
+            return payload
+        }
+    }
+
+    /** 尽力读满指定字节数。 */
+    private fun readFully(input: InputStream, buffer: ByteArray, length: Int): Boolean {
+        var filled = 0
+        var idleMillis = 0L
+        while (filled < length) {
+            if (!isServerRunning) return false
+            try {
+                val n = input.read(buffer, filled, length - filled)
+                if (n < 0) return false
+                filled += n
+                idleMillis = 0
+            } catch (e: java.net.SocketTimeoutException) {
+                idleMillis += 100
+                if (idleMillis >= IDLE_TIMEOUT_MS) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    /** 把一段 PCM 写入 AudioTrack（必要时做立体声转单声道与帧对齐）。 */
+    private fun writeToTrack(
+        track: AudioTrack,
+        buffer: ByteArray,
+        length: Int,
+        inputFrameSize: Int,
+        outChannels: Int,
+    ) {
+        val alignedBytes = (length / inputFrameSize) * inputFrameSize
+        if (alignedBytes <= 0) return
+        try {
+            val writeMode = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+                AudioTrack.WRITE_BLOCKING
+            } else {
+                AudioTrack.WRITE_NON_BLOCKING
+            }
+            val result = if (outChannels == 2 && inputFrameSize == 4) {
+                track.write(buffer, 0, alignedBytes, writeMode)
+            } else if (outChannels == 1 && inputFrameSize == 4) {
+                val mono = convertStereoToMono(buffer, alignedBytes)
+                track.write(mono, 0, mono.size, writeMode)
+            } else {
+                track.write(buffer, 0, alignedBytes, writeMode)
+            }
+            if (result < 0) {
+                DiagLog.w("音轨", "AudioTrack.write 返回错误码 $result（写入长度=$alignedBytes）")
+            }
+        } catch (e: Exception) {
+            DiagLog.e("音轨", "AudioTrack 写入异常：${e.message}", e)
+        }
+    }
+
+    private fun supportsStereo(sampleRate: Int): Boolean {
+        val size = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+        return size != AudioTrack.ERROR_BAD_VALUE && size != AudioTrack.ERROR && size > 0
+    }
+
+    /** 按流协商出的采样率与声道数创建（或复用）AudioTrack。 */
+    @Synchronized
+    private fun ensureAudioTrack(sampleRate: Int, outChannels: Int): AudioTrack? {
+        val existing = audioTrack
+        if (existing != null &&
+            currentSampleRate == sampleRate &&
+            currentOutChannels == outChannels &&
+            existing.state == AudioTrack.STATE_INITIALIZED
+        ) {
+            // AudioTrack.stop() 不改变 state，复用前必须确认它真的在播放
+            if (existing.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                try {
+                    existing.flush()
+                    existing.play()
+                    DiagLog.w("音轨", "复用音轨时发现它不在播放态，已 flush 并重新 play")
+                } catch (e: Exception) {
+                    DiagLog.e("音轨", "AudioTrack 恢复播放失败：${e.message}", e)
+                }
+            } else {
+                DiagLog.i("音轨", "复用已存在的音轨")
+            }
+            return existing
+        }
+        try {
+            existing?.stop()
+            existing?.release()
+        } catch (e: Exception) { }
+        audioTrack = null
+
+        val channelConfig = if (outChannels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+        val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, AudioFormat.ENCODING_PCM_16BIT)
+        if (minBufSize <= 0) {
+            DiagLog.e("音轨", "该采样率不被支持：getMinBufferSize 返回 $minBufSize（采样率=$sampleRate）")
+            return null
+        }
+        val bufferSizeBytes = maxOf(minBufSize, minBufSize * 4)
+
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+        val audioTrackFormat = AudioFormat.Builder()
+            .setChannelMask(channelConfig)
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(sampleRate)
+            .build()
+        val builder = AudioTrack.Builder()
+            .setAudioAttributes(audioAttributes)
+            .setAudioFormat(audioTrackFormat)
+            .setBufferSizeInBytes(bufferSizeBytes)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        }
+        val built = builder.build()
+        if (built.state != AudioTrack.STATE_INITIALIZED) {
+            DiagLog.e("音轨", "AudioTrack 初始化失败，state=${built.state}")
+            built.release()
+            return null
+        }
+        try { built.setVolume(currentVolume) } catch (e: Exception) { }
+        built.play()
+        audioTrack = built
+        currentSampleRate = sampleRate
+        currentOutChannels = outChannels
+        currentBufferBytes = bufferSizeBytes
+        DiagLog.i("音轨", "新建音轨成功：sampleRate=$sampleRate channels=$outChannels buffer=$bufferSizeBytes")
+        return built
+    }
+
+    private fun setVolumeInternal(volume: Float) {
+        try {
+            val clamped = volume.coerceIn(0f, 1f)
+            currentVolume = clamped
+            RelayPrefs.setFloat(this, RelayPrefs.KEY_VOLUME, clamped)
+            audioTrack?.setVolume(clamped)
+            DiagLog.i("音轨", "中继音量已设为：$clamped")
+        } catch (e: Exception) {
+            DiagLog.e("音轨", "设置音量失败：${e.message}", e)
+        }
+    }
+
+    private fun releaseAudioTrack() {
+        try {
+            audioTrack?.stop()
+            audioTrack?.release()
+        } catch (e: Exception) { }
+        audioTrack = null
+    }
+
+    private fun convertStereoToMono(stereoBuffer: ByteArray, length: Int): ByteArray {
+        val monoSize = length / 2
+        val monoBuffer = ByteArray(monoSize)
+        var monoIndex = 0
+        var i = 0
+        while (i + 3 < length) {
+            val left = (stereoBuffer[i].toInt() and 0xFF) or ((stereoBuffer[i + 1].toInt() and 0xFF) shl 8)
+            val right = (stereoBuffer[i + 2].toInt() and 0xFF) or ((stereoBuffer[i + 3].toInt() and 0xFF) shl 8)
+            val leftSigned = left.toShort().toInt()
+            val rightSigned = right.toShort().toInt()
+            val mono = ((leftSigned + rightSigned) / 2).toShort()
+            monoBuffer[monoIndex] = (mono.toInt() and 0xFF).toByte()
+            monoBuffer[monoIndex + 1] = ((mono.toInt() shr 8) and 0xFF).toByte()
+            i += 4
+            monoIndex += 2
+        }
+        return monoBuffer
+    }
+
+    /** 计算 24 柱频谱（简化：按时域采样块均分，供波形动画）。 */
+    private fun calculateAudioLevels(buffer: ByteArray, size: Int): FloatArray {
+        val bands = 24
+        val levels = FloatArray(bands)
+        val samplesPerBand = size / (bands * 2)
+        if (samplesPerBand <= 0) return levels
+        for (i in 0 until bands) {
+            var sum = 0f
+            val start = i * samplesPerBand * 2
+            val end = minOf(start + samplesPerBand * 2, size)
+            for (j in start until end step 2) {
+                if (j + 1 < size) {
+                    val sample = (buffer[j].toInt() and 0xFF) or ((buffer[j + 1].toInt() and 0xFF) shl 8)
+                    val normalized = sample.toShort().toFloat() / 32768f
+                    sum += kotlin.math.abs(normalized)
+                }
+            }
+            levels[i] = (sum / samplesPerBand).coerceIn(0f, 1f)
+        }
+        return levels
+    }
+
+    private fun branchName(framed: Boolean, isOpus: Boolean): String = when {
+        !framed -> "官方裸PCM"
+        isOpus -> "自研分帧Opus"
+        else -> "自研分帧PCM"
+    }
+
+    private fun recordChunk(session: DiagSession, data: ByteArray, size: Int) {
+        session.frames++
+        session.bytes += size
+        if (size > session.maxChunk) session.maxChunk = size
+        var localPeak = 0
+        var index = 0
+        while (index + 1 < size) {
+            val sample = ((data[index].toInt() and 0xFF) or (data[index + 1].toInt() shl 8)).toShort().toInt()
+            val abs = if (sample < 0) -sample else sample
+            if (abs > localPeak) localPeak = abs
+            index += 2
+        }
+        if (localPeak > session.peak) session.peak = localPeak
+        if (!session.firstChunkLogged) {
+            session.firstChunkLogged = true
+            val preview = data.take(minOf(size, 16)).joinToString(" ") { "%02x".format(it) }
+            DiagLog.i("接收", "首个音频数据到达：分支=${session.branch} 长度=$size 字节，前 ${minOf(size, 16)} 字节=[$preview]")
+        }
+    }
+
+    private fun sessionSummary(session: DiagSession): String {
+        val seconds = (System.currentTimeMillis() - session.startedAt) / 1000.0
+        return "分支=${session.branch} 时长=${String.format(Locale.US, "%.1f", seconds)}s " +
+            "收到Opus包=${session.packets} 写入音轨块数=${session.frames} " +
+            "写入字节=${session.bytes} 单块最大=${session.maxChunk}字节 全程峰值=${session.peak}"
+    }
+
+    // ------------------------------------------------------------------
+    // 通知
+    // ------------------------------------------------------------------
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "音频中继服务",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "手机放音时显示接收状态"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            }
+            NotificationManagerCompat.from(this).createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildNotification(text: String): Notification {
+        val openAppIntent = Intent(this, my.bridge.com.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            this, 0, openAppIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val stopIntent = Intent(this, AudioRelayService::class.java).apply { action = ACTION_STOP }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 1, stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Bridge 音频中继")
+            .setContentText(text)
+            .setSmallIcon(my.bridge.com.R.mipmap.ic_launcher)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setContentIntent(openAppPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止接收", stopPendingIntent)
+            .build()
+    }
+
+    private fun refreshNotification(text: String) {
+        val manager = NotificationManagerCompat.from(this)
+        manager.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private fun startForegroundCompat(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                androidx.core.app.ServiceCompat.startForeground(
+                    this, NOTIFICATION_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+}

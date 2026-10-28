@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge 集成 Aurelay「中继模式」技术调研与原型</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --ink: #1a1d21;
+    --ink-2: #4b5563;
+    --ink-3: #8a93a2;
+    --line: #e5e8ee;
+    --brand: #2563eb;
+    --brand-soft: #eff4ff;
+    --green: #16a34a;
+    --green-soft: #eafaf0;
+    --red: #dc2626;
+    --red-soft: #fdecec;
+    --amber: #d97706;
+    --amber-soft: #fef4e6;
+    --purple: #7c3aed;
+    --purple-soft: #f3eeff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 28px; letter-spacing: -0.5px; }
+  h2 { font-size: 21px; margin: 44px 0 16px; padding-left: 12px; border-left: 4px solid var(--brand); }
+  h3 { font-size: 17px; margin: 24px 0 10px; }
+  .sub { color: var(--ink-2); font-size: 14px; margin-top: 6px; }
+  .meta { display:flex; gap:16px; flex-wrap:wrap; margin-top:16px; }
+  .tag { font-size:12px; padding:3px 10px; border-radius:20px; font-weight:600; }
+  .tag.blue { background:var(--brand-soft); color:var(--brand); }
+  .tag.green { background:var(--green-soft); color:var(--green); }
+  .tag.red { background:var(--red-soft); color:var(--red); }
+  .tag.amber { background:var(--amber-soft); color:var(--amber); }
+  .tag.purple { background:var(--purple-soft); color:var(--purple); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px 24px; margin:16px 0; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
+  .card h3 { margin-top:0; }
+  p { margin:8px 0; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:720px){ .grid2 { grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin:12px 0; }
+  th, td { border:1px solid var(--line); padding:9px 12px; text-align:left; vertical-align:top; }
+  th { background:#fafbfc; font-weight:600; white-space:nowrap; }
+  .mono { font-family:"SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size:12.5px; background:#f6f7f9; padding:1px 6px; border-radius:5px; }
+  ul, ol { padding-left:22px; margin:8px 0; }
+  li { margin:5px 0; }
+  .callout { border-radius:10px; padding:14px 16px; margin:14px 0; font-size:14px; }
+  .callout.keep { background:var(--green-soft); border-left:4px solid var(--green); }
+  .callout.cut { background:var(--red-soft); border-left:4px solid var(--red); }
+  .callout.warn { background:var(--amber-soft); border-left:4px solid var(--amber); }
+  .callout.info { background:var(--brand-soft); border-left:4px solid var(--brand); }
+  .callout b { display:block; margin-bottom:4px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; margin:10px 0; font-size:13px; }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .dot { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  svg text { font-family:inherit; }
+  .flow { width:100%; height:auto; display:block; }
+  .num { display:inline-flex; width:22px; height:22px; background:var(--brand); color:#fff; border-radius:50%; align-items:center; justify-content:center; font-size:13px; font-weight:600; margin-right:8px; vertical-align:middle; }
+  .divider { height:1px; background:var(--line); margin:28px 0; }
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 22px; }
+  .toc a { color:var(--brand); text-decoration:none; }
+  .toc li { margin:4px 0; }
+  .verdict { font-size:15px; font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Bridge 集成 Aurelay「中继模式」技术调研与原型</h1>
+  <div class="sub">调研对象：<span class="mono">references/aurelay-main</span>（AudioRelay/Aurelay，v1.5.45）　|　目标：吞并/集成到 Bridge，仅保留中继模式</div>
+  <div class="meta">
+    <span class="tag blue">调研文档</span>
+    <span class="tag amber">大改动 · 需评审</span>
+    <span class="tag purple">2026-10-28</span>
+  </div>
+
+  <div class="toc" style="margin-top:24px;">
+    <b>目录</b>
+    <ol style="margin:8px 0 0;">
+      <li><a href="#s1">一句话结论</a></li>
+      <li><a href="#s2">Aurelay 到底在做什么（架构拆解）</a></li>
+      <li><a href="#s3">精简建议：保留 / 砍掉</a></li>
+      <li><a href="#s4">集成到 Bridge 的两种路线</a></li>
+      <li><a href="#s5">推荐架构（原型模型）</a></li>
+      <li><a href="#s6">关键决策点与风险</a></li>
+      <li><a href="#s7">落地步骤建议</a></li>
+    </ol>
+  </div>
+
+  <!-- ============ 1 ============ -->
+  <h2 id="s1">一、一句话结论</h2>
+  <div class="card">
+    <p class="verdict" style="color:var(--green);">可行，但不是「搬运 Aurelay」，而是「抽取其音频中继内核，重写到 Bridge 的命令/服务体系中」。</p>
+    <p>Aurelay 有约 <b>30 个 Kotlin 文件</b>，但真正属于「中继模式」的内核只有 <b>5~6 个文件</b>（约 2000 行）：流协议 + 接收播放 + 中转客户端。其余（UI 巨型单函数、广告、内购、电脑放音、保活、诊断）要么 Bridge 已有等价物、要么应砍掉。</p>
+    <p>核心难点不在「抄代码」，而在 <b>Bridge 的中转链路要不要复用自家 WS 通道，还是复用 Aurelay 的独立中转服务器</b> —— 这是决定工作量和架构形态的第一岔路。</p>
+  </div>
+
+  <!-- ============ 2 ============ -->
+  <h2 id="s2">二、Aurelay 到底在做什么</h2>
+  <div class="card">
+    <h3>2.1 产品形态：两种模式</h3>
+    <div class="grid2">
+      <div>
+        <p><b>① 手机放音（接收端）</b> —— 「电脑声音 → 手机播放」</p>
+        <p class="sub">手机当电脑的「无线音箱/耳机」。电脑把声卡输出编码成 Opus，推给手机，手机解码播放。这是 <b>你要的「中继模式」</b>。</p>
+      </div>
+      <div>
+        <p><b>② 电脑放音（发送端）</b> —— 「手机麦克风 → 电脑播放」</p>
+        <p class="sub">手机当电脑的「无线麦克风」。采集手机麦克风，Opus 编码后推给电脑。这是「电脑放音」模式，<b>建议砍掉</b>。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>2.2 中继模式（手机放音）的完整链路</h3>
+    <svg class="flow" viewBox="0 0 960 420" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+      </defs>
+      <!-- 电脑 -->
+      <rect x="20" y="50" width="180" height="140" rx="10" fill="#eff4ff" stroke="#2563eb" stroke-width="1.5"/>
+      <text x="110" y="80" text-anchor="middle" font-size="15" font-weight="700" fill="#2563eb">电脑（发送端 S）</text>
+      <text x="110" y="108" text-anchor="middle" font-size="12" fill="#4b5563">声卡输出 / 麦克风</text>
+      <text x="110" y="130" text-anchor="middle" font-size="12" fill="#4b5563">Opus 编码（128kbps）</text>
+      <text x="110" y="152" text-anchor="middle" font-size="12" fill="#4b5563">AURL 分帧协议</text>
+      <text x="110" y="174" text-anchor="middle" font-size="12" fill="#4b5563">send_audio.py / PC 端</text>
+
+      <!-- 中转服务器 -->
+      <rect x="395" y="50" width="170" height="140" rx="10" fill="#fef4e6" stroke="#d97706" stroke-width="1.5"/>
+      <text x="480" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#d97706">中转服务器</text>
+      <text x="480" y="106" text-anchor="middle" font-size="12" fill="#4b5563">WebSocket (15151)</text>
+      <text x="480" y="128" text-anchor="middle" font-size="12" fill="#4b5563">房间配对 R/S</text>
+      <text x="480" y="150" text-anchor="middle" font-size="12" fill="#4b5563">音频字节原样转发</text>
+      <text x="480" y="172" text-anchor="middle" font-size="12" fill="#4b5563">不解析 / 不落盘</text>
+
+      <!-- 手机 -->
+      <rect x="760" y="50" width="180" height="140" rx="10" fill="#eafaf0" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="850" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#16a34a">手机（接收端 R）</text>
+      <text x="850" y="106" text-anchor="middle" font-size="12" fill="#4b5563">RelayClient 出站</text>
+      <text x="850" y="128" text-anchor="middle" font-size="12" fill="#4b5563">Opus 解码（系统）</text>
+      <text x="850" y="152" text-anchor="middle" font-size="12" fill="#4b5563">AudioTrack 播放</text>
+      <text x="850" y="174" text-anchor="middle" font-size="12" fill="#4b5563">= Bridge 设备</text>
+
+      <!-- 直连路径（上） -->
+      <path d="M200 100 C 280 30, 340 30, 395 90" stroke="#8a93a2" stroke-width="1.5" fill="none" stroke-dasharray="5,4"/>
+      <text x="290" y="32" text-anchor="middle" font-size="11" fill="#8a93a2">局域网直连 :5000（内网，砍掉）</text>
+
+      <!-- 中转路径 -->
+      <path d="M200 140 L 395 140" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+      <text x="300" y="132" text-anchor="middle" font-size="11" fill="#2563eb">出站推流</text>
+      <path d="M565 140 L 760 140" stroke="#16a34a" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+      <text x="665" y="132" text-anchor="middle" font-size="11" fill="#16a34a">出站拉流</text>
+
+      <!-- 协议说明 -->
+      <rect x="20" y="230" width="920" height="160" rx="10" fill="#fafbfc" stroke="#e5e8ee"/>
+      <text x="40" y="258" font-size="14" font-weight="700" fill="#1a1d21">两层协议（中继模式的关键）</text>
+      <text x="40" y="284" font-size="12.5" fill="#4b5563">① ARLY 中转帧（手机 ↔ 服务器）：魔数 "ARLY" + 类型 + 长度，hello/ready/ping/pong/data，文本帧=控制、二进制帧=音频透传</text>
+      <text x="40" y="308" font-size="12.5" fill="#4b5563">② AURL 音频流（电脑 → 手机，透传在中转 DATA 帧里）：8 字节包头（魔数 "AURL"+版本+编码+声道+采样率）+ 分帧（4 字节长度 + Opus/PCM）</text>
+      <text x="40" y="340" font-size="12.5" fill="#8a93a2">关键洞察：服务器完全不理解音频，只做「房间配对 + 字节透传」；客户端只拼连续流，解码在手机端做。</text>
+      <text x="40" y="366" font-size="12.5" fill="#8a93a2">因此「吞并」本质 = 移植 RelayClient（出站 WS + 心跳 + 退避重连）+ AURL/ARLY 协议 + OpusDecoder + AudioTrack 播放。</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3>2.3 Aurelay 源码文件清单（30 个 .kt）</h3>
+    <table>
+      <tr><th style="width:220px;">文件</th><th>职责</th><th style="width:80px;">归属</th></tr>
+      <tr><td class="mono">RelayProtocol.kt</td><td>ARLY 中转帧协议编解码（hello/ready/ping/data）</td><td><span class="tag green">内核</span></td></tr>
+      <tr><td class="mono">RelayClient.kt</td><td>中转出站 WebSocket 客户端（心跳/退避重连/管道）</td><td><span class="tag green">内核</span></td></tr>
+      <tr><td class="mono">OpusDecoder.kt</td><td>系统 Opus 解码器封装（统一 CSD 关键坑）</td><td><span class="tag green">内核</span></td></tr>
+      <tr><td class="mono">AudioRelayService.kt</td><td>接收服务：AURL 流解析 + AudioTrack 播放 + 链路切换（约 1857 行，含大量诊断）</td><td><span class="tag green">内核</span></td></tr>
+      <tr><td class="mono">OpusEncoder.kt</td><td>Opus 编码（仅「电脑放音」用）</td><td><span class="tag red">砍</span></td></tr>
+      <tr><td class="mono">AudioCaptureService.kt</td><td>麦克风采集推流（「电脑放音」）</td><td><span class="tag red">砍</span></td></tr>
+      <tr><td class="mono">NetworkWatcher.kt</td><td>网络类型探测（WiFi/蜂窝，用于 auto 链路决策）</td><td><span class="tag amber">简化</span></td></tr>
+      <tr><td class="mono">MainActivity.kt</td><td>2449 行巨型 Compose UI（含设置页、可视化）</td><td><span class="tag red">重写</span></td></tr>
+      <tr><td class="mono">AppPrefs.kt</td><td>偏好设置统一入口</td><td><span class="tag amber">简化</span></td></tr>
+      <tr><td class="mono">KeepAliveService.kt / ResourceHolder.kt / SilentPlayer.kt / OnePixelOverlay.kt / BootReceiver / KeepAliveReceiver / KeepAliveJobService</td><td>保活体系（20 项资源）</td><td><span class="tag blue">复用 Bridge 已有</span></td></tr>
+      <tr><td class="mono">AddressReporter.kt / DiagLog.kt / DiagUploader.kt / DeviceStore.kt</td><td>地址上报、诊断日志、电脑列表</td><td><span class="tag amber">部分复用</span></td></tr>
+      <tr><td class="mono">ads/ AdsManager.kt · iap/ BillingManager.kt · PurchaseManager.kt · ui/ SmartAdBanner.kt · IapAdsActivity.kt</td><td>广告 / 内购</td><td><span class="tag red">砍</span></td></tr>
+    </table>
+  </div>
+
+  <!-- ============ 3 ============ -->
+  <h2 id="s3">三、精简建议：保留什么、砍掉什么</h2>
+
+  <div class="card">
+    <h3>3.1 保留（中继内核，约 5 文件 / 2000 行）</h3>
+    <div class="callout keep">
+      <b>必须保留</b>
+      <ul>
+        <li><b>RelayProtocol.kt + RelayClient.kt</b>：出站 WebSocket 中转客户端，含心跳（30s）、退避重连（1/2/4/8/16/30s）、DNS 兜底、优雅关闭、管道重建。这是「中继」的命脉。</li>
+        <li><b>OpusDecoder.kt</b>：系统 Opus 解码。注意「统一 CSD」83 字节这个坑（AOSP C2SoftOpusDec 要求 AOPUSHDR+AOPUSDLY+AOPUSPRL 三段齐了才解码），是血泪教训，必须原样保留。</li>
+        <li><b>AURL 流协议 + AudioTrack 播放</b>：从 AudioRelayService 里抽出，剥离诊断/链路切换，重写为 Bridge 风格。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3.2 砍掉（与「中继模式」无关）</h3>
+    <div class="callout cut">
+      <b>整体删除</b>
+      <ul>
+        <li><b>电脑放音整套</b>：OpusEncoder + AudioCaptureService + DeviceStore（我的电脑列表）—— 这是「手机→电脑」方向，不是你要的中继。</li>
+        <li><b>广告 / 内购</b>：AdsManager、BillingManager、PurchaseManager、SmartAdBanner、IapAdsActivity，及 buildConfigField ENABLE_ADS、billing/ads 依赖。</li>
+        <li><b>局域网直连（内网模式）</b>：ServerSocket :5000、TLS 整套、auto/lan 链路决策 —— 你已明确「不考虑内网模式」，链路固定走 relay，NetworkWatcher 的 auto 决策也随之砍掉。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3.3 复用 Bridge 已有的（不要重复造轮子）</h3>
+    <div class="callout info">
+      <b>Bridge 已有等价物，Aurelay 的对应部分直接丢弃</b>
+      <ul>
+        <li><b>保活体系</b>：Bridge 的 core-keepalive 已有 <span class="mono">SilentPlayer / ResourceHolder / KeepAliveService / OnePixelOverlay / BootReceiver</span>，且比 Aurelay 的更贴合本项目（无声播放开关等）。Aurelay 的整套保活直接不用。</li>
+        <li><b>设置存储</b>：Bridge 用 DataStore（core-storage），Aurelay 用 SharedPreferences。中继的服务器地址/端口/开关走 Bridge 的存储。</li>
+        <li><b>日志</b>：Bridge 用 Timber，Aurelay 用自研 DiagLog。直接砍 DiagLog，用 Timber。</li>
+        <li><b>网络</b>：Bridge 已有 OkHttp 依赖吗？—— 见决策点 D2。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3.4 精简后：Aurelay 30 文件 → 集成进 Bridge 约 4~5 个新文件</h3>
+    <table>
+      <tr><th>Bridge 新增文件</th><th>来源</th><th>规模</th></tr>
+      <tr><td class="mono">media/relay/RelayProtocol.kt</td><td>原样移植 ARLY 帧协议</td><td>~155 行</td></tr>
+      <tr><td class="mono">media/relay/RelayClient.kt</td><td>移植，去 DiagLog 改 Timber</td><td>~500 行</td></tr>
+      <tr><td class="mono">media/relay/AudioRelayService.kt</td><td>重写：AURL 流解析 + OpusDecoder + AudioTrack 播放，砍诊断/链路切换</td><td>~600 行</td></tr>
+      <tr><td class="mono">media/OpusDecoder.kt</td><td>原样移植（统一 CSD 坑）</td><td>~340 行</td></tr>
+      <tr><td class="mono">di/RelayModule.kt + 命令注册</td><td>Hilt 注入 + CommandModule 接入</td><td>~80 行</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ 4 ============ -->
+  <h2 id="s4">四、集成到 Bridge 的两种路线</h2>
+  <div class="card">
+    <p>这是最关键的架构分岔。核心问题是：<b>电脑推来的音频，走哪条通道到 Bridge 设备？</b></p>
+    <div class="grid2">
+      <div style="border:1px solid var(--line); border-radius:10px; padding:16px;">
+        <h3 style="margin-top:0;">路线 A：复用 Aurelay 的中转服务器</h3>
+        <p class="sub">Bridge 内置 RelayClient，直接连 Aurelay 已有的 <span class="mono">039039.xyz:15151</span> 中转服务器，电脑端继续用 Aurelay 的 send_audio.py / PC 客户端。</p>
+        <p><b>优点</b>：电脑端零改动、立即可用；中转服务器已就绪。</p>
+        <p><b>缺点</b>：依赖第三方/外部服务器；Bridge 的鉴权、设备体系与 Aurelay 服务器脱节。</p>
+        <div class="legend"><span><i class="dot" style="background:#d97706;"></i>适合快速验证</span></div>
+      </div>
+      <div style="border:1px solid var(--line); border-radius:10px; padding:16px;">
+        <h3 style="margin-top:0;">路线 B：走 Bridge 自有 WS 通道</h3>
+        <p class="sub">把「中转」能力整合进 Bridge 自己的服务端（FastAPI + WS）和命令体系：管理后台发「音频中继」命令，服务端把音频流转发给指定设备。</p>
+        <p><b>优点</b>：与 Bridge 现有「设备管理 / 命令下发 / 媒体流」体系统一；无需外部服务器。</p>
+        <p><b>缺点</b>：服务端要新增「音频房间配对 + 转发」逻辑（可参考 Aurelay 的 center-server）；工作量大。</p>
+        <div class="legend"><span><i class="dot" style="background:#16a34a;"></i>长期正解</span></div>
+      </div>
+    </div>
+    <div class="callout warn">
+      <b>建议：先 A 后 B</b>
+      路线 A 用最少改动把「中继内核」跑通、验证 Opus 解码/播放链路无误；确认稳定后再把中转服务器替换为 Bridge 自有的（路线 B）。两条路线的 <b>客户端内核（RelayProtocol + RelayClient + OpusDecoder + AudioTrack）完全一致</b>，只是 RelayClient 连的 URL 不同 —— 因此内核先做，路线可平滑切换。
+    </div>
+  </div>
+
+  <!-- ============ 5 ============ -->
+  <h2 id="s5">五、推荐架构（原型模型）</h2>
+  <div class="card">
+    <p>把「音频中继」作为 Bridge 的一个 <b>新命令</b>（类比已有的 music / screen_live），纳入现有命令目录体系。</p>
+    <svg class="flow" viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+      </defs>
+      <!-- 管理后台 -->
+      <rect x="20" y="20" width="200" height="120" rx="10" fill="#f3eeff" stroke="#7c3aed" stroke-width="1.5"/>
+      <text x="120" y="52" text-anchor="middle" font-size="14" font-weight="700" fill="#7c3aed">管理后台（admin）</text>
+      <text x="120" y="78" text-anchor="middle" font-size="12" fill="#4b5563">命令下发页</text>
+      <text x="120" y="100" text-anchor="middle" font-size="12" fill="#4b5563">「音频中继」卡片</text>
+      <text x="120" y="122" text-anchor="middle" font-size="12" fill="#4b5563">参数：服务器/端口/开关</text>
+
+      <!-- Bridge 服务端 -->
+      <rect x="280" y="20" width="220" height="120" rx="10" fill="#eff4ff" stroke="#2563eb" stroke-width="1.5"/>
+      <text x="390" y="52" text-anchor="middle" font-size="14" font-weight="700" fill="#2563eb">Bridge 服务端（FastAPI）</text>
+      <text x="390" y="78" text-anchor="middle" font-size="12" fill="#4b5563">命令目录 catalog 加一条</text>
+      <text x="390" y="100" text-anchor="middle" font-size="12" fill="#4b5563">audio_relay</text>
+      <text x="390" y="122" text-anchor="middle" font-size="12" fill="#4b5563">WS 下发 → 设备</text>
+
+      <!-- Bridge 设备 -->
+      <rect x="560" y="20" width="200" height="180" rx="10" fill="#eafaf0" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="660" y="48" text-anchor="middle" font-size="14" font-weight="700" fill="#16a34a">Bridge 设备（app）</text>
+      <rect x="578" y="62" width="164" height="26" rx="6" fill="#ffffff" stroke="#16a34a"/>
+      <text x="660" y="80" text-anchor="middle" font-size="12" fill="#1a1d21">CommandExecutor</text>
+      <rect x="578" y="96" width="164" height="26" rx="6" fill="#ffffff" stroke="#16a34a"/>
+      <text x="660" y="114" text-anchor="middle" font-size="12" fill="#1a1d21">AudioRelayService（新增）</text>
+      <rect x="578" y="130" width="164" height="26" rx="6" fill="#ffffff" stroke="#16a34a"/>
+      <text x="660" y="148" text-anchor="middle" font-size="12" fill="#1a1d21">RelayClient + OpusDecoder</text>
+      <rect x="578" y="164" width="164" height="26" rx="6" fill="#ffffff" stroke="#16a34a"/>
+      <text x="660" y="182" text-anchor="middle" font-size="12" fill="#1a1d21">AudioTrack 播放</text>
+
+      <!-- 中转服务器 -->
+      <rect x="560" y="260" width="200" height="80" rx="10" fill="#fef4e6" stroke="#d97706" stroke-width="1.5"/>
+      <text x="660" y="288" text-anchor="middle" font-size="13" font-weight="700" fill="#d97706">中转服务器</text>
+      <text x="660" y="310" text-anchor="middle" font-size="12" fill="#4b5563">（路线A: Aurelay 的 / 路线B: Bridge 自建）</text>
+
+      <!-- 电脑 -->
+      <rect x="820" y="260" width="120" height="80" rx="10" fill="#eff4ff" stroke="#2563eb" stroke-width="1.5"/>
+      <text x="880" y="288" text-anchor="middle" font-size="13" font-weight="700" fill="#2563eb">电脑</text>
+      <text x="880" y="310" text-anchor="middle" font-size="12" fill="#4b5563">推流（S）</text>
+
+      <!-- 连接线 -->
+      <path d="M220 80 L 280 80" stroke="#2563eb" stroke-width="2" marker-end="url(#arr2)"/>
+      <path d="M500 80 L 560 80" stroke="#2563eb" stroke-width="2" marker-end="url(#arr2)"/>
+      <path d="M660 206 L 660 260" stroke="#d97706" stroke-width="2" marker-end="url(#arr2)"/>
+      <text x="670" y="238" font-size="11" fill="#d97706">出站 WS</text>
+      <path d="M820 300 L 760 300" stroke="#2563eb" stroke-width="2" marker-end="url(#arr2)"/>
+      <text x="782" y="292" font-size="11" fill="#2563eb">音频流</text>
+
+      <!-- 复用说明 -->
+      <rect x="20" y="340" width="920" height="120" rx="10" fill="#fafbfc" stroke="#e5e8ee"/>
+      <text x="40" y="366" font-size="14" font-weight="700">复用 Bridge 现有能力（不是从头写）</text>
+      <text x="40" y="392" font-size="12.5" fill="#4b5563">· 命令体系：catalog 加「音频中继」，走 CommandExecutor → 回执，管理后台自动出现命令卡片</text>
+      <text x="40" y="414" font-size="12.5" fill="#4b5563">· 保活：复用 core-keepalive（SilentPlayer 静音锚点与中继播放天然配合）· 存储：DataStore · 日志：Timber</text>
+      <text x="40" y="436" font-size="12.5" fill="#4b5563">· 媒体：与 music/screen_live 并列，属于 media 命令分类</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3>5.1 中继命令的交互流程</h3>
+    <ol>
+      <li><span class="num">1</span>管理后台下发 <span class="mono">audio_relay</span> 命令（参数：中转服务器 host:port、是否自动开始）</li>
+      <li><span class="num">2</span>服务端经 WS 通道下发到指定设备（复用 Bridge 现有命令链路）</li>
+      <li><span class="num">3</span>设备 CommandExecutor 启动 <span class="mono">AudioRelayService</span>：出站连中转服务器，注册为接收端 R</li>
+      <li><span class="num">4</span>电脑端（推流端 S）连同一中转服务器，建立房间配对</li>
+      <li><span class="num">5</span>音频字节经中转服务器透传，设备端 OpusDecoder 解码 → AudioTrack 播放</li>
+      <li><span class="num">6</span>设备经 WS 回执「已连接/播放中/音量」，管理后台实时展示</li>
+    </ol>
+  </div>
+
+  <!-- ============ 6 ============ -->
+  <h2 id="s6">六、关键决策点与风险</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:60px;">编号</th><th>决策点</th><th>建议</th></tr>
+      <tr><td class="mono">D1</td><td>路线 A（复用 Aurelay 中转服务器）还是 B（Bridge 自建中转）？</td><td>先 A 验证内核，后切 B 长期统一</td></tr>
+      <tr><td class="mono">D2</td><td>Bridge 是否已有 OkHttp 依赖？（RelayClient 强依赖 OkHttp WebSocket）</td><td>core-network 需确认；没有则补，或用 Bridge 已有 WS 客户端改造</td></tr>
+      <tr><td class="mono">D3</td><td>「电脑放音」要不要？</td><td>默认砍；若未来要「手机麦克风→电脑」再补 OpusEncoder</td></tr>
+      <tr><td class="mono">D4</td><td>中继服务器鉴权（token/deviceId）</td><td>路线 B 下复用 Bridge 设备标识；路线 A 沿用 Aurelay 的 token</td></tr>
+      <tr><td class="mono">D5</td><td>Opus 解码的「统一 CSD」坑</td><td>必须原样保留，否则永久静音（这是 Aurelay v1.4.5 血泪修复）</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>风险清单</h3>
+    <div class="callout warn">
+      <b>需重点关注</b>
+      <ul>
+        <li><b>AudioTrack 状态陷阱</b>：<span class="mono">stop()</span> 不改变 <span class="mono">state</span>，复用「已停止」音轨会「连着没声」；会话结束只 <span class="mono">pause+flush</span>、不 <span class="mono">release</span>。这些坑已在 Aurelay CHANGELOG 里反复踩过，移植时必须保留注释。</li>
+        <li><b>中转残留帧震荡</b>：断线重连时的「旧会话残留帧 → 误判 → 重连死循环」，Aurelay 用「扫描魔数 + 受控重连 + 会话代次」解决。这些是稳定性关键，不能精简掉。</li>
+        <li><b>音轨并发</b>：切链路时多路流并发写音轨会错乱，靠「会话代次」守卫。若只保留 relay（不切链路），风险大降，可简化。</li>
+        <li><b>保活与中继的无声播放让位</b>：真实音频播放时 SilentPlayer 要让位（避免底噪）。Bridge 的 SilentPlayer 已有 <span class="mono">setScenarioAllowed</span>，需对接。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ 7 ============ -->
+  <h2 id="s7">七、落地步骤建议</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:40px;">步</th><th>内容</th><th style="width:90px;">产物</th></tr>
+      <tr><td class="mono">1</td><td>确认 D2（OkHttp 依赖）、D1（路线），补齐 Bridge 侧依赖</td><td>依赖就绪</td></tr>
+      <tr><td class="mono">2</td><td>移植 RelayProtocol + RelayClient（去 DiagLog→Timber，去电脑放音 sendAudio）</td><td>内核可出站</td></tr>
+      <tr><td class="mono">3</td><td>移植 OpusDecoder（原样，保留统一 CSD）</td><td>可解码</td></tr>
+      <tr><td class="mono">4</td><td>重写 AudioRelayService（AURL 解析 + AudioTrack 播放 + 音量控制），接入 Hilt</td><td>可播放</td></tr>
+      <tr><td class="mono">5</td><td>catalog 加 <span class="mono">audio_relay</span> 命令 + CommandModule 执行器 + 文档</td><td>命令可下发</td></tr>
+      <tr><td class="mono">6</td><td>管理后台命令卡片 + 回执展示（复用现有 media 命令 UI 模式）</td><td>端到端</td></tr>
+      <tr><td class="mono">7</td><td>真机验证：电脑推流 → 手机播放，用 Bridge 日志排查</td><td>验收</td></tr>
+    </table>
+  </div>
+
+  <div class="divider"></div>
+  <p class="sub" style="text-align:center;">本原型为调研产出，落地前需评审 D1（中转路线）与 D2（依赖）两个决策点。完整源码分析见 references/aurelay-main 及 docs 各专题文档。</p>
+
+</div>
+</body>
+</html>

@@ -49,6 +49,7 @@ import my.bridge.com.access.BridgeAccessibilityService
 import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveService
 import my.bridge.com.keepalive.KeepAliveUtils
+import my.bridge.com.relay.RelayPrefs
 import timber.log.Timber
 
 // ============ 通用设置 ============
@@ -1037,6 +1038,12 @@ fun ConnectionSettings() {
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
         }
+
+        // ===== 音频中继分区 =====
+        item { SectionTitle("音频中继") }
+        item {
+            AudioRelaySettings()
+        }
     }
 
     // 昵称编辑弹窗
@@ -1152,6 +1159,153 @@ private fun NameEditDialog(
         },
         confirmButton = {
             androidx.compose.material3.TextButton(onClick = { onConfirm(text) }) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+// ============ 音频中继设置 ============
+
+/**
+ * 音频中继设置分区（设置 → 连接页）。
+ *
+ * 中转服务器可编辑、自动重连开关（默认开，关闭需二次确认，复用核心项确认样式）。
+ * 后端零改动：中转服务器默认 039039.xyz:15151，与 Aurelay 原版共用同一后端。
+ */
+@Composable
+private fun AudioRelaySettings() {
+    val context = LocalContext.current
+
+    var server by remember { mutableStateOf(RelayPrefs.relayServer(context)) }
+    var autoReconnect by remember { mutableStateOf(RelayPrefs.autoReconnect(context)) }
+    var showServerDialog by remember { mutableStateOf(false) }
+    // 自动重连关闭二次确认
+    var pendingAutoReconnectOff by remember { mutableStateOf(false) }
+
+    SettingCard {
+        SettingValueRow(
+            icon = "🌐",
+            title = "中转服务器",
+            value = server,
+        ) {
+            showServerDialog = true
+        }
+        SettingSwitchRow(
+            icon = "🔁",
+            title = "自动重连",
+            checked = autoReconnect,
+            onCheckedChange = { newValue ->
+                if (!newValue) {
+                    // 关闭自动重连需二次确认
+                    pendingAutoReconnectOff = true
+                } else {
+                    autoReconnect = true
+                    RelayPrefs.setBoolean(context, RelayPrefs.KEY_AUTO_RECONNECT, true)
+                    Timber.d("切换：音频中继自动重连 -> 开")
+                }
+            },
+        )
+    }
+
+    // 中转服务器编辑弹窗
+    if (showServerDialog) {
+        RelayServerDialog(
+            initial = server,
+            onCancel = { showServerDialog = false },
+            onConfirm = { newServer ->
+                RelayPrefs.setString(context, RelayPrefs.KEY_RELAY_SERVER, newServer)
+                server = newServer
+                showServerDialog = false
+            },
+        )
+    }
+
+    // 自动重连关闭二次确认
+    if (pendingAutoReconnectOff) {
+        AutoReconnectConfirmDialog(
+            onCancel = { pendingAutoReconnectOff = false },
+            onConfirm = {
+                autoReconnect = false
+                RelayPrefs.setBoolean(context, RelayPrefs.KEY_AUTO_RECONNECT, false)
+                Timber.d("音频中继自动重连已二次确认关闭")
+                pendingAutoReconnectOff = false
+            },
+        )
+    }
+}
+
+/** 中转服务器地址编辑弹窗。 */
+@Composable
+private fun RelayServerDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    var error by remember { mutableStateOf<String?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("设置中转服务器") },
+        text = {
+            Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        error = null
+                    },
+                    label = { Text("中转服务器") },
+                    singleLine = true,
+                    isError = error != null,
+                    placeholder = { Text("如 039039.xyz:15151") },
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = error!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    val t = text.trim()
+                    if (t.isEmpty()) {
+                        error = "服务器地址不能为空"
+                    } else {
+                        onConfirm(t)
+                    }
+                },
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+/** 自动重连关闭二次确认对话框（复用核心项确认样式）。 */
+@Composable
+private fun AutoReconnectConfirmDialog(
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        icon = { Text("⚠️", style = MaterialTheme.typography.headlineMedium) },
+        title = { Text("关闭「自动重连」？") },
+        text = {
+            Text("自动重连是音频中继保持链路稳定的关键机制。关闭后，一旦网络波动或服务器断开连接，中继将不会自动恢复，需要手动重新开始接收。确定要关闭吗？")
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onConfirm) {
+                Text("确认关闭", color = androidx.compose.ui.graphics.Color(0xFFE5484D))
+            }
         },
         dismissButton = {
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
