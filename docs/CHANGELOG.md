@@ -4,6 +4,50 @@
 
 ---
 
+## 2026-10-28 · v0.1.69 ✅ 蓝牙耳机按键监听功能彻底剥离（里程碑：功能放弃 + 经验沉淀）
+
+**节点意义**：蓝牙耳机按键监听功能历经多轮实现与排障（v0.1.60→v0.1.68）后，
+确认目标在 Android 系统机制下**物理上不可达成**，最终彻底剥离。这是一次
+「技术方案验证 → 触及系统硬边界 → 果断止损 + 经验沉淀」的完整闭环，值得记录
+为工程决策里程碑。
+
+### 剥离原因（核心结论）
+
+> Android 蓝牙媒体按键（AVRCP）是**一对一的音频焦点竞争**：耳机按键永远只发给
+> 「当前持有音频焦点」的那个 App。当另一个媒体 App（如 Aurelay）正在**出声播放**
+> 时，它持有焦点，`requestAudioFocus(AUDIOFOCUS_GAIN)` 会被系统**拒绝或延迟**
+> （返回 `FAILED` / `DELAYED`），系统不允许一个 App 强行打断正在出声的 App。
+>
+> 因此「无论何时 Bridge 都拿得到按键」这一目标，在系统级焦点仲裁规则下无法达成
+> ——这是平台硬限制，不是代码缺陷。
+
+### 剥离清单
+
+| 层 | 改动 |
+|---|---|
+| 客户端 | 删除 `BluetoothHeadsetObserver.kt`（整文件）；`BridgeApplication.kt` 移除注入 + `start()` |
+| 服务端 | `ws.py` 删除 `_handle_media_button()` + `event=="media_button"` 分支 |
+| 文档 | `docs/keepalive/design.md` 新增附录沉淀经验；`TodoList.md` 标记已剥离 |
+
+### 明确保留（与蓝牙按键无关，未触碰）
+
+- **`SilentPlayer`**（保活「无声播放」锚点，受「后台资源占用·细化」开关控制，默认开）
+- **`ResourceHolder`** 中的 BLE 扫描（保活资源锚点）
+- **`app_version`** 版本上报（hello 握手 / 日志 / 崩溃上报通用机制）
+
+### 经验教训（详见 `docs/keepalive/design.md` 附录）
+
+1. 收到媒体按键的三条件缺一不可：`MediaSession.setActive(true)` + 持久音频焦点
+   （`AUDIOFOCUS_GAIN`，瞬时焦点会被静默收回）+ `PlaybackState.setState(STATE_PLAYING)`
+   （只 `setActions` 不 `setState` 会停在 STATE_NONE，系统不路由按键）。
+2. 保活的「无声播放」锚点（`SilentPlayer`）**不申请 AudioFocus**，与「抢焦点」
+   是两套独立机制，不能混用；「抢过正在出声的 App」必须让 MediaSession 真正占用
+   音频输出，单靠 requestAudioFocus 抢不过。
+3. 排查神器：`adb shell dumpsys media_session`（看 `Media button session` 指向）+
+   `adb shell input keyevent KEYCODE_MEDIA_PLAY_PAUSE` 模拟按键。
+
+---
+
 ## 2026-10-28 · 🏁 阶段性功能完善总结（三端功能清单）
 
 **节点意义**：自 v0.1.55 流式链路稳定里程碑以来，连续多轮 UI/UX 与数据链路打磨
