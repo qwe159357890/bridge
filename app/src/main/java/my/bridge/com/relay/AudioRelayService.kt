@@ -93,7 +93,9 @@ class AudioRelayService : Service() {
         const val ACTION_SET_VOLUME = "my.bridge.com.relay.SET_VOLUME"
         const val EXTRA_VOLUME = "volume"
 
-        const val NOTIFICATION_ID = 2001
+        // 独立通知 ID：保活服务占用 2001，中继必须用不同 ID，
+        // 否则 stopForeground/cancel 会误删保活服务的常驻通知（「Bridge 后台服务」）。
+        const val NOTIFICATION_ID = 2002
         const val CHANNEL_ID = "audioRelayChannel"
 
         // 音频接收端口（上报约定用，中转链路下仅作日志占位）
@@ -143,11 +145,25 @@ class AudioRelayService : Service() {
             context.startService(intent)
         }
 
-        /** 订阅中继状态。 */
-        fun setStateListener(listener: RelayListener?) { instance?.stateListener = listener }
+        /** 订阅中继状态。服务尚未启动时先记下，onCreate 后补挂。 */
+        fun setStateListener(listener: RelayListener?) {
+            val inst = instance
+            if (inst != null) inst.stateListener = listener
+            else pendingStateListener = listener
+        }
 
-        /** 订阅 24 柱波形。 */
-        fun setLevelsListener(listener: AudioLevelsListener?) { instance?.levelsListener = listener }
+        /** 订阅 24 柱波形。服务尚未启动时先记下，onCreate 后补挂。 */
+        fun setLevelsListener(listener: AudioLevelsListener?) {
+            val inst = instance
+            if (inst != null) inst.levelsListener = listener
+            else pendingLevelsListener = listener
+        }
+
+        // 服务未启动时暂存的监听器（onCreate 里补挂到 instance）
+        @Volatile
+        private var pendingStateListener: RelayListener? = null
+        @Volatile
+        private var pendingLevelsListener: AudioLevelsListener? = null
     }
 
     // 记录上一次中继状态（供 UI 订阅初值）
@@ -169,6 +185,9 @@ class AudioRelayService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // 补挂服务启动前 UI 已订阅的监听器（否则 UI 先打开页面再点开始时监听器会丢失）
+        pendingStateListener?.let { stateListener = it; pendingStateListener = null }
+        pendingLevelsListener?.let { levelsListener = it; pendingLevelsListener = null }
         createNotificationChannel()
         // 先挂常驻前台通知（mediaPlayback 类型）
         startForegroundCompat(buildNotification("声音中继已开启 · 点此管理"))
@@ -212,6 +231,7 @@ class AudioRelayService : Service() {
         isServerRunning = true
         relayState = RelayClient.State.CONNECTING
         stateListener?.onState(RelayClient.State.CONNECTING, "正在连接中转服务器")
+        refreshNotification(notificationTextFor(RelayClient.State.CONNECTING))
 
         // 从 RelayPrefs 读音量与自动重连开关
         currentVolume = RelayPrefs.volume(this)
@@ -220,6 +240,11 @@ class AudioRelayService : Service() {
             override fun onStateChanged(state: RelayClient.State, detail: String) {
                 relayState = state
                 stateListener?.onState(state, detail)
+                // 状态变化同步刷新前台通知文案（连接中/就绪/错误各显示对应文案）
+                if (state != RelayClient.State.READY) {
+                    // READY 表示握手就绪但音频尚未到达，由 handleStream 收到真实音频后再切「正在接收」
+                    refreshNotification(notificationTextFor(state))
+                }
             }
 
             override fun onAudioData(size: Int) {
@@ -256,16 +281,27 @@ class AudioRelayService : Service() {
         }
         relayThread?.interrupt()
         relayThread = null
-        // 让位结束：恢复无声锚点
+        // 让位结束：恢复无声保活锚点（保活模块不受中继启停影响）
         SilentPlayer.setScenarioAllowed(this, true)
-        // 暂停并清空音轨（不 release，下次复用会重新 play）
-        try {
-            audioTrack?.pause()
-            audioTrack?.flush()
-        } catch (e: Exception) { }
+        // 彻底释放音轨：停止接收后不得再因中继占着 AudioTrack 耗资源
+        releaseAudioTrack()
         relayState = RelayClient.State.IDLE
         stateListener?.onState(RelayClient.State.IDLE, "已停止")
+        // 移除中继前台通知并停止服务
+        stopForegroundCompat()
         stopSelf()
+    }
+
+    /** 移除前台通知（停止接收后通知栏不再显示任何中继相关条目）。 */
+    private fun stopForegroundCompat() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            DiagLog.w("中继", "退出前台服务失败：${e.message}")
+        }
+        try {
+            NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
+        } catch (e: Exception) { }
     }
 
     // ------------------------------------------------------------------
@@ -360,9 +396,10 @@ class AudioRelayService : Service() {
                 } catch (e: Exception) { }
             }
             val isLatest = myGeneration == sessionGeneration
-            if (isLatest) {
+            if (isLatest && isServerRunning) {
+                // 服务仍在运行时（对端断流/重连），恢复保活锚点并把通知切回「等待接收」态
                 SilentPlayer.setScenarioAllowed(this, true)
-                refreshNotification("声音中继已开启 · 点此管理")
+                refreshNotification(notificationTextFor(relayState))
             }
         }
     }
@@ -762,6 +799,10 @@ class AudioRelayService : Service() {
             audioTrack?.release()
         } catch (e: Exception) { }
         audioTrack = null
+        // 重置协商参数，下次 start 时按新流重新创建音轨
+        currentSampleRate = 0
+        currentOutChannels = 0
+        currentBufferBytes = 0
     }
 
     private fun convertStereoToMono(stereoBuffer: ByteArray, length: Int): ByteArray {
@@ -888,6 +929,14 @@ class AudioRelayService : Service() {
     private fun refreshNotification(text: String) {
         val manager = NotificationManagerCompat.from(this)
         manager.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    /** 按中继状态给出前台通知文案。 */
+    private fun notificationTextFor(state: RelayClient.State): String = when (state) {
+        RelayClient.State.CONNECTING -> "正在连接中继服务器…"
+        RelayClient.State.READY -> "中继已就绪，等待电脑声音…"
+        RelayClient.State.ERROR -> "中继连接异常，点此管理"
+        RelayClient.State.IDLE -> "声音中继已开启 · 点此管理"
     }
 
     private fun startForegroundCompat(notification: Notification) {

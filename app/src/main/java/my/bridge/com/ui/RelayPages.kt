@@ -2,9 +2,12 @@ package my.bridge.com.ui
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -64,8 +67,10 @@ fun AudioRelayPage() {
     // 中继状态（由 AudioRelayService 回调驱动）
     var state by remember { mutableStateOf(AudioRelayService.currentState()) }
     var stateDetail by remember { mutableStateOf("") }
-    // 24 柱波形电平
-    var levels by remember { mutableStateOf(FloatArray(24)) }
+    // 24 柱波形电平（用 List 存储：List 按内容判等，避免数组引用判等导致的“不刷新”）
+    var levels by remember { mutableStateOf(List(24) { 0f }) }
+    // 是否正在接收音频（有真实电平数据）
+    var receiving by remember { mutableStateOf(false) }
     // 中继音量
     var volume by remember { mutableFloatStateOf(RelayPrefs.volume(context)) }
     // 是否正在运行（驱动按钮文案）
@@ -82,7 +87,9 @@ fun AudioRelayPage() {
         })
         AudioRelayService.setLevelsListener(object : AudioRelayService.AudioLevelsListener {
             override fun onLevels(l: FloatArray) {
-                levels = l
+                // FloatArray -> List 拷贝，List 按内容判等，保证 Compose 能感知变化
+                levels = List(24) { i -> if (i < l.size) l[i] else 0f }
+                receiving = l.any { it > 0.001f }
             }
         })
         onDispose {
@@ -140,7 +147,7 @@ fun AudioRelayPage() {
                     }
                     Spacer(Modifier.height(10.dp))
                     // 24 柱波形
-                    AudioWaveform(levels = levels, active = running)
+                    AudioWaveform(levels = levels, receiving = receiving)
                 }
             }
         }
@@ -224,9 +231,9 @@ fun AudioRelayPage() {
     }
 }
 
-/** 24 柱波形：空闲时播放一段轻动画，有数据时随电平跳动。 */
+/** 24 柱波形：接收音频时随真实电平平滑跳动（spring 过渡），空闲时播放轻动画。 */
 @Composable
-private fun AudioWaveform(levels: FloatArray, active: Boolean) {
+private fun AudioWaveform(levels: List<Float>, receiving: Boolean) {
     val transition = rememberInfiniteTransition(label = "waveform")
     val idleProgress by transition.animateFloat(
         initialValue = 0f,
@@ -238,7 +245,17 @@ private fun AudioWaveform(levels: FloatArray, active: Boolean) {
         label = "idle",
     )
 
-    val hasData = active && levels.any { it > 0.001f }
+    // 每根柱子用 spring 动画平滑过渡到目标电平（原版 Aurelay 的做法）
+    val animatedLevels = levels.map { level ->
+        animateFloatAsState(
+            targetValue = level,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioLowBouncy,
+                stiffness = Spring.StiffnessLow,
+            ),
+            label = "audioLevel",
+        )
+    }
 
     Canvas(
         modifier = Modifier
@@ -249,8 +266,9 @@ private fun AudioWaveform(levels: FloatArray, active: Boolean) {
         val gap = 3.dp.toPx()
         val barWidth = (size.width - gap * (barCount - 1)) / barCount
         for (i in 0 until barCount) {
-            val level = if (hasData) {
-                levels[i].coerceIn(0.02f, 1f)
+            val level = if (receiving) {
+                // 有音频：跟随真实电平，给一个最小高度让柱子可见
+                animatedLevels[i].value.coerceIn(0.03f, 1f)
             } else {
                 // 空闲动画：正弦起伏
                 val phase = (idleProgress * 2 * Math.PI + i * 0.5).toFloat()
@@ -259,7 +277,7 @@ private fun AudioWaveform(levels: FloatArray, active: Boolean) {
             val barHeight = size.height * level
             val x = i * (barWidth + gap)
             drawRoundRect(
-                color = if (active) RelayGreen else Color(0xFFCCD2DB),
+                color = if (receiving) RelayGreen else Color(0xFFCCD2DB),
                 topLeft = androidx.compose.ui.geometry.Offset(x, (size.height - barHeight) / 2f),
                 size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f, barWidth / 2f),

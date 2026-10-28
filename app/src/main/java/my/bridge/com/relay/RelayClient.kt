@@ -127,6 +127,11 @@ class RelayClient {
         closeWebSocket()
         closePipe()
         httpClient = null
+        // 彻底中断内部线程，避免心跳/重连线程在 sleep 中空耗（停止后不得再耗资源）
+        try { pingThread?.interrupt() } catch (e: Exception) { }
+        try { retryThread?.interrupt() } catch (e: Exception) { }
+        pingThread = null
+        retryThread = null
         DiagLog.i("中继", "中转客户端已停止")
         notifyState(State.IDLE, "已停止")
     }

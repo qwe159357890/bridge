@@ -169,25 +169,36 @@ def wait_workflow(env, tag):
         if status != 200:
             print(f"  [错误] 查询 workflow 失败: {data.get('message')}")
             return None
-        for run in data.get("workflow_runs", []):
-            if run.get("head_branch") == tag or run.get("head_branch", "").startswith("v"):
-                status2 = run["status"]
-                conclusion = run.get("conclusion")
-                print(f"  workflow: {run['name']} status={status2} conclusion={conclusion}")
-                if status2 == "completed":
-                    if conclusion == "success":
-                        print("  [完成] 打包成功")
-                        return run["id"]
-                    else:
-                        print(f"  [失败] 打包结论为 {conclusion}")
-                        return None
+        # 只匹配「本次 tag 触发」的 run，按 head_branch 精确匹配；
+        # 同名 tag 用 -f 强推会复用名字，故再按 created_at 取最新一条，避免命中历史旧 run。
+        matched = [
+            r for r in data.get("workflow_runs", [])
+            if r.get("head_branch") == tag
+        ]
+        if matched:
+            run = max(matched, key=lambda r: r.get("created_at", ""))
+            status2 = run["status"]
+            conclusion = run.get("conclusion")
+            print(f"  workflow: {run['name']} status={status2} conclusion={conclusion}")
+            if status2 == "completed":
+                if conclusion == "success":
+                    print("  [完成] 打包成功")
+                    return run["id"]
+                else:
+                    print(f"  [失败] 打包结论为 {conclusion}")
+                    return None
+            # 尚未完成：继续等，不再匹配其它旧 run
+            print(f"  [等待] 本次 tag {tag} 的 workflow 仍在运行中，继续等待...")
         time.sleep(15)
     print("  [超时] 等待打包超时")
     return None
 
 
 def download_apk(env, tag, run_id):
-    """下载 APK 到 releases/。优先 Release 资产，其次 Artifact。"""
+    """下载 APK 到 releases/。优先 Release 资产，其次 Artifact。
+
+    返回实际下载成功的 APK 文件路径（Path），失败返回 None。
+    """
     repo = f"{env['GITHUB_USER']}/{env['GITHUB_REPO']}"
     RELEASE_DIR.mkdir(exist_ok=True)
 
@@ -200,25 +211,30 @@ def download_apk(env, tag, run_id):
                 print(f"\n[4] 从 Release 下载 {a['name']} ...")
                 # 公开仓库：走 gh-proxy 代理加速；私有仓库：回退 token 直连 API
                 raw_url = a["browser_download_url"]
-                if _download_via_proxies(raw_url, RELEASE_DIR / a["name"], env):
-                    return
+                dest = RELEASE_DIR / a["name"]
+                if _download_via_proxies(raw_url, dest, env):
+                    return dest
                 # 代理全部失败：不要回退 API 直连（大文件会 SIGTERM），明确报错让用户换代理/重试
                 print(f"  [错误] 所有 gh-proxy 代理下载失败，请勿改用 API 直连（会超时）。")
-                print(f"         可手动执行：curl -L -o {RELEASE_DIR / a['name']} \"https://v4.gh-proxy.org/{raw_url}\"")
-                return
+                print(f"         可手动执行：curl -L -o {dest} \"https://v4.gh-proxy.org/{raw_url}\"")
+                return None
 
-    # 方式2：workflow artifact
+    # 方式2：workflow artifact（按 run_id 精确过滤，避免下到旧 run 的产物）
     print("\n[4] Release 无 APK，改从 Artifact 下载 ...")
     status, artifacts = api_request(env, f"/repos/{repo}/actions/artifacts", env["GITHUB_TOKEN"])
     if status == 200:
         for art in artifacts.get("artifacts", []):
-            if art["name"].startswith("bridge") and ".apk" in art["name"].lower() or ".apk" in art["name"].lower():
+            # 只取本次 workflow run 的产物，且文件名是 .apk
+            if art["name"].endswith(".apk") and art.get("workflow_run", {}).get("id") == run_id:
                 # 下载 artifact 是 zip，需用 API
                 url = f"/repos/{repo}/actions/artifacts/{art['id']}/zip"
+                dest = RELEASE_DIR / f"{art['name']}.zip"
                 print(f"  下载 artifact {art['name']} (zip)")
-                _download_artifact(env, url, RELEASE_DIR / f"{art['name']}.zip")
-                return
+                if _download_artifact(env, url, dest):
+                    return dest
+                return None
     print("  [警告] 未找到可下载的 APK")
+    return None
 
 
 def _download_via_proxies(raw_url, dest, env):
@@ -272,8 +288,10 @@ def _download_artifact(env, path, dest):
         with urllib.request.urlopen(req, timeout=300) as resp, open(dest, "wb") as f:
             f.write(resp.read())
         print(f"  [成功] 已保存到 {dest}（解压后是 APK）")
+        return True
     except Exception as e:
         print(f"  [失败] 下载失败: {e}")
+        return False
 
 
 def main():
@@ -324,26 +342,26 @@ def main():
     # 4. 等待并下载
     run_id = wait_workflow(env, tag)
     if run_id:
-        download_apk(env, tag, run_id)
-        copy_to_updates_dir(tag)
+        apk_path = download_apk(env, tag, run_id)
+        copy_to_updates_dir(tag, apk_path)
 
     print("\n全部完成。APK 已下载到 releases/ 目录。")
 
 
-def copy_to_updates_dir(tag):
+def copy_to_updates_dir(tag, apk_path):
     """把刚下载的 APK 拷贝到服务端更新目录（check_update 服务器目录版）。
 
     目录 server/data/updates/ 里保留最新一个（同名覆盖），旧版本 APK 不自动
     删除（服务端按版本号取最高，多存几个也无妨）。
+
+    参数 apk_path 为本次实际下载成功的 APK 路径；若为 None 则说明下载失败，
+    直接跳过拷贝（避免把目录里残留的旧版本 APK 误拷成新版本名）。
     """
-    version = tag.lstrip("v")
-    candidates = sorted(
-        RELEASE_DIR.glob("*.apk"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
-    if not candidates:
-        print("[提示] releases/ 无 APK，跳过更新目录拷贝")
+    if apk_path is None or not Path(apk_path).exists():
+        print("[提示] 本次未成功下载 APK，跳过更新目录拷贝（避免误用旧文件）")
         return
-    src = candidates[0]
+    version = tag.lstrip("v")
+    src = Path(apk_path)
     updates_dir = ROOT / "server/data/updates"
     updates_dir.mkdir(parents=True, exist_ok=True)
     dst = updates_dir / f"bridge-{tag}.apk"
