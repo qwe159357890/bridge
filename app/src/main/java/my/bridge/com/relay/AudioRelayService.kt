@@ -71,7 +71,10 @@ class AudioRelayService : Service() {
     @Volatile
     private var headerIncomplete: Boolean = false
 
-    // 波形与状态监听器（供 UI 订阅）
+    // 波形与状态监听器（供 UI 订阅）。
+    // 注意：这里用实例字段 + companion 静态兜底双写。UI 的 listener 必须在服务
+    // stopSelf() 销毁、重新 onCreate 后依然存活，否则「第二次开始接收」时新实例
+    // 拿不到 UI 的 listener，导致状态/波形不刷新（只能退出页面重进才恢复）。
     @Volatile
     private var stateListener: RelayListener? = null
     @Volatile
@@ -153,25 +156,38 @@ class AudioRelayService : Service() {
             context.startService(intent)
         }
 
-        /** 订阅中继状态。服务尚未启动时先记下，onCreate 后补挂。 */
+        /** 订阅中继状态。listener 存于静态字段（跨服务实例存活），订阅后立即回放当前状态。 */
         fun setStateListener(listener: RelayListener?) {
-            val inst = instance
-            if (inst != null) inst.stateListener = listener
-            else pendingStateListener = listener
+            sStateListener = listener
+            // 同步到当前实例（若存在），保证实例内的回调能取到
+            instance?.stateListener = listener
+            // 立即回放一次当前状态，避免「服务已就绪但 UI 刚订阅」导致的初值空缺
+            if (listener != null) {
+                val st = instance?.relayState ?: RelayClient.State.IDLE
+                listener.onState(st, stateDetailFor(st))
+            }
         }
 
-        /** 订阅 24 柱波形。服务尚未启动时先记下，onCreate 后补挂。 */
+        /** 订阅 24 柱波形。listener 存于静态字段（跨服务实例存活）。 */
         fun setLevelsListener(listener: AudioLevelsListener?) {
-            val inst = instance
-            if (inst != null) inst.levelsListener = listener
-            else pendingLevelsListener = listener
+            sLevelsListener = listener
+            instance?.levelsListener = listener
         }
 
-        // 服务未启动时暂存的监听器（onCreate 里补挂到 instance）
+        /** 当前状态对应的说明文案（供订阅回放）。 */
+        private fun stateDetailFor(state: RelayClient.State): String = when (state) {
+            RelayClient.State.IDLE -> "已停止"
+            RelayClient.State.CONNECTING -> "正在连接中转服务器"
+            RelayClient.State.READY -> "已接入中转服务器"
+            RelayClient.State.RECEIVING -> "正在接收电脑声音"
+            RelayClient.State.ERROR -> "连接异常"
+        }
+
+        // 静态监听器（跨服务实例存活；服务 stopSelf 后重建时，UI 的订阅依然有效）
         @Volatile
-        private var pendingStateListener: RelayListener? = null
+        private var sStateListener: RelayListener? = null
         @Volatile
-        private var pendingLevelsListener: AudioLevelsListener? = null
+        private var sLevelsListener: AudioLevelsListener? = null
     }
 
     // 记录上一次中继状态（供 UI 订阅初值）
@@ -193,9 +209,10 @@ class AudioRelayService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        // 补挂服务启动前 UI 已订阅的监听器（否则 UI 先打开页面再点开始时监听器会丢失）
-        pendingStateListener?.let { stateListener = it; pendingStateListener = null }
-        pendingLevelsListener?.let { levelsListener = it; pendingLevelsListener = null }
+        // 从静态字段恢复 UI 订阅（服务 stopSelf 后重建时，UI 的 listener 依然有效，
+        // 否则「第二次开始接收」后新实例拿不到 UI 回调，状态/波形不刷新）。
+        sStateListener?.let { stateListener = it }
+        sLevelsListener?.let { levelsListener = it }
         createNotificationChannel()
         // 注意：这里**不**立即挂前台通知。通知只在真正「开始接收」（ACTION_START → startRelay）
         // 时挂起。否则 STOP / SET_VOLUME 用 startService 重新拉起已销毁的服务时，会误挂
@@ -316,11 +333,29 @@ class AudioRelayService : Service() {
         } catch (e: Exception) {
             DiagLog.w("中继", "停止中转客户端失败：${e.message}")
         }
-        relayThread?.interrupt()
+
+        // 关键：消费线程阻塞在 PipedInputStream.read()（该 read 不响应 Thread.interrupt），
+        // 但 relayClient.stop() 已 closePipe()，会令其 read() 抛 IOException 而退出循环。
+        // 这里**必须**先等消费线程真正退出，再释放 AudioTrack —— 否则消费线程还在
+        // writeToTrack() 里对 AudioTrack.write()，主线程却 releaseAudioTrack()，
+        // 对已释放的 AudioTrack 调用 write 会触发 native 崩溃（多次「接收→停止」后必现）。
+        val t = relayThread
         relayThread = null
+        if (t != null && t !== Thread.currentThread()) {
+            try {
+                t.interrupt()
+                t.join(1500)
+            } catch (e: InterruptedException) {
+                DiagLog.w("中继", "等待消费线程退出被打断")
+            }
+            if (t.isAlive) {
+                DiagLog.w("中继", "消费线程 1.5s 内未退出，强制中断（音轨将在写入被保护后释放）")
+            }
+        }
+
         // 让位结束：恢复无声保活锚点（保活模块不受中继启停影响）
         SilentPlayer.setScenarioAllowed(this, true)
-        // 彻底释放音轨：停止接收后不得再因中继占着 AudioTrack 耗资源
+        // 彻底释放音轨：此时消费线程已退出，不会再对已释放音轨 write()
         releaseAudioTrack()
         relayState = RelayClient.State.IDLE
         stateListener?.onState(RelayClient.State.IDLE, "已停止")
@@ -428,8 +463,9 @@ class AudioRelayService : Service() {
             // 只暂停并清空缓冲、不释放音轨；仅当本会话仍是最新代次才暂停
             if (myGeneration == sessionGeneration) {
                 try {
-                    audioTrack?.pause()
-                    audioTrack?.flush()
+                    val t = synchronized(this) { audioTrack }
+                    t?.pause()
+                    t?.flush()
                 } catch (e: Exception) { }
             }
             val isLatest = myGeneration == sessionGeneration
@@ -737,9 +773,15 @@ class AudioRelayService : Service() {
         inputFrameSize: Int,
         outChannels: Int,
     ) {
+        // 停止后（isServerRunning 已置 false）不再写音轨，避免对已释放的 AudioTrack 调用 write
+        if (!isServerRunning) return
         val alignedBytes = (length / inputFrameSize) * inputFrameSize
         if (alignedBytes <= 0) return
         try {
+            // 写之前再次确认音轨仍在（防止与 stopRelay 的 releaseAudioTrack 竞态）
+            val activeTrack = synchronized(this) { audioTrack }
+            if (activeTrack == null || activeTrack !== track) return
+            if (activeTrack.state != AudioTrack.STATE_INITIALIZED) return
             val writeMode = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
                 AudioTrack.WRITE_BLOCKING
             } else {
@@ -756,6 +798,9 @@ class AudioRelayService : Service() {
             if (result < 0) {
                 DiagLog.w("音轨", "AudioTrack.write 返回错误码 $result（写入长度=$alignedBytes）")
             }
+        } catch (e: IllegalStateException) {
+            // AudioTrack 已被 release，忽略（停止后正常现象）
+            DiagLog.w("音轨", "AudioTrack 已释放，跳过写入")
         } catch (e: Exception) {
             DiagLog.e("音轨", "AudioTrack 写入异常：${e.message}", e)
         }
@@ -848,6 +893,7 @@ class AudioRelayService : Service() {
         }
     }
 
+    @Synchronized
     private fun releaseAudioTrack() {
         try {
             audioTrack?.stop()

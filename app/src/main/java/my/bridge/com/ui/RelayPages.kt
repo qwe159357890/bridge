@@ -46,6 +46,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.os.Handler
+import android.os.Looper
 import my.bridge.com.relay.AudioRelayService
 import my.bridge.com.relay.RelayClient
 import my.bridge.com.relay.RelayPrefs
@@ -76,25 +78,36 @@ fun AudioRelayPage() {
     // 是否正在运行（驱动按钮文案）
     var running by remember { mutableStateOf(AudioRelayService.isRunning()) }
 
+    // 服务回调统一切到主线程再写 Compose snapshot state。
+    // 服务回调可能来自 OkHttp 线程 / 消费线程等后台线程，直接从后台线程写 snapshot state
+    // 既可能导致「状态/波形不刷新」，也可能触发运行时崩溃（多次接收→停止后更明显）。
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
     // 订阅服务回调
     DisposableEffect(Unit) {
         AudioRelayService.setStateListener(object : AudioRelayService.RelayListener {
             override fun onState(s: RelayClient.State, detail: String) {
-                state = s
-                stateDetail = detail
-                running = AudioRelayService.isRunning()
-                // 停止态时清空波形与接收标记，避免残留上次的波形形状
-                if (s == RelayClient.State.IDLE) {
-                    levels = List(24) { 0f }
-                    receiving = false
+                mainHandler.post {
+                    state = s
+                    stateDetail = detail
+                    running = AudioRelayService.isRunning()
+                    // 停止态时清空波形与接收标记，避免残留上次的波形形状
+                    if (s == RelayClient.State.IDLE) {
+                        levels = List(24) { 0f }
+                        receiving = false
+                    }
                 }
             }
         })
         AudioRelayService.setLevelsListener(object : AudioRelayService.AudioLevelsListener {
             override fun onLevels(l: FloatArray) {
                 // FloatArray -> List 拷贝，List 按内容判等，保证 Compose 能感知变化
-                levels = List(24) { i -> if (i < l.size) l[i] else 0f }
-                receiving = l.any { it > 0.001f }
+                val copy = List(24) { i -> if (i < l.size) l[i] else 0f }
+                val any = copy.any { it > 0.001f }
+                mainHandler.post {
+                    levels = copy
+                    receiving = any
+                }
             }
         })
         onDispose {
