@@ -31,9 +31,14 @@ import javax.inject.Singleton
  * （API 21+，minSdk 24 满足，零第三方依赖）并在
  * [MediaSession.Callback.onMediaButtonEvent] 里解析按键。
  *
- * **关键 1：必须请求音频焦点**。Android 的媒体按键（AVRCP）只会路由给「当前持有
- * 音频焦点的 MediaSession」。只 setActive(true) 而不 requestAudioFocus 时，媒体
- * 焦点在别的 App 手里，Bridge 永远收不到按键。
+ * **关键 1：必须持续持有音频焦点（AUDIOFOCUS_GAIN 持久焦点）**。Android 的媒体
+ * 按键（AVRCP）只会路由给「当前持有音频焦点的 MediaSession」。早期用
+ * ``AUDIOFOCUS_GAIN_TRANSIENT``（瞬时焦点）时，Bridge 请求后没有实际播放音频，
+ * 系统在授予后几百毫秒内就把焦点静默收回，导致「按耳机键那一刻焦点已不在 Bridge
+ * 手里、onMediaButtonEvent 永不触发」——这是前几版「收不到任何按键」的真正根因。
+ * 改用 ``AUDIOFOCUS_GAIN``（持久焦点）后，Bridge 持续持有焦点，媒体按键稳定路由
+ * 到本会话。代价：会抢占/打断其它 App（音乐/视频）的播放，这是 Android 机制使然，
+ * 无法两全（用户已确认接受此取舍）。
  *
  * **关键 2：必须设置 PlaybackState**。系统只在 MediaSession 的 [PlaybackState]
  * 声明了对应 ACTION（如 ACTION_PLAY_PAUSE）时才把该媒体按键路由给它。本类设置
@@ -46,7 +51,8 @@ import javax.inject.Singleton
  * 1. 仅能收到「标准媒体键」：播放/暂停/播放暂停切换/上一首/下一首/快进/快退/
  *    停止/录音等。耳机的「触摸滑动（音量触控条）」「佩戴检测」「单击/双击手势」
  *    等是耳机私有协议，Android 不开放，收不到。
- * 2. 若系统/其它 App 拒绝让出焦点，瞬时请求可能失败，此时收不到按键（罕见）。
+ * 2. 持有持久焦点会打断其它 App 播放；其它 App 请求焦点时 Bridge 会收到
+ *    AUDIOFOCUS_LOSS，本类会自动重新请求以尽量保持接收能力。
  */
 @Singleton
 class BluetoothHeadsetObserver @Inject constructor(
@@ -127,8 +133,8 @@ class BluetoothHeadsetObserver @Inject constructor(
                 "BluetoothHeadsetObserver：MediaSession 已注册并激活（isActive=%s）",
                 session.isActive,
             )
-            // 请求瞬时音频焦点：这是收到媒体按键的前提
-            requestTransientFocus()
+            // 请求持久音频焦点：这是稳定收到媒体按键的前提
+            requestPersistentFocus()
             // 监听 WS 握手完成：握手后再补报 started 状态（onCreate 里直接上报会因
             // handshakeReady=false 被 sendBusinessMessage 静默丢弃，导致服务端看不到）
             scope.launch {
@@ -162,12 +168,12 @@ class BluetoothHeadsetObserver @Inject constructor(
         }
     }
 
-    /** 请求瞬时音频焦点（成为媒体按键接收者）。 */
-    private fun requestTransientFocus() {
+    /** 请求持久音频焦点（成为媒体按键接收者，持续持有）。 */
+    private fun requestPersistentFocus() {
         val am = audioManager ?: return
         try {
             val focusResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -176,12 +182,23 @@ class BluetoothHeadsetObserver @Inject constructor(
                     )
                     .setOnAudioFocusChangeListener { change ->
                         Timber.i("BluetoothHeadsetObserver：音频焦点变化 %d", change)
-                        if (change == AudioManager.AUDIOFOCUS_LOSS ||
-                            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                        ) {
-                            hasFocus = false
-                        } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
-                            hasFocus = true
+                        when (change) {
+                            AudioManager.AUDIOFOCUS_GAIN -> hasFocus = true
+                            AudioManager.AUDIOFOCUS_LOSS -> {
+                                // 永久失去焦点（如被电话/系统占用）：放弃，等下次 start 或用户操作再请求
+                                hasFocus = false
+                                abandonFocus()
+                            }
+                            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                                // 暂时失去焦点（其它 App 播放）：标记失去，稍后尝试重新抢占
+                                hasFocus = false
+                                // 短暂延迟后重新请求，尽量保持接收能力
+                                scope.launch {
+                                    kotlinx.coroutines.delay(1000)
+                                    if (mediaSession != null) requestPersistentFocus()
+                                }
+                            }
                         }
                     }
                     .build()
@@ -192,15 +209,29 @@ class BluetoothHeadsetObserver @Inject constructor(
                 am.requestAudioFocus(
                     { change ->
                         Timber.i("BluetoothHeadsetObserver：音频焦点变化 %d", change)
-                        hasFocus = change == AudioManager.AUDIOFOCUS_GAIN
+                        when (change) {
+                            AudioManager.AUDIOFOCUS_GAIN -> hasFocus = true
+                            AudioManager.AUDIOFOCUS_LOSS -> {
+                                hasFocus = false
+                                abandonFocus()
+                            }
+                            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                                hasFocus = false
+                                scope.launch {
+                                    kotlinx.coroutines.delay(1000)
+                                    if (mediaSession != null) requestPersistentFocus()
+                                }
+                            }
+                        }
                     },
                     AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+                    AudioManager.AUDIOFOCUS_GAIN,
                 )
             }
             hasFocus = focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             Timber.i(
-                "BluetoothHeadsetObserver：请求瞬时焦点结果=%d（granted=%s）",
+                "BluetoothHeadsetObserver：请求持久焦点结果=%d（granted=%s）",
                 focusResult, hasFocus,
             )
         } catch (e: Exception) {
