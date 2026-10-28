@@ -510,6 +510,10 @@ const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
 const CAPTURE_COMMANDS = ['screenshot', 'record_screen', 'take_photo', 'record_video', 'record_audio']
 const CAPTURE_GUARD_WINDOW_MS = 15 * 60 * 1000
 
+// 分类/命令卡片记忆 key（2026-10-28 用户需求，localStorage 按浏览器隔离）
+const LAST_CATEGORY_KEY = 'bridge_admin_cmd_category'
+const LAST_COMMAND_KEY = 'bridge_admin_cmd_card'
+
 /** 目标设备在途的采集命令（15 分钟窗口内的 pending，视为正在执行；超窗视为僵尸不拦）。 */
 const pendingCapture = computed<CommandRecord | null>(() => {
   if (!form.deviceId) return null
@@ -844,6 +848,12 @@ function commandLabelOf(name: string) {
 function selectCategory(key: string) {
   activeCategory.value = key
   keyword.value = ''
+  // 分类也按浏览器记忆（2026-10-28 用户需求）：下次进页自动展开该分类
+  try {
+    localStorage.setItem(LAST_CATEGORY_KEY, key)
+  } catch {
+    /* 隐私模式等写入失败静默忽略 */
+  }
   // 切换分类时若已选命令不属于该分类，则保留原选中（用户可能只是想浏览）
 }
 
@@ -868,6 +878,12 @@ async function stopActiveCapture() {
 
 function selectCommand(cmd: CommandDef) {
   selectedCommand.value = cmd
+  // 选中卡片按浏览器记忆（2026-10-28 用户需求）：下次进页自动恢复选中
+  try {
+    localStorage.setItem(LAST_COMMAND_KEY, cmd.name)
+  } catch {
+    /* 隐私模式等写入失败静默忽略 */
+  }
   // 切换命令卡片即销毁实时画面控件（2026-10-28 用户拍板）；若正在实时播放，
   // 先结束设备端采集（stream_stop）再销毁——只断前端 WS 设备会继续采。
   if (streamCard.value?.isStreaming) {
@@ -1012,9 +1028,25 @@ async function loadCatalog() {
     const catalog = await getCommandCatalog()
     categories.value = catalog.categories
     commandDefs.value = catalog.commands
-    // 默认选中第一个分类
-    if (categories.value.length > 0) {
-      activeCategory.value = categories.value[0].key
+    // 恢复该浏览器上次浏览的分类与选中的命令卡片（2026-10-28 用户需求，
+    // localStorage 按浏览器隔离）；无记忆/记忆失效回退默认（第一个分类）
+    try {
+      const savedCat = localStorage.getItem(LAST_CATEGORY_KEY)
+      if (savedCat && categories.value.some((c) => c.key === savedCat)) {
+        activeCategory.value = savedCat
+      } else if (categories.value.length > 0) {
+        activeCategory.value = categories.value[0].key
+      }
+      const savedCmdName = localStorage.getItem(LAST_COMMAND_KEY)
+      const savedCmd = savedCmdName
+        ? commandDefs.value.find((c) => c.name === savedCmdName)
+        : undefined
+      if (savedCmd) selectCommand(savedCmd) // 走完整选中流程（含参数记忆回填）
+    } catch {
+      /* 记忆损坏时回退默认 */
+      if (categories.value.length > 0 && !activeCategory.value) {
+        activeCategory.value = categories.value[0].key
+      }
     }
   } finally {
     catalogLoading.value = false
