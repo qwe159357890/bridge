@@ -136,10 +136,13 @@ class SmsStore:
         sim_slot, sim_number}``（sim 两项可缺省，缺省按未知 -1/''）。
         重复上报时 sim 字段一并更新——客户端采集端升级后重新下发即可**回填**
         历史数据的卡信息。
-        返回 ``{"received": 收到条数, "inserted": 新增, "updated": 更新}``。
+        返回 ``{"received": 收到条数, "inserted": 新增, "updated": 更新,
+        "new_messages": [新增短信的 {sms_key, address, body, type, date_ms}, ...]}``。
+        ``new_messages`` 仅含真正新增（非重复上报）的短信，供上层逐条广播
+        new_sms 事件（避免「整批只广播最后一条」以及重复上报导致的重复通知）。
         """
         if not messages:
-            return {"received": 0, "inserted": 0, "updated": 0}
+            return {"received": 0, "inserted": 0, "updated": 0, "new_messages": []}
         sync_dt = datetime.now()
         rows = []
         for m in messages:
@@ -161,11 +164,22 @@ class SmsStore:
             )
         with self._connection() as conn, conn.cursor() as cur:
             # 精确区分新增/更新：executemany 对 ON DUPLICATE 的受影响行数语义
-            # 模糊（更新计 2），改用前后 COUNT 差值
+            # 模糊（更新计 2），改用前后 COUNT 差值 + 先查已存在键集合
             cur.execute(
                 "SELECT COUNT(*) FROM sms_messages WHERE device_id = %s", (device_id,)
             )
             before = int(cur.fetchone()[0])
+            # 查出本批 sms_key 中已存在的（用于精确识别哪些是真正新增）
+            keys = [r[1] for r in rows]
+            existing: set[str] = set()
+            if keys:
+                placeholders = ", ".join(["%s"] * len(keys))
+                cur.execute(
+                    f"SELECT sms_key FROM sms_messages "
+                    f"WHERE device_id = %s AND sms_key IN ({placeholders})",
+                    (device_id, *keys),
+                )
+                existing = {row[0] for row in cur.fetchall()}
             cur.executemany(
                 "INSERT INTO sms_messages (device_id, sms_key, address, body, "
                 "sms_type, read_flag, sim_slot, sim_number, sms_date, sync_time) "
@@ -181,10 +195,23 @@ class SmsStore:
             )
             after = int(cur.fetchone()[0])
             conn.commit()
+        # 真正新增的短信（sms_key 不在已存在集合中），供逐条广播
+        new_messages = [
+            {
+                "sms_key": r[1],
+                "address": r[2],
+                "body": r[3],
+                "type": r[4],
+                "date_ms": int(m.get("date_ms") or 0),
+            }
+            for r, m in zip(rows, messages)
+            if r[1] not in existing
+        ]
         result = {
             "received": len(rows),
             "inserted": after - before,
             "updated": len(rows) - (after - before),
+            "new_messages": new_messages,
         }
         logger.info("短信批量入库：device=%s %s", device_id, result)
         return result

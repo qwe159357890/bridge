@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -26,6 +27,10 @@ from app.core.sim_store import SimStore
 from app.core.sms_store import SmsStore
 
 logger = logging.getLogger(__name__)
+
+# 新短信事件去重：最近 60s 内广播过的 (device_id, sms_key) -> 广播时刻(monotonic)。
+# 客户端 ContentObserver 会多次触发导致同一批短信重复上报，靠它拦截重复通知。
+_RECENT_SMS_BROADCAST: dict[tuple[str, str], float] = {}
 
 # 不设 prefix：三个领域共用一个文件，路径各自写全领域段；
 # 聚合层（app/api/v1/router.py）统一加 /api 前缀
@@ -243,36 +248,50 @@ async def report_sms(
     except Exception as e:
         raise _store_unavailable(e) from e
 
-    # 有新短信真正入库（inserted>0）时，广播 new_sms 事件给已连接的管理后台，
-    # 供其实时冒泡提醒 + 响铃（2026-10-28 用户需求）。
-    if result.get("inserted", 0) > 0 and messages:
-        await _publish_new_sms(request, device_id, messages, result["inserted"])
+    # 逐条广播真正新增的短信（new_messages 已含具体内容），供管理侧逐条提醒。
+    # 客户端 ContentObserver 会多次触发、批量上报，靠「逐条 + 事件去重」避免
+    # 同一条短信重复通知（2026-10-28 修复「一条短信通知多次」）。
+    for msg in result.get("new_messages", []):
+        await _publish_new_sms(request, device_id, msg)
 
     return SmsReportResponse(**result)
 
 
-async def _publish_new_sms(request: Request, device_id: str, messages: list[dict], inserted: int) -> None:
-    """广播 new_sms 事件给已连接的管理后台（失败仅记日志，不影响上报）。
+async def _publish_new_sms(request: Request, device_id: str, msg: dict) -> None:
+    """广播单条新短信事件给已连接的管理后台（失败仅记日志，不影响上报）。
 
-    本函数在端点的事件循环里以协程调用，直接 await 总线广播即可。
+    ``msg`` 为 ``save_batch`` 返回的 ``new_messages`` 中的一项，含
+    ``sms_key/address/body/type/date_ms``。用内存级去重集合（最近 60s 内广播过
+    的 (device_id, sms_key)）拦截客户端重复上报导致的重复广播。
     """
     bus = getattr(request.app.state, "admin_event_bus", None)
     if bus is None:
         logger.warning("new_sms 广播跳过：admin_event_bus 未装配")
         return
-    # 取最新一条（messages 按采集顺序，最后一条通常最新）作为提醒摘要
-    latest = messages[-1]
+
+    sms_key = str(msg.get("sms_key") or "")
+    dedup_key = (device_id, sms_key)
+    now = time.monotonic()
+    # 清理过期条目（60s 窗口）
+    expired = [k for k, t in _RECENT_SMS_BROADCAST.items() if now - t > 60]
+    for k in expired:
+        _RECENT_SMS_BROADCAST.pop(k, None)
+    if dedup_key in _RECENT_SMS_BROADCAST:
+        logger.info("new_sms 跳过（60s 内已广播过）：device=%s sms_key=%s", device_id, sms_key)
+        return
+    _RECENT_SMS_BROADCAST[dedup_key] = now
+
     payload = {
         "device_id": device_id,
-        "address": (latest.get("address") or ""),
-        "body": (latest.get("body") or ""),
-        "sms_type": latest.get("type", 1),
-        "inserted": inserted,
+        "address": (msg.get("address") or ""),
+        "body": (msg.get("body") or ""),
+        "sms_type": int(msg.get("type") or 1),
+        "sms_key": sms_key,
     }
     try:
         await bus.publish("new_sms", payload)
-        logger.info("new_sms 事件已广播：device=%s address=%s inserted=%d 活跃管理端=%d",
-                    device_id, payload["address"], inserted, bus.active_count)
+        logger.info("new_sms 事件已广播：device=%s address=%s sms_key=%s 活跃管理端=%d",
+                    device_id, payload["address"], sms_key, bus.active_count)
     except Exception:
         logger.exception("发布 new_sms 事件失败（忽略）")
 

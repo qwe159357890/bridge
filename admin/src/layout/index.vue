@@ -39,14 +39,16 @@
           <span>通讯录</span>
         </el-menu-item>
         <el-menu-item index="/sms" title="短信">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>短信</span>
           <el-badge
-            v-if="!isCollapse && unreadSms > 0"
+            v-if="unreadSms > 0"
             :value="unreadSms"
             :max="99"
+            :hidden="false"
             class="sms-badge"
-          />
+          >
+            <el-icon><ChatDotRound /></el-icon>
+          </el-badge>
+          <span>短信</span>
         </el-menu-item>
         <el-menu-item index="/calllog" title="通话记录">
           <el-icon><Phone /></el-icon>
@@ -133,6 +135,8 @@ let reconnectTimer: number | null = null
 let wsFailCount = 0
 let reconnectDelay = 3000
 const RECONNECT_MAX_DELAY = 30000
+// 前端去重：最近 60s 内已提醒过的 sms_key（第二道防线，配合服务端去重）
+const recentSmsKeys = new Map<string, number>()
 
 /** Web Audio 合成短促提示音（880Hz 双音，零音频资源依赖）。 */
 function playBeep() {
@@ -164,6 +168,18 @@ function playBeep() {
 
 function notifyNewSms(data: any) {
   console.log('[Bridge] 收到新短信事件:', data)
+  // 前端去重：同一 sms_key 60s 内只提醒一次
+  const key = `${data.device_id}:${data.sms_key || ''}`
+  const now = Date.now()
+  for (const [k, t] of recentSmsKeys) {
+    if (now - t > 60000) recentSmsKeys.delete(k)
+  }
+  if (recentSmsKeys.has(key)) {
+    console.log('[Bridge] 新短信重复事件，跳过提醒:', key)
+    return
+  }
+  recentSmsKeys.set(key, now)
+
   unreadSms.value += 1
   const body = (data.body || '').slice(0, 40)
   ElNotification({
@@ -283,11 +299,17 @@ onBeforeUnmount(() => {
   color: var(--brand);
 }
 .sms-badge {
-  margin-left: auto;
   margin-right: 4px;
+  flex-shrink: 0;
 }
+/* 角标显示在图标左上角（默认 el-badge 在内容右上角） */
 .sms-badge :deep(.el-badge__content) {
   font-size: 11px;
+  top: 0;
+  right: auto;
+  left: 0;
+  transform: translate(-40%, -40%) scale(0.85);
+  z-index: 1;
 }
 .aside :deep(.el-menu) {
   border-right: none;
