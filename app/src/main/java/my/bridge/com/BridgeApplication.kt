@@ -35,6 +35,9 @@ class BridgeApplication : Application() {
     lateinit var musicStateReporter: my.bridge.com.media.MusicStateReporter
 
     @Inject
+    lateinit var bluetoothMediaButtonListener: my.bridge.com.media.BluetoothMediaButtonListener
+
+    @Inject
     lateinit var reportManager: my.bridge.com.report.ReportManager
 
     override fun onCreate() {
@@ -56,6 +59,11 @@ class BridgeApplication : Application() {
 
         // 音乐播放状态上报（状态变化 → WS message 通道 → 管理后台实时展示/按钮联动）
         musicStateReporter.start()
+
+        // 蓝牙耳机媒体按键监听（复用常驻保活语境，零额外功耗：只挂 MediaSession + 一次焦点，
+        // 无定时巡检）。按键 → Toast + WS 上报后台。
+        my.bridge.com.media.BridgeApplicationContextHolder.init(this)
+        bluetoothMediaButtonListener.start(this)
 
         // 主动上报总管：周期位置上报（服务定时+WorkManager 兜底）+ 新短信即推 +
         // 接收服务端 config_update 推送（后台远程开关，默认双开）

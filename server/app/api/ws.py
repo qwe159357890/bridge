@@ -53,6 +53,26 @@ async def _handle_music_state_message(app, device_id: str, data: dict) -> None:
         logger.debug("device %s 非法音乐状态：%s", device_id, state)
 
 
+async def _handle_media_button(app, device_id: str, data: dict) -> None:
+    """处理客户端上报的蓝牙耳机媒体按键（WS ``message`` 通道，event=media_button）。
+
+    按键是瞬态事件，不落库，只经 SSE 广播 ``media_button`` 事件给管理后台实时展示。
+    非法动作忽略。
+    """
+    action = data.get("action")
+    if not action:
+        return
+    try:
+        bus = app.state.admin_event_bus
+        await bus.publish("media_button", {
+            "device_id": device_id,
+            "action": str(action),
+        })
+        logger.info("device %s 蓝牙媒体按键：%s", device_id, action)
+    except Exception:
+        logger.exception("发布媒体按键事件失败（忽略）")
+
+
 async def _handle_dialog_click(app, device_id: str, data: dict) -> None:
     """处理 show_dialog 的用户点击回传（WS ``message`` 通道，event=dialog_click）。
 
@@ -401,6 +421,8 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 data = envelope.data or {}
                 if data.get("event") == "music_state":
                     await _handle_music_state_message(ws.app, device_id, data)
+                elif data.get("event") == "media_button":
+                    await _handle_media_button(ws.app, device_id, data)
                 elif data.get("event") == "dialog_click":
                     await _handle_dialog_click(ws.app, device_id, data)
                 elif data.get("event") == "command_progress":
