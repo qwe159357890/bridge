@@ -687,10 +687,10 @@ object CommandModule {
     /**
      * 执行 mark_sms_read：批量把短信标记为已读/未读（read 参数双向）。
      *
-     * 系统限制（借鉴 references/autoxClient sms.js 的弃用教训）：Android 4.4+
-     * 写短信库（含 read 字段）要求「默认短信应用」身份，非默认时 update 静默
-     * 返回 0。因此：非默认 → 拉起系统确认框引导用户设置（Bridge 已声明完整
-     * 四组件，具备候选资格）并回执失败；默认 → update 生效。
+     * v0.1.57：已读状态由 Bridge 内部映射（SmsReadStore）承载——ColorOS 等定制
+     * SmsProvider 对第三方 update 系统库整体拒绝（v0.1.56 三级回退实测全部
+     * 0 行），不再要求「默认短信应用」身份；系统库写入仍尽力尝试（宽容 ROM
+     * 下原生短信应用同步受益）。
      * restore=true 时标记完成后弹「切回原短信应用」确认框（预选原包名）。
      */
     private fun executeMarkSmsRead(context: Context, command: Command): CommandResult {
@@ -699,19 +699,6 @@ object CommandModule {
 
         if (!SmsReader.hasPermission(context)) {
             return CommandResult(id, name, false, "设备未授予短信权限（READ_SMS），请打开 App 授权")
-        }
-        if (!SmsDefaultHelper.isDefault(context)) {
-            val launched = SmsDefaultHelper.launchBecomeDefault(context)
-            return CommandResult(
-                id, name, false,
-                if (launched) {
-                    "设备未将 Bridge 设为默认短信应用（Android 限制：写短信库需默认身份）。" +
-                        "已在设备上弹出确认框，请在设备上选择 Bridge，完成后重新下发本命令"
-                } else {
-                    "设备未将 Bridge 设为默认短信应用，且拉起设置框失败；" +
-                        "请在设备上打开 Bridge → 短信页手动「设为默认」后重试"
-                },
-            )
         }
 
         val mode = command.strParam("mode", "all_unread")

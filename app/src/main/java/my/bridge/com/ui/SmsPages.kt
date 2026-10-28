@@ -80,7 +80,8 @@ private val timeFmtDate = SimpleDateFormat("MM-dd", Locale.getDefault())
  *   经 ActivityResultLauncher 拉起并回调结果——裸 startActivity 在部分 ROM 被
  *   静默取消，表现为「点了没反应」）；
  * - Bridge 为默认应用期间，新短信由 SmsDeliverReceiver 写库并通知，本页可见；
- * - 标记已读/未读双向可用：整会话按钮 + 详情页点单条气泡切换（需默认身份）。
+ * - 标记已读/未读双向可用：整会话按钮 + 详情页点单条气泡切换
+ *   （v0.1.57 起走 Bridge 内部映射 SmsReadStore，无需默认短信应用身份）。
  */
 @Composable
 fun SmsConversationsPage() {
@@ -107,7 +108,7 @@ fun SmsConversationsPage() {
             true -> if (became) {
                 toast(context, "已设为默认短信应用")
             } else {
-                toast(context, "未完成设置（已取消），标记已读/未读仍不可用")
+                toast(context, "未完成设置（已取消）；标记已读/未读仍可用（内部映射）")
             }
             false -> if (!became) {
                 toast(context, "已切回原短信应用")
@@ -168,7 +169,6 @@ fun SmsConversationsPage() {
     if (thread != null) {
         ThreadDetailPage(
             thread = thread,
-            isDefault = isDefault,
             onBack = {
                 openThread = null
                 refreshKey++ // 返回后刷新未读数
@@ -262,8 +262,8 @@ private fun DefaultSmsStatusBar(
                     color = Color(0xFF303133),
                 )
                 Text(
-                    text = if (isDefault) "新短信由 Bridge 接收，标记已读/未读可用"
-                    else "标记已读/未读需设为默认（系统限制）",
+                    text = if (isDefault) "新短信由 Bridge 接收"
+                    else "标记已读/未读随时可用（Bridge 内部已读映射）",
                     fontSize = 11.sp,
                     color = Color(0xFF8A919F),
                 )
@@ -369,7 +369,6 @@ private fun ConversationList(
 @Composable
 private fun ThreadDetailPage(
     thread: SmsRepository.Conversation,
-    isDefault: Boolean,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -383,12 +382,9 @@ private fun ThreadDetailPage(
         }
     }
 
-    /** 双向标记整会话（read=true 已读 / false 未读），本地乐观更新。 */
+    /** 双向标记整会话（read=true 已读 / false 未读），本地乐观更新。
+     *  v0.1.57：已读状态由 Bridge 内部映射承载（SmsReadStore），不再要求默认身份。 */
     fun markThread(read: Boolean, current: List<SmsRepository.ThreadMessage>) {
-        if (!isDefault) {
-            toast(context, "标记已读/未读需先在上方把 Bridge 设为默认短信应用")
-            return
-        }
         scope.launch {
             try {
                 val n = withContext(Dispatchers.IO) {
@@ -396,7 +392,7 @@ private fun ThreadDetailPage(
                         context, read, "thread_id = ?", arrayOf(thread.threadId),
                     )
                 }
-                if (n <= 0) toast(context, "未标记任何短信（可能已是该状态，或短信库拒绝写入）")
+                if (n <= 0) toast(context, "该会话没有可标记的短信")
                 messages = current.map {
                     if (it.type == 1) it.copy(read = read) else it
                 }
@@ -406,12 +402,8 @@ private fun ThreadDetailPage(
         }
     }
 
-    /** 点单条气泡：收到的短信在 已读↔未读 间切换（需默认身份）。 */
+    /** 点单条气泡：收到的短信在 已读↔未读 间切换（v0.1.57 起无需默认身份）。 */
     fun toggleMessage(msg: SmsRepository.ThreadMessage, current: List<SmsRepository.ThreadMessage>) {
-        if (!isDefault) {
-            toast(context, "标记已读/未读需先在上方把 Bridge 设为默认短信应用")
-            return
-        }
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -471,7 +463,6 @@ private fun ThreadDetailPage(
                 }
                 // 双向标记按钮（仅默认身份可用；非默认给引导提示）
                 MarkActionsBar(
-                    isDefault = isDefault,
                     canMarkRead = msgList.any { !it.read && it.type == 1 },
                     canMarkUnread = msgList.any { it.read && it.type == 1 },
                     onMarkRead = { markThread(true, msgList) },
@@ -485,7 +476,6 @@ private fun ThreadDetailPage(
 // ============ 双向标记操作条 ============
 @Composable
 private fun MarkActionsBar(
-    isDefault: Boolean,
     canMarkRead: Boolean,
     canMarkUnread: Boolean,
     onMarkRead: () -> Unit,
@@ -498,14 +488,7 @@ private fun MarkActionsBar(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (!isDefault) {
-            Text(
-                "标记已读/未读需设为默认短信应用",
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            return@Row
-        }
+        // v0.1.57：已读状态走 Bridge 内部映射（SmsReadStore），不再有默认身份门控
         if (canMarkUnread) {
             Button(
                 onClick = onMarkUnread,

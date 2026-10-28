@@ -79,16 +79,22 @@ object SmsRepository {
         }
         if (byThread.isEmpty()) return emptyList()
 
-        // 未读数：独立小查询（read=0 通常很少），按 thread_id/address 精确计数
+        // 未读数（v0.1.57）：扫描最近窗口（date DESC LIMIT）逐条叠加内部已读
+        // 映射计数——系统 read=0 且映射非「强制已读」、或 read=1 但映射「强制
+        // 未读」都算未读。ColorOS 拒绝第三方写系统 read 列（见 setReadState），
+        // 系统计数已不可信。
         val unreadByThread = HashMap<String, Int>()
         try {
+            SmsReadStore.warmUp(context)
             cr.query(
-                Telephony.Sms.CONTENT_URI, arrayOf("thread_id"),
-                "read = 0", null, null,
+                Telephony.Sms.CONTENT_URI, arrayOf("_id", "thread_id", "read"),
+                null, null, "date DESC LIMIT 2000",
             )?.use { c ->
                 while (c.moveToNext()) {
-                    val t = c.getString(0)?.takeIf { it.isNotEmpty() } ?: continue
-                    unreadByThread[t] = (unreadByThread[t] ?: 0) + 1
+                    val id = c.getString(0) ?: continue
+                    val t = c.getString(1)?.takeIf { it.isNotEmpty() } ?: continue
+                    val effectiveRead = SmsReadStore.isRead(c.getInt(2) > 0, id)
+                    if (!effectiveRead) unreadByThread[t] = (unreadByThread[t] ?: 0) + 1
                 }
             }
         } catch (e: Exception) {
@@ -109,9 +115,10 @@ object SmsRepository {
             .sortedByDescending { it.lastDateMs }
     }
 
-    /** 某会话的全部消息（时间正序，供详情页展示）。 */
+    /** 某会话的全部消息（时间正序，供详情页展示；已读状态叠加内部映射）。 */
     fun listThreadMessages(context: Context, threadId: String, limit: Int = 500): List<ThreadMessage> {
         val cr = context.contentResolver
+        SmsReadStore.warmUp(context)
         val projection = arrayOf("_id", "body", "date", "type", "read")
         val cursor = try {
             cr.query(
@@ -126,13 +133,14 @@ object SmsRepository {
         val result = mutableListOf<ThreadMessage>()
         cursor?.use { c ->
             while (c.moveToNext()) {
+                val id = c.getString(0) ?: "0"
                 result.add(
                     ThreadMessage(
-                        id = c.getString(0) ?: "0",
+                        id = id,
                         body = c.getString(1) ?: "",
                         dateMs = c.getLong(2),
                         type = c.getInt(3),
-                        read = c.getInt(4) > 0,
+                        read = SmsReadStore.isRead(c.getInt(4) > 0, id),
                     ),
                 )
             }
@@ -141,16 +149,15 @@ object SmsRepository {
     }
 
     /**
-     * 批量设置短信已读状态（双向：已读/未读；要求本应用已是默认短信应用，
-     * 调用方先校验）。
+     * 批量设置短信已读状态（双向：已读/未读）。
      * @param read true=标记已读，false=标记未读
-     * @return 受影响行数；失败抛异常
+     * @return 生效条数（系统库写入成功数与内部映射记录数取较大者）
      *
-     * ROM 兼容（2026-10-27 修复「标记已读不生效」）：AOSP 标准路径是带 selection
-     * 批量 update content://sms，但 ColorOS 等定制 SmsProvider 常只对**单行 URI**
-     * （content://sms/<id>）的 update 放行——批量返回 0 行且库无变化。因此批量
-     * 无效时回退「先查 _id 列表 → 逐条按 _id URI 更新」（顺序：全表 → Inbox 视图，
-     * 收到的短信都在 inbox，部分 ROM 只放行 inbox）。
+     * v0.1.57 拍板：ColorOS 等定制 SmsProvider 对第三方 update 系统库**整体
+     * 拒绝**（v0.1.56 三级回退实测批量/单行/Inbox 全部 0 行）——已读状态改由
+     * [SmsReadStore] 内部映射承载（展示层叠加，映射优先），系统库写入降级为
+     * 「尽力而为」（默认身份 + 宽容 ROM 下仍会尝试，原生短信应用可受益）。
+     * 因此**不再要求默认短信应用身份**，映射记录先于系统写入。
      */
     fun setReadState(
         context: Context,
@@ -161,47 +168,51 @@ object SmsRepository {
         val values = android.content.ContentValues().apply { put("read", if (read) 1 else 0) }
         val cr = context.contentResolver
 
-        // ① AOSP 标准路径：批量 update
+        // ① 先按 selection 查出目标 _id 并记录内部映射（保证无论系统库是否
+        //    接受写入，Bridge 界面内的已读状态一定生效）
+        val ids = ArrayList<String>()
+        try {
+            cr.query(
+                Telephony.Sms.CONTENT_URI, arrayOf("_id"), selection, selectionArgs, null,
+            )?.use { c ->
+                while (c.moveToNext()) ids.add(c.getLong(0).toString())
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "标记短信查目标 _id 失败（%s）", selection)
+        }
+        val mapped = SmsReadStore.mark(context, ids, read)
+
+        // ② 系统库写入（尽力而为：批量全表 → 逐条单行 URI → Inbox 视图）
         var affected = try {
             cr.update(Telephony.Sms.CONTENT_URI, values, selection, selectionArgs)
         } catch (e: Exception) {
             Timber.w(e, "批量标记短信已读失败（回退逐条更新）")
             0
         }
-        if (affected > 0) {
-            Timber.i("标记短信%s：批量 affected=%d（%s）", if (read) "已读" else "未读", affected, selection)
-            return affected
-        }
-
-        // ② 回退：查出目标 _id 列表 → 逐条单行 URI 更新（全表 URI → Inbox URI）
-        var count = 0
-        try {
-            val ids = ArrayList<Long>()
-            cr.query(
-                Telephony.Sms.CONTENT_URI, arrayOf("_id"), selection, selectionArgs, null,
-            )?.use { c ->
-                while (c.moveToNext()) ids.add(c.getLong(0))
-            }
-            Timber.i("标记短信逐条回退：命中 %d 条（%s）", ids.size, selection)
-            for (pass in 0 until 2) {
-                if (count > 0) break
-                val base = if (pass == 0) Telephony.Sms.CONTENT_URI else Telephony.Sms.Inbox.CONTENT_URI
-                for (id in ids) {
-                    count += try {
-                        cr.update(android.content.ContentUris.withAppendedId(base, id), values, null, null)
-                    } catch (e: Exception) {
-                        0
+        if (affected <= 0) {
+            var count = 0
+            try {
+                for (pass in 0 until 2) {
+                    if (count > 0) break
+                    val base = if (pass == 0) Telephony.Sms.CONTENT_URI else Telephony.Sms.Inbox.CONTENT_URI
+                    for (idStr in ids) {
+                        val id = idStr.toLongOrNull() ?: continue
+                        count += try {
+                            cr.update(android.content.ContentUris.withAppendedId(base, id), values, null, null)
+                        } catch (e: Exception) {
+                            0
+                        }
                     }
                 }
-                if (count > 0) Timber.i("标记短信逐条回退：pass=%d（%s）生效 %d 条", pass, base, count)
+            } catch (e: Exception) {
+                Timber.w(e, "逐条标记短信已读失败")
             }
-        } catch (e: Exception) {
-            Timber.w(e, "逐条标记短信已读失败")
+            affected = count
         }
         Timber.i(
-            "标记短信%s：批量=%d 逐条=%d（%s）",
-            if (read) "已读" else "未读", affected, count, selection,
+            "标记短信%s：映射=%d 系统库=%d（%s）",
+            if (read) "已读" else "未读", mapped, affected, selection,
         )
-        return count
+        return maxOf(mapped, affected)
     }
 }

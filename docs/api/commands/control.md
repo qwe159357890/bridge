@@ -237,12 +237,22 @@ Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，�
 
 ## mark_sms_read 标记短信已读/未读
 
-实现核心 `app/.../data/SmsRepository.kt`（写库，`setReadState` 双向）+
-`SmsDefaultHelper.kt`（默认身份与切换）。借鉴 autoxClient `sms.js` 的弃用教训：
-**Android 4.4+ 写短信库（含 read 字段）要求「默认短信应用」身份**，仅 WRITE_SMS
-权限会被一加/ColorOS 等 ROM 静默拒绝（update 返回 0，不抛异常）。
+实现核心 `app/.../data/SmsRepository.kt`（`setReadState` 双向）+
+`app/.../data/SmsReadStore.kt`（内部已读映射）+ `SmsDefaultHelper.kt`（默认身份与切换）。
 
-### 默认短信应用身份
+### 已读状态承载（v0.1.57 拍板）
+
+- **ColorOS 等定制 SmsProvider 对第三方 update 系统短信库整体拒绝**——v0.1.56
+  三级回退（批量全表 → 逐条单行 URI → Inbox 视图）实测全部返回 0 行，写系统库
+  这条路在部分 ROM 上堵死；
+- 因此已读状态改由 **Bridge 内部映射**承载：`SmsReadStore` 本地 JSON 持久化
+  「短信 _id → 强制已读/强制未读」，展示层（内置短信页、get_sms 未读计数）
+  把系统 read 列与映射**叠加（映射优先）**；
+- **不再要求默认短信应用身份**：Bridge 界面内的已读/未读标记随时生效；
+  系统库写入仍尽力尝试（宽容 ROM 下原生短信应用同步受益）；
+- 原生短信应用的已读状态不受影响（各管各的，互不干扰）。
+
+### 默认短信应用身份（与新短信接收相关）
 
 - Bridge 已在 Manifest 声明**默认短信应用完整四组件**（autoxClient 正是
   缺组件而无法成为候选）：
@@ -250,9 +260,8 @@ Android 10+ 限制后台启动 Activity：客户端进程虽为前台服务，�
   2. `MmsReceiver`（WAP_PUSH_DELIVER，BROADCAST_WAP_PUSH）——彩信 PDU 落盘+通知（首期不解析）；
   3. `ComposeSmsActivity`（ACTION_SENDTO sms:/smsto:）——其他 App 发短信入口；
   4. `HeadlessSmsSendService`（RESPOND_VIA_MESSAGE，SEND_RESPOND_VIA_MESSAGE）——快捷回复。
-- 非默认时执行本命令：客户端拉起系统确认框（API 29+ RoleManager SMS 角色 /
-  旧版 ACTION_CHANGE_DEFAULT），回执失败并引导设备上选择 Bridge 后重新下发。
-- **切换必须用户确认**（系统安全设计，无静默 API）：每个方向各需设备上点一次。
+- 设为默认后新短信由 Bridge 接收（不再仅是浏览）；**切换必须用户确认**
+  （系统安全设计，无静默 API）。
 - 「原短信应用」包名在成为默认前的瞬间记录到本地（短信页加载/设为默认按钮/
   本命令引导前三个时机），`restore` 切回时用 ACTION_CHANGE_DEFAULT 预选它。
 

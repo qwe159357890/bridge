@@ -30,14 +30,28 @@
          不用原生 controls：Chrome 在 waiting（缓冲耗尽，如投屏画面静止）时
          会显示旋转 spinner + 时间停走，误导「加载中/卡死」（2026-10-27 用户
          反馈）。直播进度条无意义，去掉后静止期就安静显示最后一帧。 -->
-    <video
-      v-show="kind !== 'audio'"
-      ref="videoEl"
-      class="stream-video"
-      autoplay
-      muted
-      playsinline
-    />
+    <!-- 视频容器：全屏对象（全屏后音量控件仍悬浮可见，video 元素全屏会丢覆盖层） -->
+    <div v-show="kind !== 'audio'" ref="videoBox" class="stream-video-box">
+      <video ref="videoEl" class="stream-video" autoplay muted playsinline />
+      <!-- 音量控件：去原生 controls 后自绘（静音切换 + 音量滑条），非全屏/全屏均可见 -->
+      <div class="volume-ctrl" @click.stop>
+        <el-button
+          :icon="videoMuted ? Mute : Bell"
+          size="small"
+          circle
+          :title="videoMuted ? '取消静音' : '静音'"
+          @click="toggleMute"
+        />
+        <el-slider
+          v-model="videoVolume"
+          class="volume-slider"
+          :min="0"
+          :max="100"
+          :show-tooltip="false"
+          @input="applyVolume"
+        />
+      </div>
+    </div>
     <div v-if="kind !== 'audio' && playBlocked" class="stream-resume">
       <el-button type="primary" size="small" @click="resumeVideo">点击播放</el-button>
     </div>
@@ -65,7 +79,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { Close, FullScreen } from '@element-plus/icons-vue'
+import { Bell, Close, FullScreen, Mute } from '@element-plus/icons-vue'
 import mpegts from 'mpegts.js'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
@@ -120,7 +134,28 @@ let lastRebuildAt = 0 // 上次播放器重建时刻（重建冷却，防 4.5s �
 const recorded = ref<BlobPart[]>([]) // 原始字节累积（下载用，响应式供下载按钮显隐）
 let blobUrl = ''
 
-defineExpose({ onStreamStatus, startManual })
+// 手动停止封锁：停止采集后 15 分钟内禁止自动重启同路流
+// （防 silentRefresh 拿 15 分钟窗口内的 pending 命令反复重建 WS = 僵尸订阅刷屏）
+let manualStopKey = ''
+let manualStopAt = 0
+const MANUAL_STOP_BLOCK_MS = 15 * 60_000
+
+/** 是否有活跃流会话（父页据此决定轮询节奏）。 */
+const isStreaming = computed(() => visible.value && !ended.value)
+
+/**
+ * 手动停止（点「⏹ 停止采集」后调用）：立即切断全部 WS 订阅（不等设备
+ * is_end 帧——设备可能已离线），卡片保留统计与下载；同路流 15 分钟内
+ * 不允许 silentRefresh 自动重建（用户明确的「不要僵尸订阅」）。
+ */
+function onManualStop() {
+  ended.value = true
+  manualStopKey = `${deviceId.value}:${kind.value}`
+  manualStopAt = Date.now()
+  endStream()
+}
+
+defineExpose({ onStreamStatus, startManual, onManualStop, isStreaming })
 
 const deviceName = computed(() => props.deviceNames[deviceId.value] || deviceId.value)
 
@@ -135,6 +170,7 @@ function onStreamStatus(d: {
     // 新流开始：已结束/未显示/设备或类型变化 都要重启
     // （v0.1.53 修复：旧条件 !visible.value 漏掉「已结束后再次直播」→ 卡片停在已结束 0 片）
     if (!visible.value || ended.value || deviceId.value !== d.device_id || kind.value !== d.kind) {
+      manualStopKey = '' // 真实的流开始事件优先于手动停止封锁
       startStream(d.device_id, d.kind)
     }
   } else {
@@ -159,6 +195,8 @@ function startManual(id: string, k: 'video' | 'audio' | 'screen') {
   if (visible.value && !ended.value && deviceId.value === id && kind.value === k) return
   const key = `${id}:${k}`
   if (key === sessionKey && Date.now() - lastStartAt < 60000) return
+  // 手动停止封锁期内不自动重启（新下发命令时 hide/onStreamStatus 会清封锁）
+  if (key === manualStopKey && Date.now() - manualStopAt < MANUAL_STOP_BLOCK_MS) return
   startStream(id, k)
 }
 
@@ -510,15 +548,40 @@ function download() {
   a.click()
 }
 
-/** 全屏（原生 controls 已移除，卡片头部按钮提供全屏能力）。 */
+/** 全屏（原生 controls 已移除，卡片头部按钮提供全屏能力）。
+ *  全屏对象是容器而非 video 元素：否则全屏后自绘音量控件会被排除在
+ *  全屏层外（2026-10-28 用户反馈：非全屏看不到音量按钮 → 自绘控件须全屏也可见）。 */
 function goFullscreen() {
-  videoEl.value?.requestFullscreen?.().catch?.(() => {})
+  videoBox.value?.requestFullscreen?.().catch?.(() => {})
+}
+
+// ---- 自绘音量控件 ----
+const videoBox = ref<HTMLDivElement | null>(null)
+const videoMuted = ref(true) // 初始与 video muted 属性一致（自动播放策略要求）
+const videoVolume = ref(100)
+
+function toggleMute() {
+  const v = videoEl.value
+  if (!v) return
+  videoMuted.value = !videoMuted.value
+  v.muted = videoMuted.value
+}
+
+function applyVolume() {
+  const v = videoEl.value
+  if (!v) return
+  v.volume = videoVolume.value / 100
+  if (videoVolume.value > 0 && v.muted) {
+    videoMuted.value = false
+    v.muted = false
+  }
 }
 
 function hide() {
   visible.value = false
   ended.value = true
   sessionKey = '' // 主动关闭清除会话冷却：用户立即重发同路命令不应被拦
+  manualStopKey = '' // 关闭卡片同时解除手动停止封锁（重新下发即可重启）
   stopAll()
 }
 
@@ -579,11 +642,39 @@ onBeforeUnmount(stopAll)
   font-size: 12px;
   color: #909399;
 }
+.stream-video-box {
+  position: relative;
+}
 .stream-video {
+  display: block;
   width: 100%;
   max-height: 420px;
   border-radius: 6px;
   background: #000;
+}
+/* 自绘音量控件：悬浮画面右下角，半透明底；容器全屏时依旧可见 */
+.volume-ctrl {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 18px;
+  padding: 5px 10px;
+  z-index: 5;
+}
+.volume-ctrl .el-button {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.volume-slider {
+  width: 90px;
+}
+/* 滑条配色适配深色底（Element 默认轨道太浅） */
+.volume-ctrl .el-slider__runway {
+  background: rgba(255, 255, 255, 0.3);
 }
 .stream-resume {
   text-align: center;

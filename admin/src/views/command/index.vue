@@ -75,6 +75,7 @@
               :content="cmd.description"
               placement="top"
               :show-after="250"
+              popper-class="cmd-desc-tip"
             >
               <div
                 class="command-card"
@@ -341,6 +342,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
@@ -637,6 +639,9 @@ async function stopStreamCapture() {
   try {
     const r = await sendCommand(form.deviceId, 'stream_stop', {})
     ElMessage.success(`停止命令已下发（${r.command_id.slice(0, 8)}…）`)
+    // 立即切断实时卡片的全部流 WS 订阅（不等设备 is_end 帧），并封锁
+    // silentRefresh 的自动重启——用户明确要求「不要保留僵尸订阅」
+    streamCard.value?.onManualStop()
     await load()
   } catch {
     /* 失败提示已由拦截器统一弹出 */
@@ -1108,8 +1113,24 @@ onMounted(() => {
   load()
   loadCatalog()
   connectWS()
-  refreshTimer = window.setInterval(silentRefresh, 3000)
+  refreshTimer = window.setInterval(silentPoll, 3000)
 })
+
+/**
+ * 轮询降频（v0.1.56）：无活跃会话时 15s 才真正拉一次命令列表——
+ * 之前无条件 3s 轮询，服务器终端每 3s 刷一条 GET /api/commands（用户反馈刷屏）。
+ * 活跃 = 有待回执命令 / 上传进度 / 实时卡片在播。
+ */
+let pollTick = 0
+async function silentPoll() {
+  pollTick++
+  const active =
+    streamCard.value?.isStreaming ||
+    Object.keys(progressMap.value).length > 0 ||
+    commands.value.some((r) => r.status === 'pending')
+  if (!active && pollTick % 5 !== 0) return
+  await silentRefresh()
+}
 
 onBeforeUnmount(() => {
   if (reconnectTimer) window.clearTimeout(reconnectTimer)
@@ -1117,6 +1138,11 @@ onBeforeUnmount(() => {
   if (refreshTimer !== null) window.clearInterval(refreshTimer)
   refreshTimer = null
   ws?.close()
+})
+
+/** 切走选项卡（离开本页）时关闭实时卡片：组件虽会随路由卸载自清 WS，此处显式兜底。 */
+onBeforeRouteLeave(() => {
+  streamCard.value?.hide()
 })
 </script>
 
@@ -1398,5 +1424,15 @@ onBeforeUnmount(() => {
   box-shadow: none;
   transform: none;
   cursor: not-allowed;
+}
+</style>
+
+<!-- 命令描述 tooltip：teleport 到 body，scoped 样式不生效，须非 scoped；限宽换行 -->
+<style>
+.cmd-desc-tip.el-popper {
+  max-width: 360px;
+  white-space: normal;
+  line-height: 1.55;
+  word-break: break-all;
 }
 </style>
