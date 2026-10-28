@@ -184,7 +184,7 @@ class SmsStore:
 
     def list(
         self,
-        device_id: str,
+        device_id: Optional[str] = None,
         sms_type: Optional[int] = None,
         keyword: str = "",
         before_ms: Optional[int] = None,
@@ -192,11 +192,16 @@ class SmsStore:
     ) -> tuple[list[dict[str, Any]], int]:
         """按条件查询（sms_date 倒序）。
 
+        ``device_id``：为空 = **聚合模式**，返回所有设备的短信（2026-10-28
+        用户需求：管理后台短信页支持跨设备聚合视图）。
         ``before_ms``：时间游标分页——取该时刻**之前**的记录（前端把上一页
         最旧一条的 sms_date 传回来即可翻页），对多批次累积数据比 offset 稳。
         """
         conn = self._connection()
-        conds, args = ["device_id = %s"], [device_id]
+        conds, args = [], []
+        if device_id:
+            conds.append("device_id = %s")
+            args.append(device_id)
         if sms_type is not None:
             conds.append("sms_type = %s")
             args.append(sms_type)
@@ -207,7 +212,7 @@ class SmsStore:
         if before_ms is not None:
             conds.append("sms_date < %s")
             args.append(datetime.fromtimestamp(before_ms / 1000.0))
-        where = "WHERE " + " AND ".join(conds)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS n FROM sms_messages {where}", args)
             total = int(cur.fetchone()["n"])
@@ -255,6 +260,7 @@ class SmsStore:
     def _row_to_dict(row: dict) -> dict[str, Any]:
         return {
             "id": row["id"],
+            "device_id": row["device_id"],
             "sms_key": row["sms_key"],
             "address": row["address"],
             "body": row["body"] or "",

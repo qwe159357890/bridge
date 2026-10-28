@@ -173,7 +173,7 @@ function onManualStop() {
   endStream()
 }
 
-defineExpose({ onStreamStatus, startManual, onManualStop, isStreaming })
+defineExpose({ onStreamStatus, startManual, onManualStop, hide, isStreaming })
 
 const deviceName = computed(() => props.deviceNames[deviceId.value] || deviceId.value)
 

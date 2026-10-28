@@ -238,12 +238,13 @@ def report_sms(
 @router.get("/sms", response_model=SmsListResponse, dependencies=[Depends(require_admin)])
 def list_sms(
     request: Request,
-    device_id: str = Query(min_length=1),
+    device_id: Optional[str] = Query(default=None),
     sms_type: Optional[int] = Query(default=None, ge=1, le=6),
     keyword: str = Query(default=""),
     before_ms: Optional[int] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> SmsListResponse:
+    """短信存档查询。``device_id`` 为空 = 聚合模式（返回所有设备，2026-10-28）。"""
     items, total = _get_stores(request)[1].list(
         device_id=device_id,
         sms_type=sms_type,

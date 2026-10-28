@@ -3,7 +3,7 @@
     <el-card>
       <div class="toolbar">
         <div class="left">
-          <DevicePicker v-model="deviceId" :devices="devices" placeholder="选择设备" />
+          <DevicePicker v-model="deviceId" :devices="devices" placeholder="选择设备" with-all />
           <el-select v-model="smsType" style="width: 160px" @change="reload">
             <el-option label="全部" :value="undefined" />
             <el-option v-for="(n, t) in TYPE_NAMES" :key="t" :label="n" :value="Number(t)" />
@@ -16,7 +16,7 @@
             @keyup.enter="reload"
             @clear="reload"
           />
-          <el-button type="primary" :disabled="!deviceId" @click="reload">查询</el-button>
+          <el-button type="primary" @click="reload">查询</el-button>
           <el-tooltip content="向设备下发「获取短信」命令拉取最新短信入库，完成后自动刷新列表" placement="top">
             <span>
               <el-button
@@ -58,6 +58,11 @@
         @selection-change="onSelectionChange"
       >
         <el-table-column type="selection" width="42" />
+        <el-table-column label="设备" width="130" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ deviceNameOf(row.device_id) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <el-tag :type="tagType(row.sms_type)" size="small">{{ row.sms_type_name }}</el-tag>
@@ -99,7 +104,7 @@
             :description="
               deviceId
                 ? '该设备暂无短信存档（点击上方「刷新设备短信」从设备拉取）'
-                : '请先选择设备'
+                : '暂无任何设备的短信存档（选中设备后点「刷新设备短信」拉取）'
             "
             :image-size="80"
           />
@@ -129,11 +134,12 @@ import { listSms, deleteSms, setSmsRead, simLabel, type SmsItem } from '@/api/da
 import type { Device } from '@/types'
 
 /**
- * 短信页：按设备查看短信存档。
+ * 短信页：短信存档查询（2026-10-28 起默认聚合模式——显示所有设备的短信，
+ * 设备选择器可选「全部设备（聚合）」或具体设备；每行显示来源设备）。
  * 分页用时间游标（before_ms = 已加载最旧一条的 sms_date），配合累积存档
  * 比页码翻页稳定（新数据插入不影响游标）。
  * 已读状态双向可标记（已读/未读），仅更新存档；设备端同步另发 mark_sms_read 命令。
- * 「刷新设备短信」= 直接下发 get_sms 命令（免切到命令下发页），回执后自动重查。
+ * 「刷新设备短信」= 直接下发 get_sms 命令（需先选中具体设备），回执后自动重查。
  */
 
 const TYPE_NAMES: Record<number, string> = {
@@ -157,7 +163,13 @@ const loading = ref(false)
 
 onMounted(async () => {
   devices.value = await listDevices()
+  loadPage() // 进页即聚合视图（deviceId 为空 = 所有设备）
 })
+
+/** 设备显示名（聚合列用）。 */
+function deviceNameOf(id: string) {
+  return devices.value.find((d) => d.device_id === id)?.device_name || id
+}
 
 function reload() {
   items.value = []
@@ -165,13 +177,13 @@ function reload() {
 }
 
 async function loadPage() {
-  if (!deviceId.value) return
   loading.value = true
   try {
     const oldest = items.value.length ? items.value[items.value.length - 1] : null
     const beforeMs = oldest ? Date.parse(oldest.sms_date.replace(' ', 'T')) : undefined
     const r = await listSms({
-      device_id: deviceId.value,
+      // 为空 = 聚合模式（所有设备）
+      device_id: deviceId.value || undefined,
       sms_type: smsType.value,
       keyword: keyword.value.trim() || undefined,
       before_ms: beforeMs,
@@ -233,23 +245,30 @@ function onSelectionChange(rows: SmsItem[]) {
   selected.value = rows
 }
 
-async function markRows(ids: number[], read: boolean, tip: string) {
-  if (!deviceId.value || ids.length === 0) return
-  const { updated } = await setSmsRead(deviceId.value, ids, read)
+/** 按行所属设备分组标记已读/未读（聚合模式下选中行可能跨设备）。 */
+async function markRows(rows: SmsItem[], read: boolean, tip: string) {
+  if (rows.length === 0) return
+  const byDevice = new Map<string, number[]>()
+  for (const r of rows) {
+    const list = byDevice.get(r.device_id) || []
+    list.push(r.id)
+    byDevice.set(r.device_id, list)
+  }
+  let updated = 0
+  for (const [dev, ids] of byDevice) {
+    const { updated: n } = await setSmsRead(dev, ids, read)
+    updated += n
+  }
   ElMessage.success(`${tip} ${updated} 条`)
   reload()
 }
 
 function markOne(row: SmsItem) {
-  markRows([row.id], !row.read, row.read ? '已标为未读' : '已标为已读')
+  markRows([row], !row.read, row.read ? '已标为未读' : '已标为已读')
 }
 
 function markSelected(read: boolean) {
-  markRows(
-    selected.value.map((r) => r.id),
-    read,
-    read ? '已标为已读' : '已标为未读',
-  )
+  markRows(selected.value, read, read ? '已标为已读' : '已标为未读')
 }
 
 async function removeOne(row: SmsItem) {
@@ -260,7 +279,7 @@ async function removeOne(row: SmsItem) {
   } catch {
     return
   }
-  const { deleted } = await deleteSms(deviceId.value, row.id)
+  const { deleted } = await deleteSms(row.device_id, row.id)
   ElMessage.success(`已删除 ${deleted} 条`)
   reload()
 }

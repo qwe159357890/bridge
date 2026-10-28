@@ -21,6 +21,7 @@ export interface ContactItem {
 /** 一条短信。 */
 export interface SmsItem {
   id: number
+  device_id: string
   sms_key: string
   address: string
   body: string
@@ -80,7 +81,7 @@ export function deleteContacts(deviceId: string): Promise<{ deleted: number }> {
 // ---------------- 短信 ----------------
 
 export function listSms(params: {
-  device_id: string
+  device_id?: string // 为空 = 聚合模式（所有设备）
   sms_type?: number
   keyword?: string
   before_ms?: number
