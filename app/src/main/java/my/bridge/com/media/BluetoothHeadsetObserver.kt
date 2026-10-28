@@ -111,7 +111,12 @@ class BluetoothHeadsetObserver @Inject constructor(
                     }
                 })
                 setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
-                // 关键 2：声明可处理的媒体 action，系统才把对应按键路由到本会话
+                // 关键 2：声明可处理的媒体 action，系统才把对应按键路由到本会话。
+                // 关键 3（本轮根因）：必须 setState() 到非 STATE_NONE 状态，否则系统
+                // 媒体控制中心认为「该 App 没在播放」，媒体按键根本不路由过来。
+                // 之前只 setActions 不 setState，PlaybackState 停在 STATE_NONE，是
+                // 「拿到焦点但 onMediaButtonEvent 仍零触发」的真正原因。这里设为
+                // STATE_PLAYING 并带有效 updateTime（不能为 0，否则系统仍忽略）。
                 setPlaybackState(
                     PlaybackState.Builder()
                         .setActions(
@@ -123,6 +128,11 @@ class BluetoothHeadsetObserver @Inject constructor(
                                 or PlaybackState.ACTION_FAST_FORWARD
                                 or PlaybackState.ACTION_REWIND
                                 or PlaybackState.ACTION_STOP
+                        )
+                        .setState(
+                            PlaybackState.STATE_PLAYING,
+                            0L,
+                            1f,
                         )
                         .build()
                 )
