@@ -108,7 +108,8 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
   - 容器改 **MPEG_2_TS**（`.ts`，TS 每包自带时间戳可边收边播），**需 Android 8.0+**
     （执行器前置校验，低版本回执失败提示关闭流式）；TS 不支持旋转元数据，跳过
     setOrientationHint（浏览器按原始帧播放）；
-  - start 后每 500ms 读产物文件增量 → base64 → WS `media_stream` 事件上行
+  - start 后每 500ms 读产物文件增量 → **二进制 WS 帧**（v0.1.56，省 33% 上行）
+    → `media_stream` 上行
     （服务端解 base64 → StreamHub → 管理后台专用流 WS 二进制帧 → mpegts.js 实时播）；
   - `duration` 语义变为**自动停止倒计时**（10~600 秒），可被 `stream_stop`
     提前终止；**`duration` 0 = 不限时**（v0.1.55，管理后台流式下发自动传 0），
@@ -155,7 +156,8 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
 
 ## 流式通道（服务端 + 管理后台，v0.1.49；v0.1.55 服务端统一转 FLV）
 
-- **服务端**：ws.py 收 `media_stream` 事件 → 数据分片 base64 解码 →（video）
+- **服务端**：ws.py 收 `media_stream`（text=base64 兼容旧版 / binary 二进制帧 v0.1.56）
+  → 数据解码 →（video）
   TS→FLV 转封装 → 经 `core/stream_hub.py`（StreamHub，按 device_id 的订阅者
   队列，**无订阅者即丢弃**，不缓存回放）投递给管理后台专用流 WS；
   起始/结束帧额外广播 `stream_status` 轻量事件（命令页自动开/关播放卡片，
@@ -187,24 +189,32 @@ Pillow 未安装或解码失败降级返回原图。后台媒体列表图片走�
 
 - 实时直播客户端屏幕到管理后台（端到端延迟约 **0.6~1.5 秒**），播放器在命令页
   自动弹出（stream_status kind=screen 驱动），持续到最长时长结束或 stream_stop。
-- **参数**（v0.1.55 更新）：
+- **参数**（v0.1.56 更新）：
   - `duration`：最长直播时长秒数。**0 = 不限时（默认，推荐）**——一直直播直到
     点「⏹ 停止采集」（下发 stream_stop），24h 兜底防僵尸；传 10~3600 则到时自动停；
+  - `quality`（画质档位，默认 hd）：**hd=高清**（1080P 原生 / CBR 2.5Mbps / 30fps，
+    带宽约 1.1GB/小时）与 **smooth=流畅**（720P / CBR 1.5Mbps / 15fps，省 55%
+    带宽，文字投屏观感几乎无损）两档；
+  - `low_latency`（低延迟模式，默认 false，仅管理后台生效）：播放缓冲垫从
+    1.2~3.5s 压到 0.3~1.0s，延迟立减约 1s，代价抗网络抖动变弱；
   - `upload`（回执上传，默认 false）：直播结束后是否把 FLV 存档上传服务器
     （kind=`screen_live`「直播存档」，媒体页可回放）；默认关闭（只实时观看，
     结束后本地存档删除）。
 - **静止期重复帧 + CBR（v0.1.55）**：`KEY_REPEAT_PREVIOUS_FRAME_AFTER=500ms`
   ——屏幕静止时编码器自动重编上一帧（近零码率），时间轴连续、管理端不断流；
-  `KEY_BITRATE_MODE=CBR` 显式恒定 2.5Mbps（此前未设 mode，VBR 下动态画面实测
+  `KEY_BITRATE_MODE=CBR` 显式恒定码率（此前未设 mode，VBR 下动态画面实测
   冲到 ≈22Mbps 打爆 WiFi 上行 → 发送积压爆发 → 管理端「断流十几秒→猛跳」）；
   编码器 start 后 `request-sync` 立即出首帧（缓解启动黑屏）。
+- **GOP 1s（v0.1.56）**：I 帧间隔 2s→1s，中途加入/重建订阅者的关键帧对齐等待
+  减半（起播更快），代价带宽 +5~10%。
 - **授权**：与截屏/录屏一致——投影会话保持中免确认直接开播；未保持时弹一次
   系统授权框（「立即开始」），之后长期有效。
 - **实现链**（复用 v0.1.41 持久镜像幕布 + v0.1.49 流式通道，增量仅客户端编码打包）：
-  幕布 surface 挂 **MediaCodec H.264 编码器输入面**（720p@30，2.5 Mbps，I 帧间隔 2s）
+  幕布 surface 挂 **MediaCodec H.264 编码器输入面**（画质档位见上，I 帧间隔 1s）
   → 同步模式逐帧取 AnnexB 裸流 → `media/FlvMuxer.kt`（自研极简 FLV 复用：文件头 +
   onMetaData + AVC sequence header + AVCC 逐帧 tag，约 200 行）落盘 FLV
-  → 每 500ms 文件增量 base64 → WS media_stream **kind=screen** → StreamHub
+  → 每 500ms 文件增量**二进制 WS 帧**（v0.1.56：`[2B 头长][JSON 头][负载]`，无
+  base64 膨胀，省 33% 上行）→ WS media_stream **kind=screen** → StreamHub
   → 专用流 WS → 后台 mpegts.js `type:'flv'` 实时播放 + 累积下载。
 - **FLV 而非 TS 的原因**：TS 复用（PAT/PMT/PES）约 300~500 行，FLV 对 H.264
   only 打包约百行；mpegts.js 两种 type 原生都支持（调研文档 §三 路线 B）。

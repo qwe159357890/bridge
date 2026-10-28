@@ -104,6 +104,30 @@ async def _handle_command_progress(app, device_id: str, data: dict) -> None:
         logger.exception("转发命令进度事件失败（忽略）")
 
 
+def _decode_stream_frame(raw: bytes) -> tuple[dict, bytes] | None:
+    """解包客户端二进制流分片帧（v0.1.56）：``[2B 大端头长][JSON 头][原始负载]``。
+
+    返回 (头 dict, 原始负载字节)；头 JSON 缺 data 字段不影响——调用方把
+    负载 base64 回填进头后复用既有 _handle_media_stream（服务端解码开销
+    极小，省 33% 流量的关键在客户端上行段）。解析失败返回 None。
+    """
+    import json as _json
+
+    try:
+        if len(raw) < 4:
+            return None
+        hlen = int.from_bytes(raw[:2], "big")
+        if hlen <= 0 or 2 + hlen > len(raw):
+            return None
+        header = _json.loads(raw[2:2 + hlen].decode("utf-8"))
+        if not isinstance(header, dict) or header.get("event") != "media_stream":
+            return None
+        return header, raw[2 + hlen:]
+    except Exception:
+        logger.debug("二进制流帧解包失败（忽略）")
+        return None
+
+
 async def _handle_media_stream(app, device_id: str, data: dict) -> None:
     """处理客户端流式录像/录音分片（WS ``message`` 通道，event=media_stream）。
 
@@ -111,6 +135,8 @@ async def _handle_media_stream(app, device_id: str, data: dict) -> None:
     管理后台专用流 WS（/api/admin/stream/{device_id}）的播放器；
     起始帧（带 info）/ 结束帧（is_end=true）额外广播 ``stream_status``
     事件给管理后台（轻量元数据，供命令页自动开/关播放卡片）。
+    v0.1.56：客户端数据分片改走 WS binary 帧（无 base64 膨胀），主循环
+    解包后把负载 base64 回填进头再进入本函数（处理逻辑零改动）。
     """
     kind = data.get("kind")
     if kind not in ("video", "audio", "screen"):
@@ -308,10 +334,13 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
 
     try:
         # 5. 主循环：读消息 + 心跳响应 + 读超时回收
+        # v0.1.56：改用 ws.receive() 同时收 text（JSON 协议）与 binary
+        # （媒体流分片帧，省 base64 33% 上行流量）——receive_text 收到
+        # binary 会抛 RuntimeError，无法双通道。
         while True:
             try:
-                raw = await asyncio.wait_for(
-                    ws.receive_text(),
+                msg = await asyncio.wait_for(
+                    ws.receive(),
                     timeout=settings.heartbeat.server_read_timeout,
                 )
             except asyncio.TimeoutError:
@@ -319,6 +348,29 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                             device_id, conn.idle_seconds)
                 offline_reason = "read_timeout"
                 break
+
+            if msg["type"] == "websocket.disconnect":
+                offline_reason = "disconnected"
+                break
+
+            # 二进制帧：仅媒体流分片（event=media_stream），负载 base64 回填
+            # 进头后走与文本消息完全相同的处理路径
+            if msg.get("bytes") is not None:
+                conn.touch()
+                decoded = _decode_stream_frame(msg["bytes"])
+                if decoded is not None:
+                    import base64 as _b64mod
+
+                    header, payload = decoded
+                    header["data"] = _b64mod.b64encode(payload).decode("ascii")
+                    await _handle_media_stream(ws.app, device_id, header)
+                else:
+                    logger.debug("device %s 收到无法解包的二进制帧，忽略", device_id)
+                continue
+
+            raw = msg.get("text")
+            if raw is None:
+                continue
 
             conn.touch()
             try:

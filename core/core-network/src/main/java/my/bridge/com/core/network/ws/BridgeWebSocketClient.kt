@@ -19,6 +19,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString.Companion.toByteString
 import android.os.Process
 import android.os.SystemClock
 import timber.log.Timber
@@ -361,6 +362,33 @@ class BridgeWebSocketClient(
             ws.send(WsEnvelope.make(WsEnvelope.TYPE_MESSAGE, data).toJson(gson))
         } catch (e: Exception) {
             Timber.w(e, "发送业务消息失败")
+            false
+        }
+    }
+
+    /**
+     * 发送二进制业务帧（媒体流分片专用，v0.1.56）：替代 base64 文本通道，
+     * 省 33% 上行流量（base64 膨胀 +1/3，2.5Mbps 实际占 3.3Mbps → 回到 2.5Mbps）。
+     *
+     * 帧格式：`[2B 大端头长][头 JSON（即 envelope.data，event=media_stream）][原始负载]`。
+     * WS text/binary 是独立 opcode，服务端按帧类型区分，与既有 JSON 文本协议共存。
+     *
+     * @return 是否已投递给 OkHttp 队列（未连接返回 false，调用方自行决定是否重试）
+     */
+    fun sendBusinessBinary(header: JsonObject, payload: ByteArray): Boolean {
+        val ws = webSocket ?: return false
+        if (!_handshakeReady.value) return false
+        return try {
+            val headerBytes = header.toString().toByteArray(Charsets.UTF_8)
+            if (headerBytes.size > 0xFFFF) return false
+            val frame = ByteArray(2 + headerBytes.size + payload.size)
+            frame[0] = (headerBytes.size shr 8).toByte()
+            frame[1] = (headerBytes.size and 0xFF).toByte()
+            headerBytes.copyInto(frame, 2)
+            payload.copyInto(frame, 2 + headerBytes.size)
+            ws.send(frame.toByteString(0, frame.size))
+        } catch (e: Exception) {
+            Timber.w(e, "发送二进制业务帧失败")
             false
         }
     }

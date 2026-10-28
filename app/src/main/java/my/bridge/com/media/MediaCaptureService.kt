@@ -88,7 +88,7 @@ class MediaCaptureService : Service() {
         const val EXTRA_CONSENT_DATA = "consent_data"
 
         // ---- 流式采集（stream=true 的录像/录音，借鉴 autox stream* 系列）----
-        // 分片推送节奏（毫秒）：每 500ms 读一次产物文件增量，base64 后经 WS 上行
+        // 分片推送节奏（毫秒）：每 500ms 读一次产物文件增量，二进制帧经 WS 上行
         private const val STREAM_CHUNK_INTERVAL_MS = 500L
 
         /** 当前是否有流式采集进行中（stream_stop 命令据此回执）。 */
@@ -466,6 +466,12 @@ class MediaCaptureService : Service() {
         val durationSec = if (unlimited) 0 else rawSec.coerceIn(10, 3600)
         // 回执上传开关（v0.1.55）：false = 直播结束即弃，不上传 FLV 存档
         val uploadArchive = intent.getBooleanExtra(EXTRA_UPLOAD, false)
+        // 画质档位（v0.1.56）：smooth=流畅 720P/1.5Mbps/15fps（省 55% 带宽），
+        // hd=高清 1080P/2.5Mbps/30fps（默认）
+        val tier = if (intent.getStringExtra(EXTRA_QUALITY) == "smooth") "smooth" else "hd"
+        val bitrate = if (tier == "smooth") 1_500_000 else 2_500_000
+        val fps = if (tier == "smooth") 15 else 30
+        val targetShort = if (tier == "smooth") 720 else 1080
         val startedAllAt = SystemClock.elapsedRealtime()
         val p = requireProjection(intent)
         Timber.i("投屏打点：授权就绪 +%dms", SystemClock.elapsedRealtime() - startedAllAt)
@@ -473,15 +479,16 @@ class MediaCaptureService : Service() {
         streamActive = true
         val metrics = realDisplayMetrics()
 
-        // 视频尺寸：长边压到 1280（直播分辨率不必原生，带宽与延迟优先），宽高取偶。
+        // 视频尺寸：按**短边**缩放到档位目标（竖屏 1080x2400 → 流畅 720x1600 /
+        // 高清原生 1080x2400），宽高取偶。横屏同理（短边=高）。
         // v0.1.52 修复：旧写法 `w and 1.inv().coerceAtLeast(2)` 因运算优先级实际是
         // `w and 2`——把宽高清成 0，MediaCodec.configure 直接抛 IllegalArgumentException
         // （「每次都让授权」的连带根因：首次失败释放投影会话 → 下次 projectionHeld=false）
         var w = metrics.widthPixels
         var h = metrics.heightPixels
-        val longest = maxOf(w, h)
-        if (longest > 1280) {
-            val scale = 1280f / longest
+        val shortest = minOf(w, h)
+        if (shortest > targetShort) {
+            val scale = targetShort.toFloat() / shortest
             w = (w * scale).toInt()
             h = (h * scale).toInt()
         }
@@ -501,7 +508,7 @@ class MediaCaptureService : Service() {
                     android.media.MediaFormat.KEY_COLOR_FORMAT,
                     android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
                 )
-                setInteger(android.media.MediaFormat.KEY_BIT_RATE, 2_500_000)
+                setInteger(android.media.MediaFormat.KEY_BIT_RATE, bitrate)
                 // 显式 CBR（2026-10-27 码率失控排查）：未设 bitrate mode 时设备默认
                 // 多为 VBR（KEY_BIT_RATE 只是均值，动态画面可数倍超出——实测 22Mbps
                 // 打爆 WiFi 上行 → 发送积压爆发 → 浏览器端「断流十几秒→猛跳」）。
@@ -514,8 +521,10 @@ class MediaCaptureService : Service() {
                 } catch (e: Exception) {
                     Timber.w(e, "CBR 设置失败（降级默认 VBR）")
                 }
-                setInteger(android.media.MediaFormat.KEY_FRAME_RATE, 30)
-                setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                setInteger(android.media.MediaFormat.KEY_FRAME_RATE, fps)
+                // GOP 2s→1s（v0.1.56）：关键帧密度翻倍，中途加入/重建订阅者的
+                // 关键帧对齐等待减半（起播更快），代价带宽 +5~10%
+                setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 // 静止期重复帧（2026-10-27 用户反馈根治）：Surface 无新帧时编码器
                 // 按 500ms 间隔自动重编上一帧（内容不变 P 帧近零码率）——时间轴
                 // 连续、服务端/浏览器持续有数据，管理端不再出现「静止=断流十几秒
@@ -528,8 +537,9 @@ class MediaCaptureService : Service() {
             display.setSurface(inputSurface)
             codec.start()
             Timber.i(
-                "投屏打点：编码器就绪 +%dms（%dx%d@30，CBR 2.5Mbps，%s）",
-                SystemClock.elapsedRealtime() - startedAllAt, w, h,
+                "投屏打点：编码器就绪 +%dms（%dx%d@%d，CBR %dMbps，%s 档，%s）",
+                SystemClock.elapsedRealtime() - startedAllAt, w, h, fps,
+                bitrate / 1_000_000, tier,
                 if (unlimited) "不限时" else "最长 ${durationSec}s",
             )
             // 立即请求同步帧：屏幕静止时 Surface 无新帧 → 首帧要等下一次画面更新
@@ -598,7 +608,7 @@ class MediaCaptureService : Service() {
                             // v0.1.53 修复：metadata 必须写在首帧前——旧顺序第一个 IDR
                             // 输出时 metadataWritten 还是 false 被丢弃，前端要再等数秒
                             if (!metadataWritten && csd0 != null) {
-                                muxer.writeMetadata(w, h, 30, csd0!!, csd1)
+                                muxer.writeMetadata(w, h, fps, csd0!!, csd1)
                                 metadataWritten = true
                             }
                             if (ob != null && info.size > 0 && metadataWritten) {
@@ -820,7 +830,7 @@ class MediaCaptureService : Service() {
      *
      * 流式模式（stream=true，借鉴 autox streamVideo）：
      * - 容器 MPEG_2_TS（TS 每包自带时间戳，可边收边播；执行器已保证 API 26+）；
-     * - start 后每 [STREAM_CHUNK_INTERVAL_MS] 读一次文件增量 → base64 → WS 上行
+     * - start 后每 [STREAM_CHUNK_INTERVAL_MS] 读一次文件增量 → 二进制帧 → WS 上行
      *   （event=media_stream，服务端转二进制喂给后台 mpegts.js 实时播放）；
      * - duration 变为自动停止倒计时，管理后台 stream_stop 命令可提前停；
      * - 停止后仍走完整文件上传（TS 文件本身即可播放/存档）。
@@ -1054,7 +1064,7 @@ class MediaCaptureService : Service() {
     /**
      * 麦克风录音（M4A/AAC），比录像简单得多——无相机、无预览、无 unlock。
      * stream=true 流式模式：AAC_ADTS 容器（每帧自带头，可累积实时解码播放），
-     * 每 [STREAM_CHUNK_INTERVAL_MS] 读文件增量 → base64 → WS 上行；
+     * 每 [STREAM_CHUNK_INTERVAL_MS] 读文件增量 → 二进制帧 → WS 上行；
      * 后台 Web Audio 逐段解码实时出声（约 1~2 秒延迟）。
      */
     private fun captureAudio(intent: Intent, stream: Boolean) {
@@ -1166,8 +1176,9 @@ class MediaCaptureService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * 读取产物文件 [fromOffset, len) 的增量字节，base64 后经 WS 上行
-     * （event=media_stream，服务端解 base64 后以二进制帧转发给后台播放器）。
+     * 读取产物文件 [fromOffset, len) 的增量字节，以**二进制 WS 帧**上行
+     * （v0.1.56：替代 base64 文本通道，省 33% 上行流量；服务端按 WS binary
+     * opcode 解包 2B 头长 + JSON 头 + 原始负载，走同一 _handle_media_stream）。
      *
      * @return 新的 (读偏移, 分片序号)；文件无增量返回原值（不发送）
      */
@@ -1187,10 +1198,18 @@ class MediaCaptureService : Service() {
                     raf.seek(offset)
                     raf.readFully(buf)
                 }
-                val b64 = android.util.Base64.encodeToString(buf, android.util.Base64.NO_WRAP)
                 offset += buf.size
                 index++
-                sendStreamMessage(kind, index, b64, buf.size.toLong(), offset, false)
+                val header = JsonObject().apply {
+                    addProperty("event", "media_stream")
+                    addProperty("kind", kind)
+                    addProperty("command_id", commandId)
+                    addProperty("chunk_index", index)
+                    addProperty("bytes", buf.size)
+                    addProperty("total_bytes", offset)
+                    addProperty("is_end", false)
+                }
+                wsClient.sendBusinessBinary(header, buf)
             }
         } catch (e: Exception) {
             // 分片失败不中断录制：服务端文件仍在，结束后还有完整文件上传兜底

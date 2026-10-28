@@ -299,6 +299,16 @@ COMMANDS: list[dict[str, Any]] = [
          [_param("duration", "最长时长(秒)", PARAM_TYPE_NUMBER, default=0,
                  placeholder="0 = 不限时（推荐）；或 10~3600 秒",
                  description="直播最长持续时长（秒），0 = 不限时直到手动停止"),
+          _param("quality", "画质档位", PARAM_TYPE_SELECT, default="hd",
+                 options=[
+                     {"value": "hd", "label": "高清 1080P / 2.5Mbps / 30fps"},
+                     {"value": "smooth", "label": "流畅 720P / 1.5Mbps / 15fps"},
+                 ],
+                 description="高清=原生分辨率（带宽约 1.1GB/小时）；流畅=省 55% 带宽，"
+                             "文字投屏观感几乎无损，滚动/游戏画面略欠顺滑"),
+          _param("low_latency", "低延迟模式", PARAM_TYPE_SWITCH, default=False,
+                 description="把播放缓冲垫从 1.2s 压到 0.3s（延迟立减约 1 秒），"
+                             "抗网络抖动能力变弱，WiFi 信号好时可用"),
           _param("upload", "回执上传", PARAM_TYPE_SWITCH, default=False,
                  description="流结束后把完整存档（FLV）上传到服务器；默认关闭（只实时观看，结束后即弃）")]),
     _cmd("take_photo", "拍照", "media", "📷", "调用客户端摄像头静音拍照并上传（无需设备端确认；通知栏仅显示静默的「运行中」提示，属系统硬性要求）",

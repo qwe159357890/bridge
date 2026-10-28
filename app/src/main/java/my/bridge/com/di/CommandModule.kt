@@ -1110,6 +1110,8 @@ object CommandModule {
                 if (raw <= 0) 0 else raw.coerceIn(10, 3600)
             } else 0
         val uploadArchive = command.boolParam("upload")
+        // 投屏画质档位（v0.1.56）：smooth=流畅 720P/1.5Mbps/15fps，hd=高清（默认）
+        val screenQuality = command.strParam("quality", "hd")
         val actionLabel = when {
             isRecord -> "录屏"
             isLive -> "投屏直播"
@@ -1176,6 +1178,7 @@ object CommandModule {
                 putExtra(MediaCaptureService.EXTRA_DURATION_SEC, durationSec)
                 putExtra(MediaCaptureService.EXTRA_UPLOAD, uploadArchive)
             }
+            if (isLive) putExtra(MediaCaptureService.EXTRA_QUALITY, screenQuality)
             if (!reuse) {
                 putExtra(MediaCaptureService.EXTRA_RESULT_CODE, resultCode)
                 putExtra(

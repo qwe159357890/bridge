@@ -951,6 +951,10 @@ async function doSend(force: boolean) {
   const cmdName = selectedCommand.value!.name
   sending.value = true
   try {
+    // 投屏低延迟开关：播放器卡片启动时读取（跨组件最轻的传参方式）
+    if (cmdName === 'screen_live') {
+      localStorage.setItem('bridge_stream_low_latency', params.low_latency ? '1' : '0')
+    }
     const r = await sendCommand(form.deviceId, cmdName, collectParams(), force)
     ElMessage.success(`命令已${force ? '强制' : ''}下发（${r.command_id.slice(0, 8)}…）`)
     // 流式采集命令：下发成功即预连实时播放通道（不等 stream_status 事件）。

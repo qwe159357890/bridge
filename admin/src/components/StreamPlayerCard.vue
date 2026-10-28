@@ -92,6 +92,7 @@ const videoEl = ref<HTMLVideoElement>()
 const playBlocked = ref(false)
 const audioStarted = ref(false)
 const playerError = ref('') // 播放器/流通道错误提示（不再静默黑屏）
+const lowLatency = ref(false) // 低延迟模式（screen_live 命令开关，经 localStorage 传递）
 
 // 统计
 const chunkCount = ref(0)
@@ -168,6 +169,8 @@ function startStream(id: string, k: 'video' | 'audio' | 'screen') {
   lastChunkAt = 0
   deviceId.value = id
   kind.value = k
+  // 低延迟模式：下发命令页写入的开关（播器启动时读一次，垫子策略随之切换）
+  lowLatency.value = localStorage.getItem('bridge_stream_low_latency') === '1'
   ended.value = false
   chunkCount.value = 0
   totalBytes.value = 0
@@ -302,14 +305,27 @@ function startLatencyWatch() {
       // 诊断帧数
       const q = v.getVideoPlaybackQuality?.()
       videoFrames.value = q ? q.totalVideoFrames : Math.round(v.currentTime * 30)
-      // 平滑追帧 v3：维持 1.2~3.5s 缓冲垫。40s 实测（2026-10-27）：上游分片
-      // 突发到达（设备端推流节奏不均），断供可达 ~1s——旧垫子 0.4s 必被吃干
-      // （waiting 时 lag=0.02s），这就是残余卡顿的来源。垫厚 1.2s 可扛 1s 断供，
-      // 代价是直播延迟多约 1s（可接受）。
+      // 平滑追帧 v4：缓冲垫目标由「低延迟模式」开关决定。
+      // 默认 1.2~3.5s：40s 实测（2026-10-27）上游分片突发到达（设备端推流
+      // 节奏不均），断供可达 ~1s——旧垫子 0.4s 必被吃干（waiting 时
+      // lag=0.02s），这就是残余卡顿的来源。垫厚 1.2s 可扛 1s 断供。
+      // 低延迟模式（v0.1.56，screen_live 命令开关，localStorage 传递）：
+      // 0.3~1.0s 垫子，延迟立减约 1s，代价抗抖动变弱（WiFi 差时可能卡）。
       if (v.buffered.length > 0 && !v.seeking && v.readyState >= 2) {
         const tail = v.buffered.end(v.buffered.length - 1)
         const lag = tail - v.currentTime
-        if (lag > 8) {
+        if (lowLatency.value) {
+          if (lag > 4) {
+            v.currentTime = Math.max(0, tail - 0.4)
+            v.playbackRate = 1.0
+          } else if (lag > 1.0) {
+            v.playbackRate = 1.5
+          } else if (lag < 0.3) {
+            v.playbackRate = 0.9
+          } else {
+            v.playbackRate = 1.0
+          }
+        } else if (lag > 8) {
           v.currentTime = Math.max(0, tail - 1.2)
           v.playbackRate = 1.0
         } else if (lag > 3.5) {
@@ -492,6 +508,11 @@ function download() {
     .replace(/[-:T]/g, '')
     .slice(0, 14)}.${ext}`
   a.click()
+}
+
+/** 全屏（原生 controls 已移除，卡片头部按钮提供全屏能力）。 */
+function goFullscreen() {
+  videoEl.value?.requestFullscreen?.().catch?.(() => {})
 }
 
 function hide() {
