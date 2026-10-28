@@ -225,14 +225,53 @@ def report_sms(
     x_device_id: str | None = Header(default=None),
     x_device_token: str | None = Header(default=None),
 ) -> SmsReportResponse:
-    """设备上报一批短信（去重入库）。"""
+    """设备上报一批短信（去重入库），有新短信入库时广播 new_sms 事件给管理侧。"""
     device_id = _check_device_auth(request, x_device_id, x_device_token)
     store = _get_stores(request)[1]
     try:
         result = store.save_batch(device_id, [m.model_dump() for m in body.messages])
     except Exception as e:
         raise _store_unavailable(e) from e
+
+    # 有新短信真正入库（inserted>0）时，广播 new_sms 事件给已连接的管理后台，
+    # 供其实时冒泡提醒 + 响铃（2026-10-28 用户需求）。事件走内存总线，
+    # 广播失败不影响上报主流程（此处同步 publish 会阻塞到全部连接写入完成，
+    # 故用后台任务 fire-and-forget，避免拖慢设备上报回执）。
+    if result.get("inserted", 0) > 0 and body.messages:
+        _publish_new_sms(request, device_id, body.messages, result["inserted"])
+
     return SmsReportResponse(**result)
+
+
+def _publish_new_sms(request: Request, device_id: str, messages: list[SmsItem], inserted: int) -> None:
+    """后台广播 new_sms 事件（fire-and-forget，失败仅记日志）。"""
+    import asyncio
+
+    bus = getattr(request.app.state, "admin_event_bus", None)
+    if bus is None:
+        return
+    # 取最新一条（messages 按采集顺序，最后一条通常最新）作为提醒摘要
+    latest = messages[-1]
+    payload = {
+        "device_id": device_id,
+        "address": latest.address or "",
+        "body": latest.body or "",
+        "sms_type": latest.type,
+        "inserted": inserted,
+    }
+
+    async def _fire() -> None:
+        try:
+            await bus.publish("new_sms", payload)
+        except Exception:
+            logger.exception("发布 new_sms 事件失败（忽略）")
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # 无运行事件循环（极少数同步上下文）：跳过广播，不影响上报
+        return
+    asyncio.create_task(_fire())
 
 
 @router.get("/sms", response_model=SmsListResponse, dependencies=[Depends(require_admin)])

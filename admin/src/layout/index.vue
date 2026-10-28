@@ -1,54 +1,62 @@
 <template>
   <el-container class="layout">
-    <el-aside width="220px" class="aside">
+    <el-aside :width="isCollapse ? '64px' : '220px'" class="aside">
       <div class="logo">
         <el-icon class="logo-icon"><Connection /></el-icon>
-        <span>Bridge 管理后台</span>
+        <span v-if="!isCollapse">Bridge 管理后台</span>
       </div>
       <el-menu
         :default-active="$route.path"
+        :collapse="isCollapse"
+        :collapse-transition="false"
         router
         background-color="#ffffff"
         text-color="#606266"
         active-text-color="#409eff"
       >
-        <el-menu-item index="/dashboard">
+        <el-menu-item index="/dashboard" title="仪表盘">
           <el-icon><Odometer /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
-        <el-menu-item index="/device">
+        <el-menu-item index="/device" title="设备管理">
           <el-icon><Monitor /></el-icon>
           <span>设备管理</span>
         </el-menu-item>
-        <el-menu-item index="/command">
+        <el-menu-item index="/command" title="命令下发">
           <el-icon><Promotion /></el-icon>
           <span>命令下发</span>
         </el-menu-item>
-        <el-menu-item index="/log">
+        <el-menu-item index="/log" title="日志查看">
           <el-icon><Document /></el-icon>
           <span>日志查看</span>
         </el-menu-item>
-        <el-menu-item index="/push">
+        <el-menu-item index="/push" title="消息推送">
           <el-icon><Message /></el-icon>
           <span>消息推送</span>
         </el-menu-item>
-        <el-menu-item index="/contacts">
+        <el-menu-item index="/contacts" title="通讯录">
           <el-icon><User /></el-icon>
           <span>通讯录</span>
         </el-menu-item>
-        <el-menu-item index="/sms">
+        <el-menu-item index="/sms" title="短信">
           <el-icon><ChatDotRound /></el-icon>
           <span>短信</span>
+          <el-badge
+            v-if="!isCollapse && unreadSms > 0"
+            :value="unreadSms"
+            :max="99"
+            class="sms-badge"
+          />
         </el-menu-item>
-        <el-menu-item index="/calllog">
+        <el-menu-item index="/calllog" title="通话记录">
           <el-icon><Phone /></el-icon>
           <span>通话记录</span>
         </el-menu-item>
-        <el-menu-item index="/media">
+        <el-menu-item index="/media" title="媒体文件">
           <el-icon><Picture /></el-icon>
           <span>媒体文件</span>
         </el-menu-item>
-        <el-menu-item index="/connection">
+        <el-menu-item index="/connection" title="连接监控">
           <el-icon><Connection /></el-icon>
           <span>连接监控</span>
         </el-menu-item>
@@ -57,10 +65,16 @@
 
     <el-container>
       <el-header class="header">
-        <el-breadcrumb separator="/">
-          <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
-          <el-breadcrumb-item>{{ $route.meta.title }}</el-breadcrumb-item>
-        </el-breadcrumb>
+        <div class="header-left">
+          <el-icon class="collapse-btn" @click="toggleCollapse">
+            <Fold v-if="!isCollapse" />
+            <Expand v-else />
+          </el-icon>
+          <el-breadcrumb separator="/">
+            <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
+            <el-breadcrumb-item>{{ $route.meta.title }}</el-breadcrumb-item>
+          </el-breadcrumb>
+        </div>
         <el-dropdown @command="handleCommand">
           <span class="user">
             <el-avatar :size="28" class="avatar">管</el-avatar>
@@ -82,11 +96,28 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { Fold, Expand } from '@element-plus/icons-vue'
+import { getToken } from '@/api/request'
+import { wsUrl } from '@/utils/base'
+import { ElNotification } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
+
+// ---------------- 侧边栏收缩/展开（localStorage 记忆） ----------------
+const isCollapse = ref(false)
+function toggleCollapse() {
+  isCollapse.value = !isCollapse.value
+  try {
+    localStorage.setItem('bridge_admin_aside_collapse', isCollapse.value ? '1' : '0')
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
 
 function handleCommand(command: string) {
   if (command === 'logout') {
@@ -94,6 +125,108 @@ function handleCommand(command: string) {
     router.push('/login')
   }
 }
+
+// ---------------- 全局新短信提醒（冒泡 + 声音 + 侧边栏未读角标） ----------------
+const unreadSms = ref(0)
+let ws: WebSocket | null = null
+let reconnectTimer: number | null = null
+let wsFailCount = 0
+let reconnectDelay = 3000
+const RECONNECT_MAX_DELAY = 30000
+
+/** Web Audio 合成短促提示音（880Hz 双音，零音频资源依赖）。 */
+function playBeep() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const now = ctx.currentTime
+    // 两段短音：叮—叮
+    ;[0, 0.18].forEach((offset) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = 880
+      gain.gain.setValueAtTime(0.0001, now + offset)
+      gain.gain.exponentialRampToValueAtTime(0.35, now + offset + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.15)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now + offset)
+      osc.stop(now + offset + 0.16)
+    })
+    // 播放完后释放 AudioContext
+    window.setTimeout(() => ctx.close().catch(() => {}), 500)
+  } catch {
+    /* 音频合成失败忽略 */
+  }
+}
+
+function notifyNewSms(data: any) {
+  unreadSms.value += 1
+  const body = (data.body || '').slice(0, 40)
+  ElNotification({
+    title: `新短信 · ${data.device_id}`,
+    message: `${data.address || '未知号码'}：${body}${(data.body || '').length > 40 ? '…' : ''}`,
+    type: 'info',
+    duration: 6000,
+    position: 'top-right',
+    onClick: () => {
+      router.push('/sms')
+    },
+  })
+  playBeep()
+}
+
+function connectWS() {
+  const token = getToken()
+  if (!token) return
+  let url = wsUrl('/api/admin/ws')
+  url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+  ws = new WebSocket(url)
+  ws.onopen = () => {
+    wsFailCount = 0
+    reconnectDelay = 3000
+  }
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'new_sms') {
+        notifyNewSms(msg.data)
+      }
+    } catch {
+      /* 忽略解析错误 */
+    }
+  }
+  ws.onclose = () => scheduleReconnect()
+  ws.onerror = () => ws?.close()
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return
+  wsFailCount += 1
+  const jitter = reconnectDelay * 0.8 + Math.random() * reconnectDelay * 0.4
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null
+    connectWS()
+  }, Math.round(jitter))
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_DELAY)
+}
+
+onMounted(() => {
+  try {
+    isCollapse.value = localStorage.getItem('bridge_admin_aside_collapse') === '1'
+  } catch {
+    /* 忽略 */
+  }
+  connectWS()
+})
+
+onBeforeUnmount(() => {
+  if (reconnectTimer) window.clearTimeout(reconnectTimer)
+  reconnectTimer = null
+  ws?.close()
+})
 </script>
 
 <style scoped>
@@ -114,10 +247,34 @@ function handleCommand(command: string) {
   font-size: 17px;
   font-weight: 600;
   border-bottom: 1px solid #f0f2f5;
+  white-space: nowrap;
+  overflow: hidden;
 }
 .logo-icon {
   font-size: 20px;
   color: var(--brand);
+  flex-shrink: 0;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.collapse-btn {
+  font-size: 18px;
+  cursor: pointer;
+  color: #606266;
+  transition: color 0.15s;
+}
+.collapse-btn:hover {
+  color: var(--brand);
+}
+.sms-badge {
+  margin-left: auto;
+  margin-right: 4px;
+}
+.sms-badge :deep(.el-badge__content) {
+  font-size: 11px;
 }
 .aside :deep(.el-menu) {
   border-right: none;
