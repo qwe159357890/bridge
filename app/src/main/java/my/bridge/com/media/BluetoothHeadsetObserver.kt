@@ -4,10 +4,16 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.Process
 import android.view.KeyEvent
 import com.google.gson.JsonObject
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -57,6 +63,15 @@ import javax.inject.Singleton
  *  其它播放器，且焦点可能反复易主（这是 Android 焦点机制的固有限制，无法做到
  *  绝对垄断，只能「尽力而为 + 快速抢回」）。
  *
+ * **关键 4（v0.1.68，解决「Aurelay 出声时抢不过」）：静音播放锚点**。
+ * 实测发现：Aurelay 只在「正在出声播放」时 Bridge 抢不过——因为 Android 的音频
+ * 焦点竞争偏向「正在实际出声」的 App，Bridge 只申请焦点却不出声，永远处于下风。
+ * 因此本类额外起一个独立的 [AudioTrack]（`setVolume(0f)` 静音）循环播放近静音
+ * PCM，让系统认为 Bridge 也是「正在播放」的媒体 App，从而在焦点竞争中与 Aurelay
+ * 平起平坐、甚至压过它。这是把「抢焦点」升级为「真·抢占」的关键一步。
+ * 静音锚点：只 `setVolume(0f)` 不改系统音量；跟随焦点（拿到焦点才播、丢焦点暂缓），
+ * 复用 [HandlerThread] + 每 20ms 写一帧，避免全 0 帧被判空流回收（最低位 ±1 抖动）。
+ *
  * 收到按键后：① Toast 展示动作；② 经 WS 业务通道上报 ``media_button`` 事件给
  * 服务端（供服务端日志记录 + 管理后台实时展示，便于远程排查「收没收到按键」）。
  *
@@ -87,6 +102,19 @@ class BluetoothHeadsetObserver @Inject constructor(
 
     /** 巡检间隔（毫秒）。 */
     private val watchdogIntervalMs = 2000L
+
+    // —— 静音播放锚点（关键 4）：让系统认为 Bridge「正在出声」，才能在焦点竞争中压过 Aurelay ——
+    private val SAMPLE_RATE = 48000
+    private val FRAME_SAMPLES = 960
+    private val FRAME_BYTES = FRAME_SAMPLES * 2
+    private val TICK_MS = 20L
+    private var anchorTrack: AudioTrack? = null
+    private var anchorThread: HandlerThread? = null
+    private var anchorHandler: Handler? = null
+    private var anchorTick: Runnable? = null
+    @Volatile
+    private var anchorPlaying = false
+    private var anchorCounter = 0L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -227,12 +255,12 @@ class BluetoothHeadsetObserver @Inject constructor(
                     .setOnAudioFocusChangeListener { change ->
                         Timber.i("BluetoothHeadsetObserver：音频焦点变化 %d", change)
                         when (change) {
-                            AudioManager.AUDIOFOCUS_GAIN -> hasFocus = true
+                            AudioManager.AUDIOFOCUS_GAIN -> setFocusState(true)
                             // 任何形式的失去焦点都视为「被抢走」，立即重新抢占，绝不主动 abandon
                             AudioManager.AUDIOFOCUS_LOSS,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                                hasFocus = false
+                                setFocusState(false)
                                 scheduleRefocus()
                             }
                         }
@@ -246,11 +274,11 @@ class BluetoothHeadsetObserver @Inject constructor(
                     { change ->
                         Timber.i("BluetoothHeadsetObserver：音频焦点变化 %d", change)
                         when (change) {
-                            AudioManager.AUDIOFOCUS_GAIN -> hasFocus = true
+                            AudioManager.AUDIOFOCUS_GAIN -> setFocusState(true)
                             AudioManager.AUDIOFOCUS_LOSS,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
                             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                                hasFocus = false
+                                setFocusState(false)
                                 scheduleRefocus()
                             }
                         }
@@ -259,7 +287,7 @@ class BluetoothHeadsetObserver @Inject constructor(
                     AudioManager.AUDIOFOCUS_GAIN,
                 )
             }
-            hasFocus = focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            setFocusState(focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
             Timber.i(
                 "BluetoothHeadsetObserver：请求持久焦点结果=%d（granted=%s）",
                 focusResult, hasFocus,
@@ -273,9 +301,24 @@ class BluetoothHeadsetObserver @Inject constructor(
             }
         } catch (e: Exception) {
             Timber.w(e, "BluetoothHeadsetObserver 请求音频焦点失败")
-            hasFocus = false
+            setFocusState(false)
         } finally {
             focusRequestInFlight = false
+        }
+    }
+
+    /**
+     * 统一收敛焦点状态切换：更新 [hasFocus] 并联动静音锚点启停。
+     * 拿到焦点 → 启动静音播放（让系统认为 Bridge「正在出声」，压过 Aurelay）；
+     * 失去焦点 → 暂停静音播放（避免在无焦点状态下徒占音频输出）。
+     */
+    private fun setFocusState(focused: Boolean) {
+        if (hasFocus == focused) return
+        hasFocus = focused
+        if (focused) {
+            startSilentAnchor()
+        } else {
+            stopSilentAnchor()
         }
     }
 
@@ -289,8 +332,9 @@ class BluetoothHeadsetObserver @Inject constructor(
     }
 
     /**
-     * 焦点自愈巡检：周期核对 `hasFocus`，一旦发现焦点丢失（例如被 Aurelay 等其它
-     * App 静默抢走、应用切前后台导致系统回收、或请求返回 DELAYED/失败），立即重抢。
+     * 焦点自愈巡检：周期核对 `hasFocus` 与静音锚点状态，一旦发现焦点丢失（例如被
+     * Aurelay 等其它 App 静默抢走、应用切前后台导致系统回收、或请求返回 DELAYED/
+     * 失败）立即重抢；焦点还在但锚点异常停止（AudioTrack 被系统回收）则重启锚点。
      * 这是「无论什么时候都正常」的最后一道兜底。
      */
     private fun startFocusWatchdog() {
@@ -300,6 +344,9 @@ class BluetoothHeadsetObserver @Inject constructor(
                     if (!hasFocus) {
                         Timber.d("BluetoothHeadsetObserver：巡检发现焦点丢失，重新抢占")
                         requestPersistentFocus()
+                    } else if (!anchorPlaying) {
+                        Timber.d("BluetoothHeadsetObserver：巡检发现静音锚点停止，重启")
+                        startSilentAnchor()
                     }
                 } catch (e: Exception) {
                     Timber.w(e, "BluetoothHeadsetObserver 巡检异常")
@@ -319,7 +366,7 @@ class BluetoothHeadsetObserver @Inject constructor(
                 @Suppress("DEPRECATION")
                 am.abandonAudioFocus(null)
             }
-            hasFocus = false
+            setFocusState(false)
             Timber.i("BluetoothHeadsetObserver：已放弃音频焦点")
         } catch (e: Exception) {
             Timber.w(e, "BluetoothHeadsetObserver 放弃焦点失败")
@@ -330,6 +377,7 @@ class BluetoothHeadsetObserver @Inject constructor(
     fun stop() {
         try {
             abandonFocus()
+            stopSilentAnchor()
             mediaSession?.release()
             Timber.i("BluetoothHeadsetObserver.stop：MediaSession 已释放")
         } catch (e: Exception) {
@@ -338,6 +386,107 @@ class BluetoothHeadsetObserver @Inject constructor(
         mediaSession = null
         audioManager = null
         focusRequest = null
+    }
+
+    // —— 静音播放锚点：抢到焦点后真正占用音频输出，让系统认为 Bridge「正在播放」——
+
+    /** 启动静音锚点（幂等）。近静音 PCM + setVolume(0f)，不产生可闻声音。 */
+    private fun startSilentAnchor() {
+        if (anchorPlaying) return
+        try {
+            if (anchorThread == null) {
+                val thread = HandlerThread("BridgeMediaAnchor", Process.THREAD_PRIORITY_AUDIO)
+                thread.start()
+                anchorThread = thread
+                anchorHandler = Handler(thread.looper)
+            }
+            if (anchorTrack == null) anchorTrack = buildAnchorTrack()
+            val track = anchorTrack ?: return
+            track.setVolume(0f)
+            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
+            anchorPlaying = true
+            scheduleAnchorTick()
+            Timber.i("BluetoothHeadsetObserver：静音锚点已启动（抢占音频输出）")
+        } catch (e: Exception) {
+            Timber.w(e, "BluetoothHeadsetObserver 静音锚点启动失败")
+        }
+    }
+
+    /** 暂停静音锚点（幂等）。 */
+    private fun stopSilentAnchor() {
+        if (!anchorPlaying) {
+            cancelAnchorTick()
+            return
+        }
+        anchorPlaying = false
+        cancelAnchorTick()
+        try {
+            anchorTrack?.pause()
+            anchorTrack?.flush()
+            Timber.i("BluetoothHeadsetObserver：静音锚点已暂停")
+        } catch (e: Exception) {
+            Timber.w(e, "BluetoothHeadsetObserver 静音锚点暂停失败")
+        }
+    }
+
+    private fun buildAnchorTrack(): AudioTrack? {
+        val bufferBytes = AudioTrack.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(FRAME_BYTES * 4)
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+        val format = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(SAMPLE_RATE)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build()
+        return AudioTrack.Builder()
+            .setAudioAttributes(attributes)
+            .setAudioFormat(format)
+            .setBufferSizeInBytes(bufferBytes)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+    }
+
+    private fun scheduleAnchorTick() {
+        cancelAnchorTick()
+        val handler = anchorHandler ?: return
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!anchorPlaying) return
+                try {
+                    val buffer = nextAnchorFrame()
+                    anchorTrack?.write(buffer, 0, buffer.size)
+                } catch (e: Exception) {
+                    Timber.w(e, "BluetoothHeadsetObserver 静音锚点写入失败")
+                }
+                if (anchorPlaying) anchorHandler?.postDelayed(this, TICK_MS)
+            }
+        }
+        anchorTick = runnable
+        handler.post(runnable)
+    }
+
+    private fun cancelAnchorTick() {
+        anchorTick?.let { anchorHandler?.removeCallbacks(it) }
+        anchorTick = null
+    }
+
+    /** 生成近静音帧：最低位 ±1 抖动，避免全 0 帧被判空流回收。 */
+    private fun nextAnchorFrame(): ByteArray {
+        val buffer = ByteArray(FRAME_BYTES)
+        var index = 0
+        while (index < FRAME_BYTES) {
+            val low = if ((anchorCounter++ and 1L) == 0L) 1 else 0xFF
+            buffer[index] = low.toByte()
+            buffer[index + 1] = 0.toByte()
+            index += 2
+        }
+        return buffer
     }
 
     /** 媒体键码 → 中文动作描述；非媒体键返回 null。 */
