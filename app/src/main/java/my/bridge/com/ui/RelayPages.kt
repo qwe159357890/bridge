@@ -83,6 +83,11 @@ fun AudioRelayPage() {
                 state = s
                 stateDetail = detail
                 running = AudioRelayService.isRunning()
+                // 停止态时清空波形与接收标记，避免残留上次的波形形状
+                if (s == RelayClient.State.IDLE) {
+                    levels = List(24) { 0f }
+                    receiving = false
+                }
             }
         })
         AudioRelayService.setLevelsListener(object : AudioRelayService.AudioLevelsListener {
@@ -98,8 +103,27 @@ fun AudioRelayPage() {
         }
     }
 
-    // 仅当页面重新进入、服务仍在运行时同步一次运行态；
-    // 之后完全由监听器驱动，避免周期轮询覆盖监听器刚更新的状态值。
+    // 页面每次重新可见（ON_RESUME）时，从服务同步一次真实状态。
+    // 这能兜底「从通知栏点停止接收后回到页面、监听器回调因页面不可见而未消费」的情况，
+    // 保证 UI 的按钮/状态与服务的真实运行态一致。
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                running = AudioRelayService.isRunning()
+                state = AudioRelayService.currentState()
+                if (!running) {
+                    levels = List(24) { 0f }
+                    receiving = false
+                    stateDetail = ""
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // 首次进入页面时同步一次运行态。
     LaunchedEffect(Unit) {
         running = AudioRelayService.isRunning()
         state = AudioRelayService.currentState()
@@ -302,10 +326,12 @@ private fun relayStateText(state: RelayClient.State): String = when (state) {
     RelayClient.State.IDLE -> "未启动"
     RelayClient.State.CONNECTING -> "连接中…"
     RelayClient.State.READY -> "已就绪"
+    RelayClient.State.RECEIVING -> "正在接收"
     RelayClient.State.ERROR -> "错误"
 }
 
 private fun relayStateColor(state: RelayClient.State): Color = when (state) {
+    RelayClient.State.RECEIVING -> RelayGreen
     RelayClient.State.READY -> RelayGreen
     RelayClient.State.ERROR -> RelayRed
     RelayClient.State.IDLE -> Color(0xFF8A919F)

@@ -132,12 +132,20 @@ class AudioRelayService : Service() {
 
         /** 停止中继。 */
         fun stop(context: Context) {
+            // 服务未运行时直接忽略：绝不能用 startService 重新拉起已销毁的服务，
+            // 否则 onCreate 会被触发、进而可能重新挂通知覆盖保活通知。
+            val inst = instance
+            if (inst == null || !inst.isServerRunning) return
             val intent = Intent(context, AudioRelayService::class.java).apply { action = ACTION_STOP }
             context.startService(intent)
         }
 
         /** 设置中继播放音量（0~1）。 */
         fun setVolume(context: Context, volume: Float) {
+            // 服务未运行时只持久化音量、不拉起服务（避免重新挂通知）。
+            RelayPrefs.setFloat(context, RelayPrefs.KEY_VOLUME, volume)
+            val inst = instance
+            if (inst == null || !inst.isServerRunning) return
             val intent = Intent(context, AudioRelayService::class.java).apply {
                 action = ACTION_SET_VOLUME
                 putExtra(EXTRA_VOLUME, volume)
@@ -189,8 +197,9 @@ class AudioRelayService : Service() {
         pendingStateListener?.let { stateListener = it; pendingStateListener = null }
         pendingLevelsListener?.let { levelsListener = it; pendingLevelsListener = null }
         createNotificationChannel()
-        // 先挂常驻前台通知（mediaPlayback 类型）
-        startForegroundCompat(buildNotification("声音中继已开启 · 点此管理"))
+        // 注意：这里**不**立即挂前台通知。通知只在真正「开始接收」（ACTION_START → startRelay）
+        // 时挂起。否则 STOP / SET_VOLUME 用 startService 重新拉起已销毁的服务时，会误挂
+        // 一个「声音中继已开启」的通知覆盖保活通知。
         DiagLog.i("中继", "音频中继接收服务已创建")
     }
 
@@ -201,8 +210,14 @@ class AudioRelayService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_SET_VOLUME -> {
-                val volume = intent.getFloatExtra(EXTRA_VOLUME, 0.8f)
-                setVolumeInternal(volume)
+                // 仅在服务确实在运行时才处理音量；否则直接忽略并确保服务结束，
+                // 避免「SET_VOLUME 重新拉起已停止的服务」导致通知被误挂。
+                if (isServerRunning) {
+                    val volume = intent.getFloatExtra(EXTRA_VOLUME, 0.8f)
+                    setVolumeInternal(volume)
+                } else {
+                    stopSelf()
+                }
                 return START_NOT_STICKY
             }
             else -> {
@@ -236,6 +251,7 @@ class AudioRelayService : Service() {
             relayThread = null
         }
         isServerRunning = true
+        // 真正开始接收：此时才挂前台通知（唯一挂通知入口），并切到「连接中」态
         relayState = RelayClient.State.CONNECTING
         stateListener?.onState(RelayClient.State.CONNECTING, "正在连接中转服务器")
         refreshNotification(notificationTextFor(RelayClient.State.CONNECTING))
@@ -245,13 +261,18 @@ class AudioRelayService : Service() {
 
         relayClient.listener = object : RelayClient.Listener {
             override fun onStateChanged(state: RelayClient.State, detail: String) {
+                // 防状态降级：若已进入「正在接收」态（真实音频在播），
+                // 收到迟到的 ready 不应把状态拉回 READY（音频持续，UI 会闪回「已就绪」）。
+                if (relayState == RelayClient.State.RECEIVING && state == RelayClient.State.READY) {
+                    return
+                }
                 relayState = state
                 stateListener?.onState(state, detail)
-                // 状态变化同步刷新前台通知文案（连接中/就绪/错误各显示对应文案）
-                if (state != RelayClient.State.READY) {
-                    // READY 表示握手就绪但音频尚未到达，由 handleStream 收到真实音频后再切「正在接收」
-                    refreshNotification(notificationTextFor(state))
-                }
+                // 状态变化同步刷新前台通知文案（连接中/就绪/错误各显示对应文案）。
+                // 注意：READY 也必须刷新通知（显示「已就绪，等待电脑声音」），否则 UI/通知
+                // 会一直停留在「连接中」。真正「正在接收」的文案由 handleStream 收到音频后
+                // 切换到 RECEIVING 状态再刷新。
+                refreshNotification(notificationTextFor(state))
             }
 
             override fun onAudioData(size: Int) {
@@ -280,6 +301,11 @@ class AudioRelayService : Service() {
     }
 
     private fun stopRelay() {
+        // 幂等守卫：停止流程只执行一次，避免 onDestroy 里二次调用重复通知/重复释放。
+        if (!isServerRunning && relayThread == null && relayState == RelayClient.State.IDLE) {
+            // 已经停止过了（例如 onDestroy 里第二次调用），只保证通知已移除即可
+            return
+        }
         // 先置停止标记，让所有读流线程（readHeader/readFully/scanRelayMagic）立即退出
         isServerRunning = false
         // 先解绑 listener：停止阶段不再让 RelayClient 的状态回调刷新通知/UI，
@@ -325,9 +351,9 @@ class AudioRelayService : Service() {
         val myGeneration = ++sessionGeneration
         DiagLog.i("中继", "开始处理来自 $peerLabel 的音频流（会话代次 #$myGeneration）")
 
-        // 真实音频开始播放，无声播放锚点让位（避免底噪混入输出）
-        SilentPlayer.setScenarioAllowed(this, false)
-        refreshNotification("正在接收电脑声音 · 点此管理")
+        // 真实音频开始播放：切换到「正在接收」状态，通知与 UI 一并更新，
+        // 同时无声播放锚点让位（避免底噪混入输出）。
+        enterReceivingState()
 
         try {
             val input = PushbackInputStream(rawInput, HEADER_SIZE)
@@ -408,11 +434,29 @@ class AudioRelayService : Service() {
             }
             val isLatest = myGeneration == sessionGeneration
             if (isLatest && isServerRunning) {
-                // 服务仍在运行时（对端断流/重连），恢复保活锚点并把通知切回「等待接收」态
-                SilentPlayer.setScenarioAllowed(this, true)
-                refreshNotification(notificationTextFor(relayState))
+                // 服务仍在运行时（对端断流/重连）：退出「正在接收」态，恢复到「已就绪」，
+                // 恢复保活锚点，通知与 UI 一并回到「等待接收」态。
+                exitReceivingState()
             }
         }
+    }
+
+    /** 进入「正在接收音频」态：更新状态、通知与 UI，并让位保活无声锚点。 */
+    private fun enterReceivingState() {
+        if (!isServerRunning) return
+        relayState = RelayClient.State.RECEIVING
+        SilentPlayer.setScenarioAllowed(this, false)
+        refreshNotification(notificationTextFor(RelayClient.State.RECEIVING))
+        stateListener?.onState(RelayClient.State.RECEIVING, "正在接收电脑声音")
+    }
+
+    /** 退出「正在接收音频」态：恢复到「已就绪，等待电脑声音」，并恢复保活锚点。 */
+    private fun exitReceivingState() {
+        if (!isServerRunning) return
+        relayState = RelayClient.State.READY
+        SilentPlayer.setScenarioAllowed(this, true)
+        refreshNotification(notificationTextFor(RelayClient.State.READY))
+        stateListener?.onState(RelayClient.State.READY, "已接入中转服务器")
     }
 
     /** 中转链路扫描魔数失败时，受控触发一次中转重连（让 PC 重新发包头）。 */
@@ -946,6 +990,7 @@ class AudioRelayService : Service() {
     private fun notificationTextFor(state: RelayClient.State): String = when (state) {
         RelayClient.State.CONNECTING -> "正在连接中继服务器…"
         RelayClient.State.READY -> "中继已就绪，等待电脑声音…"
+        RelayClient.State.RECEIVING -> "正在接收电脑声音 · 点此管理"
         RelayClient.State.ERROR -> "中继连接异常，点此管理"
         RelayClient.State.IDLE -> "声音中继已开启 · 点此管理"
     }

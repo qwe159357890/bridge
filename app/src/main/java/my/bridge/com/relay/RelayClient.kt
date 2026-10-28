@@ -36,6 +36,7 @@ class RelayClient {
         IDLE,       // 未连接
         CONNECTING, // 正在连接或重连
         READY,      // 已就绪（收到 ready，可收发数据）
+        RECEIVING,  // 正在接收音频（已收到真实音频数据，正在播放）
         ERROR       // 出错（握手被拒或网络异常）
     }
 
