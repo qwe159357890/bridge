@@ -14,11 +14,12 @@
 **真相（两张截图破案）**：用户悬停视频看到的「画中画」三字按钮是 **Chrome 对
 video 元素的原生悬浮按钮**（原生视频画中画，尺寸限制更死且无任何说明），
 「正在画中画模式下播放」也是 Chrome 原生占位文案——用户走的根本不是我们的
-Document PiP。而我们头部的画中画按钮带 `pipSupported` 能力检测，用户浏览器
-不支持（需 Chrome/Edge ≥ 116）时被 `v-if` **整个隐藏** → 「从来没见过这个按钮」。
-**已修**：①video 加 `disablepictureinpicture` 禁掉误导性原生悬浮按钮；
-②画中画按钮**始终显示**——不支持时置灰 + tooltip 引导升级浏览器，
-支持时 tooltip 说明尺寸限制；Playwright 实测 5173 渲染文案完整。
+Document PiP。而我们头部的画中画按钮带 `pipSupported` 能力检测，此前被
+`v-if` 整个隐藏（或页面缓存未刷新）→「从来没见过这个按钮」。
+**已修（2026-10-28 终版）**：①画中画按钮**始终显示**（支持时可用、悬停
+el-tooltip 显示限制说明；用户浏览器 Chrome 156 实测支持）；②用户拍板
+**恢复原生 video 画中画**（不禁用，与 Document PiP 并存）。Playwright 实测：
+`documentPictureInPicture` 可用、头部按钮渲染正常未置灰。**待用户刷新确认**。
 
 ### 2. 目标设备跨页面保持（admin）
 
