@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,8 +15,11 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -34,6 +38,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -106,7 +112,9 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 0 -> HomePage(currentTab = homeTab, onTabChange = { homeTab = it })
                 1 -> SettingsPage(currentTab = settingsTab, onTabChange = { settingsTab = it })
             }
-            // 退出提醒冒泡（内容区底部居中，自动 2 秒消失）
+            // 退出提醒冒泡（内容区底部居中，自动 2 秒消失）。
+            // v0.1.57 美化：品牌蓝图标圆徽 + 深色渐变胶囊 + 投影（用户要求美观，
+            // 旧版是纯色块白字毫无设计感）
             androidx.compose.animation.AnimatedVisibility(
                 visible = showExitHint,
                 modifier = Modifier
@@ -117,14 +125,40 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 exit = androidx.compose.animation.fadeOut() +
                     androidx.compose.animation.slideOutVertically { it / 2 },
             ) {
-                Text(
-                    "再按一次返回退出 Bridge",
-                    color = Color.White,
-                    fontSize = 13.sp,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .background(Color(0xCC303133), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
-                )
+                        .shadow(10.dp, RoundedCornerShape(24.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Color(0xF0243348), Color(0xF01A6EE8)),
+                            ),
+                            RoundedCornerShape(24.dp),
+                        )
+                        .padding(start = 7.dp, end = 18.dp, top = 7.dp, bottom = 7.dp),
+                ) {
+                    // 图标圆徽：品牌蓝底 + 白色退出图标
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .background(Color(0xFF1A6EE8), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ExitToApp,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "再按一次返回退出 Bridge",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
         // 底部导航

@@ -215,6 +215,7 @@
                 v-if="isStreamMode && form.deviceId"
                 type="warning"
                 size="large"
+                :disabled="!streamActive"
                 @click="stopStreamCapture"
               >
                 ⏹ 停止采集
@@ -647,6 +648,24 @@ async function stopStreamCapture() {
     /* 失败提示已由拦截器统一弹出 */
   }
 }
+
+/**
+ * 当前是否正在采集（⏹ 停止采集按钮的可用依据，2026-10-28 用户拍板：
+ * 只有正在采集时按钮才可用）。两个信号取或：
+ * ① 实时卡片在播；② 选中设备有 15 分钟窗口内的流式命令在途
+ * （卡片可能已被切走销毁，但设备端采集还在跑，此时仍应允许停止）。
+ */
+const streamActive = computed(() => {
+  if (streamCard.value?.isStreaming) return true
+  const now = Date.now()
+  return commands.value.some((r) => {
+    const k = STREAM_COMMAND_KINDS[r.command]
+    if (!k || r.status !== 'pending') return false
+    if (r.device_id !== form.deviceId) return false
+    const isStream = k === 'screen' || !!r.params?.stream
+    return isStream && now - r.created_at * 1000 <= CAPTURE_GUARD_WINDOW_MS
+  })
+})
 const deviceNameMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   for (const d of devices.value) map[d.device_id] = d.device_name
@@ -820,6 +839,10 @@ function selectCategory(key: string) {
 
 function selectCommand(cmd: CommandDef) {
   selectedCommand.value = cmd
+  // 切换命令卡片即销毁实时画面控件（2026-10-28 用户拍板）：断开全部连接、
+  // 控件从页面移除；hide 会记住会话，silentRefresh 的自动兜底不会把卡片弹回。
+  // 下次下发采集命令/真实新流开始时卡片才重新挂载。
+  if (streamCard.value?.isStreaming) streamCard.value?.hide()
   // 重置参数：按 default 或类型给初值
   for (const p of cmd.params) {
     if (p.default !== undefined && p.default !== null) {
@@ -887,7 +910,8 @@ function ensureStreamPreconnect() {
     return k === 'screen' || !!r.params?.stream
   })
   if (running) {
-    streamCard.value?.startManual(running.device_id, STREAM_COMMAND_KINDS[running.command])
+    // source='auto'：用户切走/关掉的会话不会被自动弹回（组件内 userClosed 拦截）
+    streamCard.value?.startManual(running.device_id, STREAM_COMMAND_KINDS[running.command], 'auto')
   }
 }
 
@@ -967,7 +991,7 @@ async function doSend(force: boolean) {
     const streamKind = STREAM_COMMAND_KINDS[cmdName]
     if (streamKind && form.deviceId) {
       const isStreamMode = streamKind === 'screen' || !!params.stream
-      if (isStreamMode) streamCard.value?.startManual(form.deviceId, streamKind)
+      if (isStreamMode) streamCard.value?.startManual(form.deviceId, streamKind, 'manual')
     }
     // get_location：记下命令 ID 与下发时刻，等回执推送匹配后展示定位结果地图
     if (cmdName === 'get_location') {
@@ -1430,9 +1454,27 @@ onBeforeRouteLeave(() => {
 <!-- 命令描述 tooltip：teleport 到 body，scoped 样式不生效，须非 scoped；限宽换行 -->
 <style>
 .cmd-desc-tip.el-popper {
-  max-width: 360px;
+  max-width: 380px;
   white-space: normal;
-  line-height: 1.55;
+  line-height: 1.6;
   word-break: break-all;
+}
+/* 悬停提示美化（2026-10-28 用户要求美观）：深色渐变底 + 圆角 + 微光边框 + 投影，
+   与后台卡片风格协调 */
+.cmd-desc-tip.el-popper.is-dark {
+  background: linear-gradient(135deg, #1f2d3d 0%, #2b3f55 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #e8eef5;
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    0 2px 6px rgba(0, 0, 0, 0.18);
+}
+/* 箭头与气泡同色（覆盖默认纯黑） */
+.cmd-desc-tip.el-popper.is-dark .el-popper__arrow::before {
+  background: #24374c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
 }
 </style>

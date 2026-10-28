@@ -14,6 +14,14 @@
             下载（{{ kind === 'audio' ? '.aac' : '.flv' }}）
           </el-button>
           <el-button
+            v-if="kind !== 'audio' && pipSupported"
+            :icon="Monitor"
+            size="small"
+            circle
+            title="画中画窗口（可自由调整大小）"
+            @click="togglePip"
+          />
+          <el-button
             v-if="kind !== 'audio'"
             :icon="FullScreen"
             size="small"
@@ -30,27 +38,32 @@
          不用原生 controls：Chrome 在 waiting（缓冲耗尽，如投屏画面静止）时
          会显示旋转 spinner + 时间停走，误导「加载中/卡死」（2026-10-27 用户
          反馈）。直播进度条无意义，去掉后静止期就安静显示最后一帧。 -->
-    <!-- 视频容器：全屏对象（全屏后音量控件仍悬浮可见，video 元素全屏会丢覆盖层） -->
-    <div v-show="kind !== 'audio'" ref="videoBox" class="stream-video-box">
-      <video ref="videoEl" class="stream-video" autoplay muted playsinline />
-      <!-- 音量控件：去原生 controls 后自绘（静音切换 + 音量滑条），非全屏/全屏均可见 -->
-      <div class="volume-ctrl" @click.stop>
-        <el-button
-          :icon="videoMuted ? Mute : Bell"
-          size="small"
-          circle
-          :title="videoMuted ? '取消静音' : '静音'"
-          @click="toggleMute"
-        />
-        <el-slider
-          v-model="videoVolume"
-          class="volume-slider"
-          :min="0"
-          :max="100"
-          :show-tooltip="false"
-          @input="applyVolume"
-        />
+    <!-- 视频容器：全屏对象（全屏后音量控件仍悬浮可见，video 元素全屏会丢覆盖层）。
+         外层 host 是画中画的「归位锚点」：videoBox 被 move 进 PiP 窗口后，
+         pagehide 时按原位搬回 host，不破坏 Vue 模板结构。 -->
+    <div v-show="kind !== 'audio'" ref="videoHost" class="stream-video-host">
+      <div ref="videoBox" class="stream-video-box">
+        <video ref="videoEl" class="stream-video" autoplay muted playsinline />
+        <!-- 音量控件：去原生 controls 后自绘（静音切换 + 音量滑条），非全屏/全屏均可见 -->
+        <div class="volume-ctrl" @click.stop>
+          <el-button
+            :icon="videoMuted ? Mute : Bell"
+            size="small"
+            circle
+            :title="videoMuted ? '取消静音' : '静音'"
+            @click="toggleMute"
+          />
+          <el-slider
+            v-model="videoVolume"
+            class="volume-slider"
+            :min="0"
+            :max="100"
+            :show-tooltip="false"
+            @input="applyVolume"
+          />
+        </div>
       </div>
+      <div v-if="pipActive" class="pip-hint">画面正在画中画窗口中播放（窗口可自由拖拽调整大小）</div>
     </div>
     <div v-if="kind !== 'audio' && playBlocked" class="stream-resume">
       <el-button type="primary" size="small" @click="resumeVideo">点击播放</el-button>
@@ -79,7 +92,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { Bell, Close, FullScreen, Mute } from '@element-plus/icons-vue'
+import { Bell, Close, FullScreen, Monitor, Mute } from '@element-plus/icons-vue'
 import mpegts from 'mpegts.js'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
@@ -140,6 +153,11 @@ let manualStopKey = ''
 let manualStopAt = 0
 const MANUAL_STOP_BLOCK_MS = 15 * 60_000
 
+// 用户主动关闭（点 × 或切换命令卡片销毁）时记住会话：auto 预连（silentRefresh
+// 兜底）不再自动弹回卡片——用户明确要求「切走就销毁，下次有需求再添加」；
+// 真实新流开始（onStreamStatus）或用户重新下发命令（source='manual'）时解除。
+let userClosedKey = ''
+
 /** 是否有活跃流会话（父页据此决定轮询节奏）。 */
 const isStreaming = computed(() => visible.value && !ended.value)
 
@@ -171,6 +189,7 @@ function onStreamStatus(d: {
     // （v0.1.53 修复：旧条件 !visible.value 漏掉「已结束后再次直播」→ 卡片停在已结束 0 片）
     if (!visible.value || ended.value || deviceId.value !== d.device_id || kind.value !== d.kind) {
       manualStopKey = '' // 真实的流开始事件优先于手动停止封锁
+      userClosedKey = '' // 同理：设备真的开了新流 = 新需求，解除关闭封锁
       startStream(d.device_id, d.kind)
     }
   } else {
@@ -191,7 +210,12 @@ function onStreamStatus(d: {
  *   轮询，15 分钟窗口内的 pending 流式命令会让 ended 卡片被反复重启，
  *   每次重建两条流 WS（服务端日志刷屏 + 无意义直连订阅）。
  */
-function startManual(id: string, k: 'video' | 'audio' | 'screen') {
+function startManual(id: string, k: 'video' | 'audio' | 'screen', source: 'auto' | 'manual' = 'manual') {
+  // 用户已主动关掉的会话：自动兜底预连不得弹回（切卡片销毁后 silentRefresh
+  // 每 3s 都会发现 pending 命令，不拦的话卡片立刻「复活」，销毁形同虚设）
+  const preKey = `${id}:${k}`
+  if (source === 'auto' && preKey === userClosedKey) return
+  if (source === 'manual') userClosedKey = '' // 用户重新下发 = 明确的新需求
   if (visible.value && !ended.value && deviceId.value === id && kind.value === k) return
   const key = `${id}:${k}`
   if (key === sessionKey && Date.now() - lastStartAt < 60000) return
@@ -518,6 +542,7 @@ function decodeAndPlay(ab: ArrayBuffer) {
 /** 流结束：停播放器、出下载链接。 */
 function endStream() {
   ended.value = true
+  closePip()
   stopLatencyWatch()
   destroyPlayer()
   if (recWs) {
@@ -555,6 +580,79 @@ function goFullscreen() {
   videoBox.value?.requestFullscreen?.().catch?.(() => {})
 }
 
+// ---- 画中画（Document Picture-in-Picture，Chrome/Edge 116+）----
+// 与 video 元素原生 requestPictureInPicture 的区别：PiP 窗口大小可被用户
+// 自由拖拽调整，且整个 videoBox（含自绘音量控件）一起搬进去。
+const videoHost = ref<HTMLDivElement | null>(null)
+const pipWindow = ref<any>(null)
+const pipSupported = computed(
+  () => typeof (window as any)?.documentPictureInPicture?.requestWindow === 'function',
+)
+const pipActive = computed(() => !!pipWindow.value)
+
+/** 打开/关闭画中画窗口（窗口边角可自由拖拽调整大小，浏览器原生能力）。 */
+async function togglePip() {
+  const api = (window as any).documentPictureInPicture
+  if (!api?.requestWindow) return
+  if (pipWindow.value) {
+    pipWindow.value.close()
+    return
+  }
+  const box = videoBox.value
+  if (!box) return
+  try {
+    const w = await api.requestWindow({ width: 640, height: 400 })
+    pipWindow.value = w
+    // 复制页面全部样式表：scoped 样式靠 data-v 属性选择器，元素带属性走，
+    // 音量控件/视频在 PiP 文档里照常渲染
+    copyStylesTo(w)
+    w.document.body.style.margin = '0'
+    w.document.body.style.background = '#000'
+    // PiP 文档专属布局：容器铺满窗口（仅作用于 PiP 文档，搬回页面无副作用）
+    const st = w.document.createElement('style')
+    st.textContent = [
+      'body{display:flex;align-items:center;justify-content:center;overflow:hidden}',
+      '.stream-video-box{width:100vw;height:100vh}',
+      '.stream-video{width:100%;height:100%;max-height:100vh;object-fit:contain;border-radius:0}',
+    ].join('\n')
+    w.document.head.appendChild(st)
+    w.document.body.append(box)
+    w.addEventListener('pagehide', () => {
+      pipWindow.value = null
+      videoHost.value?.append(box) // 窗口关闭（手动/代码）后画面按原位搬回
+    })
+  } catch {
+    /* 用户拒绝权限或浏览器限制，静默忽略 */
+  }
+}
+
+/** 流结束/关闭卡片时收掉画中画窗口（触发 pagehide → 画面搬回）。 */
+function closePip() {
+  if (pipWindow.value) {
+    try {
+      pipWindow.value.close()
+    } catch {
+      /* 忽略 */
+    }
+    pipWindow.value = null
+  }
+}
+
+function copyStylesTo(w: any) {
+  for (const ss of Array.from(document.styleSheets)) {
+    try {
+      const css = Array.from(ss.cssRules)
+        .map((r) => r.cssText)
+        .join('\n')
+      const st = w.document.createElement('style')
+      st.textContent = css
+      w.document.head.appendChild(st)
+    } catch {
+      /* 跨域样式表读不了 cssRules，跳过 */
+    }
+  }
+}
+
 // ---- 自绘音量控件 ----
 const videoBox = ref<HTMLDivElement | null>(null)
 const videoMuted = ref(true) // 初始与 video muted 属性一致（自动播放策略要求）
@@ -578,6 +676,9 @@ function applyVolume() {
 }
 
 function hide() {
+  // 用户主动关掉卡片：记住会话，自动兜底预连不再弹回（重新下发命令/
+  // 真实新流开始时解除）。含已结束会话——切走即销毁，不该被 auto 拉回。
+  userClosedKey = sessionKey || userClosedKey
   visible.value = false
   ended.value = true
   sessionKey = '' // 主动关闭清除会话冷却：用户立即重发同路命令不应被拦
@@ -586,6 +687,7 @@ function hide() {
 }
 
 function stopAll() {
+  closePip()
   stopLatencyWatch()
   destroyPlayer()
   if (playWs) {
@@ -642,6 +744,9 @@ onBeforeUnmount(stopAll)
   font-size: 12px;
   color: #909399;
 }
+.stream-video-host {
+  position: relative;
+}
 .stream-video-box {
   position: relative;
 }
@@ -651,6 +756,31 @@ onBeforeUnmount(stopAll)
   max-height: 420px;
   border-radius: 6px;
   background: #000;
+}
+/* 全屏态：解除 420px 高度限制，画面真正铺满全屏容器（2026-10-28 用户反馈
+   「全屏只是窗口全屏，画面大小没变」的根因） */
+.stream-video-box:fullscreen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+.stream-video-box:fullscreen .stream-video {
+  width: 100%;
+  height: 100%;
+  max-height: 100vh;
+  object-fit: contain;
+  border-radius: 0;
+}
+/* 画中画期间页面内的占位提示（画面已搬进 PiP 窗口） */
+.pip-hint {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 13px;
+  color: #909399;
+  background: #f5f7fa;
+  border: 1px dashed #dcdfe6;
+  border-radius: 6px;
 }
 /* 自绘音量控件：悬浮画面右下角，半透明底；容器全屏时依旧可见 */
 .volume-ctrl {
