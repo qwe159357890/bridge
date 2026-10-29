@@ -159,6 +159,8 @@ class LogStore:
             self._migrate_legacy_content()
             self._mysql_ok = True
             logger.info("日志存储已连接 MySQL")
+            # 启动时立即清理一次超龄日志（设备可能已长期停止上传，add 触发不到的兜底）
+            self._cleanup_expired(force=True)
         except Exception as exc:
             self._mysql_ok = False
             logger.warning("日志存储 MySQL 不可用，降级内存模式：%s", exc)
@@ -187,13 +189,22 @@ class LogStore:
                 except Exception:
                     # 列已存在，忽略
                     pass
+            # 唯一索引去重是本功能的关键，创建失败绝不能静默吞掉——
+            # 否则日志会大量重复入库、且无任何告警。这里显式检查并告警。
             try:
                 cur.execute(
                     "ALTER TABLE device_logs "
                     "ADD UNIQUE KEY uk_device_line (device_id, ts, line_hash)"
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # 常见原因：表里已有历史重复数据导致 Duplicate entry。
+                # 此时必须先清重再补索引，否则 INSERT IGNORE 去重永远失效。
+                logger.warning(
+                    "日志表唯一索引 uk_device_line 创建失败，去重将失效：%s。"
+                    "请先清理 device_logs 中的重复行再重建索引。", exc,
+                )
+            else:
+                logger.info("日志表唯一索引 uk_device_line 已就绪，按行去重生效")
         conn.commit()
 
     def close(self) -> None:
@@ -267,13 +278,13 @@ class LogStore:
         device_name: str = "",
         app_version: str = "",
         logs: Optional[list[dict]] = None,
-    ) -> list[LogEntry]:
-        """追加日志并入库，返回入库的日志行列表。
+    ) -> int:
+        """追加日志并入库，返回去重后实际新入库的行数（int）。
 
         - ``logs``：结构化日志行数组（新客户端），每项含 ts/level/tag/message；
         - ``content``：整块文本（旧客户端），服务端会按行拆分为 LogEntry 入库。
 
-        超长内容截断尾部，超限条数丢弃最旧。
+        超长内容截断尾部，超限条数丢弃最旧。重复行（同设备同 ts 同 hash）自动跳过。
         """
         entries = self._build_entries(device_id, content, device_name, app_version, logs)
         if not entries:
@@ -310,7 +321,7 @@ class LogStore:
                 self._maybe_cleanup()
                 logger.info("设备 %s 上传日志 %d 行，去重后新入库 %d 行（MySQL）",
                             device_id, len(entries), inserted)
-                return entries
+                return inserted
             except Exception as exc:
                 if self._mysql_ok:
                     logger.warning("日志写入 MySQL 失败，降级内存：%s", exc)
@@ -331,7 +342,7 @@ class LogStore:
             del buf[: len(buf) - self._max_entries]
         logger.info("设备 %s 上传日志 %d 行，去重后新入库 %d 行（内存）",
                     device_id, len(entries), len(new_entries))
-        return entries
+        return len(new_entries)
 
     def _build_entries(
         self,
@@ -347,16 +358,22 @@ class LogStore:
         for line in (logs or []):
             msg = line.get("message", "")
             msg = msg if len(msg) <= self._max_content else msg[-self._max_content:]
+            # ts 归一到整数毫秒（与 _line_hash 的 int(ts) 对齐，保证 hash 稳定）
+            ts_raw = line.get("ts") or (time.time() * 1000.0)
+            ts_norm = int(float(ts_raw))
             entries.append(LogEntry(
                 device_id=device_id,
                 message=msg,
                 level=(line.get("level") or "I")[:8],
                 tag=(line.get("tag") or "")[:64],
-                ts=float(line.get("ts") or (time.time() * 1000.0)),
+                ts=float(ts_norm),
                 device_name=device_name or "",
                 app_version=app_version or "",
             ))
-        # 2) 整块文本（旧客户端）：按行拆分，简单解析 `[L] [tag] msg`
+        # 2) 整块文本（旧客户端兼容，已基本废弃）：按行拆分，简单解析 `[L] [tag] msg`
+        # 已知限制：旧 content 无精确逐行时间戳，ts 用「当前时刻」兜底，
+        # 因此旧客户端重复上传同一批 content 时 ts 不稳定、去重失效——
+        # 这是过渡兼容路径的可接受限制（新客户端一律走 logs 数组，ts 精确）。
         if content:
             for raw in content.splitlines():
                 line = raw.rstrip()
@@ -546,19 +563,36 @@ class LogStore:
             for r in rows
         ]
 
-    def count(self, device_id: Optional[str] = None) -> int:
-        """日志行数统计（不传 device_id 时返回全部行总数）。"""
+    def count(
+        self,
+        device_id: Optional[str] = None,
+        level: str = "",
+        tag: str = "",
+        keyword: str = "",
+    ) -> int:
+        """日志行数统计（不传 device_id 时返回全部行总数；支持 level/tag/keyword 过滤）。"""
         if self._mysql_enabled:
             try:
                 conn = self._connection()
+                sql = "SELECT COUNT(*) FROM device_logs"
+                conds: list[str] = []
+                args: list = []
+                if device_id is not None:
+                    conds.append("device_id = %s")
+                    args.append(device_id)
+                if level:
+                    conds.append("level = %s")
+                    args.append(level)
+                if tag:
+                    conds.append("tag = %s")
+                    args.append(tag)
+                if keyword:
+                    conds.append("message LIKE %s")
+                    args.append(f"%{keyword}%")
+                if conds:
+                    sql += " WHERE " + " AND ".join(conds)
                 with conn.cursor() as cur:
-                    if device_id is not None:
-                        cur.execute(
-                            "SELECT COUNT(*) FROM device_logs WHERE device_id = %s",
-                            (device_id,),
-                        )
-                    else:
-                        cur.execute("SELECT COUNT(*) FROM device_logs")
+                    cur.execute(sql, args)
                     n = int(cur.fetchone()[0])
                 self._mysql_ok = True
                 return n
@@ -566,9 +600,16 @@ class LogStore:
                 if self._mysql_ok:
                     logger.warning("日志统计 MySQL 失败，读内存：%s", exc)
                 self._mysql_ok = False
-        if device_id is not None:
-            return len(self._memory.get(device_id, []))
-        return sum(len(v) for v in self._memory.values())
+        entries = self._memory.get(device_id, []) if device_id is not None else [
+            e for v in self._memory.values() for e in v
+        ]
+        if level:
+            entries = [e for e in entries if e.level == level]
+        if tag:
+            entries = [e for e in entries if e.tag == tag]
+        if keyword:
+            entries = [e for e in entries if keyword in e.message]
+        return len(entries)
 
     # ------------------------------------------------------------------
     # 保留天数清理
@@ -580,6 +621,19 @@ class LogStore:
             return
         now = time.time()
         if now - self._last_cleanup < _CLEANUP_INTERVAL:
+            return
+        self._cleanup_expired(force=True)
+
+    def _cleanup_expired(self, force: bool = False) -> None:
+        """删除超龄日志（force=True 忽略节流立即执行）。
+
+        除 add 时的低频触发外，服务启动（connect）也会 force 清理一次，
+        避免设备停止上传后超龄数据长期滞留、表持续膨胀。
+        """
+        if not self._mysql_enabled or self._retention_days <= 0:
+            return
+        now = time.time()
+        if not force and now - self._last_cleanup < _CLEANUP_INTERVAL:
             return
         self._last_cleanup = now
         try:
@@ -604,7 +658,11 @@ def _line_hash(ts: float, level: str, tag: str, message: str) -> str:
     """
     import hashlib
 
-    raw = f"{ts}|{level}|{tag}|{message}".encode("utf-8")
+    # ts 归一化为整数毫秒：客户端 LogLine.ts 是 Long（整数毫秒），但服务端经
+    # pydantic float 解析后可能变成 float（如 169855....233.0），若不归一，
+    # 同一条日志在「内存路径/磁盘路径/旧格式兜底」下字符串化不一致 → hash 漂移 → 去重失效。
+    ts_norm = int(ts)
+    raw = f"{ts_norm}|{level}|{tag}|{message}".encode("utf-8")
     return hashlib.md5(raw).hexdigest()
 
 

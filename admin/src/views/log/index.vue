@@ -57,14 +57,25 @@
               <span class="section-title">
                 {{ deviceNameOf(currentDeviceId) }} 的日志（共 {{ total }} 行）
               </span>
-              <el-button
-                type="danger"
-                size="small"
-                :icon="Delete"
-                @click="handleClear"
-              >
-                清除该设备日志
-              </el-button>
+              <div class="toolbar-actions">
+                <el-button
+                  type="primary"
+                  size="small"
+                  :icon="Upload"
+                  :loading="uploading"
+                  @click="handleUpload"
+                >
+                  上报日志
+                </el-button>
+                <el-button
+                  type="danger"
+                  size="small"
+                  :icon="Delete"
+                  @click="handleClear"
+                >
+                  清除该设备日志
+                </el-button>
+              </div>
             </div>
 
             <!-- 过滤栏 -->
@@ -152,11 +163,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search, Delete } from '@element-plus/icons-vue'
+import { Refresh, Search, Delete, Upload } from '@element-plus/icons-vue'
 import { listLogDevices, getDeviceLogs, clearDeviceLogs } from '@/api/logs'
+import { sendCommand } from '@/api/commands'
+import { getToken } from '@/api/request'
+import { wsUrl } from '@/utils/base'
 import { formatTime } from '@/utils/format'
 import type { LogEntry, LogDeviceSummary } from '@/types'
 
@@ -272,14 +286,107 @@ async function handleClear() {
   } catch {
     return
   }
-  await clearDeviceLogs(currentDeviceId.value)
-  ElMessage.success('已清除')
+  try {
+    await clearDeviceLogs(currentDeviceId.value)
+    ElMessage.success('已清除')
+  } catch (e: any) {
+    // 404 表示设备已无日志（幂等），其它错误给出提示
+    if (e?.response?.status !== 404) {
+      ElMessage.error(`清除失败：${e?.message || e}`)
+    }
+  }
   page.value = 1
   loadDevices()
   loadLogs()
 }
 
-onMounted(loadDevices)
+// 上报日志：向设备下发 upload_log 命令，客户端全量上传（服务端按行去重）
+const uploading = ref(false)
+async function handleUpload() {
+  if (!currentDeviceId.value) return
+  uploading.value = true
+  try {
+    const r = await sendCommand(currentDeviceId.value, 'upload_log', {})
+    pendingUploadCommandId = r.command_id
+    ElMessage.success(`日志上报命令已下发，等待设备回执…`)
+  } catch (e: any) {
+    ElMessage.error(`日志上报命令下发失败：${e?.message || e}`)
+  } finally {
+    uploading.value = false
+  }
+}
+
+// —— 回执监听：upload_log 回执成功后自动刷新日志 ——
+let ws: WebSocket | null = null
+let pendingUploadCommandId = ''
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectDelay = 3000
+
+function connectWS() {
+  const token = getToken()
+  if (!token) return
+  let url = wsUrl('/api/admin/ws')
+  url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+  ws = new WebSocket(url)
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'command_result') {
+        const d = msg.data
+        // 只有当前设备、且是 upload_log 回执才触发刷新
+        // command 精确匹配为主，pendingUploadCommandId 为辅（命令可能改名时仍能兜底匹配）
+        const isUpload = d && d.device_id === currentDeviceId.value &&
+          (d.command === 'upload_log' || d.command_id === pendingUploadCommandId)
+        if (isUpload) {
+          if (d.command_id === pendingUploadCommandId) {
+            pendingUploadCommandId = ''
+          }
+          // success 可能缺省（老服务端），默认视为成功
+          if (d.success === false) {
+            ElMessage.warning('日志上报失败，仍刷新本地列表')
+          } else {
+            ElMessage.success('日志已上报，正在刷新…')
+          }
+          // 回执到达即刷新（设备列表计数 + 当前设备日志）
+          loadDevices()
+          loadLogs()
+        }
+      }
+    } catch {
+      // 忽略解析错误
+    }
+  }
+  ws.onclose = () => {
+    scheduleReconnect()
+  }
+  ws.onerror = () => {
+    ws?.close()
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 30000)
+    connectWS()
+  }, reconnectDelay)
+}
+
+onMounted(() => {
+  loadDevices()
+  connectWS()
+})
+
+onBeforeUnmount(() => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  ws?.close()
+  ws = null
+})
 </script>
 
 <style scoped>
@@ -380,6 +487,11 @@ onMounted(loadDevices)
 }
 .section-title {
   font-weight: 600;
+}
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 .filter-bar {
   display: flex;

@@ -40,6 +40,9 @@ object DiagLog {
     /** 导出时最多带出多少字符（与后端 max_content_chars 对齐，避免请求体过大）。 */
     private const val MAX_DUMP_CHARS = 200_000
 
+    /** 按行上传时最多带出的磁盘历史行数（防止日志量极大时构造过多对象）。 */
+    private const val MAX_DUMP_LINES = 5000
+
     /** 单日志文件上限（字节），写满即滚动。默认 1MB。 */
     private const val MAX_FILE_BYTES = 1024 * 1024
 
@@ -149,14 +152,37 @@ object DiagLog {
             if (lineRing.size >= RING_CAPACITY) lineRing.removeFirst()
             lineRing.addLast(LogLine(ts, level, tag, message))
         }
-        writeToFile(line)
+        // 磁盘行带完整 epoch 毫秒前缀（| 分隔），保证重启后能精确还原 ts、按行上传且去重精确。
+        writeToFile("$ts|$line")
     }
 
     /** 取内存缓冲全部行（由旧到新）。 */
     fun ringLines(): List<String> = synchronized(lock) { ArrayList(ring) }
 
-    /** 取结构化日志行（由旧到新），供 upload_log 按行上传。 */
-    fun dumpLines(): List<LogLine> = synchronized(lock) { ArrayList(lineRing) }
+    /** 取结构化日志行（由旧到新），供 upload_log 按行上传。
+     *
+     * 合并「磁盘历史」与「内存缓冲」两部分：
+     * - 磁盘历史（[readRecentFileLines]）：跨进程/重启前落盘的行，带 epoch 毫秒前缀可精确还原 ts；
+     *   只取「早于内存最早日志」的部分，避免与内存重复；
+     * - 内存 [lineRing]：本次进程产生的最新日志（精确 ts）。
+     * 重启后 lineRing 为空，此时返回磁盘全部历史（保证历史不丢）。
+     * 去重交给服务端（按 device_id + ts + line_hash 唯一索引），重复上传自动跳过。
+     */
+    fun dumpLines(): List<LogLine> {
+        val mem = synchronized(lock) { ArrayList(lineRing) }
+        val disk = readRecentFileLines()
+        if (mem.isEmpty()) return disk
+        // 磁盘历史与内存缓冲存在重叠（磁盘是内存落盘的持久化副本），
+        // 用 (ts, level, tag, message) 元组去重，而非按 ts 阈值过滤——
+        // 后者在同毫秒边界会误删「与内存最早一条同 ts」的磁盘行导致漏报。
+        val seen = HashSet<String>()
+        val result = ArrayList<LogLine>(disk.size + mem.size)
+        fun key(l: LogLine) = "${l.ts}\u0001${l.level}\u0001${l.tag}\u0001${l.message}"
+        for (l in disk) if (seen.add(key(l))) result.add(l)
+        for (l in mem) if (seen.add(key(l))) result.add(l)
+        result.sortBy { it.ts }
+        return result
+    }
 
     /** 清空内存缓冲。 */
     fun clear() = synchronized(lock) {
@@ -170,13 +196,12 @@ object DiagLog {
      */
     fun flushToFile() {
         val w = writer ?: return
-        val barrier = object : Runnable { override fun run() {} }
         try {
-            w.execute(barrier)
-            // 单线程执行器按 FIFO 执行，barrier 执行完即意味着之前的写都已完成
-            // （无同步回调可用，这里以「提交成功 + 稍候」尽力而为，不阻塞崩溃路径太久）
+            // submit + get 短超时：真正等待已排队的写完成（单线程执行器 FIFO），
+            // 确保崩溃上报前历史已落盘；超时则不阻塞崩溃路径。
+            w.submit { }.get(500, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (_: Exception) {
-            // 执行器可能已关闭，忽略
+            // 执行器可能已关闭或等待超时，忽略（崩溃路径不能卡太久）
         }
     }
 
@@ -294,7 +319,7 @@ object DiagLog {
 
     /**
      * 读取磁盘日志的最近部分（尾部优先，最多 [MAX_DUMP_CHARS] 的一半，
-     * 给内存缓冲/环境信息留空间）。
+     * 给内存缓冲/环境信息留空间）。仅读主文件 + 滚动文件，去掉 ts 前缀保持可读。
      */
     private fun readRecentFileText(): String {
         val dir = logDir ?: return ""
@@ -303,13 +328,111 @@ object DiagLog {
             if (!main.exists()) return ""
             val bytes = main.readBytes()
             val cap = MAX_DUMP_CHARS / 2
-            if (bytes.size <= cap) {
+            val raw = if (bytes.size <= cap) {
                 String(bytes, Charsets.UTF_8)
             } else {
                 String(bytes, bytes.size - cap, cap, Charsets.UTF_8)
             }
+            // 去掉每行开头的 "ts|" 前缀（若有），恢复可读格式
+            raw.lines().joinToString("\n") { stripTsPrefix(it) }
         } catch (_: Exception) {
             ""
         }
+    }
+
+    /**
+     * 读取磁盘历史的结构化日志行（含滚动文件，按时间由旧到新）。
+     * 磁盘行格式为 ``epoch毫秒|MM-dd HH:mm:ss.SSS [L] [tag] msg``，可精确还原 ts；
+     * 兼容旧格式（无 ts 前缀的行用「当前年份 + 解析时间」估算 ts）。
+     * 最多保留最近 [MAX_DUMP_LINES] 行，避免日志量极大时一次性构造过多对象。
+     */
+    private fun readRecentFileLines(): List<LogLine> {
+        val dir = logDir ?: return emptyList()
+        return try {
+            val files = mutableListOf<File>()
+            val main = File(dir, FILE_NAME)
+            if (main.exists()) files.add(main)
+            for (i in 1..MAX_FILES) {
+                val f = File(dir, "$FILE_NAME.$i")
+                if (f.exists()) files.add(f)
+            }
+            val result = ArrayList<LogLine>()
+            // 从旧到新读（.N 最旧在前，main 最新在后），超限时从最旧淘汰
+            for (f in files.asReversed()) {
+                for (raw in f.readLines()) {
+                    val line = raw.trimEnd()
+                    if (line.isEmpty()) continue
+                    val parsed = parseFileLine(line) ?: continue
+                    result.add(parsed)
+                    if (result.size > MAX_DUMP_LINES) result.removeAt(0)
+                }
+            }
+            result
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** 解析一行磁盘日志 → LogLine（带 ts 前缀精确还原，旧格式估算）。 */
+    private fun parseFileLine(line: String): LogLine? {
+        val idx = line.indexOf('|')
+        val (ts, rest) = if (idx > 0) {
+            val t = line.substring(0, idx).toLongOrNull()
+            if (t != null) t to line.substring(idx + 1) else null to line
+        } else null to line
+        // rest 形如 "MM-dd HH:mm:ss.SSS [L] [tag] msg"
+        val level = extractLevel(rest) ?: "I"
+        val tag = extractTag(rest) ?: ""
+        val message = extractMessage(rest) ?: rest
+        val finalTs = ts ?: estimateTs(rest)
+        return LogLine(finalTs, level, tag, message)
+    }
+
+    private fun extractLevel(rest: String): String? {
+        val b = rest.indexOf('[')
+        if (b < 0) return null
+        val e = rest.indexOf(']', b)
+        if (e < 0) return null
+        return rest.substring(b + 1, e).trim().ifEmpty { null }
+    }
+
+    private fun extractTag(rest: String): String? {
+        // 第一个 [..] 是级别，第二个 [..] 是 tag
+        val first = rest.indexOf(']')
+        if (first < 0) return null
+        val after = rest.substring(first + 1).trimStart()
+        if (!after.startsWith("[")) return null
+        val e = after.indexOf(']')
+        if (e < 0) return null
+        return after.substring(1, e).trim().ifEmpty { null }
+    }
+
+    private fun extractMessage(rest: String): String? {
+        val first = rest.indexOf(']')
+        if (first < 0) return rest
+        val after = rest.substring(first + 1).trimStart()
+        if (!after.startsWith("[")) return rest.substring(first + 1).trimStart().ifEmpty { rest }
+        val e = after.indexOf(']')
+        if (e < 0) return rest
+        return after.substring(e + 1).trimStart().ifEmpty { rest }
+    }
+
+    /** 旧格式（无 ts 前缀）估算 ts：当前年份 + 解析出的 MM-dd HH:mm:ss.SSS。 */
+    private fun estimateTs(rest: String): Long {
+        return try {
+            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+            val year = SimpleDateFormat("yyyy", Locale.US).format(Date())
+            fmt.parse("$year-${rest.take(18)}")?.time ?: System.currentTimeMillis()
+        } catch (_: Exception) {
+            System.currentTimeMillis()
+        }
+    }
+
+    /** 去掉行首 "ts|" 前缀（供全文本 dump 保持可读）。 */
+    private fun stripTsPrefix(line: String): String {
+        val idx = line.indexOf('|')
+        return if (idx > 0 && line.substring(0, idx).toLongOrNull() != null) {
+            line.substring(idx + 1)
+        } else line
     }
 }

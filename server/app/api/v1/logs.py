@@ -31,7 +31,7 @@ def _get_store(request: Request) -> LogStore:
 async def upload_log(body: LogUploadRequest, request: Request) -> LogUploadResponse:
     """接收客户端上传的日志（结构化行数组，服务端按行入库并去重）。"""
     store = _get_store(request)
-    entries = store.add(
+    stored = store.add(
         device_id=body.device_id,
         content=body.content or "",
         device_name=body.device_name or "",
@@ -42,7 +42,7 @@ async def upload_log(body: LogUploadRequest, request: Request) -> LogUploadRespo
         code=0,
         message="上传成功",
         device_id=body.device_id,
-        stored=len(entries),
+        stored=stored,
     )
 
 
@@ -71,11 +71,8 @@ async def get_device_logs(
         tag=tag,
         keyword=keyword,
     )
-    # total：带过滤条件的总行数（若无过滤，直接 count；有过滤则需按过滤条件统计）
-    if level or tag or keyword:
-        total = len(store.list(device_id, limit=0, level=level, tag=tag, keyword=keyword))
-    else:
-        total = store.count(device_id)
+    # total：带过滤条件的总行数（直接 COUNT，避免全量拉取进内存数个数）
+    total = store.count(device_id, level=level, tag=tag, keyword=keyword)
     logs = [
         LogEntryResponse(
             device_id=e.device_id,
