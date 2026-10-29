@@ -49,6 +49,16 @@ class RelayClient {
     @Volatile
     var listener: Listener? = null
 
+    /**
+     * 重连前回调钩子（可选，由服务层注入）。
+     *
+     * 每次真正发起重连动作前调用一次，用于「切换网络/断线后重新上报设备在线状态」，
+     * 让中转服务器与 PC 端重新撮合，避免服务端旧会话残留导致重连后依然收不到音频。
+     * 回调抛异常不影响重连主流程。
+     */
+    @Volatile
+    var onBeforeReconnect: (() -> Unit)? = null
+
     // 连接参数（来自 RelayPrefs）
     private var host: String = ""
     private var port: Int = RelayProtocol.DEFAULT_PORT
@@ -277,7 +287,7 @@ class RelayClient {
         }
     }
 
-    /** 心跳循环：每 30 秒发一次文本 ping。 */
+    /** 心跳循环：每 30 秒发一次文本 ping，并做「心跳超时判死」兜底。 */
     private fun pingLoop() {
         while (running) {
             try {
@@ -290,6 +300,17 @@ class RelayClient {
                 webSocket?.send("{\"type\":\"ping\"}")
             } catch (e: Exception) {
                 DiagLog.w("中继", "发送心跳失败：${e.message}")
+            }
+            // 心跳超时判死兜底：不管网络切换有没有被监听到、onFailure/onClosed 有没有被触发，
+            // 只要「距最后一次收到任何数据」超过阈值，就判定链路已死，主动强制重连。
+            // 这覆盖了「半开连接」（切换网络后旧 TCP 悬空、OS 不发 FIN/RST）这类盲区。
+            val lastAlive = lastAliveAt
+            if (lastAlive > 0 && webSocket != null) {
+                val idle = System.currentTimeMillis() - lastAlive
+                if (idle >= RelayProtocol.HEARTBEAT_TIMEOUT_MS) {
+                    DiagLog.w("中继", "心跳超时判死：${idle}ms 未收到任何数据，主动强制重连")
+                    forceReconnect()
+                }
             }
         }
     }
@@ -339,6 +360,13 @@ class RelayClient {
                 }
                 if (!running || generation != myGen || webSocket != null) break
                 DiagLog.i("中继", "第 $attempt 次重连")
+                // 重连前重新上报设备在线状态：让中转服务器与 PC 端重新撮合，
+                // 避免「旧会话残留 / 配对丢失」导致重连后依然收不到音频。
+                try {
+                    onBeforeReconnect?.invoke()
+                } catch (e: Exception) {
+                    DiagLog.w("中继", "重连前重新上报失败：${e.message}")
+                }
                 connectOnce()
                 try {
                     Thread.sleep(3000)

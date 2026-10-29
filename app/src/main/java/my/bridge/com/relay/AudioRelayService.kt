@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -40,6 +42,12 @@ class AudioRelayService : Service() {
 
     private val relayClient = RelayClient()
     private var relayThread: Thread? = null
+
+    // 网络状态监听：切换网络（WiFi↔蜂窝、断网）时主动触发重连。
+    // 这是「用户不点停止就永远连接」的关键一环——不等 onFailure/onClosed（半开连接下
+    // 它们可能永远不触发），网络一丢失就立即 forceReconnect。
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     @Volatile
     private var isServerRunning = false
@@ -299,6 +307,17 @@ class AudioRelayService : Service() {
             }
         }
 
+        // 注入「重连前重新上报」钩子：每次重连动作前把设备在线状态重新报到中转服务器，
+        // 让 PC 端重新撮合，避免「旧会话残留/配对丢失」导致重连后收不到音频。
+        relayClient.onBeforeReconnect = {
+            if (isServerRunning) {
+                RelayReporter.reportNow(this@AudioRelayService)
+            }
+        }
+
+        // 注册网络监听：网络丢失/切换时立即强制重连（「永远连接」的关键一环）。
+        registerNetworkCallback()
+
         relayThread = Thread({
             try {
                 relayClient.start(this@AudioRelayService, RelayPrefs.autoReconnect(this@AudioRelayService))
@@ -327,6 +346,10 @@ class AudioRelayService : Service() {
         }
         // 先置停止标记，让所有读流线程（readHeader/readFully/scanRelayMagic）立即退出
         isServerRunning = false
+        // 取消网络监听（停止后不再需要感知网络变化）
+        unregisterNetworkCallback()
+        // 解绑重连前上报钩子
+        relayClient.onBeforeReconnect = null
         // 先解绑 listener：停止阶段不再让 RelayClient 的状态回调刷新通知/UI，
         // 避免 stop() 内部 notifyState(IDLE) 把中继通知重新弹出来（最终仍会被移除）。
         relayClient.listener = null
@@ -376,6 +399,54 @@ class AudioRelayService : Service() {
         try {
             NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         } catch (e: Exception) { }
+    }
+
+    /**
+     * 注册网络状态监听：默认网络丢失（onLost）时立即强制重连。
+     *
+     * 为什么需要它：切换 WiFi↔蜂窝、断网、信号丢失时，底层 TCP 会变成「半开连接」，
+     * OkHttp 的 onFailure/onClosed 可能迟迟不触发（OS 不发 FIN/RST），心跳超时兜底要等
+     * 60s。网络监听能在「网络接口消失」的第一时间（秒级）就触发重连，是「永远连接」的快路径。
+     */
+    private fun registerNetworkCallback() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            connectivityManager = cm
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onLost(network: Network) {
+                    // 网络丢失：主动强制重连，让 RelayClient 走退避重连重新建连。
+                    // 仅在服务运行中处理（停止后不重连，符合「用户点停止即彻底停止」）。
+                    if (!isServerRunning) return
+                    DiagLog.w("中继", "检测到网络丢失，主动触发中继重连")
+                    try {
+                        relayClient.forceReconnect()
+                    } catch (e: Exception) {
+                        DiagLog.e("中继", "网络丢失触发重连失败：${e.message}", e)
+                    }
+                }
+            }
+            networkCallback = callback
+            cm.registerDefaultNetworkCallback(callback)
+            DiagLog.i("中继", "已注册网络监听（网络丢失时自动重连）")
+        } catch (e: Exception) {
+            DiagLog.w("中继", "注册网络监听失败：${e.message}")
+        }
+    }
+
+    /** 取消网络监听（停止接收时调用）。 */
+    private fun unregisterNetworkCallback() {
+        try {
+            val cm = connectivityManager
+            val cb = networkCallback
+            if (cm != null && cb != null) {
+                cm.unregisterNetworkCallback(cb)
+            }
+        } catch (e: Exception) {
+            DiagLog.w("中继", "取消网络监听失败：${e.message}")
+        }
+        connectivityManager = null
+        networkCallback = null
     }
 
     // ------------------------------------------------------------------

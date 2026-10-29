@@ -46,6 +46,10 @@ object RelayProtocol {
     // 心跳间隔（毫秒）
     const val PING_INTERVAL_MS = 30_000L
 
+    // 心跳超时判死阈值（毫秒）：超过该时长未收到任何数据（音频帧/pong/ready），
+    // 判定链路已死（半开连接等 onFailure/onClosed 覆盖不到的场景），主动强制重连。
+    const val HEARTBEAT_TIMEOUT_MS = 60_000L
+
     // 重连退避档位（毫秒），封顶 30 秒
     val BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 
