@@ -336,7 +336,20 @@ class RelayClient {
         }
     }
 
-    /** 断线后按退避策略重连（1/2/4/8/16/30 秒），可被 RelayPrefs 关闭。 */
+    /**
+     * 断线后按退避策略重连（1/2/4/8/16/30 秒封顶），可被 RelayPrefs 关闭。
+     *
+     * 关键设计（修复「只重连几次就停」的 bug）：
+     * 重连是一个**常驻看门狗线程**，只要 `running && autoReconnect` 就持续运转，
+     * **永不因「退避档位用尽」或「单次连接失败」而退出**。它周期性检查
+     * `webSocket == null`，一旦发现未连接就再次发起连接，退避指数增长但封顶 30s。
+     *
+     * 旧实现的问题：循环依赖 `webSocket == null` 且单次 `connectOnce()` 内 OkHttp
+     * connectTimeout(8s) 异步失败时，`onFailure` 会再次触发 `scheduleReconnect()`，
+     * 而旧代码 `if (retryThread.isAlive) return` 会把它吞掉，导致「网络恢复前重连
+     * 用尽、恢复后无人再触发」——即手机日志里「只重连 3 次就停、网络恢复后不再连」。
+     * 新实现由单一 watchdog 线程兜底，彻底消除多线程互斥吞掉重连的问题。
+     */
     private fun scheduleReconnect() {
         if (!running) return
         // 自动重连关闭时不再重连：断开即进入停止态（用户已在设置中二次确认关闭）
@@ -344,12 +357,28 @@ class RelayClient {
             DiagLog.i("中继", "自动重连已关闭，断线后不重连")
             return
         }
-        val myGen = generation
+        // 看门狗线程已存在且存活则复用（单一实例，杜绝多线程互相吞掉重连）
         val existing = retryThread
         if (existing != null && existing.isAlive) return
         retryThread = Thread({
             var attempt = 0
-            while (running && generation == myGen && webSocket == null) {
+            var lastConnectAt = 0L
+            // 常驻看门狗：只要未停止且允许重连，就持续保证「连上为止」。
+            // 退出条件只有 running=false / 代次变化 / autoReconnect=false，
+            // 绝不因「已重连 N 次」或「单次失败」而停止。
+            while (running && autoReconnect) {
+                val myGen = generation
+                // 已连上（webSocket != null）则等待，把控制权交还给连接生命周期；
+                // 连接断开（onFailure/onClosed 置空 webSocket）后会再次进入重连。
+                if (webSocket != null) {
+                    try {
+                        Thread.sleep(500)
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                    continue
+                }
+                // 指数退避：1/2/4/8/16/30 秒封顶，避免失败时疯狂空转
                 val index = attempt.coerceAtMost(RelayProtocol.BACKOFF_MS.size - 1)
                 val delay = RelayProtocol.BACKOFF_MS[index]
                 attempt++
@@ -358,7 +387,8 @@ class RelayClient {
                 } catch (e: InterruptedException) {
                     break
                 }
-                if (!running || generation != myGen || webSocket != null) break
+                if (!running || !autoReconnect || generation != myGen) break
+                if (webSocket != null) continue
                 DiagLog.i("中继", "第 $attempt 次重连")
                 // 重连前重新上报设备在线状态：让中转服务器与 PC 端重新撮合，
                 // 避免「旧会话残留 / 配对丢失」导致重连后依然收不到音频。
@@ -367,9 +397,13 @@ class RelayClient {
                 } catch (e: Exception) {
                     DiagLog.w("中继", "重连前重新上报失败：${e.message}")
                 }
+                lastConnectAt = System.currentTimeMillis()
                 connectOnce()
+                // 等连接结果落地（onOpen 置 webSocket / onFailure 置 null）。
+                // 若本次 connectOnce 因网络不通而长时间无结果，watchdog 会在下一轮
+                // 继续重试（webSocket 仍为 null），不会被「8s connect 超时」卡死退出。
                 try {
-                    Thread.sleep(3000)
+                    Thread.sleep(1000)
                 } catch (e: InterruptedException) {
                     break
                 }

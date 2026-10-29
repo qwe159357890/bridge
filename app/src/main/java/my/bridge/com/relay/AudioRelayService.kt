@@ -425,6 +425,41 @@ class AudioRelayService : Service() {
                         DiagLog.e("中继", "网络丢失触发重连失败：${e.message}", e)
                     }
                 }
+
+                override fun onAvailable(network: Network) {
+                    // 网络恢复：立即触发重连 + 重新上报设备在线状态，让中转服务器与 PC 端
+                    // 重新撮合。这是「切断网络→恢复后自动恢复播放」的关键快路径：
+                    // 若只靠 onLost 那次重连，恢复瞬间可能正卡在 connect 超时里，导致
+                    // 手机迟迟不重连（服务器侧表现为「接收方连接结束后再无接入」）。
+                    if (!isServerRunning) return
+                    DiagLog.i("中继", "检测到网络恢复，立即触发中继重连并重新上报")
+                    try {
+                        RelayReporter.reportNow(this@AudioRelayService)
+                        relayClient.forceReconnect()
+                    } catch (e: Exception) {
+                        DiagLog.e("中继", "网络恢复触发重连失败：${e.message}", e)
+                    }
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    networkCapabilities: android.net.NetworkCapabilities,
+                ) {
+                    // 网络能力变化（如 WiFi↔蜂窝切换时连接能力重建）：同样视为「需要重连」的
+                    // 信号，避免切换网络后旧连接悬空、新网络已可用却无人重连的窗口。
+                    if (!isServerRunning) return
+                    val hasInternet = networkCapabilities.hasCapability(
+                        android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET
+                    )
+                    if (hasInternet) {
+                        DiagLog.i("中继", "网络能力变化（已具备上网能力），触发中继重连")
+                        try {
+                            relayClient.forceReconnect()
+                        } catch (e: Exception) {
+                            DiagLog.e("中继", "网络能力变化触发重连失败：${e.message}", e)
+                        }
+                    }
+                }
             }
             networkCallback = callback
             cm.registerDefaultNetworkCallback(callback)

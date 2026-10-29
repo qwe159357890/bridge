@@ -434,9 +434,23 @@ class BridgeWebSocketClient(
         }
     }
 
-    /** 计算指数退避 + 抖动。 */
+    /** 计算指数退避 + 抖动。
+     *
+     * 关键修复（负数退避的根因）：旧实现 `RECONNECT_BASE_MS * 2.0.pow(attempt)` 在
+     * `attempt` 累积过大（连接长期连不上时 `reconnectAttempt` 无限自增）时，
+     * `2.0.pow(63)` 溢出为 Long.MIN_VALUE，乘以 base 后仍是负数；而 `coerceAtMost(60s)`
+     * 对负数无效（负数 < 60s 恒成立），最终 `delay(负数)` 变成**立即返回的空转**，
+     * 形成「重连等待 -883ms」的疯狂重连死循环（手机日志里 1.7 万次重连即此）。
+     *
+     * 修复：把指数先对「能产生最大退避的指数上界」做 coerceAtMost，彻底杜绝溢出。
+     * base=1000ms，max=60000ms，2^n 到 60 秒时 n≈6，故指数上界取 6 即可封顶且不溢出。
+     */
     private fun backoffDelay(attempt: Int): Long {
-        val exp = WsConfig.RECONNECT_BASE_MS * 2.0.pow(attempt.coerceAtLeast(0)).toLong()
+        // 指数上界：2^6 = 64 > 60000/1000 = 60，取 6 保证 exp 最大 64000ms，随后 coerce 到 60s。
+        // 即便 attempt 传进超大值（Integer 上限），也只会安全封顶，不再溢出为负数。
+        val maxExp = 6
+        val safeAttempt = attempt.coerceIn(0, maxExp)
+        val exp = WsConfig.RECONNECT_BASE_MS * (1L shl safeAttempt)
         val capped = exp.coerceAtMost(WsConfig.RECONNECT_MAX_MS)
         val jitter = 1 + Random.nextDouble(-WsConfig.RECONNECT_JITTER, WsConfig.RECONNECT_JITTER)
         return (capped * jitter).toLong()
