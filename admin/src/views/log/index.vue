@@ -115,7 +115,7 @@
             >
               <el-table-column label="#" type="index" width="70" align="center">
                 <template #default="{ $index }">
-                  <span class="row-index">{{ total - (page - 1) * pageSize - $index }}</span>
+                  <span class="row-index">{{ (page - 1) * pageSize + $index + 1 }}</span>
                 </template>
               </el-table-column>
               <el-table-column label="时间" width="150">

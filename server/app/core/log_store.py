@@ -293,19 +293,24 @@ class LogStore:
         if self._mysql_enabled:
             try:
                 conn = self._connection()
-                inserted = 0
                 with conn.cursor() as cur:
-                    for e in entries:
-                        # INSERT IGNORE + 唯一索引 (device_id, ts, line_hash) 去重：
-                        # 客户端全量上传时，已存在的历史行会被自动跳过，只落新行。
-                        cur.execute(
-                            "INSERT IGNORE INTO device_logs "
-                            "(device_id, device_name, app_version, ts, level, tag, message, content, line_hash, created_at) "
-                            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                            (e.device_id, e.device_name, e.app_version, e.ts, e.level,
-                             e.tag, e.message, e.message, _line_hash(e.ts, e.level, e.tag, e.message), e.created_at),
-                        )
-                        inserted += cur.rowcount
+                    # 批量插入：executemany 一次提交全部行，避免逐行 execute 的 N+1 网络往返。
+                    # 之前逐条 INSERT 在公网 MySQL 下 500+ 行要十几秒，且阻塞事件循环导致
+                    # 客户端 ping 超时断连；批量后一次往返即可完成。
+                    # INSERT IGNORE + 唯一索引 (device_id, ts, line_hash) 去重：
+                    # 客户端全量上传时，已存在的历史行会被自动跳过，只落新行。
+                    rows = [
+                        (e.device_id, e.device_name, e.app_version, e.ts, e.level,
+                         e.tag, e.message, e.message,
+                         _line_hash(e.ts, e.level, e.tag, e.message), e.created_at)
+                        for e in entries
+                    ]
+                    inserted = cur.executemany(
+                        "INSERT IGNORE INTO device_logs "
+                        "(device_id, device_name, app_version, ts, level, tag, message, content, line_hash, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        rows,
+                    )
                     if self._max_entries > 0:
                         cur.execute(
                             "DELETE FROM device_logs WHERE id IN ("
@@ -399,7 +404,7 @@ class LogStore:
         tag: str = "",
         keyword: str = "",
     ) -> list[LogEntry]:
-        """某设备的日志（按时间由旧到新），支持过滤与分页。
+        """某设备的日志（按时间由新到旧），支持过滤与分页。
 
         :param offset: 分页起始（0 起）；limit=0 表示不分页、返回全部
         :param level: 按级别过滤（I/W/E/D，空=全部）
@@ -426,6 +431,8 @@ class LogStore:
             entries = [e for e in entries if e.tag == tag]
         if keyword:
             entries = [e for e in entries if keyword in e.message]
+        # 内存按追加序（旧→新）存储，统一反转为「新→旧」与 MySQL 一致
+        entries.reverse()
         return entries
 
     def _list_mysql(
@@ -452,7 +459,7 @@ class LogStore:
         if keyword:
             sql += " AND message LIKE %s"
             args.append(f"%{keyword}%")
-        sql += " ORDER BY ts ASC, id ASC"
+        sql += " ORDER BY ts DESC, id DESC"
         if limit and limit > 0:
             sql += " LIMIT %s OFFSET %s"
             args += [limit, offset]
@@ -476,8 +483,8 @@ class LogStore:
 
     def get_latest(self, device_id: str) -> Optional[LogEntry]:
         """某设备最新一条日志。"""
-        entries = self.list(device_id)
-        return entries[-1] if entries else None
+        entries = self.list(device_id, limit=1)
+        return entries[0] if entries else None
 
     def clear(self, device_id: str) -> int:
         """清除某设备日志，返回清除的条数。"""

@@ -135,6 +135,13 @@ object DiagLog {
             (it.stackTrace.firstOrNull()?.toString() ?: "无堆栈")
     } ?: ""
 
+    /**
+     * 把 message 中的换行符（\r/\n/\r\n）转义为可见占位符，保证一条日志在磁盘文件里
+     * 物理上只占一行。否则多行堆栈会被落盘拆散，readRecentFileLines() 读回时误拆成多条。
+     */
+    private fun flattenNewlines(message: String): String =
+        message.replace("\r\n", "⏎").replace('\n', '⏎').replace('\r', '⏎')
+
     private fun append(level: String, tag: String, message: String) {
         // D 级（debug/verbose）不刷 Logcat，避免高频日志拖慢应用；仅 I/W/E 输出到 Logcat。
         when (level) {
@@ -145,11 +152,17 @@ object DiagLog {
         }
         val now = Date()
         val ts = now.time
-        val line = "${timeFormat.format(now)} [$level] [$tag] $message"
+        // message 可能含多行（如异常堆栈被整体作为一条日志写入时含 \n/\r），
+        // 落盘前必须把换行转义为可见占位符，否则一条日志在磁盘文件里被物理拆成多行，
+        // readRecentFileLines() 用 readLines() 读回时会误拆成多条独立日志（tag 空、level I 的脏数据）。
+        val flat = flattenNewlines(message)
+        val line = "${timeFormat.format(now)} [$level] [$tag] $flat"
         synchronized(lock) {
             if (ring.size >= RING_CAPACITY) ring.removeFirst()
             ring.addLast(line)
             if (lineRing.size >= RING_CAPACITY) lineRing.removeFirst()
+            // 内存缓冲保留原始 message（含换行），保证 dumpLines 上传时信息完整；
+            // 磁盘落盘用转义后的 flat，保证一行一条、读回不拆散。
             lineRing.addLast(LogLine(ts, level, tag, message))
         }
         // 磁盘行带完整 epoch 毫秒前缀（| 分隔），保证重启后能精确还原 ts、按行上传且去重精确。
@@ -384,8 +397,10 @@ object DiagLog {
         val level = extractLevel(rest) ?: "I"
         val tag = extractTag(rest) ?: ""
         val message = extractMessage(rest) ?: rest
+        // 反转义落盘时的换行占位符，还原多行 message（与内存缓冲一致，保证去重键一致）
+        val restored = message.replace('⏎', '\n')
         val finalTs = ts ?: estimateTs(rest)
-        return LogLine(finalTs, level, tag, message)
+        return LogLine(finalTs, level, tag, restored)
     }
 
     private fun extractLevel(rest: String): String? {
