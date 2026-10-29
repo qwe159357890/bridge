@@ -58,6 +58,15 @@ object RelayProtocol {
     // 并发建连/断连竞态留下「TCP 已连但 hello 未送达」的半死连接。
     const val FORCE_RECONNECT_DEBOUNCE_MS = 500L
 
+    // 「等 ready」超时（毫秒）：onOpen 触发（TCP 已连）后若超过该时长仍未收到
+    // 服务器回发的 ready，判定为半死连接（TCP 三次握手在切网旧路由上完成一半、
+    // hello 实际未送达服务器、服务器从未登记本端），主动强制重连。
+    //
+    // 这是「切网络后永久卡死在『已连上、等 ready』死态」的根治：不依赖 pingLoop
+    // 心跳判死（其依赖 lastAliveAt 且历史日志证明从未触发），由常驻 watchdog 线程
+    // 兜底——只要 onOpen 后 10 秒内没 ready，就强制重连。
+    const val READY_TIMEOUT_MS = 10_000L
+
     /**
      * 构造一个完整帧（魔数 + 类型 + 长度 + 载荷）
      */

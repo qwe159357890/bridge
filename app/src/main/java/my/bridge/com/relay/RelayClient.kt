@@ -97,6 +97,15 @@ class RelayClient {
     @Volatile
     private var lastAliveAt = 0L
 
+    // 当前连接是否已收到服务器 ready（true 表示撮合就绪、链路真正可用）。
+    // 与 webSocket != null 区分：后者只代表 TCP 连上，前者才代表服务器已登记本端。
+    @Volatile
+    private var ready = false
+
+    // 本次连接 onOpen 触发的时间戳（用于「等 ready 超时」判死）。
+    @Volatile
+    private var lastOpenAt = 0L
+
     /**
      * 启动中转连接（已在运行时忽略）。
      *
@@ -191,6 +200,8 @@ class RelayClient {
         }
         lastForceReconnectAt = now
         DiagLog.w("中继", "强制重连：丢弃当前管道与旧会话残留")
+        ready = false
+        lastOpenAt = 0L
         // 递增代次：作废所有在途旧连接的 onOpen/onMessage/onFailure/onClosed 回调，
         // 避免「旧连接 onOpen 已赋值 webSocket + 发 hello，但 TCP 半死」的半死连接
         // 污染新会话状态（这正是切网络后手机「已连上却收不到 ready」的根因）。
@@ -243,6 +254,8 @@ class RelayClient {
                 if (isStale()) { try { socket.close(1000, "stale") } catch (e: Exception) {}; return }
                 webSocket = socket
                 lastAliveAt = System.currentTimeMillis()
+                lastOpenAt = lastAliveAt
+                ready = false
                 rebuildPipe()
                 DiagLog.i("中继", "已连上中转服务器")
                 val hello = JSONObject()
@@ -282,6 +295,7 @@ class RelayClient {
                 DiagLog.e("中继", "中转连接异常：${t.message}", t)
                 notifyState(State.ERROR, "连接异常：${t.message ?: "未知"}")
                 webSocket = null
+                ready = false
                 closePipe()
                 scheduleReconnect()
             }
@@ -290,6 +304,7 @@ class RelayClient {
                 if (isStale()) return
                 DiagLog.i("中继", "中转连接已关闭：code=$code reason=$reason")
                 webSocket = null
+                ready = false
                 closePipe()
                 scheduleReconnect()
             }
@@ -302,6 +317,7 @@ class RelayClient {
             val obj = JSONObject(text)
             when (obj.optString("type")) {
                 "ready" -> {
+                    ready = true
                     notifyState(State.READY, "已接入中转服务器")
                     DiagLog.i("中继", "收到 ready，中转链路就绪")
                 }
@@ -404,6 +420,31 @@ class RelayClient {
                 // 已连上（webSocket != null）则等待，把控制权交还给连接生命周期；
                 // 连接断开（onFailure/onClosed 置空 webSocket）后会再次进入重连。
                 if (webSocket != null) {
+                    // 半死连接判死（由常驻 watchdog 兜底，不依赖 pingLoop——历史日志证明
+                    // pingLoop 心跳判死在同类场景下从未触发过，疑似线程失效）：
+                    //   ① 未就绪超时：onOpen 已触发（TCP 已连）但超过 READY_TIMEOUT_MS 仍未收到
+                    //      ready——hello 没送达服务器、服务器从未登记本端，永远不会回 ready；
+                    //   ② 就绪后失联：已收到 ready，但超过 HEARTBEAT_TIMEOUT_MS 未收到任何数据
+                    //      （音频帧/pong），判定链路半死。
+                    // 两种情况都主动强制重连，摆脱对 pingLoop 的依赖。
+                    val nowMs = System.currentTimeMillis()
+                    val openedAt = lastOpenAt
+                    val lastAlive = lastAliveAt
+                    val readyDead = !ready && openedAt > 0 &&
+                        nowMs - openedAt >= RelayProtocol.READY_TIMEOUT_MS
+                    val aliveDead = ready && lastAlive > 0 &&
+                        nowMs - lastAlive >= RelayProtocol.HEARTBEAT_TIMEOUT_MS
+                    if (readyDead || aliveDead) {
+                        DiagLog.w(
+                            "中继",
+                            if (readyDead)
+                                "已连上但 ${nowMs - openedAt}ms 未收到 ready（半死连接），强制重连"
+                            else
+                                "就绪后 ${nowMs - lastAlive}ms 未收到数据（链路半死），强制重连"
+                        )
+                        forceReconnect()
+                        continue
+                    }
                     try {
                         Thread.sleep(500)
                     } catch (e: InterruptedException) {
