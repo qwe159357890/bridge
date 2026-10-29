@@ -4,6 +4,45 @@
 
 ---
 
+## 2026-10-29 · 🔁 音频中继「永远连接」自愈里程碑（v0.1.83）
+
+**节点意义**：解决「手机放音（音频中继）切换网络后无法自动恢复，必须重启中转服务器才能重新出声」的
+历史顽疾，确立「用户不点停止就永远连接、永远尝试接收」的核心体验。**最新客户端 v0.1.83。**
+
+### 背景与根因
+
+- 音频中继（手机放音）走的是 **Aurelay 第三方中转服务器**（`039039.xyz:15151`，后端零改动），
+  与 Bridge 自建服务端（主 WebSocket、心跳、上报）是**两套完全独立的连接体系**，本次改造**仅动中继体系**。
+- 根因三重：① 客户端无网络切换感知（`RelayClient` 未注册 `ConnectivityManager` 监听）；
+  ② 半开连接下 OkHttp `onFailure`/`onClosed` 可能永远不触发（`readTimeout=0` + 无心跳超时判死）；
+  ③ 停止→重连清不掉服务端旧会话，重新 `hello` 无法重建干净链路。
+
+### 四道自愈防线（只要不点「停止」，就永远在尝试接收）
+
+| 防线 | 触发源 | 速度 | 覆盖场景 |
+|---|---|---|---|
+| ① 网络监听 | `ConnectivityManager.onLost` | 秒级 | 切换 WiFi↔蜂窝、断网、信号丢失 |
+| ② 心跳超时判死 | `lastAliveAt` 超 60s | 分钟级 | 半开连接、漏监听、悄悄断线 |
+| ③ OkHttp 回调 | `onFailure`/`onClosed` | 即时 | 服务器断、握手失败（既有） |
+| ④ 重连前重新上报 | `onBeforeReconnect` → `RelayReporter.reportNow` | 每次重连 | 清服务端旧会话、让 PC 重新撮合 |
+
+### 改动文件
+
+- `relay/RelayProtocol.kt`：新增 `HEARTBEAT_TIMEOUT_MS = 60_000L` 心跳超时判死阈值。
+- `relay/RelayClient.kt`：新增 `onBeforeReconnect` 回调钩子；`pingLoop` 加心跳超时判死（60s 无数据即 `forceReconnect`）；
+  `scheduleReconnect` 重连循环每次 `connectOnce()` 前调用 `onBeforeReconnect`。
+- `relay/AudioRelayService.kt`：`startRelay` 注入 `onBeforeReconnect`（重新上报）+ 注册网络监听
+  （`registerDefaultNetworkCallback`，`onLost` 触发 `forceReconnect`）；`stopRelay` 取消监听、解绑钩子。
+
+### 验证与边界
+
+- **用户实测**：多次切换网络临时验证通过，可自动恢复接收（无需再重启中转服务器）。
+- **回退基线**：改造前远程 main HEAD `5364cd2f`（v0.1.82），本次提交 `74b30792`（v0.1.83）。
+- **边界（已如实告知）**：客户端可 100% 保证「永远尝试重连」，但最终能否出声仍取决于 Aurelay
+  第三方服务器对「同 device_id 断线重连」的处理；第④道重新上报可覆盖绝大多数场景。
+
+---
+
 ## 2026-10-29 · 🏁 日志系统重构 + 数据库可靠性治理 + 侧边栏 UI 里程碑（v0.1.82）
 
 **节点意义**：自 10-28「阶段性功能完善总结」以来，围绕「日志可追溯」「数据库可靠性」
