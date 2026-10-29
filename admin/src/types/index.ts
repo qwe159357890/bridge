@@ -57,12 +57,15 @@ export interface CommandCatalog {
   commands: CommandDef[]
 }
 
-// 日志条目
+// 日志条目（一行结构化日志）
 export interface LogEntry {
   device_id: string
   device_name: string
   app_version: string
-  content: string
+  ts: number
+  level: string
+  tag: string
+  message: string
   created_at: number
 }
 

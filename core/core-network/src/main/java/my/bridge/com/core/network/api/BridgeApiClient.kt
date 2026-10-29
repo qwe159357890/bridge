@@ -37,15 +37,17 @@ class BridgeApiClient(
     suspend fun registerDevice(deviceId: String, deviceName: String? = null): String =
         api().registerDevice(BridgeApi.RegisterRequest(device_id = deviceId, device_name = deviceName)).token
 
-    /** 上传诊断日志，返回服务端 message（失败抛异常，由调用方处理）。 */
+    /** 上传诊断日志（结构化行数组），返回服务端 message（失败抛异常，由调用方处理）。 */
     suspend fun uploadLog(
         deviceId: String,
-        content: String,
+        logs: List<BridgeApi.LogLine>,
+        content: String = "",
         deviceName: String = "",
         appVersion: String = "",
     ): String = api().uploadLog(
         BridgeApi.LogUploadRequest(
             device_id = deviceId,
+            logs = logs,
             content = content,
             device_name = deviceName,
             app_version = appVersion,

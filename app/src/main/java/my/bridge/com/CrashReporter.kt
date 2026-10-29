@@ -60,23 +60,28 @@ class CrashReporter(
             scope.launch {
                 try {
                     val deviceId = deviceStore.deviceId()
-                    val content = buildString {
-                        append("===== 崩溃信息 =====\n")
-                        append("线程：").append(thread.name).append("\n")
+                    // 崩溃信息作为一条结构化日志行追加，其余日志行用 dumpLines 按行上报
+                    val crashMessage = buildString {
+                        append("线程：").append(thread.name).append(" | ")
                         append("异常：").append(throwable.javaClass.name).append(": ")
-                            .append(throwable.message).append("\n")
-                        throwable.stackTrace.forEach {
-                            append("\tat ").append(it.toString()).append("\n")
-                        }
-                        append("\n")
-                        // dump 内已含环境信息 + 内存缓冲 + 磁盘日志（跨进程历史）
-                        append(DiagLog.dump(context))
+                            .append(throwable.message).append(" | ")
+                        append(throwable.stackTrace.firstOrNull()?.toString() ?: "无堆栈")
                     }
+                    val logs = DiagLog.dumpLines().map {
+                        my.bridge.com.core.network.api.BridgeApi.LogLine(
+                            ts = it.ts, level = it.level, tag = it.tag, message = it.message,
+                        )
+                    } + my.bridge.com.core.network.api.BridgeApi.LogLine(
+                        ts = System.currentTimeMillis(),
+                        level = "E",
+                        tag = "Crash",
+                        message = crashMessage,
+                    )
                     val deviceName = deviceStore.deviceName() ?: deviceId
                     val appVersion = DiagLog.appVersionName(context)
                     apiClient.uploadLog(
                         deviceId = deviceId,
-                        content = content,
+                        logs = logs,
                         deviceName = deviceName,
                         appVersion = appVersion,
                     )

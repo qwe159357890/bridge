@@ -31,16 +31,30 @@ interface BridgeApi {
     /** 设备注册响应体。 */
     data class RegisterResponse(val device_id: String, val token: String)
 
-    /** 日志上传请求体。 */
+    /** 日志上传请求体（结构化日志行数组）。 */
     data class LogUploadRequest(
         val device_id: String,
-        val content: String,
+        val logs: List<LogLine> = emptyList(),
+        val content: String = "",
         val device_name: String = "",
         val app_version: String = "",
     )
 
+    /** 一行结构化日志（与服务端 schemas/logs.py 的 LogLine 对齐）。 */
+    data class LogLine(
+        val ts: Long,
+        val level: String = "I",
+        val tag: String = "",
+        val message: String = "",
+    )
+
     /** 日志上传响应体。 */
-    data class LogUploadResponse(val code: Int, val message: String, val device_id: String)
+    data class LogUploadResponse(
+        val code: Int,
+        val message: String,
+        val device_id: String,
+        val stored: Int = 0,
+    )
 
     /** 位置上报请求体（对应服务端 LocationReportRequest，get_location 持久化）。 */
     data class LocationReportRequest(

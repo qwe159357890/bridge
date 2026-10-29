@@ -221,25 +221,24 @@ class BluetoothMediaButtonListener @Inject constructor(
     }
 
     private fun toastAction(action: String) {
-        // 拿到一个可用 Context：优先用 mediaSession 所在进程的 applicationContext。
         val ctx = BridgeApplicationContextHolder.get()
         if (ctx == null) {
             Timber.w("无法获取应用上下文，跳过 Toast")
             return
         }
+        // 主线程串行展示，避免 MediaSession 回调线程与 UI 线程竞争 Toast。
+        // 关键：高频连按时**绝不 cancel**——cancel 会打断系统 Toast 队列，
+        // 导致「频率一快就什么都不显示」。正确做法是复用同一个 Toast 实例，
+        // 每次仅 setText 覆盖文案后重新 show，由系统自行决定展示时长与排队，
+        // 这样无论按键多快，最新一次按键的文案一定会稳定出现在屏幕上。
         mainHandler.post {
             try {
-                val t = toast
-                if (t == null) {
-                    toast = Toast.makeText(ctx, "蓝牙按键：$action", Toast.LENGTH_SHORT)
-                    toast?.show()
-                } else {
-                    // 复用实例：先取消当前展示，再更新文案并立即重新展示，实现即时覆盖
-                    t.cancel()
-                    t.setText("蓝牙按键：$action")
-                    t.duration = Toast.LENGTH_SHORT
-                    t.show()
+                val t = toast ?: Toast.makeText(ctx, "", Toast.LENGTH_SHORT).also {
+                    toast = it
                 }
+                t.setText("蓝牙按键：$action")
+                t.duration = Toast.LENGTH_SHORT
+                t.show()
             } catch (e: Exception) {
                 Timber.w(e, "Toast 失败")
             }

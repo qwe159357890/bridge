@@ -227,12 +227,16 @@ object CommandModule {
     ): CommandResult {
         return try {
             val deviceId = deviceStore.deviceId()
-            val content = DiagLog.dump(context)
+            val logs = DiagLog.dumpLines().map {
+                my.bridge.com.core.network.api.BridgeApi.LogLine(
+                    ts = it.ts, level = it.level, tag = it.tag, message = it.message,
+                )
+            }
             val deviceName = deviceStore.deviceName() ?: deviceId
             val appVersion = DiagLog.appVersionName(context)
             val message = apiClient.uploadLog(
                 deviceId = deviceId,
-                content = content,
+                logs = logs,
                 deviceName = deviceName,
                 appVersion = appVersion,
             )

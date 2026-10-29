@@ -117,10 +117,14 @@ class ConnectionViewModel @Inject constructor(
             _uploadResult.value = "上传中…"
             val result = try {
                 val id = deviceStore.deviceId()
-                val content = DiagLog.dump(context)
+                val logs = DiagLog.dumpLines().map {
+                    my.bridge.com.core.network.api.BridgeApi.LogLine(
+                        ts = it.ts, level = it.level, tag = it.tag, message = it.message,
+                    )
+                }
                 val name = deviceStore.deviceName() ?: id
                 val version = DiagLog.appVersionName(context)
-                apiClient.uploadLog(id, content, name, version)
+                apiClient.uploadLog(id, logs, deviceName = name, appVersion = version)
             } catch (e: Exception) {
                 Timber.e(e, "手动上传日志失败")
                 "上传失败：${e.message}"

@@ -29,15 +29,21 @@ def _get_store(request: Request) -> LogStore:
 
 @router.post("", response_model=LogUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_log(body: LogUploadRequest, request: Request) -> LogUploadResponse:
-    """接收客户端上传的日志。"""
+    """接收客户端上传的日志（结构化行数组，服务端按行入库并去重）。"""
     store = _get_store(request)
-    store.add(
+    entries = store.add(
         device_id=body.device_id,
-        content=body.content,
+        content=body.content or "",
         device_name=body.device_name or "",
         app_version=body.app_version or "",
+        logs=[l.model_dump() for l in body.logs],
     )
-    return LogUploadResponse(code=0, message="上传成功", device_id=body.device_id)
+    return LogUploadResponse(
+        code=0,
+        message="上传成功",
+        device_id=body.device_id,
+        stored=len(entries),
+    )
 
 
 @router.get("/{device_id}", response_model=LogListResponse, dependencies=[Depends(require_admin)])
@@ -46,22 +52,39 @@ async def get_device_logs(
     request: Request,
     offset: int = 0,
     limit: int = 20,
+    level: str = "",
+    tag: str = "",
+    keyword: str = "",
 ) -> LogListResponse:
-    """读取某设备的日志（分页，由旧到新）。
+    """读取某设备的日志（按行分页，支持级别/标签/关键字过滤，由旧到新）。
 
-    ``limit=0`` 表示不分页、返回全部（兼容旧调用方）；默认 20 条/页。
+    ``limit=0`` 表示不分页、返回全部（兼容旧调用方）；默认 20 行/页。
     """
     store = _get_store(request)
     offset = max(0, offset)
     limit = max(0, limit)
-    total = store.count(device_id)
-    entries = store.list(device_id, offset=offset, limit=limit)
+    entries = store.list(
+        device_id,
+        offset=offset,
+        limit=limit,
+        level=level,
+        tag=tag,
+        keyword=keyword,
+    )
+    # total：带过滤条件的总行数（若无过滤，直接 count；有过滤则需按过滤条件统计）
+    if level or tag or keyword:
+        total = len(store.list(device_id, limit=0, level=level, tag=tag, keyword=keyword))
+    else:
+        total = store.count(device_id)
     logs = [
         LogEntryResponse(
             device_id=e.device_id,
             device_name=e.device_name,
             app_version=e.app_version,
-            content=e.content,
+            ts=e.ts,
+            level=e.level,
+            tag=e.tag,
+            message=e.message,
             created_at=e.created_at,
         )
         for e in entries

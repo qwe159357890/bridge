@@ -55,11 +55,29 @@ object DiagLog {
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
+    /** 结构化日志行缓冲（与 ring 同步维护，供 upload_log 按行上传）。 */
+    private val lineRing = ArrayDeque<LogLine>()
+
     /** 落盘目录（惰性初始化，需先 [init]）。 */
     private var logDir: File? = null
 
     /** 单线程文件写执行器（串行化磁盘 IO）。 */
     private var writer: ExecutorService? = null
+
+    /**
+     * 一行结构化日志（供 [dumpLines] 按行上传，服务端按行存储/去重/过滤）。
+     *
+     * @param ts 日志产生时间（epoch 毫秒）
+     * @param level 级别：I/W/E/D/V
+     * @param tag 模块标签，如 中继/音轨/解码/Bridge
+     * @param message 日志正文
+     */
+    data class LogLine(
+        val ts: Long,
+        val level: String,
+        val tag: String,
+        val message: String,
+    )
 
     /**
      * 初始化落盘：设置日志目录并启动异步写线程。
@@ -122,10 +140,14 @@ object DiagLog {
             "I" -> Log.i(TAG, "[$tag] $message")
             else -> Unit
         }
-        val line = "${timeFormat.format(Date())} [$level] [$tag] $message"
+        val now = Date()
+        val ts = now.time
+        val line = "${timeFormat.format(now)} [$level] [$tag] $message"
         synchronized(lock) {
             if (ring.size >= RING_CAPACITY) ring.removeFirst()
             ring.addLast(line)
+            if (lineRing.size >= RING_CAPACITY) lineRing.removeFirst()
+            lineRing.addLast(LogLine(ts, level, tag, message))
         }
         writeToFile(line)
     }
@@ -133,8 +155,14 @@ object DiagLog {
     /** 取内存缓冲全部行（由旧到新）。 */
     fun ringLines(): List<String> = synchronized(lock) { ArrayList(ring) }
 
+    /** 取结构化日志行（由旧到新），供 upload_log 按行上传。 */
+    fun dumpLines(): List<LogLine> = synchronized(lock) { ArrayList(lineRing) }
+
     /** 清空内存缓冲。 */
-    fun clear() = synchronized(lock) { ring.clear() }
+    fun clear() = synchronized(lock) {
+        ring.clear()
+        lineRing.clear()
+    }
 
     /**
      * 强制把待写日志刷到磁盘（同步，阻塞至队列排空）。
