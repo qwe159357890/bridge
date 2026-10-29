@@ -91,6 +91,9 @@ object CommandModule {
             Command.UPLOAD_LOG to CommandExecutor { command ->
                 executeUploadLog(context, deviceStore, apiClient, command)
             },
+            Command.CLEAR_LOG to CommandExecutor { command ->
+                executeClearLog(command)
+            },
         Command.PLAY_MUSIC to CommandExecutor { command ->
             executePlayMusic(context, deviceStore, apiClient, command)
         },
@@ -245,6 +248,20 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 upload_log 上传失败")
             CommandResult(command.commandId, command.command, false, "上传失败：${e.message}")
+        }
+    }
+
+    /** 执行 clear_log：清空设备端日志（内存缓冲 + 磁盘文件），配合管理后台「清除全部日志」。 */
+    private fun executeClearLog(command: Command): CommandResult {
+        return try {
+            val removed = DiagLog.clearAll()
+            CommandResult(
+                command.commandId, command.command, true,
+                "已清空设备端日志（内存缓冲 + $removed 个磁盘文件）",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 clear_log 执行失败")
+            CommandResult(command.commandId, command.command, false, "清理失败：${e.message}")
         }
     }
 

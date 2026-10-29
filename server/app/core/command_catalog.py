@@ -399,6 +399,9 @@ COMMANDS: list[dict[str, Any]] = [
 
     # ---- 系统类 ----
     _cmd("upload_log", "上传日志", "system", "📤", "让客户端自动上传诊断日志"),
+    _cmd("clear_log", "清除设备日志", "system", "🧹",
+         "清空客户端本地日志（内存缓冲 + 磁盘日志文件），配合管理后台「清除全部日志」"
+         "实现三端同步清除；仅在设备在线时有效，回执清理的磁盘文件数"),
     _cmd("check_update", "检查更新", "system", "🔎",
          "让客户端检查应用更新（服务器 updates 目录版，不依赖 GitHub）；"
          "开发者把最新 APK（文件名含版本号，如 bridge-v0.1.32.apk，可选配 update.json "

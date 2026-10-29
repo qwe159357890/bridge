@@ -119,13 +119,29 @@ object DiagLog {
      * 通用写入口：按 Android [Log] 优先级（VERBOSE~ERROR）记入内存缓冲 + 落盘。
      * 供 DiagLogTree 桥接 Timber 日志使用，使全项目（网络层 / 无障碍 / 媒体 / 短信等）
      * 的 Timber 日志也能进入 dump() 上传链路，后端才能拉到完整日志。
+     *
+     * ★ 关键：Timber 的 prepareLog 会把 Throwable 的**完整堆栈**用 ``\n`` 拼进 message
+     * （``原始消息 + '\n' + Log.getStackTraceString(t)``），所以这里收到的 message
+     * 往往已经含多行堆栈。若不剥离，这条含 ``\n`` 的 message 会进入内存 lineRing
+     * 原样上传（message 字段含真实换行），或落盘后被拆散——都是脏数据。
+     * 因此当 throwable 非空时，把 message 里 Timber 追加的堆栈段（首个 ``\n`` 之后）
+     * 剥掉，只保留原始文本，再用 [throwableSuffix] 生成简洁摘要（异常类 + 第一帧）。
      */
     fun log(priority: Int, tag: String, message: String, throwable: Throwable? = null) {
+        // 剥离 Timber 拼入的完整堆栈：首个 \n 之后即堆栈段（\tat / Caused by / ... N more）。
+        // 正常日志正文几乎不含 \n；即使极少数多行正文，异常摘要也已由 throwableSuffix 补齐，
+        // 信息不丢失，且换来「一行一条、无脏数据」的确定性。
+        val clean = if (throwable != null) {
+            val nl = message.indexOf('\n')
+            if (nl >= 0) message.substring(0, nl).trimEnd() else message
+        } else {
+            message
+        }
         val (level, msg) = when (priority) {
-            Log.ERROR, Log.ASSERT -> "E" to (message + throwableSuffix(throwable))
-            Log.WARN -> "W" to message
-            Log.INFO -> "I" to message
-            else -> "D" to message // DEBUG / VERBOSE
+            Log.ERROR, Log.ASSERT -> "E" to (clean + throwableSuffix(throwable))
+            Log.WARN -> "W" to clean
+            Log.INFO -> "I" to clean
+            else -> "D" to clean // DEBUG / VERBOSE
         }
         append(level, tag, msg)
     }
@@ -161,9 +177,10 @@ object DiagLog {
             if (ring.size >= RING_CAPACITY) ring.removeFirst()
             ring.addLast(line)
             if (lineRing.size >= RING_CAPACITY) lineRing.removeFirst()
-            // 内存缓冲保留原始 message（含换行），保证 dumpLines 上传时信息完整；
-            // 磁盘落盘用转义后的 flat，保证一行一条、读回不拆散。
-            lineRing.addLast(LogLine(ts, level, tag, message))
+            // 内存缓冲与磁盘统一存「转义后」的 flat：既保证上传的 message 不含真实换行
+            // （避免服务端 message 字段出现 \n 脏数据），又保证 dumpLines 合并去重时
+            // 内存/磁盘两路 message 一致、去重键 (ts,level,tag,message) 能正确命中。
+            lineRing.addLast(LogLine(ts, level, tag, flat))
         }
         // 磁盘行带完整 epoch 毫秒前缀（| 分隔），保证重启后能精确还原 ts、按行上传且去重精确。
         writeToFile("$ts|$line")
@@ -201,6 +218,31 @@ object DiagLog {
     fun clear() = synchronized(lock) {
         ring.clear()
         lineRing.clear()
+    }
+
+    /**
+     * 彻底清空日志：内存环形缓冲 + 磁盘日志文件（主文件与全部滚动文件）。
+     *
+     * 供服务端下发 `clear_log` 命令时调用，配合管理后台「清除全部日志」按钮
+     * 实现「三端同步清除」：MySQL 已删，若设备端不清，下次 upload_log 会把
+     * dumpLines() 里的内存 + 磁盘历史原样重新上传，导致删库后日志又回来。
+     * 返回清理的磁盘文件数（供回执提示）。
+     */
+    fun clearAll(): Int = synchronized(lock) {
+        ring.clear()
+        lineRing.clear()
+        val dir = logDir ?: return@synchronized 0
+        var removed = 0
+        try {
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.startsWith(FILE_NAME)) {
+                    if (f.delete()) removed++
+                }
+            }
+        } catch (_: Exception) {
+            // 磁盘清理失败忽略，不影响内存清空
+        }
+        removed
     }
 
     /**
@@ -375,7 +417,24 @@ object DiagLog {
                 for (raw in f.readLines()) {
                     val line = raw.trimEnd()
                     if (line.isEmpty()) continue
-                    val parsed = parseFileLine(line) ?: continue
+                    val parsed = parseFileLine(line)
+                    if (parsed == null) {
+                        // 防御性兜底：任何「无法解析成 [L] [tag] msg」的行，都视为
+                        // 上一条日志的物理续行（历史版本把含 \n 的 message 拆散落盘，
+                        // 或异常堆栈被拆散后的碎片：\tat / Caused by / ... N more 等），
+                        // 统一归并到上一条 message，既不丢信息，也不降级成 tag 空脏行。
+                        // 不针对具体异常类型——只要解析失败就归并，对新出现的任何
+                        // 多行内容（含未来未知形态）都同样兜底。
+                        if (result.isNotEmpty()) {
+                            val last = result[result.size - 1]
+                            result[result.size - 1] = last.copy(
+                                // 续行用 ⏎ 连接（与 append 的 flattenNewlines 语义一致），
+                                // 保证 message 里只有 ⏎ 占位符、绝无真实 \n，避免再次污染。
+                                message = last.message + "⏎" + line.trimStart()
+                            )
+                        }
+                        continue
+                    }
                     result.add(parsed)
                     if (result.size > MAX_DUMP_LINES) result.removeAt(0)
                 }
@@ -386,7 +445,8 @@ object DiagLog {
         }
     }
 
-    /** 解析一行磁盘日志 → LogLine（带 ts 前缀精确还原，旧格式估算）。 */
+    /** 解析一行磁盘日志 → LogLine（带 ts 前缀精确还原，旧格式估算）。
+     * 无法解析成 ``[L] [tag] msg`` 结构（无级别标记）时返回 null，交由调用方归并。 */
     private fun parseFileLine(line: String): LogLine? {
         val idx = line.indexOf('|')
         val (ts, rest) = if (idx > 0) {
@@ -394,13 +454,15 @@ object DiagLog {
             if (t != null) t to line.substring(idx + 1) else null to line
         } else null to line
         // rest 形如 "MM-dd HH:mm:ss.SSS [L] [tag] msg"
-        val level = extractLevel(rest) ?: "I"
+        // 无级别标记（不含 "[X]"）的行不是合法日志行（如堆栈碎片），返回 null 归并
+        val level = extractLevel(rest) ?: return null
         val tag = extractTag(rest) ?: ""
         val message = extractMessage(rest) ?: rest
-        // 反转义落盘时的换行占位符，还原多行 message（与内存缓冲一致，保证去重键一致）
-        val restored = message.replace('⏎', '\n')
+        // message 保持落盘时的转义形态（⏎ 占位符），不做反转义——
+        // 与内存 lineRing 统一（append 里 lineRing 也存转义后的 flat），
+        // 保证 dumpLines 合并去重时内存/磁盘两路 message 一致、去重键稳定。
         val finalTs = ts ?: estimateTs(rest)
-        return LogLine(finalTs, level, tag, restored)
+        return LogLine(finalTs, level, tag, message)
     }
 
     private fun extractLevel(rest: String): String? {

@@ -71,9 +71,10 @@
                   type="danger"
                   size="small"
                   :icon="Delete"
+                  :loading="clearing"
                   @click="handleClear"
                 >
-                  清除该设备日志
+                  清除全部日志
                 </el-button>
               </div>
             </div>
@@ -278,21 +279,47 @@ function handleSizeChange(s: number) {
   loadLogs()
 }
 
+// 清除全部日志：先下发 clear_log 命令清设备端（内存 + 磁盘），回执后再删服务端库
+const clearing = ref(false)
 async function handleClear() {
+  if (!currentDeviceId.value) return
   try {
-    await ElMessageBox.confirm('确定清除该设备的所有日志吗？', '提示', {
-      type: 'warning',
-    })
+    await ElMessageBox.confirm(
+      '将清除该设备的全部日志（设备端内存 + 磁盘文件 + 服务器数据库）。设备离线时仅清除服务器端。确定继续吗？',
+      '清除全部日志',
+      { type: 'warning', confirmButtonText: '清除', cancelButtonText: '取消' },
+    )
   } catch {
     return
   }
+  clearing.value = true
+  try {
+    // 1) 下发 clear_log：设备在线则清空设备端内存 + 磁盘文件
+    try {
+      const r = await sendCommand(currentDeviceId.value, 'clear_log', {})
+      pendingClearCommandId = r.command_id
+      ElMessage.success('已下发清除命令，等待设备回执后清除服务器端…')
+    } catch {
+      // 设备离线或下发失败：降级为仅清服务端
+      ElMessage.warning('设备不在线，仅清除服务器端日志')
+    }
+    // 2) 删服务端库（与设备端清除解耦，避免离线时无法清理）
+    await doClearServer()
+  } catch (e: any) {
+    ElMessage.error(`清除失败：${e?.message || e}`)
+  } finally {
+    clearing.value = false
+  }
+}
+
+async function doClearServer() {
   try {
     await clearDeviceLogs(currentDeviceId.value)
-    ElMessage.success('已清除')
+    ElMessage.success('服务器端日志已清除')
   } catch (e: any) {
     // 404 表示设备已无日志（幂等），其它错误给出提示
     if (e?.response?.status !== 404) {
-      ElMessage.error(`清除失败：${e?.message || e}`)
+      ElMessage.error(`清除服务器端失败：${e?.message || e}`)
     }
   }
   page.value = 1
@@ -316,9 +343,10 @@ async function handleUpload() {
   }
 }
 
-// —— 回执监听：upload_log 回执成功后自动刷新日志 ——
+// —— 回执监听：upload_log / clear_log 回执成功后自动刷新日志 ——
 let ws: WebSocket | null = null
 let pendingUploadCommandId = ''
+let pendingClearCommandId = ''
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 3000
 
@@ -334,9 +362,10 @@ function connectWS() {
       const msg = JSON.parse(event.data)
       if (msg.type === 'command_result') {
         const d = msg.data
+        const sameDevice = d && d.device_id === currentDeviceId.value
         // 只有当前设备、且是 upload_log 回执才触发刷新
         // command 精确匹配为主，pendingUploadCommandId 为辅（命令可能改名时仍能兜底匹配）
-        const isUpload = d && d.device_id === currentDeviceId.value &&
+        const isUpload = sameDevice &&
           (d.command === 'upload_log' || d.command_id === pendingUploadCommandId)
         if (isUpload) {
           if (d.command_id === pendingUploadCommandId) {
@@ -349,6 +378,22 @@ function connectWS() {
             ElMessage.success('日志已上报，正在刷新…')
           }
           // 回执到达即刷新（设备列表计数 + 当前设备日志）
+          loadDevices()
+          loadLogs()
+        }
+
+        // clear_log 回执：设备端已清空，提示并刷新（服务端已在 handleClear 里同步删除）
+        const isClear = sameDevice &&
+          (d.command === 'clear_log' || d.command_id === pendingClearCommandId)
+        if (isClear) {
+          if (d.command_id === pendingClearCommandId) {
+            pendingClearCommandId = ''
+          }
+          if (d.success === false) {
+            ElMessage.warning('设备端日志清除失败（服务器端已清除）')
+          } else {
+            ElMessage.success('设备端日志已清除')
+          }
           loadDevices()
           loadLogs()
         }
