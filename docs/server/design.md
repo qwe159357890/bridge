@@ -436,7 +436,19 @@ auth:
 
 ### 15.4 存储
 
-当前用内存字典实现（`DeviceRegistry`），接口与存储解耦，后续可替换为数据库/Redis 而无需改动调用方。
+设备 token 持久化到 MySQL（`core/device_token_store.py` 的 ``DeviceTokenStore``，
+表 ``device_tokens``），``DeviceRegistry`` 以内存 dict 作一级缓存、DB 为持久层：
+
+- **写穿透**：注册（`register`）/ 昵称更新（`update_name`）/ 删除（`remove`）/
+  活跃时间刷新（`authenticate` 成功）同步落库。
+- **读穿透**：`authenticate` 内存未命中时查 DB 并回填缓存。
+- **启动预热**：`registry.load_persisted()` 全量回填内存。
+- **降级容错**：MySQL 不可达时自动降级为纯内存模式（注册/鉴权照常，仅重启后设备需重新注册），
+  绝不拖垮鉴权主链路。
+
+这样服务重启后已注册设备 token 依然有效，杜绝「服务重启→内存注册表清空→客户端旧 token
+全部 4004 重连循环」的故障。客户端侧另有「4004 自动重注册」兜底（见 `docs/api/ws-client.md`
+第九节），覆盖 MySQL 故障等异常场景的双保险。
 
 ---
 

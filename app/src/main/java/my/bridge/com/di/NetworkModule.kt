@@ -86,6 +86,23 @@ object NetworkModule {
                     android.util.Log.w("NetworkModule", "注册设备失败（继续握手）：${e.message}")
                 }
             },
+            // 服务端以 4004（token 失效/未注册）拒绝连接时触发：主动清空旧 token 并
+            // 重新注册，成功则立即用新 token 重连（快速自愈），失败返回 false 走退避。
+            // 典型触发：服务端重启后内存注册表清空，本地旧 token 全部失效。
+            onAuthFailure = {
+                try {
+                    val deviceId = deviceStore.deviceId().also { identity.deviceId = it }
+                    val deviceName = deviceStore.deviceName().also { identity.deviceName = it }
+                    val token = apiClient.registerDevice(deviceId, deviceName)
+                    deviceStore.saveToken(token)
+                    identity.token = token
+                    android.util.Log.i("NetworkModule", "token 失效后自动重注册成功，立即重连")
+                    true
+                } catch (e: Exception) {
+                    android.util.Log.w("NetworkModule", "token 失效自动重注册失败：${e.message}")
+                    false
+                }
+            },
             listener = null,
             commandExecutors = commandExecutors,
         )

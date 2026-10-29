@@ -23,6 +23,7 @@ import okio.ByteString.Companion.toByteString
 import android.os.Process
 import android.os.SystemClock
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.pow
 import kotlin.random.Random
@@ -47,6 +48,10 @@ import kotlin.random.Random
  * @param uptimeSecondsProvider 进程运行时长提供者（秒，可为空，缺省用系统计算）
  * @param onBeforeHello 每次连接成功、发送 hello 之前调用的钩子（挂起）。用于「注册设备」
  *   确保服务端注册表与连接同步——服务端重启后注册表清空，重连时借此自动补注册。
+ * @param onAuthFailure 收到 close code=4004（unauthorized，token 失效）时调用的钩子（挂起）。
+ *   用于「token 失效后主动重新注册」——返回 true 表示已刷新 token，本轮连接会立即用新 token
+ *   重连；返回 false 表示重注册失败，按普通断线退避重连（下次 onBeforeHello 再尝试）。
+ *   服务端重启后内存注册表清空，旧 token 全部失效，靠此钩子显式自愈而非隐式依赖重连兜底。
  * @param listener 推送回调（可选）
  * @param commandExecutors 命令执行器表（command 名 -> 执行器）
  */
@@ -62,6 +67,7 @@ class BridgeWebSocketClient(
     /** 客户端版本号提供者（写入 hello，供服务端日志/后台展示；缺省为空）。 */
     private val appVersionProvider: () -> String? = { null },
     private val onBeforeHello: (suspend () -> Unit)? = null,
+    private val onAuthFailure: (suspend () -> Boolean)? = null,
     private val listener: WsMessageListener? = null,
     private val commandExecutors: Map<String, CommandExecutor> = emptyMap(),
 ) {
@@ -148,11 +154,31 @@ class BridgeWebSocketClient(
 
     /**
      * 连接主循环：连接 → 读消息直到断线 → 按退避重连。
+     *
+     * 若服务端以 4004（token 失效）拒绝，先执行 [onAuthFailure] 重新注册，
+     * 成功后立即用新 token 重连（不等待退避）；失败则按普通断线退避，交由
+     * 下次连接的 [onBeforeHello] 兜底再试。
      */
     private suspend fun connectLoop() {
         while (scope.isActive && !shouldStop) {
-            connectOnce()
+            val unauthorized = connectOnce()
             if (shouldStop) break
+
+            // token 失效：先重注册，成功则立即重连（本轮 backoff 置零，快速自愈）
+            if (unauthorized) {
+                val refreshed = try {
+                    onAuthFailure?.invoke() ?: false
+                } catch (e: Exception) {
+                    Timber.w(e, "token 失效重注册钩子异常（按普通断线退避）")
+                    false
+                }
+                if (refreshed) {
+                    reconnectAttempt = 0
+                    continue
+                }
+                // 重注册失败：退避后重连，onBeforeHello 会再次尝试注册
+                Timber.w("token 失效且自动重注册失败，退避后重试")
+            }
 
             // 指数退避 + 抖动
             val backoff = backoffDelay(reconnectAttempt)
@@ -165,14 +191,19 @@ class BridgeWebSocketClient(
 
     /**
      * 单次连接尝试：阻塞直到连接结束（onClosed / onFailure）。
+     *
+     * 返回值：服务端主动以鉴权失败（code=4004）关闭时为 true，其余为 false。
+     * 由 [connectLoop] 据此决定是否先执行「token 失效重注册」再重连。
      */
-    private suspend fun connectOnce() {
+    private suspend fun connectOnce(): Boolean {
         _state.value = WsConnectionState.CONNECTING
         // 新连接开始：先关闭握手信号，杜绝上一条连接残留的 true 让业务消息抢跑
         _handshakeReady.value = false
 
         val request = Request.Builder().url(ServerAddress.wsUrl()).build()
         val closed = CompletableDeferred<Unit>()
+        // 本次连接是否被服务端以「鉴权失败」拒绝（close code=4004）
+        val unauthorized = AtomicBoolean(false)
 
         val listenerImpl = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -199,6 +230,11 @@ class BridgeWebSocketClient(
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                // 服务端拒绝：4004 表示 token 失效（unauthorized），标记为鉴权失败
+                if (code == 4004) {
+                    unauthorized.set(true)
+                    Timber.w("鉴权失败：token 失效或未注册（close code=4004），将触发自动重注册")
+                }
                 webSocket.close(code, reason)
             }
 
@@ -217,6 +253,7 @@ class BridgeWebSocketClient(
         closed.await()
         this@BridgeWebSocketClient.webSocket = null
         pongSignal.getAndSet(null)?.complete(Unit)
+        return unauthorized.get()
     }
 
     /** 发送 hello 握手消息。 */

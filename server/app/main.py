@@ -25,6 +25,7 @@ from app.core.command_store import CommandStore
 from app.core.connection_manager import ConnectionManager
 from app.core.connection_event_store import build_connection_event_store
 from app.core.device_registry import DeviceRegistry
+from app.core.device_token_store import DeviceTokenStore
 from app.core.location_store import build_location_store
 from app.core.contacts_store import build_contacts_store
 from app.core.sms_store import build_sms_store
@@ -100,7 +101,17 @@ def create_app() -> FastAPI:
     manager = ConnectionManager(max_connections=settings.connection.max_connections)
     manager.set_replace_handler(_build_replace_handler())
 
-    registry = DeviceRegistry(token_ttl=settings.auth.token_ttl)
+    # 设备 token 持久层（MySQL）：重启后已注册设备 token 仍有效，
+    # 持久层不可达时 DeviceRegistry 自动降级为纯内存模式
+    device_token_store = DeviceTokenStore(
+        host=settings.locations.mysql.host,
+        port=settings.locations.mysql.port,
+        user=settings.locations.mysql.user,
+        password=settings.locations.mysql.password,
+        database=settings.locations.mysql.database,
+    )
+
+    registry = DeviceRegistry(token_ttl=settings.auth.token_ttl, store=device_token_store)
 
     log_store = build_log_store(
         settings.locations.mysql,
@@ -202,7 +213,9 @@ def create_app() -> FastAPI:
             media_store.connect()
             admin_token_store.connect()
             log_store.connect()
+            device_token_store.connect()
             admin_auth.load_persisted()  # 启动预热：持久层 token 回填内存缓存
+            registry.load_persisted()  # 启动预热：持久层设备 token 回填内存缓存
 
         try:
             await asyncio.get_event_loop().run_in_executor(None, _connect_all)
@@ -220,6 +233,7 @@ def create_app() -> FastAPI:
         media_store.close()
         admin_token_store.close()
         log_store.close()
+        device_token_store.close()
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)
