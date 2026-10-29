@@ -164,13 +164,45 @@ class RelayClient {
 
     fun isRunning(): Boolean = running
 
-    /** 强制重连：主动断开当前 WebSocket 并触发一次全新连接。 */
+    /** 上次强制重连的时间戳（防抖：合并切网络瞬间三路回调的密集触发）。 */
+    @Volatile
+    private var lastForceReconnectAt = 0L
+
+    /**
+     * 强制重连：主动断开当前 WebSocket 并触发一次全新连接。
+     *
+     * 关键修复（「切网络后偶发不重连」的竞态根因）：
+     * 切网络瞬间 onLost/onAvailable/onCapabilitiesChanged 三路回调会**密集并发触发**
+     * 多次 forceReconnect。旧实现不递增 generation、也不防抖，导致：
+     *   - 多个并发 connectOnce 竞相建立/关闭连接；
+     *   - 旧连接的 onOpen 已把 webSocket 赋值并发出了 hello，但 TCP 半死，
+     *     hello 实际未送达服务器，服务端收不到 hello 自然不登记、不发 ready；
+     *   - 手机端却以为「已连上」，进入空等 ready 的死态（服务器日志：手机连上
+     *     却无「已接入」记录，直到 13 秒后下一次真正重连才登记）。
+     * 修复：① 递增 generation 作废所有在途旧连接回调；② 500ms 防抖合并密集触发。
+     */
     @Synchronized
     fun forceReconnect() {
         if (!running) return
+        val now = System.currentTimeMillis()
+        // 防抖：500ms 内只执行一次真正的重连，合并切网络瞬间的密集触发。
+        if (now - lastForceReconnectAt < RelayProtocol.FORCE_RECONNECT_DEBOUNCE_MS) {
+            return
+        }
+        lastForceReconnectAt = now
         DiagLog.w("中继", "强制重连：丢弃当前管道与旧会话残留")
+        // 递增代次：作废所有在途旧连接的 onOpen/onMessage/onFailure/onClosed 回调，
+        // 避免「旧连接 onOpen 已赋值 webSocket + 发 hello，但 TCP 半死」的半死连接
+        // 污染新会话状态（这正是切网络后手机「已连上却收不到 ready」的根因）。
+        generation++
         closeWebSocket()
         closePipe()
+        // 打断旧 watchdog 线程的退避睡眠，让它立刻醒来、以新的 generation 重新开始
+        // 重连（否则 forceReconnect 想立即重连，watchdog 却还卡在退避 sleep 里，产生延迟）。
+        try {
+            retryThread?.interrupt()
+        } catch (e: Exception) {
+        }
         scheduleReconnect()
     }
 
@@ -364,17 +396,19 @@ class RelayClient {
             var attempt = 0
             var lastConnectAt = 0L
             // 常驻看门狗：只要未停止且允许重连，就持续保证「连上为止」。
-            // 退出条件只有 running=false / 代次变化 / autoReconnect=false，
+            // 退出条件只有 running=false / autoReconnect=false，
             // 绝不因「已重连 N 次」或「单次失败」而停止。
+            // 注意：被 interrupt（forceReconnect 主动打断退避睡眠）时不退出，
+            // 而是立即进入下一轮重连——interrupt 是「唤醒」而非「终止」。
             while (running && autoReconnect) {
-                val myGen = generation
                 // 已连上（webSocket != null）则等待，把控制权交还给连接生命周期；
                 // 连接断开（onFailure/onClosed 置空 webSocket）后会再次进入重连。
                 if (webSocket != null) {
                     try {
                         Thread.sleep(500)
                     } catch (e: InterruptedException) {
-                        break
+                        // 被 forceReconnect 唤醒：立即继续，重新评估连接状态
+                        continue
                     }
                     continue
                 }
@@ -385,9 +419,10 @@ class RelayClient {
                 try {
                     Thread.sleep(delay)
                 } catch (e: InterruptedException) {
-                    break
+                    // 被 forceReconnect 唤醒：跳过退避，立即进入本轮重连
+                    continue
                 }
-                if (!running || !autoReconnect || generation != myGen) break
+                if (!running || !autoReconnect) break
                 if (webSocket != null) continue
                 DiagLog.i("中继", "第 $attempt 次重连")
                 // 重连前重新上报设备在线状态：让中转服务器与 PC 端重新撮合，
@@ -405,7 +440,8 @@ class RelayClient {
                 try {
                     Thread.sleep(1000)
                 } catch (e: InterruptedException) {
-                    break
+                    // 被唤醒：立即进入下一轮评估
+                    continue
                 }
             }
         }, "BridgeRelayRetry").also { it.start() }

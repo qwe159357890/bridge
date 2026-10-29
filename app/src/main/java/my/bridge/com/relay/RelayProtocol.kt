@@ -53,6 +53,11 @@ object RelayProtocol {
     // 重连退避档位（毫秒），封顶 30 秒
     val BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 
+    // 强制重连防抖窗口（毫秒）：切网络瞬间 onLost/onAvailable/onCapabilitiesChanged
+    // 三路回调会密集并发触发 forceReconnect，此窗口内只执行一次真正重连，避免
+    // 并发建连/断连竞态留下「TCP 已连但 hello 未送达」的半死连接。
+    const val FORCE_RECONNECT_DEBOUNCE_MS = 500L
+
     /**
      * 构造一个完整帧（魔数 + 类型 + 长度 + 载荷）
      */
