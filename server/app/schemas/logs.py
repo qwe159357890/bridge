@@ -35,8 +35,10 @@ class LogEntryResponse(BaseModel):
 
 
 class LogListResponse(BaseModel):
-    """某设备日志列表响应。"""
+    """某设备日志列表响应（分页）。"""
 
     device_id: str
-    total: int
+    total: int = Field(default=0, description="该设备日志总条数")
+    offset: int = Field(default=0, description="当前页起始（0 起）")
+    limit: int = Field(default=0, description="每页条数（0 = 不分页，返回全部）")
     logs: list[LogEntryResponse] = Field(default_factory=list)

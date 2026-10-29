@@ -43,7 +43,11 @@ class BridgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // 日志：release 只保留 warn 以上
+        // 日志：先初始化落盘目录（files/logs/），再桥接 Timber → DiagLog 内存缓冲
+        // （release 也必须 plant，否则后端拉日志看不到网络层/无障碍/媒体等关键模块的日志）；
+        // debug 额外 plant DebugTree 刷 Logcat，便于本地开发。
+        my.bridge.com.core.common.DiagLog.init(this)
+        Timber.plant(DiagLogTree())
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
         }

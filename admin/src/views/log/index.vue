@@ -55,7 +55,7 @@
           <template v-if="currentDeviceId">
             <div class="toolbar">
               <span class="section-title">
-                {{ deviceNameOf(currentDeviceId) }} 的日志（{{ logs.length }} 条）
+                {{ deviceNameOf(currentDeviceId) }} 的日志（共 {{ total }} 条）
               </span>
               <div>
                 <el-button
@@ -72,7 +72,7 @@
             <div class="log-list">
               <div v-for="(log, i) in logs" :key="i" class="log-item">
                 <div class="log-meta">
-                  <span class="log-index">#{{ logs.length - i }}</span>
+                  <span class="log-index">#{{ total - (page - 1) * pageSize - i }}</span>
                   <span class="log-tag">v{{ log.app_version || '-' }}</span>
                   <span class="log-time">{{ formatTime(log.created_at) }}</span>
                   <el-button
@@ -91,6 +91,19 @@
                 v-if="logs.length === 0"
                 description="该设备暂无日志"
                 :image-size="60"
+              />
+
+              <el-pagination
+                v-if="total > pageSize"
+                class="log-pagination"
+                background
+                layout="total, sizes, prev, pager, next, jumper"
+                :total="total"
+                :page-sizes="[10, 20, 50, 100]"
+                :current-page="page"
+                :page-size="pageSize"
+                @current-change="handlePageChange"
+                @size-change="handleSizeChange"
               />
             </div>
           </template>
@@ -115,6 +128,10 @@ const devices = ref<LogDeviceSummary[]>([])
 const logs = ref<LogEntry[]>([])
 const currentDeviceId = ref('')
 const keyword = ref('')
+// 分页状态
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 const filteredDevices = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
@@ -148,12 +165,29 @@ async function loadDevices() {
 
 async function loadLogs() {
   if (!currentDeviceId.value) return
-  const res = await getDeviceLogs(currentDeviceId.value)
+  const res = await getDeviceLogs(
+    currentDeviceId.value,
+    (page.value - 1) * pageSize.value,
+    pageSize.value,
+  )
   logs.value = res.logs
+  total.value = res.total
 }
 
 function selectDevice(id: string) {
   currentDeviceId.value = id
+  page.value = 1
+  loadLogs()
+}
+
+function handlePageChange(p: number) {
+  page.value = p
+  loadLogs()
+}
+
+function handleSizeChange(s: number) {
+  pageSize.value = s
+  page.value = 1
   loadLogs()
 }
 
@@ -176,7 +210,9 @@ async function handleClear() {
   }
   await clearDeviceLogs(currentDeviceId.value)
   ElMessage.success('已清除')
+  page.value = 1
   loadDevices()
+  loadLogs()
 }
 
 onMounted(loadDevices)
@@ -312,5 +348,9 @@ onMounted(loadDevices)
   border-radius: 4px;
   max-height: 200px;
   overflow-y: auto;
+}
+.log-pagination {
+  margin-top: 16px;
+  justify-content: flex-end;
 }
 </style>

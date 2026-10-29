@@ -177,6 +177,26 @@ class ConnectionEventsConfig(BaseModel):
     )
 
 
+class LogsConfig(BaseModel):
+    """诊断日志持久化配置（2026-10-29 拍板 MySQL 表 + 保留天数 + 分页）。
+
+    清理策略：**保留天数为主、单设备条数为兜底**。
+    - retention_days：超龄日志按天定期清理（主策略，日志价值随时间衰减）；
+    - max_entries_per_device：单设备最多保留条数（兜底，防止极端场景 30 天内刷爆，
+      且保证分页可翻阅更多历史）。0 = 不限条数。
+    """
+
+    retention_days: int = Field(
+        default=30, ge=0, description="日志保留天数，超龄定期清理（0 = 永不清理）",
+    )
+    max_entries_per_device: int = Field(
+        default=2000, ge=0, description="单设备最多保留日志条数（兜底；0 = 不限）",
+    )
+    page_size: int = Field(
+        default=20, ge=1, le=200, description="管理后台日志分页每页条数",
+    )
+
+
 class LoggingConfig(BaseModel):
     """日志配置。"""
 
@@ -198,6 +218,7 @@ class Settings(BaseModel):
     updates: UpdatesConfig = UpdatesConfig()
     locations: LocationsConfig = LocationsConfig()
     connection_events: ConnectionEventsConfig = ConnectionEventsConfig()
+    logs: LogsConfig = LogsConfig()
     adb: AdbConfig = AdbConfig()
 
 

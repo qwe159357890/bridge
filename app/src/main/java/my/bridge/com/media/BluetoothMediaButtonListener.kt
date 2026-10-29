@@ -49,6 +49,10 @@ class BluetoothMediaButtonListener @Inject constructor(
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
 
+    // 复用同一个 Toast 实例：快速连按时 cancel 旧的再 setText+show，实现即时覆盖，
+    // 避免每次 makeText().show() 新建 Toast 被系统串行排队导致「延迟数秒才显示」。
+    private var toast: Toast? = null
+
     @Volatile
     private var started = false
 
@@ -225,7 +229,17 @@ class BluetoothMediaButtonListener @Inject constructor(
         }
         mainHandler.post {
             try {
-                Toast.makeText(ctx, "蓝牙按键：$action", Toast.LENGTH_SHORT).show()
+                val t = toast
+                if (t == null) {
+                    toast = Toast.makeText(ctx, "蓝牙按键：$action", Toast.LENGTH_SHORT)
+                    toast?.show()
+                } else {
+                    // 复用实例：先取消当前展示，再更新文案并立即重新展示，实现即时覆盖
+                    t.cancel()
+                    t.setText("蓝牙按键：$action")
+                    t.duration = Toast.LENGTH_SHORT
+                    t.show()
+                }
             } catch (e: Exception) {
                 Timber.w(e, "Toast 失败")
             }

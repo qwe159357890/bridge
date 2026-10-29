@@ -52,24 +52,25 @@ class CrashReporter(
     /** 采集崩溃日志并异步上报。 */
     private fun report(thread: Thread, throwable: Throwable) {
         try {
-            // 记录崩溃到诊断日志缓冲
+            // 记录崩溃到诊断日志缓冲，并尽力把内存日志刷到磁盘（崩溃瞬间历史不丢）
             DiagLog.e("Crash", "未捕获异常（线程 ${thread.name}）", throwable)
+            DiagLog.flushToFile()
 
             // 异步上报（独立线程，短阻塞等待尽量发出）
             scope.launch {
                 try {
                     val deviceId = deviceStore.deviceId()
                     val content = buildString {
-                        append(DiagLog.environment(context))
-                        append("\n===== 崩溃信息 =====\n")
+                        append("===== 崩溃信息 =====\n")
                         append("线程：").append(thread.name).append("\n")
                         append("异常：").append(throwable.javaClass.name).append(": ")
                             .append(throwable.message).append("\n")
                         throwable.stackTrace.forEach {
                             append("\tat ").append(it.toString()).append("\n")
                         }
-                        append("\n===== 最近日志 =====\n")
-                        DiagLog.ringLines().forEach { append(it).append("\n") }
+                        append("\n")
+                        // dump 内已含环境信息 + 内存缓冲 + 磁盘日志（跨进程历史）
+                        append(DiagLog.dump(context))
                     }
                     val deviceName = deviceStore.deviceName() ?: deviceId
                     val appVersion = DiagLog.appVersionName(context)

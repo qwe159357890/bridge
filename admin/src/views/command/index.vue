@@ -21,6 +21,15 @@
             >
               {{ musicStateText }}
             </el-tag>
+            <el-tag
+              v-if="form.deviceId && mediaButton"
+              type="primary"
+              size="small"
+              effect="dark"
+              class="music-tag"
+            >
+              🎧 {{ mediaButtonText }}
+            </el-tag>
             <el-button
               v-if="form.deviceId"
               :icon="Refresh"
@@ -535,6 +544,9 @@ const pendingCapture = computed<CommandRecord | null>(() => {
 
 const musicState = ref<MusicState | null>(null)
 
+// 蓝牙耳机媒体按键：最近一次按键（实时事件，非持久状态，仅展示最近动作）
+const mediaButton = ref<{ device_id: string; action: string; at: number } | null>(null)
+
 // 目标设备的 SIM 卡信息（get_sim_info 上报的快照）：选卡下拉按它动态渲染
 const deviceSims = ref<DeviceSim[]>([])
 const simSyncTime = ref('')
@@ -759,6 +771,13 @@ const musicTagType = computed(() => {
   }
 })
 
+const mediaButtonText = computed(() => {
+  const b = mediaButton.value
+  if (!b) return ''
+  const time = new Date(b.at).toLocaleTimeString('zh-CN', { hour12: false })
+  return `最近按键：${b.action}（${time}）`
+})
+
 /** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
 function isBlocked(cmd: CommandDef): boolean {
   const allowed = MUSIC_STATE_RULES[cmd.name]
@@ -826,6 +845,7 @@ watch(
     locationCard.value?.hide()
     volumeCard.value?.hide() // 音量卡片随设备切换关闭（新设备需重新获取）
     volumeSnapshot.value = null // 参数区实时音量同步失效（音量命令选中时自动重查）
+    mediaButton.value = null // 蓝牙按键标签随设备切换清空（新设备无按键历史）
     loadMusicState()
     loadDeviceSims() // 选卡下拉按新设备的实际卡动态渲染
   },
@@ -1177,6 +1197,13 @@ function connectWS() {
         // 实时音乐状态推送：仅更新当前目标设备
         if (msg.data.device_id === form.deviceId) {
           musicState.value = msg.data
+        }
+      } else if (msg.type === 'media_button') {
+        // 蓝牙耳机媒体按键：即时消息提示不限设备（任何设备来按键都提醒）；
+        // 状态标签仍跟随当前选中设备（标签就在设备选择栏旁）
+        ElMessage.info(`${deviceNameOf(msg.data.device_id)}：蓝牙按键「${msg.data.action}」`)
+        if (msg.data.device_id === form.deviceId) {
+          mediaButton.value = { ...msg.data, at: Date.now() }
         }
       } else if (msg.type === 'command_interaction') {
         // 弹窗点击回传等交互事件：刷新命令历史 + 轻提示

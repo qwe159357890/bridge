@@ -103,9 +103,12 @@ class OpusDecoder(
             if (inIndex >= 0) {
                 val inputBuffer = instance.getInputBuffer(inIndex)
                 if (inputBuffer != null) {
+                    // 防御：Opus 包若超过输入缓冲容量，截断放入（否则 put 抛
+                    // BufferOverflowException，某些 ROM 上甚至触发 native 崩溃）。
+                    val safeSize = size.coerceAtMost(inputBuffer.capacity())
                     inputBuffer.clear()
-                    inputBuffer.put(packet, 0, size)
-                    instance.queueInputBuffer(inIndex, 0, size, timestampUs, 0)
+                    inputBuffer.put(packet, 0, safeSize)
+                    instance.queueInputBuffer(inIndex, 0, safeSize, timestampUs, 0)
                     timestampUs += 20_000 // 每个 Opus 包约 20ms
                 } else {
                     instance.queueInputBuffer(inIndex, 0, 0, timestampUs, 0)
@@ -164,13 +167,23 @@ class OpusDecoder(
                     try {
                         val outputBuffer = instance.getOutputBuffer(outIndex)
                         if (outputBuffer != null && info.size > 0) {
-                            val pcm = ByteArray(info.size)
-                            outputBuffer.position(info.offset)
-                            outputBuffer.limit(info.offset + info.size)
-                            outputBuffer.get(pcm)
-                            framesOut++
-                            onPcm(pcm, info.size)
+                            // 防御：info 的 offset/size 来自解码器，异常时可能越界，
+                            // 越界 get 会抛 BufferUnderflowException（部分 ROM 上甚至 native 崩溃）。
+                            // 先钳制到缓冲容量内，再做防御性读取。
+                            val cap = outputBuffer.capacity()
+                            val off = info.offset.coerceIn(0, cap)
+                            val len = info.size.coerceAtMost(cap - off)
+                            if (len > 0) {
+                                val pcm = ByteArray(len)
+                                outputBuffer.position(off)
+                                outputBuffer.limit(off + len)
+                                outputBuffer.get(pcm)
+                                framesOut++
+                                onPcm(pcm, len)
+                            }
                         }
+                    } catch (e: Exception) {
+                        DiagLog.e("解码", "读取解码输出失败（忽略本块）：${describe(e)}", e)
                     } finally {
                         instance.releaseOutputBuffer(outIndex, false)
                     }

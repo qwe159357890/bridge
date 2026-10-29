@@ -70,6 +70,8 @@ export interface LogEntry {
 export interface LogListResponse {
   device_id: string
   total: number
+  offset: number
+  limit: number
   logs: LogEntry[]
 }
 

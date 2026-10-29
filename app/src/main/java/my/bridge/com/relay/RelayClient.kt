@@ -46,6 +46,7 @@ class RelayClient {
         fun onAudioData(size: Int)
     }
 
+    @Volatile
     var listener: Listener? = null
 
     // 连接参数（来自 RelayPrefs）
@@ -70,6 +71,10 @@ class RelayClient {
     private var autoReconnect = true
 
     private var httpClient: OkHttpClient? = null
+
+    // WebSocket 跨线程访问（OkHttp 回调线程赋值、pingThread 发送、主线程 stop 置空），
+    // 必须 volatile 保证可见性，否则 stop 后 ping 线程仍可能向已关闭的连接 send。
+    @Volatile
     private var webSocket: WebSocket? = null
 
     private var pingThread: Thread? = null

@@ -268,10 +268,12 @@ class AudioRelayService : Service() {
             relayThread = null
         }
         isServerRunning = true
-        // 真正开始接收：此时才挂前台通知（唯一挂通知入口），并切到「连接中」态
+        // 真正开始接收：此时才挂前台通知（唯一挂通知入口），并切到「连接中」态。
+        // 关键：必须调用 startForeground（而非 notify），否则 startForegroundService 启动后
+        // 未在时限内前台化，系统会抛 ForegroundServiceDidNotStartInTimeException 直接崩溃。
         relayState = RelayClient.State.CONNECTING
         stateListener?.onState(RelayClient.State.CONNECTING, "正在连接中转服务器")
-        refreshNotification(notificationTextFor(RelayClient.State.CONNECTING))
+        startForegroundCompat(buildNotification(notificationTextFor(RelayClient.State.CONNECTING)))
 
         // 从 RelayPrefs 读音量与自动重连开关
         currentVolume = RelayPrefs.volume(this)
@@ -462,11 +464,12 @@ class AudioRelayService : Service() {
             }
             // 只暂停并清空缓冲、不释放音轨；仅当本会话仍是最新代次才暂停
             if (myGeneration == sessionGeneration) {
-                try {
-                    val t = synchronized(this) { audioTrack }
-                    t?.pause()
-                    t?.flush()
-                } catch (e: Exception) { }
+                synchronized(this) {
+                    try {
+                        audioTrack?.pause()
+                        audioTrack?.flush()
+                    } catch (e: Exception) { }
+                }
             }
             val isLatest = myGeneration == sessionGeneration
             if (isLatest && isServerRunning) {
@@ -777,32 +780,36 @@ class AudioRelayService : Service() {
         if (!isServerRunning) return
         val alignedBytes = (length / inputFrameSize) * inputFrameSize
         if (alignedBytes <= 0) return
-        try {
-            // 写之前再次确认音轨仍在（防止与 stopRelay 的 releaseAudioTrack 竞态）
-            val activeTrack = synchronized(this) { audioTrack }
+        // 关键：write 必须与 releaseAudioTrack / ensureAudioTrack 的 release 在同一把锁内完成，
+        // 彻底消除「锁外 write 时音轨已被另一线程 release」的竞态窗口。这是 native 崩溃
+        // （对已释放音轨 write → SIGSEGV）的直接根因，部分 ROM（ColorOS 等）不会抛 Java
+        // 异常而是直接 native 崩溃，故必须用锁把「判等 + 状态检查 + write」原子化。
+        synchronized(this) {
+            val activeTrack = audioTrack
             if (activeTrack == null || activeTrack !== track) return
             if (activeTrack.state != AudioTrack.STATE_INITIALIZED) return
-            val writeMode = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
-                AudioTrack.WRITE_BLOCKING
-            } else {
-                AudioTrack.WRITE_NON_BLOCKING
+            // MODE_STREAM 必须用阻塞写：非阻塞写（WRITE_NON_BLOCKING）在缓冲满时会返回
+            // 部分写入/0，且与「已 release」的竞态更易触发 native 层异常。统一用阻塞写，
+            // 由 isServerRunning 守卫保证停止后尽快退出，不再依赖非阻塞的「立即返回」。
+            val writeMode = AudioTrack.WRITE_BLOCKING
+            try {
+                val result = if (outChannels == 2 && inputFrameSize == 4) {
+                    activeTrack.write(buffer, 0, alignedBytes, writeMode)
+                } else if (outChannels == 1 && inputFrameSize == 4) {
+                    val mono = convertStereoToMono(buffer, alignedBytes)
+                    activeTrack.write(mono, 0, mono.size, writeMode)
+                } else {
+                    activeTrack.write(buffer, 0, alignedBytes, writeMode)
+                }
+                if (result < 0) {
+                    DiagLog.w("音轨", "AudioTrack.write 返回错误码 $result（写入长度=$alignedBytes）")
+                }
+            } catch (e: IllegalStateException) {
+                // AudioTrack 已被 release，忽略（停止后正常现象）
+                DiagLog.w("音轨", "AudioTrack 已释放，跳过写入")
+            } catch (e: Exception) {
+                DiagLog.e("音轨", "AudioTrack 写入异常：${e.message}", e)
             }
-            val result = if (outChannels == 2 && inputFrameSize == 4) {
-                track.write(buffer, 0, alignedBytes, writeMode)
-            } else if (outChannels == 1 && inputFrameSize == 4) {
-                val mono = convertStereoToMono(buffer, alignedBytes)
-                track.write(mono, 0, mono.size, writeMode)
-            } else {
-                track.write(buffer, 0, alignedBytes, writeMode)
-            }
-            if (result < 0) {
-                DiagLog.w("音轨", "AudioTrack.write 返回错误码 $result（写入长度=$alignedBytes）")
-            }
-        } catch (e: IllegalStateException) {
-            // AudioTrack 已被 release，忽略（停止后正常现象）
-            DiagLog.w("音轨", "AudioTrack 已释放，跳过写入")
-        } catch (e: Exception) {
-            DiagLog.e("音轨", "AudioTrack 写入异常：${e.message}", e)
         }
     }
 
@@ -886,7 +893,10 @@ class AudioRelayService : Service() {
             val clamped = volume.coerceIn(0f, 1f)
             currentVolume = clamped
             RelayPrefs.setFloat(this, RelayPrefs.KEY_VOLUME, clamped)
-            audioTrack?.setVolume(clamped)
+            // 加锁访问，避免与 releaseAudioTrack 的 release 竞态（对已释放音轨 setVolume 同样危险）
+            synchronized(this) {
+                audioTrack?.setVolume(clamped)
+            }
             DiagLog.i("音轨", "中继音量已设为：$clamped")
         } catch (e: Exception) {
             DiagLog.e("音轨", "设置音量失败：${e.message}", e)

@@ -194,6 +194,25 @@ function notifyNewSms(data: any) {
   playBeep()
 }
 
+function notifyMediaButton(data: any) {
+  console.log('[Bridge] 收到蓝牙媒体按键事件:', data)
+  const actionMap: Record<string, string> = {
+    '播放': '播放',
+    '暂停': '暂停',
+    '下一首': '下一首',
+    '上一首': '上一首',
+    '停止': '停止',
+  }
+  const action = actionMap[data.action] || data.action || '未知'
+  ElNotification({
+    title: `蓝牙按键 · ${data.device_id}`,
+    message: `「${action}」`,
+    type: 'info',
+    duration: 3000,
+    position: 'top-right',
+  })
+}
+
 function connectWS() {
   const token = getToken()
   if (!token) {
@@ -215,6 +234,8 @@ function connectWS() {
       console.log('[Bridge] 管理 WS 收到事件:', msg.type)
       if (msg.type === 'new_sms') {
         notifyNewSms(msg.data)
+      } else if (msg.type === 'media_button') {
+        notifyMediaButton(msg.data)
       }
     } catch {
       console.warn('[Bridge] 管理 WS 消息解析失败:', event.data)

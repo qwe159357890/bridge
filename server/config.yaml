@@ -48,6 +48,11 @@ music:
 connection_events:
   retention_days: 90             # 设备上下线记录保留天数（MySQL 表，超龄自动清理；0=永不清理）
 
+logs:
+  retention_days: 30             # 设备诊断日志保留天数（MySQL 表，超龄自动清理；0=永不清理）
+  max_entries_per_device: 2000   # 单设备最多保留条数（兜底，防极端刷爆；0=不限；主策略是上面的按天清理）
+  page_size: 20                  # 管理后台日志查看每页条数（1~200）
+
 locations:
   mysql:
     host: "127.0.0.1"            # MySQL 主机（get_location 上报持久化）

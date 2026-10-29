@@ -41,10 +41,21 @@ async def upload_log(body: LogUploadRequest, request: Request) -> LogUploadRespo
 
 
 @router.get("/{device_id}", response_model=LogListResponse, dependencies=[Depends(require_admin)])
-async def get_device_logs(device_id: str, request: Request) -> LogListResponse:
-    """读取某设备的日志列表（由旧到新）。"""
+async def get_device_logs(
+    device_id: str,
+    request: Request,
+    offset: int = 0,
+    limit: int = 20,
+) -> LogListResponse:
+    """读取某设备的日志（分页，由旧到新）。
+
+    ``limit=0`` 表示不分页、返回全部（兼容旧调用方）；默认 20 条/页。
+    """
     store = _get_store(request)
-    entries = store.list(device_id)
+    offset = max(0, offset)
+    limit = max(0, limit)
+    total = store.count(device_id)
+    entries = store.list(device_id, offset=offset, limit=limit)
     logs = [
         LogEntryResponse(
             device_id=e.device_id,
@@ -55,7 +66,13 @@ async def get_device_logs(device_id: str, request: Request) -> LogListResponse:
         )
         for e in entries
     ]
-    return LogListResponse(device_id=device_id, total=len(logs), logs=logs)
+    return LogListResponse(
+        device_id=device_id,
+        total=total,
+        offset=offset,
+        limit=limit,
+        logs=logs,
+    )
 
 
 @router.get("", dependencies=[Depends(require_admin)])

@@ -31,7 +31,7 @@ from app.core.sms_store import build_sms_store
 from app.core.calllog_store import build_calllog_store
 from app.core.sim_store import build_sim_store
 from app.core.media_store import build_media_store
-from app.core.log_store import LogStore
+from app.core.log_store import LogStore, build_log_store
 from app.core.music_state_store import MusicStateStore
 from app.core.stream_hub import StreamHub
 from app.core.report_config_store import ReportConfigStore
@@ -102,7 +102,11 @@ def create_app() -> FastAPI:
 
     registry = DeviceRegistry(token_ttl=settings.auth.token_ttl)
 
-    log_store = LogStore()
+    log_store = build_log_store(
+        settings.locations.mysql,
+        settings.logs.retention_days,
+        settings.logs.max_entries_per_device,
+    )
 
     command_store = CommandStore()
 
@@ -197,6 +201,7 @@ def create_app() -> FastAPI:
             sim_store.connect()
             media_store.connect()
             admin_token_store.connect()
+            log_store.connect()
             admin_auth.load_persisted()  # 启动预热：持久层 token 回填内存缓存
 
         try:
@@ -214,6 +219,7 @@ def create_app() -> FastAPI:
         sim_store.close()
         media_store.close()
         admin_token_store.close()
+        log_store.close()
 
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)
