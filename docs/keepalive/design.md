@@ -142,3 +142,28 @@ startForegroundService 后**立即返回 false** → 任务结束、进程瞬间
 ①KeepAliveJobService.onStartJob 返回 true + 4s 后 jobFinished；
 ②KeepAliveReceiver.goAsync() + 4s 后 finish。广播/任务组件存活期间系统不冻结
 进程 → onCreate 在窗口内正常派发 → v0.1.99 的重试+stopSelf 防线照常生效。
+
+## 附录 5：服务运行中重复拉起未补挂前台（v0.2.01，2026-10-30）
+
+**v0.2.00 修复后仍崩溃 2 次**（20:06:50 / 20:07:38，dropbox 实锤 v0.2.00）。
+关键差异：`Frozen: false`，`Process-Runtime` 分别为 **936921ms（≈15.6 分钟）** 和
+38788ms——进程长活、未冻结，v0.2.00 修的冻结路径这次没参与。服务端日志库无
+「startForeground 失败」DiagLog → 不是挂前台失败，是**根本没调用**。
+
+**真根因（Android 12+ 语义）**：`startForegroundService()` 的前台化义务是
+**按次计**的——每次调用都要求一次对应的 `startForeground()`，**即使服务已在前台**。
+服务运行中再次被拉起时系统只派发 `onStartCommand`（`onCreate` 跳过），而旧
+`onStartCommand` 对普通 intent（兜底 Job 的 `KeepAliveService.start()`）不做任何事
+就返回——前台义务无人履行，~30s 超时崩溃。触发链实锤：
+`KeepAliveJobService.onStartJob → KeepAliveService.start()（KeepAliveService.kt:43）
+→ 义务悬空`。周期 Job 间隔（~15min）与首个崩溃的进程存活时长精确吻合。
+
+**修复（v0.2.01）**：`onStartCommand` 在 `promoted=true` 时无条件
+`promoteWithRetry()` 补挂前台（重复 `startForeground` 幂等，仅刷新通知）；顺带修
+`promoteAttempts` 成功后不归零的隐患（否则后续重试直接判「耗尽」误 stopSelf）。
+至此三类路径全覆盖：冷启动 onCreate 挂前台（v0.1.99 防线）、冻结窗口兜底
+（v0.2.00 保持处理中）、运行中重复拉起补挂（本附录）。
+
+**教训**：`startForegroundService` 不是「启动服务」，是「预约一次前台化义务」；
+运行中的服务被再次拉起时义务照样产生，`onCreate` 里的 `startForeground`
+覆盖不了这条路径。

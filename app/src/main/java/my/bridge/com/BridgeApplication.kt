@@ -35,10 +35,10 @@ class BridgeApplication : Application() {
     lateinit var musicStateReporter: my.bridge.com.media.MusicStateReporter
 
     @Inject
-    lateinit var bluetoothMediaButtonListener: my.bridge.com.media.BluetoothMediaButtonListener
+    lateinit var reportManager: my.bridge.com.report.ReportManager
 
     @Inject
-    lateinit var reportManager: my.bridge.com.report.ReportManager
+    lateinit var bluetoothMediaButtonListener: my.bridge.com.media.BluetoothMediaButtonListener
 
     override fun onCreate() {
         super.onCreate()
@@ -64,8 +64,8 @@ class BridgeApplication : Application() {
         // 音乐播放状态上报（状态变化 → WS message 通道 → 管理后台实时展示/按钮联动）
         musicStateReporter.start()
 
-        // 蓝牙耳机媒体按键监听（复用常驻保活语境，零额外功耗：只挂 MediaSession + 一次焦点，
-        // 无定时巡检）。按键 → Toast + WS 上报后台。
+        // 蓝牙耳机媒体按键监听（正常补获模式：其它媒体没在播时才持有焦点接按键，
+        // 有媒体开播即让位、停播自动补获，事件驱动零轮询）。按键 → Toast + WS 上报后台。
         my.bridge.com.media.BridgeApplicationContextHolder.init(this)
         bluetoothMediaButtonListener.start(this)
 

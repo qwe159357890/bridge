@@ -17,26 +17,27 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 蓝牙耳机媒体按键监听器（进程内单例）。
+ * 蓝牙耳机媒体按键监听器（进程内单例）——「正常补获」版。
  *
- * 目标：其它 App **不出声**时，Bridge 能稳定收到蓝牙耳机（AVRCP）的
+ * 目标：其它 App **没在播放**时，Bridge 能收到蓝牙耳机（AVRCP）的
  * 「播放/暂停/上一首/下一首」按键；收到后 Toast 提示 + 经 WS 上报后台。
  *
- * 功耗约束（关键）：**零额外功耗**。不引入任何定时巡检 / 轮询 / 后台线程——
- * 只做两件一次性动作：
- *   1. 创建并激活一个 MediaSession（setFlags + setPlaybackState + isActive=true）；
- *   2. 申请一次持久音频焦点（AUDIOFOCUS_GAIN）。
- * 焦点丢失只在系统回调（onAudioFocusChange）里被动重抢，绝不 abandonFocus、
- * 绝不起定时任务。这样常驻开销 ≈ 0（MediaSession 注册 + 一次焦点申请，
- * 无循环、无 wakeup）。
+ * 行为契约（v0.2.01 起，取代旧的「永久抢占」策略）：
+ * - **不抢占**：任何其它媒体开始播放 → 收到焦点丢失立即让位（abandonFocus），
+ *   绝不重抢；对方的播放和按键完全不受 Bridge 干扰。
+ * - **正常补获**：其它媒体停止后 → 自动恢复申请焦点，按键回到 Bridge。
+ * - 恢复时机由系统事件驱动（AudioPlaybackCallback 的 onPlaybackConfigChanged），
+ *   **零轮询、零定时器**，常驻开销 ≈ 0。
  *
- * 副作用（用户已确认接受）：申请 GAIN 持久焦点后，其它 App 播放音乐时会被
- * Bridge 「抢停/压低」（GAIN 焦点的平台行为）。这是「其它 App 不出声时能收到
- * 按键」的必然代价，二者不可兼得。
+ * 结构（两部分缺一不可）：
+ * 1. MediaSession：isActive=true + STATE_PLAYING 注册为按键路由候选
+ *    （按键永远路由给「持有焦点的 MediaSession」，且 PlaybackState 不得为
+ *    STATE_NONE，见 docs/keepalive/design.md 附录）；
+ * 2. 音频焦点：空闲期必须持有 GAIN 焦点；但持有策略从「丢了就抢」改为
+ *    「丢了就让、媒体停了再补」。
  *
- * 参考：docs/keepalive/design.md 附录「蓝牙耳机按键监听」的四条件结论——
- * 缺一不可：isActive=true / setPlaybackState(非 NONE) / 持久 GAIN 焦点 /
- * LOSS 重抢不 abandon。
+ * API 24/25 兜底：AudioPlaybackCallback 需 API 26，低版本仅在启动时检查一次
+ * isMusicActive（设备为老机型时按键恢复需重启进程，可接受）。
  */
 @Singleton
 class BluetoothMediaButtonListener @Inject constructor(
@@ -48,8 +49,13 @@ class BluetoothMediaButtonListener @Inject constructor(
     private var mediaSession: MediaSession? = null
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
+    private var playbackCallback: AudioManager.AudioPlaybackCallback? = null
 
-    // 复用同一个 Toast 实例：快速连按时 cancel 旧的再 setText+show，实现即时覆盖，
+    /** 当前是否持有焦点（由焦点回调维护，避免重复申请）。 */
+    @Volatile
+    private var holdsFocus = false
+
+    // 复用同一个 Toast 实例：快速连按时仅 setText+show 覆盖文案，
     // 避免每次 makeText().show() 新建 Toast 被系统串行排队导致「延迟数秒才显示」。
     private var toast: Toast? = null
 
@@ -69,16 +75,19 @@ class BluetoothMediaButtonListener @Inject constructor(
         val appContext = context.applicationContext
         mainHandler.post {
             try {
+                val am = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager = am
                 installMediaSession(appContext)
-                requestFocus(appContext)
-                Timber.i("蓝牙媒体按键监听已启动")
+                registerPlaybackObserver(am)
+                syncFocus("启动")
+                Timber.i("蓝牙媒体按键监听已启动（正常补获模式）")
             } catch (e: Exception) {
                 Timber.e(e, "蓝牙媒体按键监听启动失败")
             }
         }
     }
 
-    /** 释放 MediaSession 与焦点（进程退出时调用，幂等）。 */
+    /** 释放 MediaSession、焦点与播放监听（进程退出时调用，幂等）。 */
     fun stop() {
         if (!started) return
         started = false
@@ -90,6 +99,12 @@ class BluetoothMediaButtonListener @Inject constructor(
             } catch (e: Exception) {
                 Timber.w(e, "释放 MediaSession 失败")
             }
+            playbackCallback?.let { cb ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioManager?.unregisterAudioPlaybackCallback(cb)
+                }
+            }
+            playbackCallback = null
             abandonFocus()
             Timber.i("蓝牙媒体按键监听已停止")
         }
@@ -104,7 +119,7 @@ class BluetoothMediaButtonListener @Inject constructor(
                 override fun onSkipToPrevious() = onKey("上一首")
                 override fun onStop() = onKey("停止")
             })
-            // 必须声明处理媒体按键，否则按键永不路由过来（条件 1/2）
+            // 必须声明处理媒体按键，否则按键永不路由过来
             setFlags(
                 MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
                     MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
@@ -128,66 +143,121 @@ class BluetoothMediaButtonListener @Inject constructor(
         mediaSession = session
     }
 
-    private fun requestFocus(context: Context) {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager = am
-        // 持久 GAIN 焦点（条件 3）：瞬时焦点会在不实际出声时被系统秒收回。
-        // 用 USAGE_MEDIA + CONTENT_TYPE_MUSIC，与媒体按键语义一致。
+    /**
+     * 注册全局播放起停监听（事件驱动，零轮询）：
+     * 任意 App 的播放配置变化（开播/停播）都会回调 onPlaybackConfigChanged，
+     * 在回调里按 isMusicActive 现场判定「有没有媒体在出声」并补获/让位。
+     */
+    private fun registerPlaybackObserver(am: AudioManager) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            // API 24/25：无 AudioPlaybackCallback，仅启动时同步一次焦点状态
+            Timber.d("API<26，跳过播放监听注册（仅启动时补获一次）")
+            return
+        }
+        val callback = object : AudioManager.AudioPlaybackCallback() {
+            override fun onPlaybackConfigChanged(configs: MutableList<android.media.AudioPlaybackConfiguration>) {
+                // 判定用 isMusicActive 而非 configs：部分播放器暂停后仍残留配置条目，
+                // isMusicActive 反映「此刻是否真有声音输出」，语义更准。
+                val musicActive = try {
+                    am.isMusicActive
+                } catch (e: Exception) {
+                    Timber.w(e, "isMusicActive 查询失败")
+                    false
+                }
+                mainHandler.post {
+                    if (musicActive) {
+                        yieldFocus("其它媒体开播")
+                    } else {
+                        syncFocus("其它媒体停止")
+                    }
+                }
+            }
+        }
+        playbackCallback = callback
+        am.registerAudioPlaybackCallback(callback, mainHandler)
+    }
+
+    /**
+     * 按「此刻有没有媒体在出声」对齐焦点状态：
+     * - 没人在出声且未持焦点 → 补获（申请一次 GAIN）；
+     * - 有媒体在出声 → 让位（不应发生，让位逻辑在 yieldFocus）。
+     */
+    private fun syncFocus(reason: String) {
+        val am = audioManager ?: return
+        val musicActive = try {
+            am.isMusicActive
+        } catch (e: Exception) {
+            false
+        }
+        if (musicActive) {
+            yieldFocus(reason)
+            return
+        }
+        if (!holdsFocus) {
+            requestFocusOnce(am, reason)
+        }
+    }
+
+    /** 让位：主动放弃焦点，把按键路由权完全交还给正在播放的 App，绝不重抢。 */
+    private fun yieldFocus(reason: String) {
+        if (holdsFocus) {
+            abandonFocus()
+            Timber.i("音频焦点：$reason，让位不重抢")
+        }
+    }
+
+    /** 申请一次持久 GAIN 焦点（仅在空闲补获时调用；丢失后绝不在这里重抢）。 */
+    private fun requestFocusOnce(am: AudioManager, reason: String) {
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attrs)
-                .setOnAudioFocusChangeListener(::onFocusChange, mainHandler)
-                .build()
-            focusRequest = request
-            val result = am.requestAudioFocus(request)
-            Timber.i("申请音频焦点结果=$result")
-        } else {
-            @Suppress("DEPRECATION")
-            val result = am.requestAudioFocus(
-                ::onFocusChange,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN,
-            )
-            Timber.i("申请音频焦点结果=$result")
-        }
-    }
-
-    /** 焦点回调（条件 4）：遇 LOSS 立即重抢、绝不 abandonFocus。 */
-    private fun onFocusChange(change: Int) {
-        when (change) {
-            AudioManager.AUDIOFOCUS_GAIN -> Timber.d("音频焦点：获得")
-            AudioManager.AUDIOFOCUS_LOSS,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
-            -> {
-                // 被其它 App 抢走焦点：立即重新申请（不 abandon，保持竞争）
-                Timber.d("音频焦点：丢失($change)，立即重抢")
-                mainHandler.post { reacquireFocus() }
-            }
-            else -> Timber.d("音频焦点：其他状态($change)")
-        }
-    }
-
-    private fun reacquireFocus() {
-        val am = audioManager ?: return
-        val req = focusRequest
         try {
-            if (req != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                am.requestAudioFocus(req)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = focusRequest
+                    ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(attrs)
+                        .setOnAudioFocusChangeListener(::onFocusChange, mainHandler)
+                        .build()
+                        .also { focusRequest = it }
+                val result = am.requestAudioFocus(request)
+                holdsFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+                Timber.i("音频焦点补获（$reason）：result=$result holdsFocus=$holdsFocus")
             } else {
                 @Suppress("DEPRECATION")
-                am.requestAudioFocus(
+                val result = am.requestAudioFocus(
                     ::onFocusChange,
                     AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN,
                 )
+                holdsFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+                Timber.i("音频焦点补获（$reason）：result=$result holdsFocus=$holdsFocus")
             }
         } catch (e: Exception) {
-            Timber.w(e, "重抢焦点失败")
+            Timber.w(e, "音频焦点补获失败")
+        }
+    }
+
+    /**
+     * 焦点回调：任何形式的丢失都**只标记、只让位**，绝不重抢——
+     * 这是与旧「永久抢占」版本的核心区别。真正的恢复时机由
+     * AudioPlaybackCallback 在「其它媒体停止」时触发 syncFocus 补获。
+     */
+    private fun onFocusChange(change: Int) {
+        when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                holdsFocus = true
+                Timber.d("音频焦点：获得")
+            }
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
+            -> {
+                holdsFocus = false
+                mainHandler.post { abandonFocus() }
+                Timber.d("音频焦点：丢失($change)，让位不重抢")
+            }
+            else -> Timber.d("音频焦点：其他状态($change)")
         }
     }
 
@@ -203,15 +273,13 @@ class BluetoothMediaButtonListener @Inject constructor(
         } catch (e: Exception) {
             Timber.w(e, "释放焦点失败")
         }
-        audioManager = null
-        focusRequest = null
+        // 保留 focusRequest 对象以便后续补获复用；仅标记未持有
+        holdsFocus = false
     }
 
     private fun onKey(action: String) {
         // Toast 展示（主线程）
         try {
-            // 用 applicationContext 无法直接 Toast，需借助 Handler 与 Looper。
-            // 此处直接在主线程回调里 Toast 需要 Context，改为用全局 Application 上下文。
             toastAction(action)
         } catch (e: Exception) {
             Timber.w(e, "Toast 展示失败")

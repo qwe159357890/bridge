@@ -213,6 +213,34 @@ class MediaCaptureService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * 按当前 mode 挂前台（幂等，重复调用仅刷新通知）。
+     * 前台类型按模式选择：投屏类 MEDIA_PROJECTION，拍照/录像 CAMERA，录音 MICROPHONE。
+     * camera/microphone 类型 API 30 起才有，低于 30 用两参 startForeground
+     * （while-in-use 限制也是 30+ 才生效）。
+     *
+     * v0.2.01 防崩：startForeground 若抛异常（如 FGS 类型/权限校验失败）且不接住，
+     * 异常直接崩进程（v0.1.99 在 KeepAliveService/AudioRelayService 的同款教训）——
+     * 这里 catch 后 stopSelf 撤销本次 startForegroundService 义务。
+     */
+    private fun startForegroundForMode() {
+        val type = when (mode) {
+            MODE_PHOTO, MODE_VIDEO -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            MODE_AUDIO -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                startForeground(NOTIFICATION_ID, buildNotification(), type)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "采集服务挂前台失败，stopSelf 防崩（mode=%s）", mode)
+            stopSelf()
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
             // 系统重投递或异常启动：无任务则退出（会话保持态由 stopSelf 前的回调兜底）
@@ -231,6 +259,11 @@ class MediaCaptureService : Service() {
                     "设备正在执行其他采集任务（截屏/录屏/拍照/录像/录音互斥），请等当前任务回执后再下发",
                 ),
             )
+            // v0.2.01 防崩：本服务经 startForegroundService 拉起，前台化义务按次计——
+            // 并发拒绝路径同样履行义务（服务已在前台，重复 startForeground 幂等，
+            // 类型沿用当前在途任务的 mode），否则 ~30s 后 FGS 超时崩溃
+            // （见 docs/keepalive/design.md 附录 5）。
+            startForegroundForMode()
             return START_NOT_STICKY
         }
 
@@ -239,19 +272,7 @@ class MediaCaptureService : Service() {
         finished = false
         captureBusy = true
 
-        // 前台类型按模式选择：投屏类 MEDIA_PROJECTION，拍照/录像 CAMERA，录音 MICROPHONE。
-        // camera/microphone 类型 API 30 起才有，低于 30 用两参 startForeground
-        // （while-in-use 限制也是 30+ 才生效）
-        val type = when (mode) {
-            MODE_PHOTO, MODE_VIDEO -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            MODE_AUDIO -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startForeground(NOTIFICATION_ID, buildNotification(), type)
-        } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
-        }
+        startForegroundForMode()
 
         // 工作线程只在服务生命周期内创建一次（会话复用后服务常驻，多次采集共用）
         val h: Handler = handler ?: run {

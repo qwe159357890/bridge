@@ -79,7 +79,6 @@ class KeepAliveService : Service() {
     // 实际未成功 → 超时崩溃）。触发源均为后台兜底（JobScheduler/AlarmManager），
     // 免疫窗口在 startForeground() 时刻二次校验，存在竞态，所以偶发、难复现。
     private var promoted = false
-    private var pendingApply = false
     private var promoteAttempts = 0
     private var stopRequested = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -108,7 +107,7 @@ class KeepAliveService : Service() {
         }
         if (ok) {
             promoted = true
-            pendingApply = false
+            promoteAttempts = 0
             applyKeepAlive()
             return
         }
@@ -123,17 +122,18 @@ class KeepAliveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (stopRequested) return START_NOT_STICKY
-        if (intent?.action == ACTION_REFRESH) {
-            if (promoted) {
-                runCatching { doPromote() }.onFailure {
-                    DiagLog.e("KeepAliveService", "REFRESH 重新挂前台失败（服务已在前台，不影响运行）", it)
-                }
-                applyKeepAlive()
-            } else {
-                // onCreate 的重试还在进行：标记待应用，成功后统一 applyKeepAlive
-                pendingApply = true
-            }
+        if (promoted) {
+            // v0.2.01 关键修复：Android 12+ 要求**每一次** startForegroundService() 拉起
+            // 都必须有对应的一次 startForeground()——即使服务已经在前台。服务运行中
+            // onCreate 不会再次执行，兜底 Job/Receiver/REFRESH 重复拉起时若不在这里
+            // 补挂前台，约 30s 后必崩 ForegroundServiceDidNotStartInTimeException
+            // （v0.2.00 20:06:50/20:07:38 两次线上实锤：Frozen=false、进程存活
+            // 15.6min/39s，周期 Job onStartJob → start() → 前台义务无人履行）。
+            promoteWithRetry()
+            if (intent?.action == ACTION_REFRESH) applyKeepAlive()
         }
+        // promoted=false：onCreate 的 promoteWithRetry 重试链仍在进行，
+        // 成功后会统一挂前台并应用保活配置，这里无需动作
         return START_STICKY
     }
 

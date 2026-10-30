@@ -138,7 +138,13 @@ class AudioRelayService : Service() {
         /** 启动中继（startForegroundService）。 */
         fun start(context: Context) {
             val intent = Intent(context, AudioRelayService::class.java).apply { action = ACTION_START }
-            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+            try {
+                androidx.core.content.ContextCompat.startForegroundService(context, intent)
+            } catch (e: Exception) {
+                // Android 12+ 后台启动限制会抛 ForegroundServiceStartNotAllowedException，
+                // 不接住会直接崩进程（调用方 UI 层自行提示失败）
+                DiagLog.e("中继", "startForegroundService 启动失败", e)
+            }
         }
 
         /** 停止中继。 */
@@ -246,7 +252,16 @@ class AudioRelayService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                startRelay()
+                // v0.2.01 防崩：startForegroundService 的前台化义务按次计——运行中再次被
+                // startForegroundService 拉起（如中继已连时重复点「连接」）时 onCreate
+                // 不会执行，必须在这里补挂前台，否则 ~30s 后
+                // ForegroundServiceDidNotStartInTimeException 崩溃
+                // （同 KeepAliveService v0.2.01，见 docs/keepalive/design.md 附录 5）。
+                if (isServerRunning) {
+                    startForegroundCompat(buildNotification(notificationTextFor(relayState)))
+                } else {
+                    startRelay()
+                }
                 return START_NOT_STICKY
             }
         }
