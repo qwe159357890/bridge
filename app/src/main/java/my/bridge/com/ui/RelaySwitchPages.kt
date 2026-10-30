@@ -35,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -78,8 +79,9 @@ private val SwitchGray = Color(0xFF8A919F)
  * 智能控制页（主页「发现」Tab 改为「智能控制」）。
  *
  * 交互流程严格照 references/relay-control/src/main.ts 移植：
- * - 显示状态完全由 connected + device.online + statusCache 推导，无中间态；
- * - 点击开关只发 set + Toast「正在开启/关闭...」，UI 等设备上报 status 驱动刷新；
+ * - 真实开关状态仍完全由 connected + device.online + statusCache 推导；
+ * - 点击开关只发 set + Toast，UI 等设备上报 status 驱动刷新；另加命令确认层防止重复点击，
+ *   15 秒未确认自动查询，查询 10 秒仍无回应则显示「重试开启/关闭」；
  * - 窗格模式点击卡片 = 选中该设备并切回单卡模式；
  * - 设置保存后整体重连。
  */
@@ -188,13 +190,20 @@ fun RelaySwitchPage() {
                     gridItems(sorted, key = { it.id }) { device ->
                         val pio = RelaySwitchPrefs.pioForDevice(context, device.id)
                         val value = RelaySwitchState.pioValue(ui.statusCache[device.id], pio)
+                        val command = ui.pendingCommands[RelaySwitchState.commandKey(device.id, pio)]
                         PaneCard(
                             device = device,
                             value = value,
                             connected = ui.connected,
+                            pendingCommand = command,
                             onToggle = { isOn ->
-                                if (isOn) pendingCloseDevice = device
-                                else client.setRelay(device.id, pio, 0)
+                                if (command?.awaitingRetry == true) {
+                                    client.setRelay(device.id, pio, command.targetValue)
+                                } else if (isOn) {
+                                    pendingCloseDevice = device
+                                } else {
+                                    client.setRelay(device.id, pio, 0)
+                                }
                             },
                             // 对应 pane-card click：选中该设备并切回单卡模式
                             onSelect = {
@@ -213,6 +222,7 @@ fun RelaySwitchPage() {
                 ?: RelaySwitchState.Device(currentId, currentId, false)
             val pio = RelaySwitchPrefs.pioForDevice(context, currentId)
             val value = RelaySwitchState.pioValue(ui.statusCache[currentId], pio)
+            val command = ui.pendingCommands[RelaySwitchState.commandKey(currentId, pio)]
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -223,9 +233,15 @@ fun RelaySwitchPage() {
                     device = device,
                     value = value,
                     connected = ui.connected,
+                    pendingCommand = command,
                     onToggle = { isOn ->
-                        if (isOn) pendingCloseDevice = device
-                        else client.setRelay(device.id, pio, 0)
+                        if (command?.awaitingRetry == true) {
+                            client.setRelay(device.id, pio, command.targetValue)
+                        } else if (isOn) {
+                            pendingCloseDevice = device
+                        } else {
+                            client.setRelay(device.id, pio, 0)
+                        }
                     },
                 )
                 Text(
@@ -315,6 +331,8 @@ private fun DeviceCard(
     value: Int?,
     /** WS 是否已连接。 */
     connected: Boolean,
+    /** 当前端口的待确认命令；只影响按钮，不篡改真实状态徽章。 */
+    pendingCommand: RelaySwitchState.PendingCommand?,
     onToggle: (isOn: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -322,6 +340,8 @@ private fun DeviceCard(
     val phase = cardPhase(connected, device.online, value)
     val isOn = phase == CardPhase.ON
     val hasValue = phase == CardPhase.ON || phase == CardPhase.OFF
+    val awaitingConfirmation = pendingCommand != null && !pendingCommand.awaitingRetry
+    val retryCommand = pendingCommand?.takeIf { it.awaitingRetry }
 
     // 状态配色（与原项目一致：开启=绿，关闭=红，等待=灰）
     val ringColor = when (phase) {
@@ -390,36 +410,48 @@ private fun DeviceCard(
                 }
                 Spacer(Modifier.height(14.dp))
 
-                // 开关按钮（颜色=点击后要执行的动作：开启=红，关闭=绿；禁用=灰）
+                // 等待确认只禁用当前按钮；超时后按原目标显示「重试开启/关闭」。
                 Button(
                     onClick = { onToggle(isOn) },
-                    enabled = hasValue,
+                    enabled = retryCommand != null || (hasValue && !awaitingConfirmation),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(46.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = when (phase) {
-                            CardPhase.ON -> SwitchGreen
-                            CardPhase.OFF -> SwitchRed
+                        containerColor = when {
+                            awaitingConfirmation -> SwitchGray
+                            retryCommand != null -> if (retryCommand.targetValue == 0) SwitchRed else SwitchGreen
+                            phase == CardPhase.ON -> SwitchGreen
+                            phase == CardPhase.OFF -> SwitchRed
                             else -> SwitchGray
                         },
                     ),
                 ) {
-                    ActionBtnIcon(
-                        isOnline = device.online && connected,
-                        hasValue = hasValue,
-                        isOn = isOn,
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
+                    if (awaitingConfirmation) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        ActionBtnIcon(
+                            isOnline = device.online && connected,
+                            hasValue = hasValue,
+                            isOn = isOn,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        when (phase) {
-                            CardPhase.WAITING -> "等待连接"
-                            CardPhase.FETCHING -> "获取中…"
-                            CardPhase.ON -> "关闭设备"
-                            CardPhase.OFF -> "开启设备"
+                        when {
+                            awaitingConfirmation -> "等待确认…"
+                            retryCommand != null -> if (retryCommand.targetValue == 0) "重试开启" else "重试关闭"
+                            phase == CardPhase.WAITING -> "等待连接"
+                            phase == CardPhase.FETCHING -> "获取中…"
+                            phase == CardPhase.ON -> "关闭设备"
+                            else -> "开启设备"
                         },
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -438,6 +470,8 @@ private fun PaneCard(
     value: Int?,
     /** WS 是否已连接。 */
     connected: Boolean,
+    /** 当前端口的待确认命令；只影响按钮，不篡改真实状态徽章。 */
+    pendingCommand: RelaySwitchState.PendingCommand?,
     onToggle: (isOn: Boolean) -> Unit,
     onSelect: () -> Unit,
 ) {
@@ -446,6 +480,8 @@ private fun PaneCard(
     val phase = cardPhase(connected, device.online, value)
     val isOn = phase == CardPhase.ON
     val hasValue = phase == CardPhase.ON || phase == CardPhase.OFF
+    val awaitingConfirmation = pendingCommand != null && !pendingCommand.awaitingRetry
+    val retryCommand = pendingCommand?.takeIf { it.awaitingRetry }
 
     val ringColor = when (phase) {
         CardPhase.ON -> SwitchGreen
@@ -534,36 +570,48 @@ private fun PaneCard(
                 }
                 Spacer(Modifier.height(10.dp))
 
-                // 开关按钮（颜色=点击后要执行的动作：开启=红，关闭=绿；禁用=灰）
+                // 等待确认只禁用当前按钮；超时后按原目标重试，不经过状态反转。
                 Button(
                     onClick = { onToggle(isOn) },
-                    enabled = hasValue,
+                    enabled = retryCommand != null || (hasValue && !awaitingConfirmation),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(38.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = when (phase) {
-                            CardPhase.ON -> SwitchGreen
-                            CardPhase.OFF -> SwitchRed
+                        containerColor = when {
+                            awaitingConfirmation -> SwitchGray
+                            retryCommand != null -> if (retryCommand.targetValue == 0) SwitchRed else SwitchGreen
+                            phase == CardPhase.ON -> SwitchGreen
+                            phase == CardPhase.OFF -> SwitchRed
                             else -> SwitchGray
                         },
                     ),
                 ) {
-                    ActionBtnIcon(
-                        isOnline = device.online && connected,
-                        hasValue = hasValue,
-                        isOn = isOn,
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp),
-                    )
+                    if (awaitingConfirmation) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        ActionBtnIcon(
+                            isOnline = device.online && connected,
+                            hasValue = hasValue,
+                            isOn = isOn,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
                     Spacer(Modifier.width(5.dp))
                     Text(
-                        when (phase) {
-                            CardPhase.WAITING -> "等待"
-                            CardPhase.FETCHING -> "获取中"
-                            CardPhase.ON -> "关闭"
-                            CardPhase.OFF -> "开启"
+                        when {
+                            awaitingConfirmation -> "确认中…"
+                            retryCommand != null -> if (retryCommand.targetValue == 0) "重试开启" else "重试关闭"
+                            phase == CardPhase.WAITING -> "等待"
+                            phase == CardPhase.FETCHING -> "获取中"
+                            phase == CardPhase.ON -> "关闭"
+                            else -> "开启"
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,

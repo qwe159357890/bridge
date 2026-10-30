@@ -25,13 +25,13 @@ import java.util.concurrent.TimeUnit
  * | connectWebSocket()        | [connectOnce]                 |
  * | ws.onopen                 | onOpen：fetchDevices → 按模式 subscribe + get_status |
  * | handleServerMessage()     | [handleMessage]：status / device_online / device_offline / devices_list / error |
- * | sendRelayCommandForDevice | [setRelay]：只发 set + Toast，UI 等设备上报 status 驱动 |
+ * | sendRelayCommandForDevice | [setRelay]：发 set + Toast，UI 等设备上报 status 驱动 |
  * | togglePaneMode()          | [onPaneModeChanged]：窗格订阅全部；单设备退订其它 |
  * | pane-card click           | [onDeviceSelected]：选中设备并切单卡，退订其它 + 订阅当前 |
  * | scheduleReconnect()       | 固定 3 秒重连（RECONNECT_INTERVAL_MS） |
  *
- * 显示状态不在此层做中间态（无「执行中」/轮询/离线宽限）——
- * 完全由 RelaySwitchState 的 connected + online + statusCache 推导，与参考一致。
+ * 真实显示状态仍由 connected + online + statusCache 推导；额外增加轻量命令确认层：
+ * 防止重复点击、15 秒超时自动查询、10 秒查询无回应后允许按原目标重试。
  */
 class RelaySwitchClient {
 
@@ -56,6 +56,12 @@ class RelaySwitchClient {
 
     /** 当前挂起的重连定时任务（对应参考的 reconnectTimer），null 表示无。 */
     private var pendingReconnect: Runnable? = null
+
+    /** 命令序号：让旧命令的延迟超时任务无法影响新命令。 */
+    private var commandSequence = 0L
+
+    @Synchronized
+    private fun nextCommandId(): Long = ++commandSequence
 
     // ------------------------------------------------------------------
     // 生命周期（对应 initApp / disconnectWebSocket）
@@ -91,6 +97,7 @@ class RelaySwitchClient {
         cancelReconnect()
         closeWebSocket()
         httpClient = null
+        RelaySwitchState.clearAllCommands()
         RelaySwitchState.setConnected(false)
         DiagLog.i("智能控制", "继电器客户端已停止")
     }
@@ -142,8 +149,8 @@ class RelaySwitchClient {
     /**
      * 设置继电器（对应 sendRelayCommandForDevice）。
      *
-     * value：0=开，1=关。**只发 set 并 Toast 提示，不本地改状态**——
-     * UI 最终由设备执行后上报的 status 广播驱动刷新（与参考完全一致）。
+     * value：0=开，1=关。不本地修改真实开关状态；仅登记命令确认状态：
+     * 等待期间禁用对应按钮，收到真实 status 后恢复并刷新 UI。
      */
     fun setRelay(deviceId: String, pio: Int, value: Int) {
         // 对应参考的 ws.readyState === WebSocket.OPEN 判断
@@ -151,14 +158,50 @@ class RelaySwitchClient {
             RelaySwitchState.toast("未连接到服务器")
             return
         }
-        send(JSONObject().apply {
+        val command = RelaySwitchState.PendingCommand(
+            commandId = nextCommandId(),
+            deviceId = deviceId,
+            pio = pio,
+            targetValue = value,
+        )
+        RelaySwitchState.beginCommand(command)
+        val sent = send(JSONObject().apply {
             put("type", RelaySwitchProtocol.TYPE_SET)
             put("device_id", deviceId)
             put("pio", pio)
             put("value", value)
         })
-        DiagLog.i("智能控制", "setRelay device=$deviceId pio=$pio value=$value")
+        if (!sent) {
+            RelaySwitchState.discardCommand(command.commandId)
+            RelaySwitchState.toast("命令发送失败，请重试")
+            DiagLog.w("智能控制", "set 发送失败 device=$deviceId pio=$pio value=$value")
+            return
+        }
+        DiagLog.i(
+            "智能控制",
+            "setRelay id=${command.commandId} device=$deviceId pio=$pio value=$value sent=true",
+        )
         RelaySwitchState.toast(if (value == 0) "正在开启..." else "正在关闭...")
+        scheduleCommandTimeout(deviceId, pio, command.commandId)
+    }
+
+    /**
+     * 15 秒未收到真实状态则自动查询一次；再给查询 10 秒覆盖设备休眠唤醒。
+     * 仍无回应才进入「待重试」，重试会按原 targetValue 重发绝对 set，不会误反转。
+     */
+    private fun scheduleCommandTimeout(deviceId: String, pio: Int, commandId: Long) {
+        mainHandler.postDelayed({
+            if (!RelaySwitchState.isCommandWaiting(commandId)) return@postDelayed
+            if (webSocket == null || !RelaySwitchState.state.connected) return@postDelayed
+            DiagLog.w("智能控制", "命令确认超时，自动查询 id=$commandId device=$deviceId pio=$pio")
+            sendGetStatus(deviceId)
+            mainHandler.postDelayed({
+                if (RelaySwitchState.markAwaitingRetry(commandId)) {
+                    DiagLog.w("智能控制", "查询后仍未确认，允许重试 id=$commandId device=$deviceId pio=$pio")
+                    RelaySwitchState.toast("状态未确认，请重试")
+                }
+            }, RelaySwitchProtocol.STATUS_QUERY_TIMEOUT_MS)
+        }, RelaySwitchProtocol.COMMAND_CONFIRM_TIMEOUT_MS)
     }
 
     /** 手动刷新当前设备状态（对应设置弹窗的「刷新」按钮 refresh-status）。 */
@@ -276,6 +319,7 @@ class RelaySwitchClient {
                 DiagLog.e("智能控制", "连接异常：${t.message}", t)
                 webSocket = null
                 // 照 ws.onclose：setConnected(false)，UI 随即显示「等待连接」
+                RelaySwitchState.clearAllCommands()
                 RelaySwitchState.setConnected(false)
                 scheduleReconnect(context)
             }
@@ -284,6 +328,7 @@ class RelaySwitchClient {
                 if (isStale()) return
                 DiagLog.i("智能控制", "连接已关闭：code=$code reason=$reason")
                 webSocket = null
+                RelaySwitchState.clearAllCommands()
                 RelaySwitchState.setConnected(false)
                 if (!intentionalClose) scheduleReconnect(context)
             }
@@ -358,6 +403,7 @@ class RelaySwitchClient {
                     val map = mutableMapOf<String, Int>()
                     statusData.keys().forEach { key -> map[key] = statusData.optInt(key) }
                     RelaySwitchState.updateStatus(deviceId, map)
+                    RelaySwitchState.confirmStatus(deviceId, map.keys)
                     DiagLog.i("智能控制", "收到 status device=$deviceId data=$map")
                 }
                 // 对应 case 'device_online'

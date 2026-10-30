@@ -34,6 +34,12 @@ object RelaySwitchProtocol {
     /** 断线重连间隔（毫秒，参考 .env 的 VITE_RECONNECT_INTERVAL=3000，固定间隔不重避）。 */
     const val RECONNECT_INTERVAL_MS = 3_000L
 
+    /** set 后等待设备真实 status 的最长时间；超时自动补发一次 get_status。 */
+    const val COMMAND_CONFIRM_TIMEOUT_MS = 15_000L
+
+    /** 超时查询的等待窗口；覆盖休眠设备被唤醒后回报所需时间。 */
+    const val STATUS_QUERY_TIMEOUT_MS = 10_000L
+
     /**
      * OkHttp 协议层 ping 间隔（秒）。
      *
