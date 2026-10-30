@@ -14,9 +14,10 @@ import java.util.concurrent.Executors
 /**
  * 快递扫码本地存储（v1 纯本地闭环，服务端通道下一版接入）。
  *
- * 设计（照调研文档 §5.5 / §6.6）：
- * - 会话以「自然日」为一等键（yyyy-MM-dd），每天一个，自动命名「10月30日 出库单」；
- * - 跨天自动切会话：addRecord 时发现今天没有会话就自动创建（0 点分界不会串单）；
+ * 设计（照调研文档 §5.5 / §6.6，v0.1.95 修订）：
+ * - 会话一等键 = UUID（id），支持自由增删改/重命名；date 仅作创建日期分组与「今日会话」判定；
+ * - 扫码自动落「今日最新会话」，不存在则自动创建（默认名 defaultName(date)）；
+ * - 跨天自动切会话：0 点分界后 date 变化，自动建新会话不会串单；
  * - 全局已见值集合（value → 首见日期）支撑「全局去重」策略，O(1) 判重；
  * - 持久化 = filesDir/scan/scan_sessions.json（Gson），保存走单线程后台执行器。
  */
@@ -67,6 +68,8 @@ object ScanStore {
                     seen = data?.seen ?: emptyMap()
                 }
             }.onFailure { Timber.tag(TAG).e(it, "读取扫码存档失败") }
+            // 旧档迁移：v0.1.94 会话无 id，用 date 补齐为一等键
+            sessions = sessions.map { s -> if (s.id.isNullOrBlank()) s.copy(id = s.date) else s }
             nextId = (sessions.maxOfOrNull { s -> s.records.maxOfOrNull { it.id } ?: 0L } ?: 0L) + 1
             loaded = true
             publish()
@@ -74,7 +77,7 @@ object ScanStore {
     }
 
     // ------------------------------------------------------------------
-    // 日期与会话
+    // 日期与会话（v0.1.95：会话自由增删改，id 为一等键）
     // ------------------------------------------------------------------
 
     private val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -82,34 +85,60 @@ object ScanStore {
     /** 今天的一等键（yyyy-MM-dd）。 */
     fun todayKey(): String = dateFmt.format(Date())
 
-    /** 会话显示名：「10月30日 出库单」。 */
-    fun displayName(date: String): String = runCatching {
+    /** 会话默认名：「10月30日」（v0.1.95 起：创建弹窗默认文本，可编辑，不带「出库单」后缀）。 */
+    fun defaultName(date: String): String = runCatching {
         val parts = date.split("-")
-        "${parts[1].toInt()}月${parts[2].toInt()}日 出库单"
-    }.getOrDefault("$date 出库单")
+        "${parts[1].toInt()}月${parts[2].toInt()}日"
+    }.getOrDefault(date)
 
-    /** 今日会话（不存在返回 null，不自动创建；自动创建只在落库时刻发生）。 */
-    fun todaySession(): ScanSession? = synchronized(lock) {
-        sessions.find { it.date == todayKey() }
+    /** 今日会话列表（可能多个，按创建时间倒序，最新在前）。 */
+    fun todaySessions(): List<ScanSession> = synchronized(lock) {
+        sessions.filter { it.date == todayKey() }.sortedByDescending { it.createdAt }
     }
 
-    /** 手动创建今日会话（跨天提示卡的「创建今日出库单」按钮）。已存在则原样返回。 */
-    fun createTodaySession(context: Context): ScanSession = synchronized(lock) {
+    /** 今日最新会话（不存在返回 null，不自动创建；自动创建只在落库时刻发生）。 */
+    fun todaySession(): ScanSession? = todaySessions().firstOrNull()
+
+    fun sessionById(id: String): ScanSession? = synchronized(lock) {
+        sessions.find { it.key == id }
+    }
+
+    /**
+     * 创建会话（跨天提示 / 会话管理页「新建」入口）。
+     * @param date 创建日期，默认今天（历史补录场景可传过去日期）。
+     */
+    fun createSession(context: Context, name: String, date: String = todayKey()): ScanSession = synchronized(lock) {
         ensureLoaded(context)
-        val today = todayKey()
-        sessions.find { it.date == today } ?: run {
-            val created = ScanSession(
-                date = today,
-                name = displayName(today),
-                createdAt = System.currentTimeMillis(),
-                records = emptyList(),
-            )
-            sessions = sessions + created
-            Timber.tag(TAG).i("创建今日会话 %s", today)
-            persistAsync(context)
-            publish()
-            created
-        }
+        val created = ScanSession(
+            id = java.util.UUID.randomUUID().toString(),
+            date = date,
+            name = name.ifBlank { defaultName(date) },
+            createdAt = System.currentTimeMillis(),
+            records = emptyList(),
+        )
+        sessions = sessions + created
+        Timber.tag(TAG).i("创建会话 %s（%s）", created.name, date)
+        persistAsync(context)
+        publish()
+        created
+    }
+
+    /** 重命名会话。 */
+    fun renameSession(context: Context, id: String, newName: String) = synchronized(lock) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return@synchronized
+        sessions = sessions.map { if (it.key == id) it.copy(name = trimmed) else it }
+        persistAsync(context)
+        publish()
+    }
+
+    /** 删除会话（按 id），并按剩余记录重建全局已见集合。 */
+    fun deleteSessionById(context: Context, id: String) = synchronized(lock) {
+        sessions = sessions.filter { it.key != id }
+        rebuildSeen()
+        persistAsync(context)
+        publish()
+        Timber.tag(TAG).i("删除会话 %s", id)
     }
 
     // ------------------------------------------------------------------
@@ -143,7 +172,8 @@ object ScanStore {
     }
 
     /**
-     * 入库：自动落今天的会话（跨天 0 点分界自动切单），写全局已见集合，异步持久化。
+     * 入库：自动落「今日最新会话」（跨天 0 点分界自动切单），写全局已见集合，异步持久化。
+     * 今日无会话时自动创建（默认名「10月30日」）。
      * @param force true = 用户在「询问」弹窗点了接受。
      */
     fun addRecord(
@@ -155,8 +185,14 @@ object ScanStore {
     ): ScanRecord? = synchronized(lock) {
         ensureLoaded(context)
         val today = todayKey()
-        val session = sessions.find { it.date == today } ?: run {
-            val created = ScanSession(today, displayName(today), System.currentTimeMillis(), emptyList())
+        val session = sessions.filter { it.date == today }.maxByOrNull { it.createdAt } ?: run {
+            val created = ScanSession(
+                id = java.util.UUID.randomUUID().toString(),
+                date = today,
+                name = defaultName(today),
+                createdAt = System.currentTimeMillis(),
+                records = emptyList(),
+            )
             sessions = sessions + created
             created
         }
@@ -173,7 +209,7 @@ object ScanStore {
             manual = manual,
         )
         sessions = sessions.map {
-            if (it.date == today) it.copy(records = it.records + record) else it
+            if (it.key == session.key) it.copy(records = it.records + record) else it
         }
         seen = seen + (value to today)
         if (seen.size > MAX_SEEN) {
@@ -188,17 +224,34 @@ object ScanStore {
     }
 
     /** 清空指定会话的记录（保留会话本身），并按剩余记录重建全局已见集合。 */
-    fun clearSession(context: Context, date: String) = synchronized(lock) {
-        sessions = sessions.map { if (it.date == date) it.copy(records = emptyList()) else it }
+    fun clearSession(context: Context, id: String) = synchronized(lock) {
+        sessions = sessions.map { if (it.key == id) it.copy(records = emptyList()) else it }
         rebuildSeen()
         persistAsync(context)
         publish()
-        Timber.tag(TAG).i("清空会话 %s", date)
+        Timber.tag(TAG).i("清空会话 %s", id)
     }
 
-    /** 删除整个会话（历史清理用）。 */
-    fun deleteSession(context: Context, date: String) = synchronized(lock) {
-        sessions = sessions.filter { it.date != date }
+    /** 修改单条记录的单号（记录级编辑），同步全局已见集合。 */
+    fun updateRecord(context: Context, sessionId: String, recordId: Long, newValue: String) = synchronized(lock) {
+        val trimmed = newValue.trim()
+        if (trimmed.isEmpty()) return@synchronized
+        sessions = sessions.map { s ->
+            if (s.key != sessionId) s
+            else s.copy(records = s.records.map { if (it.id == recordId) it.copy(value = trimmed) else it })
+        }
+        rebuildSeen()
+        persistAsync(context)
+        publish()
+        Timber.tag(TAG).i("编辑记录 %d → %s", recordId, trimmed)
+    }
+
+    /** 删除单条记录，并按剩余记录重建全局已见集合。 */
+    fun deleteRecord(context: Context, sessionId: String, recordId: Long) = synchronized(lock) {
+        sessions = sessions.map { s ->
+            if (s.key != sessionId) s
+            else s.copy(records = s.records.filter { it.id != recordId })
+        }
         rebuildSeen()
         persistAsync(context)
         publish()
@@ -213,9 +266,9 @@ object ScanStore {
     // CSV 导出（照参考项目 ScanModel.ToCSV 语义：单号,码制,时间,来源）
     // ------------------------------------------------------------------
 
-    fun exportCsv(context: Context, date: String): String? = synchronized(lock) {
+    fun exportCsv(context: Context, id: String): String? = synchronized(lock) {
         ensureLoaded(context)
-        val session = sessions.find { it.date == date } ?: return null
+        val session = sessions.find { it.key == id } ?: return null
         if (session.records.isEmpty()) return null
         val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         buildString {

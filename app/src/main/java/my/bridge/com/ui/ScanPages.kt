@@ -1,10 +1,13 @@
 package my.bridge.com.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -56,6 +59,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -90,12 +95,16 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import my.bridge.com.R
 import my.bridge.com.scanner.DedupStrategy
 import my.bridge.com.scanner.ScanAnalyzer
 import my.bridge.com.scanner.ScanFormats
 import my.bridge.com.scanner.ScanPrefs
+import my.bridge.com.scanner.ScanRecord
+import my.bridge.com.scanner.ScanSession
 import my.bridge.com.scanner.ScanState
 import my.bridge.com.scanner.ScanStore
+import my.bridge.com.scanner.key
 import timber.log.Timber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -118,13 +127,13 @@ private enum class ScanView {
     /** 跨天提示（今天还没有会话）。 */
     CROSS_DAY,
 
-    /** 会话选择页（设置里关了「自动进入今日会话」）。 */
+    /** 会话管理（全部会话增删改 + 进入扫码）。 */
     CHOOSER,
 
     /** 扫码主界面。 */
     SCANNER,
 
-    /** 会话记录列表（打开指定日期）。 */
+    /** 会话记录列表（按会话 id 打开）。 */
     SESSION_LIST,
 }
 
@@ -137,29 +146,33 @@ private enum class ScanMode(val label: String) {
 /**
  * 快递扫码页（主页第 4 个 Tab「快递扫码」，智能控制之后）。
  *
- * v1 纯本地闭环：相机识别 → 本地按日会话存储 → CSV 导出（服务端通道下一版接入）。
- * 生命周期照智能控制纪律：进入绑定相机，onDispose 全部释放。
+ * v1 纯本地闭环：相机识别 → 本地会话存储 → CSV 导出（服务端通道下一版接入）。
+ * v0.1.95：入口设置（会话列表/直接扫码）、会话自由增删改、记录级编辑删除、
+ * 同码冷却节流、相机按需启停（单次扫完/手动输入/离开页面即释放）。
  */
 @Composable
 fun ScanPage() {
     val context = LocalContext.current
     val ui = ScanState.state
 
-    // 首次组合时同步读档并决定初始视图（§5.5 场景 A/B）
+    // 首次组合时同步读档并决定初始视图：
+    // 入口设置=会话列表 → 会话管理；否则今日有会话 → 直接扫码，无 → 跨天创建提示。
     var view by remember {
         mutableStateOf(
             run {
                 ScanStore.ensureLoaded(context)
-                val today = ScanStore.todaySession()
                 when {
-                    today == null -> ScanView.CROSS_DAY
-                    ScanPrefs.autoEnterToday(context) -> ScanView.SCANNER
-                    else -> ScanView.CHOOSER
+                    ScanPrefs.entryMode(context) == ScanPrefs.ENTRY_LIST -> ScanView.CHOOSER
+                    ScanStore.todaySession() != null -> ScanView.SCANNER
+                    else -> ScanView.CROSS_DAY
                 }
             }
         )
     }
-    var listDate by remember { mutableStateOf(ScanStore.todayKey()) }
+    var listSessionId by remember { mutableStateOf("") }
+
+    // 提示音预热（SoundPool 解码异步，进页面就加载避免首扫无声）
+    LaunchedEffect(Unit) { ScanFeedback.init(context) }
 
     // 跨天监听：页面停留期间跨过 0 点 → 下次入库自动切新会话，此处在扫码页顶部
     // 显示的会话名需要跟着变。用一个轻量定时刷新 todayKey 即可。
@@ -174,28 +187,28 @@ fun ScanPage() {
     when (view) {
         ScanView.CROSS_DAY -> ScanCrossDayPage(
             todayTick = todayTick,
-            onCreateToday = { ScanStore.createTodaySession(context); view = ScanView.SCANNER },
+            onCreateToday = { view = ScanView.SCANNER },
             onOpenHistory = {
-                listDate = ScanStore.todayKey()
-                view = ScanView.SESSION_LIST
+                listSessionId = ScanStore.todaySession()?.key ?: ""
+                view = ScanView.CHOOSER
             },
-            onOpenDate = { listDate = it; view = ScanView.SESSION_LIST },
+            onOpenSession = { listSessionId = it; view = ScanView.SESSION_LIST },
         )
         ScanView.CHOOSER -> ScanChooserPage(
             todayTick = todayTick,
-            onEnterToday = { view = ScanView.SCANNER },
-            onOpenDate = { listDate = it; view = ScanView.SESSION_LIST },
+            onEnterScan = { view = ScanView.SCANNER },
+            onOpenSession = { listSessionId = it; view = ScanView.SESSION_LIST },
         )
         ScanView.SCANNER -> ScanCameraPage(
             todayTick = todayTick,
-            onOpenList = {
-                listDate = ScanStore.todayKey()
+            onOpenManager = { view = ScanView.CHOOSER },
+            onOpenRecords = { id ->
+                listSessionId = id
                 view = ScanView.SESSION_LIST
             },
-            onOpenChooser = { view = ScanView.CHOOSER },
         )
         ScanView.SESSION_LIST -> ScanSessionListPage(
-            date = listDate,
+            sessionId = listSessionId,
             todayTick = todayTick,
             onBack = {
                 view = if (ScanStore.todaySession() != null) ScanView.SCANNER else ScanView.CROSS_DAY
@@ -214,11 +227,14 @@ private fun ScanCrossDayPage(
     todayTick: Long,
     onCreateToday: () -> Unit,
     onOpenHistory: () -> Unit,
-    onOpenDate: (String) -> Unit,
+    onOpenSession: (String) -> Unit,
 ) {
+    val context = LocalContext.current
     val ui = ScanState.state
     val today = ScanStore.todayKey()
     val history = ui.sessions.filter { it.date != today }
+    var showCreate by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -243,22 +259,22 @@ private fun ScanCrossDayPage(
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text(
-                            "今天是 ${ScanStore.displayName(today).removeSuffix(" 出库单")}",
+                            "今天是 ${ScanStore.defaultName(today)}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                         )
-                        Text("还没有今日出库单", color = ScanSub, fontSize = 13.sp)
+                        Text("还没有今日会话", color = ScanSub, fontSize = 13.sp)
                     }
                 }
                 Spacer(Modifier.height(20.dp))
                 Button(
-                    onClick = onCreateToday,
+                    onClick = { showCreate = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(44.dp),
                     shape = RoundedCornerShape(22.dp),
                 ) {
-                    Text("创建今日出库单", fontWeight = FontWeight.SemiBold)
+                    Text("创建今日会话", fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.height(10.dp))
                 Button(
@@ -280,86 +296,235 @@ private fun ScanCrossDayPage(
             Spacer(Modifier.height(20.dp))
             Text("历史会话", color = ScanSub, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
-            HistorySessionList(history, onOpenDate, Modifier.weight(1f))
+            SessionManageRows(
+                sessions = history,
+                todayTag = false,
+                onOpen = onOpenSession,
+                modifier = Modifier.weight(1f),
+            )
         }
         @Suppress("UNUSED_EXPRESSION") todayTick
     }
+
+    // 创建弹窗：默认文本「10月30日」，可编辑，确认后创建
+    if (showCreate) {
+        ScanTextInputDialog(
+            title = "创建今日会话",
+            initial = ScanStore.defaultName(today),
+            confirmLabel = "创建",
+            onConfirm = { name ->
+                ScanStore.createSession(context, name)
+                showCreate = false
+                onCreateToday()
+            },
+            onDismiss = { showCreate = false },
+        )
+    }
 }
 
-// ============ 会话选择页（场景 A 关） ============
+// ============ 会话管理页（选择会话 + 自由增删改） ============
 
 @Composable
 private fun ScanChooserPage(
     todayTick: Long,
-    onEnterToday: () -> Unit,
-    onOpenDate: (String) -> Unit,
+    onEnterScan: () -> Unit,
+    onOpenSession: (String) -> Unit,
 ) {
+    val context = LocalContext.current
     val ui = ScanState.state
     val today = ScanStore.todayKey()
+    var showCreate by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
     ) {
         Spacer(Modifier.height(12.dp))
-        Text("选择会话", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text("会话管理", fontWeight = FontWeight.Bold, fontSize = 18.sp)
         Spacer(Modifier.height(12.dp))
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onEnterToday() },
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = ScanBrand.copy(alpha = 0.08f)),
-        ) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(ScanStore.displayName(today), fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "今日会话 · ${ui.sessions.find { it.date == today }?.records?.size ?: 0} 条",
-                        color = ScanSub, fontSize = 12.sp,
-                    )
-                }
-                Text("进入 ›", color = ScanBrand, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row {
+            Button(
+                onClick = onEnterScan,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp),
+                shape = RoundedCornerShape(21.dp),
+            ) {
+                Text("进入扫码", fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { showCreate = true },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp),
+                shape = RoundedCornerShape(21.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = ScanBrand,
+                ),
+            ) {
+                Text("＋ 新建会话", fontWeight = FontWeight.SemiBold)
             }
         }
-        Spacer(Modifier.height(16.dp))
-        val history = ui.sessions.filter { it.date != today }
-        if (history.isNotEmpty()) {
-            Text("历史会话", color = ScanSub, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            HistorySessionList(history, onOpenDate, Modifier.weight(1f))
+        Spacer(Modifier.height(14.dp))
+        if (ui.sessions.isEmpty()) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Text("还没有会话，点「新建会话」开始", color = ScanSub)
+            }
+        } else {
+            SessionManageRows(
+                sessions = ui.sessions,
+                todayTag = true,
+                onOpen = onOpenSession,
+                modifier = Modifier.weight(1f),
+            )
         }
         @Suppress("UNUSED_EXPRESSION") todayTick
     }
+
+    if (showCreate) {
+        ScanTextInputDialog(
+            title = "新建会话",
+            initial = ScanStore.defaultName(today),
+            confirmLabel = "创建",
+            onConfirm = { name ->
+                ScanStore.createSession(context, name)
+                showCreate = false
+            },
+            onDismiss = { showCreate = false },
+        )
+    }
 }
 
-/** 历史会话列表（只读，点击查看记录）。 */
+/** 会话行列表：点击查看记录，行尾菜单（重命名 / 删除）。 */
 @Composable
-private fun HistorySessionList(
-    history: List<my.bridge.com.scanner.ScanSession>,
-    onOpenDate: (String) -> Unit,
+private fun SessionManageRows(
+    sessions: List<ScanSession>,
+    todayTag: Boolean,
+    onOpen: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val today = ScanStore.todayKey()
+    var renameTarget by remember { mutableStateOf<ScanSession?>(null) }
+    var deleteTarget by remember { mutableStateOf<ScanSession?>(null) }
+
     LazyColumn(modifier = modifier) {
-        items(history, key = { it.date }) { session ->
+        items(sessions, key = { it.key }) { session ->
+            var menuOpen by remember { mutableStateOf(false) }
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
-                    .clickable { onOpenDate(session.date) },
+                    .clickable { onOpen(session.key) },
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(session.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Text("${session.records.size} 条", color = ScanSub, fontSize = 12.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (todayTag && session.date == today) {
+                                Text(
+                                    "今日",
+                                    fontSize = 10.sp,
+                                    color = ScanBrand,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(ScanBrand.copy(alpha = 0.10f))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(session.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Text(
+                            "${session.date} · ${session.records.size} 条",
+                            color = ScanSub, fontSize = 12.sp,
+                        )
                     }
-                    Text("›", color = ScanSub, fontSize = 16.sp)
+                    Box {
+                        Text(
+                            "⋮",
+                            fontSize = 18.sp,
+                            color = ScanSub,
+                            modifier = Modifier
+                                .clickable { menuOpen = true }
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                        )
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("重命名") },
+                                onClick = { menuOpen = false; renameTarget = session },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除", color = ScanOrange) },
+                                onClick = { menuOpen = false; deleteTarget = session },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
+
+    renameTarget?.let { target ->
+        ScanTextInputDialog(
+            title = "重命名会话",
+            initial = target.name,
+            onConfirm = { name ->
+                ScanStore.renameSession(context, target.key, name)
+                renameTarget = null
+            },
+            onDismiss = { renameTarget = null },
+        )
+    }
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除会话？") },
+            text = { Text("将删除「${target.name}」及其全部 ${target.records.size} 条记录，不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    ScanStore.deleteSessionById(context, target.key)
+                    deleteTarget = null
+                }) { Text("删除", color = ScanOrange) }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } },
+        )
+    }
+}
+
+/** 通用文本输入弹窗（创建会话 / 重命名 / 编辑单号共用）。 */
+@Composable
+private fun ScanTextInputDialog(
+    title: String,
+    initial: String,
+    confirmLabel: String = "确定",
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                label = { Text("名称") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(text.trim()) },
+                enabled = text.isNotBlank(),
+            ) { Text(confirmLabel) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 // ============ 扫码主界面 ============
@@ -368,8 +533,8 @@ private fun HistorySessionList(
 @Composable
 private fun ScanCameraPage(
     todayTick: Long,
-    onOpenList: () -> Unit,
-    onOpenChooser: () -> Unit,
+    onOpenManager: () -> Unit,
+    onOpenRecords: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -392,8 +557,12 @@ private fun ScanCameraPage(
     var torchOn by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showManual by remember { mutableStateOf(false) }
-    // 单次模式：确认一条后暂停分析器，等用户点「继续扫描」
+    // 相机启停总开关（v0.1.95）：单次扫完一条 / 打开手动输入 → 关相机省电；
+    // 再点「单次/连续」chip 或「继续扫描」才重新绑定。
+    var cameraActive by remember { mutableStateOf(true) }
     var singlePaused by remember { mutableStateOf(false) }
+    // 手动输入弹窗打开前的相机状态，关闭时恢复
+    var manualPrevActive by remember { mutableStateOf(false) }
 
     // 最近一次确认的结果（成功卡 / 重复提示卡共用）
     var lastValue by remember { mutableStateOf<String?>(null) }
@@ -406,6 +575,10 @@ private fun ScanCameraPage(
     var askFormat by remember { mutableStateOf<String?>(null) }
     // 清空确认弹窗
     var confirmClear by remember { mutableStateOf(false) }
+
+    // 同码冷却（v0.1.95）：同一单号处理过后 N 毫秒内再次识别 → 完全静默忽略。
+    // 先于去重策略执行、对所有策略生效——堵住「对准一个包裹连续弹窗/连续入库」。
+    val cooldownMap = remember { HashMap<String, Long>() }
 
     // 识别处理器的最新引用：分析器在绑定时创建（捕获旧闭包会读到过期 mode），
     // 因此分析器只持有 handlerRef，每次重组由 SideEffect 刷新指向最新 lambda。
@@ -424,16 +597,32 @@ private fun ScanCameraPage(
         onDispose { view.keepScreenOn = false }
     }
 
+    // 页面级兜底释放（离开 Tab 时）：手电筒关 + 分析器释放 + 线程池关停（v0.1.95 排查项）
     DisposableEffect(Unit) {
         onDispose {
+            runCatching { camera?.cameraControl?.enableTorch(false) }
             analyzerRef.value?.release()
             analyzerRef.value = null
             analysisExecutor.shutdown()
         }
     }
 
-    // 识别确认 → 业务处理（判重 / 入库 / 反馈）。analyzer 回调在主线程。
-    val handleBarcode: (String, String, Boolean) -> Unit = { value, format, manual ->
+    // 识别确认 → 业务处理（冷却节流 → 判重 → 入库 / 反馈）。analyzer 回调在主线程。
+    val handleBarcode: (String, String, Boolean) -> Unit = handler@{ value, format, manual ->
+        val now = System.currentTimeMillis()
+        // —— 同码冷却窗口：静默忽略，不弹窗 / 不响音 / 不提示（手动输入豁免） ——
+        if (!manual) {
+            val lastHandled = cooldownMap[value]
+            if (lastHandled != null && now - lastHandled < ScanPrefs.cooldownMs(context)) {
+                Timber.tag("快递扫码").d("冷却窗口内忽略重复识别 %s", value)
+                return@handler
+            }
+        }
+        cooldownMap[value] = now
+        if (cooldownMap.size > 64) {
+            cooldownMap.entries.removeAll { now - it.value > 60_000 }
+        }
+
         val session = ScanStore.todaySession()
         val lastRecord = session?.records?.lastOrNull()?.value
         when (val decision = ScanStore.evaluate(context, value, lastRecord)) {
@@ -448,10 +637,11 @@ private fun ScanCameraPage(
                     lastFormat = if (manual) ScanFormats.display(ScanFormats.MANUAL)
                     else ScanFormats.display(format)
                     lastIsDuplicate = false
-                    lastAt = System.currentTimeMillis()
-                    ScanFeedback.beepAndVibrate(context)
+                    lastAt = now
+                    ScanFeedback.success(context)
                     if (mode == ScanMode.SINGLE) {
-                        analyzerRef.value?.paused = true
+                        // 单次模式：扫完一条立即停相机（unbind 全部用例，取景框隐藏）
+                        cameraActive = false
                         singlePaused = true
                     }
                 }
@@ -460,13 +650,15 @@ private fun ScanCameraPage(
                 lastValue = value
                 lastFormat = ScanFormats.display(if (manual) ScanFormats.MANUAL else format)
                 lastIsDuplicate = true
-                lastAt = System.currentTimeMillis()
+                lastAt = now
+                ScanFeedback.duplicate(context)
                 ScanFeedback.toast(context, decision.reason)
             }
             ScanStore.Decision.Ask -> {
                 lastValue = value
                 lastFormat = ScanFormats.display(if (manual) ScanFormats.MANUAL else format)
                 lastIsDuplicate = true
+                ScanFeedback.duplicate(context)
                 askValue = value
                 askFormat = format
             }
@@ -475,7 +667,8 @@ private fun ScanCameraPage(
     SideEffect { handlerRef.value = handleBarcode }
 
     val today = ScanStore.todayKey()
-    val session = ui.sessions.find { it.date == today }
+    val session = ui.sessions.find { it.date == today && it.records.isNotEmpty() }
+        ?: ui.sessions.find { it.date == today }
 
     Column(
         modifier = Modifier
@@ -485,20 +678,29 @@ private fun ScanCameraPage(
         // 会话头
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(ScanStore.displayName(today), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(
+                    session?.name ?: ScanStore.defaultName(today),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                )
                 Text(
                     "${mode.label}模式 · ${session?.records?.size ?: 0} 条",
                     color = ScanSub, fontSize = 12.sp,
                 )
             }
-            TextButton(onClick = onOpenChooser) { Text("切换", color = ScanBrand) }
-            TextButton(onClick = onOpenList) { Text("记录", color = ScanBrand) }
+            TextButton(onClick = onOpenManager) { Text("会话", color = ScanBrand) }
+            TextButton(
+                onClick = {
+                    val id = session?.key
+                    if (id != null) onOpenRecords(id) else ScanFeedback.toast(context, "今日还没有会话记录")
+                },
+            ) { Text("记录", color = ScanBrand) }
         }
         @Suppress("UNUSED_EXPRESSION") todayTick
 
         Spacer(Modifier.height(8.dp))
 
-        // 相机取景区 + 取景框
+        // 相机取景区 + 取景框（cameraActive=false 时整体不参与组合 → 相机自动 unbind 释放）
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -506,7 +708,21 @@ private fun ScanCameraPage(
                 .clip(RoundedCornerShape(16.dp))
                 .background(ScanDark),
         ) {
-            if (hasCam) {
+            if (!hasCam) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("需要相机权限才能扫码", color = Color.White, fontSize = 15.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                        Text("授予权限")
+                    }
+                }
+            } else if (cameraActive) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
@@ -519,7 +735,7 @@ private fun ScanCameraPage(
                 )
                 // 相机绑定（bindKey 变化时重建分析器以应用新码制白名单）
                 val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(hasCam, bindKey) {
+                DisposableEffect(bindKey) {
                     val previewView = previewViewRef.value
                     val providerFuture = ProcessCameraProvider.getInstance(context)
                     val analyzer = ScanAnalyzer(
@@ -612,6 +828,7 @@ private fun ScanCameraPage(
                 // 取景框遮罩（四角括号 + 激光线）
                 ViewfinderOverlay(modifier = Modifier.fillMaxSize())
             } else {
+                // 相机已停止（单次扫完 / 手动输入中）：不调用摄像头
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -619,11 +836,13 @@ private fun ScanCameraPage(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Text("需要相机权限才能扫码", color = Color.White, fontSize = 15.sp)
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                        Text("授予权限")
-                    }
+                    Text("📷", fontSize = 40.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (mode == ScanMode.SINGLE) "单次扫描完成，点「继续扫描」再次开启相机" else "相机已停止",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
                 }
             }
         }
@@ -668,9 +887,8 @@ private fun ScanCameraPage(
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = {
-                    analyzerRef.value?.reset()
-                    analyzerRef.value?.paused = false
                     singlePaused = false
+                    cameraActive = true
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -690,17 +908,22 @@ private fun ScanCameraPage(
         ) {
             ScanModeChip("单次", mode == ScanMode.SINGLE, Modifier.weight(1f)) {
                 mode = ScanMode.SINGLE
-                analyzerRef.value?.reset()
-                analyzerRef.value?.paused = false
+                singlePaused = false
+                cameraActive = true
             }
             Spacer(Modifier.width(8.dp))
             ScanModeChip("连续", mode == ScanMode.CONTINUOUS, Modifier.weight(1f)) {
                 mode = ScanMode.CONTINUOUS
-                analyzerRef.value?.reset()
-                analyzerRef.value?.paused = false
+                singlePaused = false
+                cameraActive = true
             }
             Spacer(Modifier.width(8.dp))
-            ScanModeChip("手动输入", false, Modifier.weight(1f)) { showManual = true }
+            ScanModeChip("手动输入", false, Modifier.weight(1f)) {
+                // 手动输入不需要相机：打开弹窗前先停相机，关闭时恢复原状态
+                manualPrevActive = cameraActive
+                cameraActive = false
+                showManual = true
+            }
             Spacer(Modifier.width(8.dp))
             Box(
                 modifier = Modifier
@@ -732,8 +955,12 @@ private fun ScanCameraPage(
     // 手动输入弹窗
     if (showManual) {
         var text by remember { mutableStateOf("") }
+        val closeManual = {
+            showManual = false
+            cameraActive = manualPrevActive
+        }
         AlertDialog(
-            onDismissRequest = { showManual = false },
+            onDismissRequest = { closeManual() },
             title = { Text("手动输入单号") },
             text = {
                 OutlinedTextField(
@@ -747,14 +974,14 @@ private fun ScanCameraPage(
                 TextButton(
                     onClick = {
                         val v = text
-                        showManual = false
+                        closeManual()
                         if (v.isNotEmpty()) handleBarcode(v, ScanFormats.MANUAL, true)
                     },
                     enabled = text.isNotBlank(),
                 ) { Text("添加") }
             },
             dismissButton = {
-                TextButton(onClick = { showManual = false }) { Text("取消") }
+                TextButton(onClick = { closeManual() }) { Text("取消") }
             },
         )
     }
@@ -787,7 +1014,7 @@ private fun ScanCameraPage(
                             context, dupValue,
                             askFormat ?: ScanFormats.MANUAL, manual = false, force = true,
                         )
-                        ScanFeedback.beepAndVibrate(context)
+                        ScanFeedback.success(context)
                         askValue = null
                     },
                 ) { Text("添加") }
@@ -810,15 +1037,15 @@ private fun ScanCameraPage(
         )
     }
 
-    // 清空确认
+    // 清空今日会话确认
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("清空今日记录？") },
-            text = { Text("将删除今日会话的全部 ${session?.records?.size ?: 0} 条记录，不可恢复。") },
+            text = { Text("将删除「${session?.name ?: ScanStore.defaultName(today)}」的全部 ${session?.records?.size ?: 0} 条记录，不可恢复。") },
             confirmButton = {
                 TextButton(onClick = {
-                    ScanStore.clearSession(context, ScanStore.todayKey())
+                    session?.let { ScanStore.clearSession(context, it.key) }
                     confirmClear = false
                 }) { Text("清空", color = ScanOrange) }
             },
@@ -891,20 +1118,27 @@ private fun ViewfinderOverlay(modifier: Modifier = Modifier) {
     }
 }
 
-// ============ 会话记录页 ============
+// ============ 会话记录页（记录级管理：复制 / 编辑 / 删除） ============
 
 @Composable
 private fun ScanSessionListPage(
-    date: String,
+    sessionId: String,
     todayTick: Long,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val ui = ScanState.state
-    val session = ui.sessions.find { it.date == date }
+    val session = ui.sessions.find { it.key == sessionId }
     val records = session?.records ?: emptyList()
+    var headerMenu by remember { mutableStateOf(false) }
+    var renameOpen by remember { mutableStateOf(false) }
+    var deleteOpen by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
+    var editTarget by remember { mutableStateOf<ScanRecord?>(null) }
     val timeFmt = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
+    val clipboard = remember {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    }
 
     Column(
         modifier = Modifier
@@ -915,30 +1149,64 @@ private fun ScanSessionListPage(
             TextButton(onClick = onBack) { Text("‹ 返回") }
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(ScanStore.displayName(date), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text("共 ${records.size} 条", color = ScanSub, fontSize = 12.sp)
+                Text(
+                    session?.name ?: "会话不存在",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    maxLines = 1,
+                )
+                Text(
+                    session?.let { "${it.date} · 共 ${it.records.size} 条" } ?: "",
+                    color = ScanSub, fontSize = 12.sp,
+                )
             }
             TextButton(
-                onClick = { exportCsvAndShare(context, date) },
+                onClick = { session?.let { exportCsvAndShare(context, it.key) } },
                 enabled = records.isNotEmpty(),
             ) { Text("导出CSV", color = ScanBrand) }
-            TextButton(
-                onClick = { confirmClear = true },
-                enabled = records.isNotEmpty(),
-            ) { Text("清空", color = ScanOrange) }
+            Box {
+                Text(
+                    "⋮",
+                    fontSize = 18.sp,
+                    color = ScanSub,
+                    modifier = Modifier
+                        .clickable { headerMenu = true }
+                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                )
+                DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("重命名会话") },
+                        onClick = { headerMenu = false; renameOpen = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("清空记录", color = ScanOrange) },
+                        onClick = { headerMenu = false; confirmClear = true },
+                        enabled = records.isNotEmpty(),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("删除会话", color = ScanOrange) },
+                        onClick = { headerMenu = false; deleteOpen = true },
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
-        if (records.isEmpty()) {
+        if (session == null) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Text("会话不存在或已删除", color = ScanSub)
+            }
+        } else if (records.isEmpty()) {
             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                 Text("暂无记录", color = ScanSub)
             }
         } else {
             LazyColumn(Modifier.weight(1f)) {
                 items(records, key = { it.id }) { record ->
+                    var menuOpen by remember { mutableStateOf(false) }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                            .padding(vertical = 6.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -955,7 +1223,41 @@ private fun ScanSessionListPage(
                                 color = ScanSub, fontSize = 11.sp,
                             )
                         }
-                        Text("✓", color = ScanGreen)
+                        Text("✓", color = ScanGreen, fontSize = 13.sp)
+                        Spacer(Modifier.width(4.dp))
+                        Box {
+                            Text(
+                                "⋮",
+                                fontSize = 16.sp,
+                                color = ScanSub,
+                                modifier = Modifier
+                                    .clickable { menuOpen = true }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("复制单号") },
+                                    onClick = {
+                                        menuOpen = false
+                                        clipboard?.setPrimaryClip(
+                                            ClipData.newPlainText("单号", record.value)
+                                        )
+                                        ScanFeedback.toast(context, "已复制单号")
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("编辑") },
+                                    onClick = { menuOpen = false; editTarget = record },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("删除", color = ScanOrange) },
+                                    onClick = {
+                                        menuOpen = false
+                                        ScanStore.deleteRecord(context, sessionId, record.id)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -963,14 +1265,55 @@ private fun ScanSessionListPage(
         @Suppress("UNUSED_EXPRESSION") todayTick
     }
 
-    if (confirmClear) {
+    // 重命名会话
+    if (renameOpen && session != null) {
+        ScanTextInputDialog(
+            title = "重命名会话",
+            initial = session.name,
+            onConfirm = { name ->
+                ScanStore.renameSession(context, sessionId, name)
+                renameOpen = false
+            },
+            onDismiss = { renameOpen = false },
+        )
+    }
+    // 编辑单号
+    editTarget?.let { record ->
+        ScanTextInputDialog(
+            title = "编辑单号",
+            initial = record.value,
+            onConfirm = { newValue ->
+                ScanStore.updateRecord(context, sessionId, record.id, newValue)
+                editTarget = null
+            },
+            onDismiss = { editTarget = null },
+        )
+    }
+    // 删除会话确认
+    if (deleteOpen && session != null) {
+        AlertDialog(
+            onDismissRequest = { deleteOpen = false },
+            title = { Text("删除会话？") },
+            text = { Text("将删除「${session.name}」及其全部 ${session.records.size} 条记录，不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    ScanStore.deleteSessionById(context, sessionId)
+                    deleteOpen = false
+                    onBack()
+                }) { Text("删除", color = ScanOrange) }
+            },
+            dismissButton = { TextButton(onClick = { deleteOpen = false }) { Text("取消") } },
+        )
+    }
+    // 清空确认
+    if (confirmClear && session != null) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("清空该会话？") },
             text = { Text("将删除全部 ${records.size} 条记录，不可恢复。") },
             confirmButton = {
                 TextButton(onClick = {
-                    ScanStore.clearSession(context, date)
+                    ScanStore.clearSession(context, sessionId)
                     confirmClear = false
                 }) { Text("清空", color = ScanOrange) }
             },
@@ -980,11 +1323,11 @@ private fun ScanSessionListPage(
 }
 
 /** 生成 CSV 到 cache/exports 并拉起系统分享。 */
-private fun exportCsvAndShare(context: android.content.Context, date: String) {
+private fun exportCsvAndShare(context: android.content.Context, id: String) {
     runCatching {
-        val csv = ScanStore.exportCsv(context, date) ?: return
+        val csv = ScanStore.exportCsv(context, id) ?: return
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-        val file = File(dir, "scan_$date.csv")
+        val file = File(dir, "scan_$id.csv")
         file.writeText(csv)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_SEND).apply {
@@ -1003,7 +1346,8 @@ private fun exportCsvAndShare(context: android.content.Context, date: String) {
 @Composable
 private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
     val context = LocalContext.current
-    var autoEnter by remember { mutableStateOf(ScanPrefs.autoEnterToday(context)) }
+    var entryMode by remember { mutableStateOf(ScanPrefs.entryMode(context)) }
+    var cooldownMs by remember { mutableStateOf(ScanPrefs.cooldownMs(context)) }
     var dedup by remember { mutableStateOf(ScanPrefs.dedup(context)) }
     var formats by remember { mutableStateOf(ScanPrefs.formats(context)) }
     var sound by remember { mutableStateOf(ScanPrefs.sound(context)) }
@@ -1016,18 +1360,59 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
             ) {
-                // 自动进入今日会话
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("打开自动进入今日会话", fontSize = 14.sp)
+                // 进入入口
+                Text("进入快递扫码页时", color = ScanSub, fontSize = 13.sp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { entryMode = ScanPrefs.ENTRY_SCAN },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = entryMode == ScanPrefs.ENTRY_SCAN,
+                        onClick = { entryMode = ScanPrefs.ENTRY_SCAN },
+                    )
+                    Text("直接进入扫码页", fontSize = 13.sp)
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { entryMode = ScanPrefs.ENTRY_LIST },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = entryMode == ScanPrefs.ENTRY_LIST,
+                        onClick = { entryMode = ScanPrefs.ENTRY_LIST },
+                    )
+                    Text("进入会话列表（手动选）", fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(10.dp))
+                // 同码冷却
+                Text("同码冷却（同一单号静默忽略窗口）", color = ScanSub, fontSize = 13.sp)
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1000L, 2000L, 2500L, 3000L, 5000L).forEach { ms ->
+                        val active = cooldownMs == ms
                         Text(
-                            "会话按日自动创建；关 = 打开先停在选择页",
-                            color = ScanSub, fontSize = 11.sp,
+                            text = if (active) "${ms / 1000.0}s ✓" else "${ms / 1000.0}s",
+                            fontSize = 12.sp,
+                            color = if (active) ScanBrand else ScanSub,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (active) ScanBrand.copy(alpha = 0.10f)
+                                    else MaterialTheme.colorScheme.surface
+                                )
+                                .clickable { cooldownMs = ms }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
                         )
                     }
-                    Switch(checked = autoEnter, onCheckedChange = { autoEnter = it })
                 }
-                Spacer(Modifier.height(12.dp))
+                Text(
+                    "对准同一包裹时摄像头会反复识别；冷却窗口内同码完全静默，防止连续弹窗/连续入库",
+                    color = ScanSub, fontSize = 10.sp,
+                )
+                Spacer(Modifier.height(10.dp))
                 Text("重复单号策略", color = ScanSub, fontSize = 13.sp)
                 DedupStrategy.entries.forEach { strategy ->
                     Row(
@@ -1077,7 +1462,8 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
         confirmButton = {
             TextButton(onClick = {
                 // 白名单全关视为无效，兜底回全选（与 ScanPrefs.formats 一致）
-                ScanPrefs.setAutoEnterToday(context, autoEnter)
+                ScanPrefs.setEntryMode(context, entryMode)
+                ScanPrefs.setCooldownMs(context, cooldownMs)
                 ScanPrefs.setDedup(context, dedup)
                 ScanPrefs.setFormats(context, if (formats.isEmpty()) ScanFormats.ALL.toSet() else formats)
                 ScanPrefs.setSound(context, sound)
@@ -1091,34 +1477,63 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
 
 // ============ 反馈（提示音 / 震动 / Toast） ============
 
+/**
+ * 提示音/震动反馈（v0.1.95 重做感知）。
+ *
+ * 成熟扫码软件惯例（ZXing BeepManager / 工业扫描枪）：
+ * - 成功音 = 短促高频单音（~150ms、2~4kHz 穿透力最好），音量拉满；
+ * - 重复/警示音 = 明显不同的低频「两短响」，不看屏幕也能区分；
+ * - 震动 200~300ms。
+ * 音效文件：res/raw/scan_ok.wav（2800Hz 单音）/ scan_dup.wav（900Hz 两短响）。
+ */
 private object ScanFeedback {
 
-    private var lastToastAt = 0L
-    private var lastToastMsg: String? = null
+    private var soundPool: SoundPool? = null
+    private var okId = 0
+    private var dupId = 0
 
-    fun beepAndVibrate(context: android.content.Context) {
-        if (ScanPrefs.sound(context)) {
-            runCatching {
-                val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-                tone.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
-                    { runCatching { tone.release() } }, 400,
-                )
+    /** 页面进入时预热（SoundPool 解码异步，提前加载避免首扫无声）。 */
+    fun init(context: android.content.Context) {
+        if (soundPool != null) return
+        runCatching {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            soundPool = SoundPool.Builder()
+                .setMaxStreams(2)
+                .setAudioAttributes(attrs)
+                .build()
+            okId = soundPool?.load(context, R.raw.scan_ok, 1) ?: 0
+            dupId = soundPool?.load(context, R.raw.scan_dup, 1) ?: 0
+        }.onFailure { Timber.tag("快递扫码").e(it, "提示音初始化失败") }
+    }
+
+    private fun play(id: Int) {
+        val pool = soundPool ?: return
+        if (id != 0) runCatching { pool.play(id, 1f, 1f, 1, 0, 1f) }
+    }
+
+    /** 扫码成功：高频短 beep + 长震动。 */
+    fun success(context: android.content.Context) {
+        if (ScanPrefs.sound(context)) play(okId)
+        if (ScanPrefs.vibration(context)) vibrate(context, 250)
+    }
+
+    /** 重复/警示：低频两短响（与成功音明显区分）。 */
+    fun duplicate(context: android.content.Context) {
+        if (ScanPrefs.sound(context)) play(dupId)
+    }
+
+    private fun vibrate(context: android.content.Context, ms: Long) {
+        runCatching {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                context.getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? Vibrator
             }
-        }
-        if (ScanPrefs.vibration(context)) {
-            runCatching {
-                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val manager = context.getSystemService(android.os.VibratorManager::class.java)
-                    manager?.defaultVibrator
-                } else {
-                    @Suppress("DEPRECATION")
-                    context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? Vibrator
-                }
-                vibrator?.vibrate(
-                    VibrationEffect.createOneShot(60, VibrationEffect.DEFAULT_AMPLITUDE)
-                )
-            }
+            vibrator?.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
         }
     }
 
@@ -1132,4 +1547,7 @@ private object ScanFeedback {
             android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
         }
     }
+
+    private var lastToastAt = 0L
+    private var lastToastMsg: String? = null
 }

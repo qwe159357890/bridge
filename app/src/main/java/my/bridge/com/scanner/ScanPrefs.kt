@@ -12,7 +12,18 @@ object ScanPrefs {
 
     private const val SP_NAME = "scan_config"
 
-    // 打开页面自动进入今日会话（关 = 停在会话选择页手动进入）
+    // 进入快递扫码页时的入口（v0.1.95）：ENTRY_SCAN = 直接扫码页，ENTRY_LIST = 会话列表。
+    // 兼容迁移：无 entry_mode 记录时沿用旧 auto_enter_today 开关（true→scan / false→list）。
+    const val KEY_ENTRY_MODE = "scan_entry_mode"
+    const val ENTRY_SCAN = "scan"
+    const val ENTRY_LIST = "list"
+
+    // 同码冷却窗口（v0.1.95）：同一单号处理过之后 N 毫秒内再次识别 → 静默忽略，
+    // 先于去重策略执行、对所有策略生效（工业扫描枪 same-symbol timeout 惯例）。
+    const val KEY_COOLDOWN_MS = "scan_cooldown_ms"
+    const val DEFAULT_COOLDOWN_MS = 2500L
+
+    // 旧开关（v0.1.94「打开自动进入今日会话」），仅作 entry_mode 迁移兜底，不再直接使用
     const val KEY_AUTO_ENTER_TODAY = "scan_auto_enter_today"
 
     // 去重策略（DedupStrategy.name）
@@ -27,11 +38,23 @@ object ScanPrefs {
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
 
-    fun autoEnterToday(context: Context): Boolean =
-        sp(context).getBoolean(KEY_AUTO_ENTER_TODAY, true)
+    /** 进入扫码页时的入口：ENTRY_SCAN（直接扫码）/ ENTRY_LIST（会话列表）。 */
+    fun entryMode(context: Context): String {
+        val saved = sp(context).getString(KEY_ENTRY_MODE, null)
+        if (saved != null) return saved
+        return if (sp(context).getBoolean(KEY_AUTO_ENTER_TODAY, true)) ENTRY_SCAN else ENTRY_LIST
+    }
 
-    fun setAutoEnterToday(context: Context, value: Boolean) {
-        sp(context).edit().putBoolean(KEY_AUTO_ENTER_TODAY, value).apply()
+    fun setEntryMode(context: Context, value: String) {
+        sp(context).edit().putString(KEY_ENTRY_MODE, value).apply()
+    }
+
+    /** 同码冷却窗口毫秒数。 */
+    fun cooldownMs(context: Context): Long =
+        sp(context).getInt(KEY_COOLDOWN_MS, DEFAULT_COOLDOWN_MS.toInt()).toLong()
+
+    fun setCooldownMs(context: Context, value: Long) {
+        sp(context).edit().putInt(KEY_COOLDOWN_MS, value.toInt()).apply()
     }
 
     fun dedup(context: Context): DedupStrategy = runCatching {

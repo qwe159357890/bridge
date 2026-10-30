@@ -17,14 +17,26 @@ data class ScanRecord(
     val manual: Boolean = false,
 )
 
-/** 一个扫描会话（按自然日一个，自动命名「10月30日 出库单」）。 */
+/**
+ * 一个扫描会话。
+ *
+ * v0.1.95 起会话支持自由增删改（用户拍板放开「每天一个」限制）：
+ * - [id] = 一等键（UUID），旧数据迁移时用 [date] 兜底；
+ * - [date] = 创建日期（yyyy-MM-dd），用于分组展示与「今日会话」判定；
+ * - [name] = 可编辑名称（创建时默认「10月30日」这类日期文本）。
+ */
 data class ScanSession(
-    /** 会话一等键：yyyy-MM-dd。 */
+    /** 会话唯一键。v0.1.94 旧档缺失时由 ScanStore 迁移为 date。 */
+    val id: String? = null,
+    /** 创建日期 yyyy-MM-dd。 */
     val date: String,
     val name: String,
     val createdAt: Long,
     val records: List<ScanRecord>,
 )
+
+/** 会话一等键（id 缺失时退回 date，兼容旧档反序列化中间态）。 */
+val ScanSession.key: String get() = id ?: date
 
 /** 去重策略（§6.6 五种；ADJACENT 为默认）。 */
 enum class DedupStrategy {

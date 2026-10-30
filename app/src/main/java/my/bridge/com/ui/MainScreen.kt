@@ -3,6 +3,8 @@ package my.bridge.com.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -253,36 +255,52 @@ fun SettingsPage(currentTab: Int, onTabChange: (Int) -> Unit) {
     }
 }
 
-// ============ 二级 Tab 栏（均分占满宽度，选中蓝/未选中灰） ============
+// ============ 二级 Tab 栏（标题不换行；空间不足时可左右滑动） ============
 @Composable
 private fun BridgeTabRow(
     titles: List<String>,
     currentTab: Int,
     onTabChange: (Int) -> Unit,
 ) {
-    TabRow(
-        selectedTabIndex = currentTab,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = BrandBlue,
-        modifier = Modifier.fillMaxWidth(),
-        divider = {},
+    // v0.1.95：4 个 Tab 后均分宽度不够导致文字换行。改为自定义行：
+    // 标题 maxLines=1 不换行；Row 横向可滚动（窄屏/超长标题时左右滑动）。
+    val scrollState = rememberScrollState()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .horizontalScroll(scrollState),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         titles.forEachIndexed { index, title ->
             val isSelected = currentTab == index
-            Tab(
-                selected = isSelected,
-                onClick = { onTabChange(index) },
-                modifier = Modifier.height(44.dp),
-                selectedContentColor = BrandBlue,
-                unselectedContentColor = InactiveColor,
-                text = {
-                    Text(
-                        text = title,
-                        fontSize = 15.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                },
-            )
+            Column(
+                modifier = Modifier
+                    .clickable { onTabChange(index) }
+                    .padding(horizontal = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = title,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) BrandBlue else InactiveColor,
+                )
+                Spacer(Modifier.height(6.dp))
+                // 选中下划线
+                Box(
+                    modifier = Modifier
+                        .width(28.dp)
+                        .height(3.dp)
+                        .background(
+                            if (isSelected) BrandBlue else Color.Transparent,
+                            RoundedCornerShape(2.dp),
+                        ),
+                )
+            }
         }
     }
 }

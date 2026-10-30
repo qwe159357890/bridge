@@ -30,7 +30,9 @@ object ScanState {
     /** 统一写入口：产出全新快照对象。 */
     fun replace(sessions: List<ScanSession>, seenCount: Int) {
         _state = ScanUiState(
-            sessions = sessions.sortedByDescending { it.date },
+            sessions = sessions.sortedWith(
+                compareByDescending<ScanSession> { it.date }.thenByDescending { it.createdAt }
+            ),
             seenCount = seenCount,
         )
     }
