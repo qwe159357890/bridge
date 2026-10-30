@@ -45,6 +45,16 @@ object RelaySwitchProtocol {
     /** 执行中状态兜底超时（毫秒）：超过该时长仍未收到状态确认，则退出「执行中」态。 */
     const val PENDING_TIMEOUT_MS = 18_000L
 
+    /**
+     * 设备离线宽限期（毫秒）。
+     *
+     * ESP32 为省电会周期性休眠，休眠时 WS 断开、服务端立刻广播 device_offline，
+     * 但设备几秒后就会重连 —— 若收到 offline 立即置灰，UI 会在「在线↔离线」之间反复闪烁，
+     * 表现为「明明在线却显示不在线」。故收到 offline 后先进入宽限观察，
+     * 期间保留旧状态不再变灰；宽限内重新上线则取消，超时未恢复才真正标记离线。
+     */
+    const val OFFLINE_GRACE_MS = 6_000L
+
     /** 重连退避档位（毫秒），封顶 30 秒。 */
     val BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 

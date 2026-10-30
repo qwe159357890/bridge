@@ -48,7 +48,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -89,10 +88,11 @@ fun RelaySwitchPage() {
     val context = LocalContext.current
     val client = remember { SwitchClientHolder.get() }
 
-    // UI 状态（由 RelaySwitchState 驱动）
-    var devices by remember { mutableStateOf(RelaySwitchState.devices) }
-    var revision by remember { mutableStateOf(RelaySwitchState.revision) }
-    var connection by remember { mutableStateOf(RelaySwitchState.connection) }
+    // ★ 唯一状态来源：不可变快照。读取即自动订阅重组
+    // （过去「多个可变字段 + revision」的写法会在引用未变时被 Compose 判成无变化而漏刷）
+    val ui = RelaySwitchState.state
+    val devices = ui.devices
+    val connection = ui.connection
     var paneMode by remember { mutableStateOf(RelaySwitchPrefs.paneMode(context)) }
 
     // 二次确认弹窗状态
@@ -102,17 +102,7 @@ fun RelaySwitchPage() {
 
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    // 订阅状态变化（切主线程写 Compose snapshot state）
     DisposableEffect(Unit) {
-        RelaySwitchState.setDeviceListener {
-            mainHandler.post {
-                devices = RelaySwitchState.devices
-                revision = RelaySwitchState.revision
-            }
-        }
-        RelaySwitchState.setConnectionListener { state ->
-            mainHandler.post { connection = state }
-        }
         RelaySwitchState.setErrorListener { message ->
             mainHandler.post {
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -123,8 +113,6 @@ fun RelaySwitchPage() {
         onDispose {
             // 离开页面即释放连接（省电优先，页面少用，不追求重连低延迟）
             client.stop()
-            RelaySwitchState.setDeviceListener(null)
-            RelaySwitchState.setConnectionListener(null)
             RelaySwitchState.setErrorListener(null)
         }
     }
@@ -174,11 +162,11 @@ fun RelaySwitchPage() {
 
         Spacer(Modifier.height(8.dp))
 
-        // 内容区：窗格模式用每行两列卡片网格，单设备模式用单卡
-        // 用 key(revision) 强制在状态版本变化时重建内容子树，确保卡片重读最新 pioValue/pending
-        key(revision) {
+        // 内容区：窗格模式用每行两列卡片网格，单设备模式用单卡。
+        // 每张卡片所需的 value / pending 均由上层计算后**作为参数传入**，
+        // 这样 Compose 能可靠检测到变化并重组（不再让卡片内部去读单例）。
         if (paneMode) {
-            val sorted = sortedDevices(devices)
+            val sorted = RelaySwitchState.sortedDevices(devices, ui.deviceOrder)
             if (sorted.isEmpty()) {
                 EmptyState("暂无设备")
             } else {
@@ -189,10 +177,16 @@ fun RelaySwitchPage() {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
                 ) {
-                    gridItems(sorted) { device ->
-                        PaneCard(device) { isOn ->
+                    gridItems(sorted, key = { it.id }) { device ->
+                        val pio = RelaySwitchPrefs.pioForDevice(context, device.id)
+                        val value = RelaySwitchState.pioValue(ui.deviceStatus[device.id], pio)
+                        PaneCard(
+                            device = device,
+                            value = value,
+                            isPending = device.id in ui.pendingDevices,
+                        ) { isOn ->
                             if (isOn) pendingCloseDevice = device
-                            else client.setRelay(device.id, RelaySwitchPrefs.pioForDevice(context, device.id), 0)
+                            else client.setRelay(device.id, pio, 0)
                         }
                     }
                 }
@@ -201,15 +195,21 @@ fun RelaySwitchPage() {
             val currentId = RelaySwitchPrefs.deviceId(context)
             val device = devices.find { it.id == currentId }
                 ?: RelaySwitchState.Device(currentId, currentId, false)
+            val pio = RelaySwitchPrefs.pioForDevice(context, currentId)
+            val value = RelaySwitchState.pioValue(ui.deviceStatus[currentId], pio)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                DeviceCard(device) { isOn ->
+                DeviceCard(
+                    device = device,
+                    value = value,
+                    isPending = currentId in ui.pendingDevices,
+                ) { isOn ->
                     if (isOn) pendingCloseDevice = device
-                    else client.setRelay(device.id, RelaySwitchPrefs.pioForDevice(context, device.id), 0)
+                    else client.setRelay(device.id, pio, 0)
                 }
                 Text(
                     text = "控制 ESP32 继电器设备（智能开关）。开启后 Bridge 主动连接继电器服务器，" +
@@ -219,7 +219,6 @@ fun RelaySwitchPage() {
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                 )
             }
-        }
         }
     }
 
@@ -247,7 +246,12 @@ fun RelaySwitchPage() {
     }
 }
 
-/** 切换窗格模式：进入时订阅所有设备并取状态。 */
+/**
+ * 切换窗格模式（照 togglePaneMode）。
+ *
+ * 窗格模式需订阅**所有**设备并逐个取状态；切回单设备模式时退订其它设备、只保留当前设备。
+ * 这一同步由 RelaySwitchClient.syncSubscriptions 统一处理。
+ */
 private fun togglePane(
     context: android.content.Context,
     client: RelaySwitchClient,
@@ -256,12 +260,7 @@ private fun togglePane(
 ) {
     RelaySwitchPrefs.setBoolean(context, RelaySwitchPrefs.KEY_PANE_MODE, enabled)
     onChanged(enabled)
-    if (enabled) {
-        RelaySwitchState.devices.forEach { d ->
-            client.subscribe(d.id)
-            client.getStatus(d.id)
-        }
-    }
+    client.syncSubscriptions(context)
 }
 
 /** 客户端单例持有器：保证页面重组间复用同一 WebSocket 客户端实例。 */
@@ -271,18 +270,6 @@ private object SwitchClientHolder {
 
     @Synchronized
     fun get(): RelaySwitchClient = client ?: RelaySwitchClient().also { client = it }
-}
-
-/** 设备排序（照 compareDevices：在线优先 → 服务端顺序 → 中文名）。 */
-private fun sortedDevices(devices: List<RelaySwitchState.Device>): List<RelaySwitchState.Device> {
-    val order = RelaySwitchState.deviceOrder
-    return devices.sortedWith(
-        compareBy(
-            { d -> if (d.online) 0 else 1 },
-            { d -> order.indexOf(d.id).let { if (it >= 0) it else Int.MAX_VALUE } },
-            { it.name },
-        )
-    )
 }
 
 /** 连接状态胶囊。 */
@@ -314,14 +301,16 @@ private fun ConnectionPill(state: RelaySwitchState.Connection) {
 @Composable
 private fun DeviceCard(
     device: RelaySwitchState.Device,
+    /** 该设备当前引脚的电平值：0=开，1=关，null=尚未取得。 */
+    value: Int?,
+    /** 是否处于「执行中」（已下发 set、等待设备回报）。 */
+    isPending: Boolean,
     onToggle: (isOn: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val pio = RelaySwitchPrefs.pioForDevice(context, device.id)
-    val value = RelaySwitchState.pioValue(device.id, pio)
-    val isOn = device.online && value == 0
     val hasValue = device.online && value != null
-    val isPending = RelaySwitchState.isPending(device.id)
+    val isOn = hasValue && value == 0
 
     // 状态配色（与原项目一致：开启=绿，关闭/点击开启动作=红，等待=灰）
     val ringColor = when {
@@ -449,14 +438,16 @@ private fun DeviceCard(
 @Composable
 private fun PaneCard(
     device: RelaySwitchState.Device,
+    /** 该设备当前引脚的电平值：0=开，1=关，null=尚未取得。 */
+    value: Int?,
+    /** 是否处于「执行中」（已下发 set、等待设备回报）。 */
+    isPending: Boolean,
     onToggle: (isOn: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val pio = RelaySwitchPrefs.pioForDevice(context, device.id)
-    val value = RelaySwitchState.pioValue(device.id, pio)
-    val isOn = device.online && value == 0
     val hasValue = device.online && value != null
-    val isPending = RelaySwitchState.isPending(device.id)
+    val isOn = hasValue && value == 0
 
     val ringColor = when {
         !device.online -> SwitchGray
@@ -763,8 +754,10 @@ private fun RelaySwitchSettingsDialog(
     }
     // 设备下拉框展开状态
     var deviceDropdownExpanded by remember { mutableStateOf(false) }
-    // 设备列表（来自 RelaySwitchState，已由客户端拉取；含 id + name 昵称 + online）
-    val devices = RelaySwitchState.devices
+    // 设备列表（来自 RelaySwitchState 快照，已由客户端拉取；含 id + name 昵称 + online）
+    val snapshot = RelaySwitchState.state
+    val devices = snapshot.devices
+    val deviceOrder = snapshot.deviceOrder
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -776,7 +769,7 @@ private fun RelaySwitchSettingsDialog(
                     onValueChange = { server = it },
                     label = { Text("服务器地址") },
                     singleLine = true,
-                    placeholder = { Text("如 127.0.0.1:15152") },
+                    placeholder = { Text("如 http://192.168.1.10:15152") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -801,7 +794,7 @@ private fun RelaySwitchSettingsDialog(
                         expanded = deviceDropdownExpanded,
                         onDismissRequest = { deviceDropdownExpanded = false },
                     ) {
-                        val sorted = sortedDevices(devices)
+                        val sorted = RelaySwitchState.sortedDevices(devices, deviceOrder)
                         if (sorted.isEmpty()) {
                             DropdownMenuItem(
                                 text = { Text(deviceId) },

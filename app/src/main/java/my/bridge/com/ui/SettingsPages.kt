@@ -1516,7 +1516,7 @@ private fun RelaySwitchSettings() {
 
 /** 智能控制「当前设备」显示名：优先昵称，离线加后缀；找不到时回退为设备 ID。 */
 private fun relayDeviceDisplayName(deviceId: String): String {
-    val device = my.bridge.com.switch.RelaySwitchState.devices.find { it.id == deviceId }
+    val device = my.bridge.com.switch.RelaySwitchState.state.devices.find { it.id == deviceId }
         ?: return deviceId
     return device.name + if (device.online) "" else " (离线)"
 }
@@ -1528,7 +1528,9 @@ private fun RelayDeviceSelectDialog(
     onCancel: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    val devices = my.bridge.com.switch.RelaySwitchState.devices
+    val snapshot = my.bridge.com.switch.RelaySwitchState.state
+    val devices = snapshot.devices
+    val deviceOrder = snapshot.deviceOrder
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("选择设备") },
@@ -1550,9 +1552,8 @@ private fun RelayDeviceSelectDialog(
                             val oa = if (a.online) 0 else 1
                             val ob = if (b.online) 0 else 1
                             if (oa != ob) return@Comparator oa - ob
-                            val order = my.bridge.com.switch.RelaySwitchState.deviceOrder
-                            val ia = order.indexOf(a.id).let { if (it >= 0) it else Int.MAX_VALUE }
-                            val ib = order.indexOf(b.id).let { if (it >= 0) it else Int.MAX_VALUE }
+                            val ia = deviceOrder.indexOf(a.id).let { if (it >= 0) it else Int.MAX_VALUE }
+                            val ib = deviceOrder.indexOf(b.id).let { if (it >= 0) it else Int.MAX_VALUE }
                             if (ia != ib) return@Comparator ia - ib
                             a.name.compareTo(b.name)
                         },
