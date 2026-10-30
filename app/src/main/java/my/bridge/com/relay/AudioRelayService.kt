@@ -1157,6 +1157,12 @@ class AudioRelayService : Service() {
         RelayClient.State.IDLE -> "声音中继已开启 · 点此管理"
     }
 
+    /**
+     * v0.1.99 防崩：旧实现 catch 后裸调 startForeground 兜底——若兜底再抛
+     * （如 ForegroundServiceStartNotAllowedException，v0.1.74 时代的历史崩溃即此向量），
+     * 异常直接穿透崩溃进程。现改为：失败记日志 → 降级重试 → 仍失败 stopSelf()
+     * 撤销 startForegroundService 的 5 秒倒计时（防 ForegroundServiceDidNotStartInTime）。
+     */
     private fun startForegroundCompat(notification: Notification) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1168,7 +1174,13 @@ class AudioRelayService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            startForeground(NOTIFICATION_ID, notification)
+            DiagLog.e("中继", "startForeground(mediaPlayback) 失败，降级重试", e)
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (e2: Exception) {
+                DiagLog.e("中继", "挂前台彻底失败，stopSelf 防崩", e2)
+                stopSelf()
+            }
         }
     }
 }

@@ -106,3 +106,22 @@
   分支（已删除）。
 - **保留**（勿误删）：保活 `SilentPlayer` / `ResourceHolder` BLE 扫描 / `app_version` 版本上报。
 
+
+## 附录 3：前台化超时崩溃修复（v0.1.99，2026-10-30）
+
+**现象**：偶发「Bridge 已停止运行」，难复现。adb dropbox 实锤堆栈：
+`ForegroundServiceDidNotStartInTimeException`（KeepAliveService，触发源
+KeepAliveJobService.onStartJob / KeepAliveReceiver.onReceive；v0.1.95~98 共 8 次；
+更早 v0.1.74 时代 AudioRelayService 同款）。
+
+**根因**：`startForegroundService()` 后系统给 5 秒期限调用 `startForeground()`。
+旧 `promoteToForeground()` 用 catch **吞掉异常**——`startForeground` 实际失败时
+（最可能：后台免疫窗口在 startForeground() 时刻二次校验的竞态，Android 12+ 后台
+启动限制），期限一到系统直接崩溃进程。扫码/截屏与此无关（v0.1.98 的 safeExecutor
+修复保留，属独立加固）。
+
+**修复**：①promote 失败不再吞——DiagLog.e 记录完整异常 + 350ms×3 次重试（覆盖
+竞态类瞬时失败，总窗口 ~1.05s ≪ 5s）；②重试耗尽 → `stopSelf()` 撤销本次前台启动
+（系统取消倒计时，唯一防崩出口），等下次兜底/用户进 App 再拉起；③REFRESH 路径
+同样防护；④AudioRelayService 降级分支裸 startForeground 再抛会穿透崩溃 → 补
+runCatching + stopSelf。根因异常下次出现会带完整堆栈进服务端日志，可精确定位。

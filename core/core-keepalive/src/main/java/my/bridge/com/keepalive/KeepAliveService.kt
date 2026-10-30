@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import my.bridge.com.core.common.DiagLog
 
 /**
  * 常驻保活前台服务。
@@ -71,26 +72,74 @@ class KeepAliveService : Service() {
 
     private lateinit var notificationManager: NotificationManager
 
+    // ---- v0.1.99 前台化防崩状态 ----
+    // startForegroundService 启动的服务必须在 5 秒内成功 startForeground()，否则系统抛
+    // ForegroundServiceDidNotStartInTimeException 直接崩溃（v0.1.95~98 线上 8 次
+    // 「Bridge 已停止运行」的实锤根因：promoteToForeground 吞了异常 → startForeground
+    // 实际未成功 → 超时崩溃）。触发源均为后台兜底（JobScheduler/AlarmManager），
+    // 免疫窗口在 startForeground() 时刻二次校验，存在竞态，所以偶发、难复现。
+    private var promoted = false
+    private var pendingApply = false
+    private var promoteAttempts = 0
+    private var stopRequested = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     override fun onCreate() {
         super.onCreate()
         startedAt = System.currentTimeMillis()
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
-        promoteToForeground()
-        applyKeepAlive()
-        Log.i(TAG, "常驻保活服务已启动")
+        promoteWithRetry()
+    }
+
+    /**
+     * 带重试的前台化：失败重试 3 次（350ms 间隔，总窗口 ~1.05s，远小于 5s 期限），
+     * 覆盖「免疫窗口竞态」类瞬时失败；重试耗尽仍失败 → 立即 stopSelf() 撤销本次
+     * 前台启动（系统取消 5 秒倒计时，不再崩溃），等下次兜底任务/用户进 App 再拉起。
+     */
+    private fun promoteWithRetry() {
+        val attempt = ++promoteAttempts
+        val ok = try {
+            doPromote()
+            true
+        } catch (e: Exception) {
+            DiagLog.e("KeepAliveService", "startForeground 失败（第 $attempt 次）", e)
+            false
+        }
+        if (ok) {
+            promoted = true
+            pendingApply = false
+            applyKeepAlive()
+            return
+        }
+        if (attempt < 4) {
+            mainHandler.postDelayed({ if (!stopRequested) promoteWithRetry() }, 350)
+        } else {
+            DiagLog.e("KeepAliveService", "挂前台重试耗尽，stopSelf 防崩（异常见上一条日志）")
+            stopRequested = true
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (stopRequested) return START_NOT_STICKY
         if (intent?.action == ACTION_REFRESH) {
-            promoteToForeground()
-            applyKeepAlive()
+            if (promoted) {
+                runCatching { doPromote() }.onFailure {
+                    DiagLog.e("KeepAliveService", "REFRESH 重新挂前台失败（服务已在前台，不影响运行）", it)
+                }
+                applyKeepAlive()
+            } else {
+                // onCreate 的重试还在进行：标记待应用，成功后统一 applyKeepAlive
+                pendingApply = true
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
         try { ResourceHolder.releaseAll(this) } catch (e: Exception) { Log.w(TAG, "释放资源失败：${e.message}") }
         try { OnePixelOverlay.hide(this) } catch (e: Exception) { Log.w(TAG, "隐藏一像素失败：${e.message}") }
         try { SilentPlayer.setScenarioAllowed(this, false) } catch (e: Exception) { Log.w(TAG, "停止无声播放失败：${e.message}") }
@@ -114,22 +163,23 @@ class KeepAliveService : Service() {
         SilentPlayer.applyEnabled(this)
     }
 
-    private fun promoteToForeground() {
-        try {
-            val notification = buildNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "挂前台通知失败：${e.message}")
+    /**
+     * 挂前台（不吞异常，失败直接抛给 promoteWithRetry）。
+     * v0.1.99 重命名自 promoteToForeground：旧实现 catch 吞掉异常是线上崩溃根因。
+     */
+    private fun doPromote() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
         }
+        Log.i(TAG, "常驻保活服务已前台化")
     }
 
     private fun buildNotification(): Notification {
