@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Size
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -170,6 +171,16 @@ fun ScanPage() {
         )
     }
     var listSessionId by remember { mutableStateOf("") }
+
+    // 返回键（v0.1.96）：记录列表按返回 → 回到入口设置决定的上级
+    // （入口=会话列表 → 会话管理；入口=直接扫码 → 扫码页，今日无会话则跨天提示）。
+    BackHandler(enabled = view == ScanView.SESSION_LIST) {
+        view = when {
+            ScanPrefs.entryMode(context) == ScanPrefs.ENTRY_LIST -> ScanView.CHOOSER
+            ScanStore.todaySession() != null -> ScanView.SCANNER
+            else -> ScanView.CROSS_DAY
+        }
+    }
 
     // 提示音预热（SoundPool 解码异步，进页面就加载避免首扫无声）
     LaunchedEffect(Unit) { ScanFeedback.init(context) }
@@ -1481,10 +1492,11 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
  * 提示音/震动反馈（v0.1.95 重做感知）。
  *
  * 成熟扫码软件惯例（ZXing BeepManager / 工业扫描枪）：
- * - 成功音 = 短促高频单音（~150ms、2~4kHz 穿透力最好），音量拉满；
- * - 重复/警示音 = 明显不同的低频「两短响」，不看屏幕也能区分；
+ * - 成功音 = 短促高频音效，重复/警示音 = 明显不同的警示音，播放音量拉满；
  * - 震动 200~300ms。
- * 音效文件：res/raw/scan_ok.wav（2800Hz 单音）/ scan_dup.wav（900Hz 两短响）。
+ * 音效文件（v0.1.96 起为用户提供的成品音效，原始文件在 assets/sounds/）：
+ * - res/raw/scan_ok.wav =「扫描咻.wav」（48kHz 16bit 立体声 0.16s）
+ * - res/raw/scan_dup.wav =「重复录入.wav」（48kHz 16bit 单声道 0.42s）
  */
 private object ScanFeedback {
 
@@ -1496,8 +1508,11 @@ private object ScanFeedback {
     fun init(context: android.content.Context) {
         if (soundPool != null) return
         runCatching {
+            // v0.1.96：走 USAGE_MEDIA（媒体通道）——SONIFICATION/通知通道系统音量通常
+            // 偏低且可能被勿扰模式静音；媒体通道音量一般最高。音源本身已 0dBFS 满幅、
+            // 播放音量 1.0，应用侧全部拉满（绝对上限=系统媒体音量，App 不能越过）。
             val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
             soundPool = SoundPool.Builder()
