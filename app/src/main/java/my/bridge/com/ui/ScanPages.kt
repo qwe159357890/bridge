@@ -26,12 +26,19 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -84,9 +91,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -96,6 +108,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 import my.bridge.com.R
 import my.bridge.com.scanner.DedupStrategy
 import my.bridge.com.scanner.ScanAnalyzer
@@ -105,6 +118,7 @@ import my.bridge.com.scanner.ScanRecord
 import my.bridge.com.scanner.ScanSession
 import my.bridge.com.scanner.ScanState
 import my.bridge.com.scanner.ScanStore
+import my.bridge.com.scanner.ScanUploadClient
 import my.bridge.com.scanner.key
 import timber.log.Timber
 import java.io.File
@@ -583,6 +597,58 @@ private fun ScanCameraPage(
     var lastIsDuplicate by remember { mutableStateOf(false) }
     var lastAt by remember { mutableLongStateOf(0L) }
 
+    // 结果动画（v0.2.02）：lastAt 变化即重放。flash 驱动取景框四角闪色外扩，
+    // shake 驱动重复卡轻摇；中央徽章（ScanFlashBadge）内部自带时序。
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(lastAt) {
+        if (lastAt == 0L) return@LaunchedEffect
+        flash.snapTo(0f)
+        flash.animateTo(1f, tween(150, easing = FastOutSlowInEasing))
+        delay(430)
+        flash.animateTo(0f, tween(280))
+    }
+    val density = LocalDensity.current
+    val shakeX = remember { Animatable(0f) }
+    LaunchedEffect(lastAt) {
+        if (lastAt == 0L || !lastIsDuplicate) {
+            shakeX.snapTo(0f)
+            return@LaunchedEffect
+        }
+        val amp = with(density) { 5.dp.toPx() }
+        shakeX.animateTo(-amp, tween(55))
+        shakeX.animateTo(amp, tween(90))
+        shakeX.animateTo(-amp * 0.6f, tween(75))
+        shakeX.animateTo(0f, tween(85))
+    }
+
+    // —— 上传到 PC（v0.2.02，扩展 Barcode to PC 协议）——
+    // 开关/地址变化即重建客户端（DisposableEffect 负责 start/stop，跟随页面生命周期）。
+    var uploadOn by remember { mutableStateOf(ScanPrefs.uploadEnabled(context)) }
+    var uploadHostText by remember { mutableStateOf(ScanPrefs.uploadHost(context)) }
+    var uploadState by remember { mutableStateOf(ScanUploadClient.State.IDLE) }
+    // 服务器回执「未匹配」标记：命中该状态时结果卡追加提示 + 播 quxiao
+    var lastServerMiss by remember { mutableStateOf(false) }
+    val uploadClient = remember(uploadOn, uploadHostText) {
+        if (uploadOn && ScanPrefs.uploadUrl(context) != null) {
+            ScanUploadClient(
+                context,
+                onReceipt = { receipt ->
+                    if (receipt.result == "miss") {
+                        lastServerMiss = true
+                        ScanFeedback.miss(context)
+                    }
+                },
+                onStateChanged = { uploadState = it },
+            )
+        } else {
+            null
+        }
+    }
+    DisposableEffect(uploadClient) {
+        uploadClient?.start()
+        onDispose { uploadClient?.stop() }
+    }
+
     // 「询问」弹窗
     var askValue by remember { mutableStateOf<String?>(null) }
     var askFormat by remember { mutableStateOf<String?>(null) }
@@ -654,7 +720,10 @@ private fun ScanCameraPage(
                     else ScanFormats.display(format)
                     lastIsDuplicate = false
                     lastAt = now
+                    lastServerMiss = false
                     ScanFeedback.success(context)
+                    // 逐条实时上报 PC（SalesRecordSystem）；离线/未开启时静默跳过
+                    ScanStore.todaySession()?.let { uploadClient?.upload(it, record) }
                     if (mode == ScanMode.SINGLE) {
                         // 单次模式：扫完一条立即停相机（unbind 全部用例，取景框隐藏）
                         cameraActive = false
@@ -703,6 +772,26 @@ private fun ScanCameraPage(
                     "${mode.label}模式 · ${session?.records?.size ?: 0} 条",
                     color = ScanSub, fontSize = 12.sp,
                 )
+            }
+            // 上传状态徽标（v0.2.02）：仅在上传开启时显示，一眼确认 PC 57891 是否在线
+            if (uploadOn) {
+                val (dotColor, dotLabel) = when (uploadState) {
+                    ScanUploadClient.State.ONLINE -> ScanGreen to "PC在线"
+                    ScanUploadClient.State.CONNECTING -> ScanOrange to "连接中"
+                    ScanUploadClient.State.OFFLINE -> Color(0xFFD64545) to "PC离线"
+                    ScanUploadClient.State.IDLE -> ScanSub to "未连接"
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(dotColor),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(dotLabel, color = ScanSub, fontSize = 11.sp)
+                }
+                Spacer(Modifier.width(6.dp))
             }
             TextButton(onClick = onOpenManager) { Text("会话", color = ScanBrand) }
             TextButton(
@@ -841,8 +930,18 @@ private fun ScanCameraPage(
                     }
                     }
                 }
-                // 取景框遮罩（四角括号 + 激光线）
-                ViewfinderOverlay(modifier = Modifier.fillMaxSize())
+                // 取景框遮罩（四角括号 + 激光线；v0.2.02 加识别结果闪色外扩）
+                ViewfinderOverlay(
+                    modifier = Modifier.fillMaxSize(),
+                    flash = flash.value,
+                    duplicate = lastIsDuplicate,
+                )
+                // 识别结果中央徽章：成功=绿勾描画 / 重复=橙色感叹号（弹性弹出→淡出）
+                ScanFlashBadge(
+                    tick = lastAt,
+                    isDuplicate = lastIsDuplicate,
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
                 // 相机已停止（单次扫完 / 手动输入中）：不调用摄像头
                 Column(
@@ -863,37 +962,46 @@ private fun ScanCameraPage(
             }
         }
 
-        // 最近结果卡
+        // 最近结果卡（v0.2.02：上滑入场替代硬出现；重复时轻摇）
         val showResult = lastValue != null && System.currentTimeMillis() - lastAt < 4000
-        if (showResult) {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (lastIsDuplicate) ScanOrangeSoft else ScanGreenSoft)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    if (lastIsDuplicate) "⚠️" else "✓",
-                    fontSize = 16.sp,
-                    color = if (lastIsDuplicate) ScanOrange else ScanGreen,
-                )
-                Spacer(Modifier.width(10.dp))
-                Column {
+        AnimatedVisibility(
+            visible = showResult,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Column {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationX = shakeX.value }
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (lastIsDuplicate) ScanOrangeSoft else ScanGreenSoft)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        lastValue ?: "",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                    )
-                    Text(
-                        "$lastFormat · ${if (lastIsDuplicate) "重复" else "已加入会话"}",
-                        fontSize = 11.sp,
+                        if (lastIsDuplicate) "⚠️" else "✓",
+                        fontSize = 16.sp,
                         color = if (lastIsDuplicate) ScanOrange else ScanGreen,
                     )
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            lastValue ?: "",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                        )
+                        Text(
+                            // v0.2.02：服务器回执 miss 时追加提示（PC 端退货库中没有该单号）
+                            if (lastServerMiss && !lastIsDuplicate) "$lastFormat · 已加入会话 · 服务器未匹配"
+                            else "$lastFormat · ${if (lastIsDuplicate) "重复" else "已加入会话"}",
+                            fontSize = 11.sp,
+                            color = if (lastIsDuplicate) ScanOrange else ScanGreen,
+                        )
+                    }
                 }
             }
         }
@@ -1048,6 +1156,9 @@ private fun ScanCameraPage(
             onSaved = {
                 showSettings = false
                 bindKey++ // 重建分析器应用新码制白名单
+                // 同步上传设置（开关/地址变化 → remember key 变化 → 重建客户端）
+                uploadOn = ScanPrefs.uploadEnabled(context)
+                uploadHostText = ScanPrefs.uploadHost(context)
                 ScanFeedback.toast(context, "扫码设置已保存")
             },
         )
@@ -1095,7 +1206,11 @@ private fun ScanModeChip(label: String, active: Boolean, modifier: Modifier = Mo
 
 /** 取景框遮罩：四角括号 + 扫描线动画。 */
 @Composable
-private fun ViewfinderOverlay(modifier: Modifier = Modifier) {
+private fun ViewfinderOverlay(
+    modifier: Modifier = Modifier,
+    flash: Float = 0f,
+    duplicate: Boolean = false,
+) {
     val transition = rememberInfiniteTransition(label = "laser")
     val laserY by transition.animateFloat(
         initialValue = 0.30f,
@@ -1106,13 +1221,17 @@ private fun ViewfinderOverlay(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val left = w * 0.14f
-        val right = w * 0.86f
-        val top = h * 0.22f
-        val bottom = h * 0.62f
+        // 识别确认瞬间：括号向外扩 + 闪绿（重复=橙），flash∈[0,1] 由页面级 Animatable 驱动
+        val expand = 14f * flash
+        val left = w * 0.14f - expand
+        val right = w * 0.86f + expand
+        val top = h * 0.22f - expand
+        val bottom = h * 0.62f + expand
         val len = 44f
         val stroke = Stroke(width = 8f, cap = StrokeCap.Round)
-        val color = Color.White.copy(alpha = 0.9f)
+        val base = Color.White.copy(alpha = 0.9f)
+        val flashColor = if (duplicate) ScanOrange else ScanGreen
+        val color = if (flash > 0f) lerp(base, flashColor, flash) else base
         // 四角括号
         fun corner(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float) {
             drawLine(color, Offset(x1, y1), Offset(x2, y2), stroke.width, StrokeCap.Round)
@@ -1131,6 +1250,75 @@ private fun ViewfinderOverlay(modifier: Modifier = Modifier) {
             strokeWidth = 5f,
             cap = StrokeCap.Round,
         )
+    }
+}
+
+/**
+ * 识别结果中央徽章（v0.2.02）：[tick] 变化即重放一次性动画。
+ * 成功 = 绿色圆 + 白勾描画（PathMeasure 逐段画出）；重复 = 橙色圆 + 白色感叹号。
+ * 时序：弹出（scale 0.3→1.15→1.0，带 overshoot）→ 停留 → 淡出，全程约 0.9s。
+ */
+@Composable
+private fun ScanFlashBadge(
+    tick: Long,
+    isDuplicate: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val scale = remember { Animatable(0.3f) }
+    val alpha = remember { Animatable(0f) }
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(tick) {
+        if (tick == 0L) return@LaunchedEffect
+        scale.snapTo(0.3f)
+        alpha.snapTo(0f)
+        progress.snapTo(0f)
+        alpha.animateTo(1f, tween(60))
+        scale.animateTo(1.15f, tween(130, easing = FastOutSlowInEasing))
+        scale.animateTo(1f, tween(90, easing = FastOutSlowInEasing))
+        progress.animateTo(1f, tween(220, easing = FastOutSlowInEasing))
+        delay(340)
+        alpha.animateTo(0f, tween(220))
+    }
+    if (alpha.value > 0.01f) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Canvas(
+                modifier = Modifier
+                    .size(64.dp)
+                    .graphicsLayer {
+                        scaleX = scale.value
+                        scaleY = scale.value
+                        this.alpha = alpha.value
+                    },
+            ) {
+                val d = size.minDimension
+                drawCircle(if (isDuplicate) ScanOrange else ScanGreen, radius = d / 2f)
+                val stroke = Stroke(width = d * 0.085f, cap = StrokeCap.Round)
+                if (isDuplicate) {
+                    // 感叹号：竖条 + 圆点
+                    val cx = size.width / 2f
+                    drawLine(
+                        Color.White,
+                        Offset(cx, d * 0.26f),
+                        Offset(cx, d * 0.58f),
+                        strokeWidth = stroke.width,
+                        cap = StrokeCap.Round,
+                    )
+                    drawCircle(Color.White, radius = stroke.width * 0.85f, center = Offset(cx, d * 0.76f))
+                } else {
+                    // 对勾描画：PathMeasure 按进度截取片段
+                    val path = Path().apply {
+                        moveTo(size.width * 0.27f, size.height * 0.52f)
+                        lineTo(size.width * 0.44f, size.height * 0.68f)
+                        lineTo(size.width * 0.74f, size.height * 0.33f)
+                    }
+                    val pm = PathMeasure()
+                    pm.setPath(path, false)
+                    val seg = Path()
+                    pm.getSegment(0f, pm.length * progress.value, seg, true)
+                    drawPath(seg, Color.White, style = stroke)
+                }
+            }
+        }
     }
 }
 
@@ -1368,6 +1556,8 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
     var formats by remember { mutableStateOf(ScanPrefs.formats(context)) }
     var sound by remember { mutableStateOf(ScanPrefs.sound(context)) }
     var vibration by remember { mutableStateOf(ScanPrefs.vibration(context)) }
+    var uploadOn by remember { mutableStateOf(ScanPrefs.uploadEnabled(context)) }
+    var uploadHost by remember { mutableStateOf(ScanPrefs.uploadHost(context)) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1473,6 +1663,25 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
                     Text("震动反馈", fontSize = 14.sp, modifier = Modifier.weight(1f))
                     Switch(checked = vibration, onCheckedChange = { vibration = it })
                 }
+                Spacer(Modifier.height(10.dp))
+                // —— 上传到 PC（v0.2.02，扩展 Barcode to PC 协议）——
+                Text("上传到 PC（销售记录系统）", color = ScanSub, fontSize = 13.sp)
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("扫码后实时上报 PC 端签收", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Switch(checked = uploadOn, onCheckedChange = { uploadOn = it })
+                }
+                if (uploadOn) {
+                    OutlinedTextField(
+                        value = uploadHost,
+                        onValueChange = { uploadHost = it },
+                        label = { Text("PC 地址") },
+                        placeholder = { Text("192.168.31.5:57891") },
+                        supportingText = { Text("PC 运行销售记录系统（端口默认 57891），手机与 PC 需同一局域网") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1484,6 +1693,8 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
                 ScanPrefs.setFormats(context, if (formats.isEmpty()) ScanFormats.ALL.toSet() else formats)
                 ScanPrefs.setSound(context, sound)
                 ScanPrefs.setVibration(context, vibration)
+                ScanPrefs.setUploadEnabled(context, uploadOn)
+                ScanPrefs.setUploadHost(context, uploadHost)
                 onSaved()
             }) { Text("保存") }
         },
@@ -1508,6 +1719,7 @@ private object ScanFeedback {
     private var soundPool: SoundPool? = null
     private var okId = 0
     private var dupId = 0
+    private var missId = 0
 
     /** 页面进入时预热（SoundPool 解码异步，提前加载避免首扫无声）。 */
     fun init(context: android.content.Context) {
@@ -1526,6 +1738,7 @@ private object ScanFeedback {
                 .build()
             okId = soundPool?.load(context, R.raw.scan_ok, 1) ?: 0
             dupId = soundPool?.load(context, R.raw.scan_dup, 1) ?: 0
+            missId = soundPool?.load(context, R.raw.scan_miss, 1) ?: 0
         }.onFailure { Timber.tag("快递扫码").e(it, "提示音初始化失败") }
     }
 
@@ -1543,6 +1756,14 @@ private object ScanFeedback {
     /** 重复/警示：低频两短响（与成功音明显区分）。 */
     fun duplicate(context: android.content.Context) {
         if (ScanPrefs.sound(context)) play(dupId)
+    }
+
+    /**
+     * 服务器未匹配（v0.2.02）：PC 端 scanResult{miss} 回执触发。
+     * 音源 = SalesRecordSystem 的「取消.wav」（quxiao）同源。
+     */
+    fun miss(context: android.content.Context) {
+        if (ScanPrefs.sound(context)) play(missId)
     }
 
     private fun vibrate(context: android.content.Context, ms: Long) {

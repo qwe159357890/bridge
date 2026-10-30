@@ -35,6 +35,11 @@ object ScanPrefs {
     const val KEY_SOUND = "scan_sound"
     const val KEY_VIBRATION = "scan_vibration"
 
+    // 上传到 PC（v0.2.02，扩展 Barcode to PC 协议）：开关 + 目标地址「IP:端口」
+    const val KEY_UPLOAD_ENABLED = "scan_upload_enabled"
+    const val KEY_UPLOAD_HOST = "scan_upload_host"
+    const val DEFAULT_UPLOAD_PORT = 57891
+
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
 
@@ -85,5 +90,34 @@ object ScanPrefs {
 
     fun setVibration(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_VIBRATION, value).apply()
+    }
+
+    /** 上传到 PC 总开关（v0.2.02）。 */
+    fun uploadEnabled(context: Context): Boolean = sp(context).getBoolean(KEY_UPLOAD_ENABLED, false)
+
+    fun setUploadEnabled(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_UPLOAD_ENABLED, value).apply()
+    }
+
+    /** 上传目标地址，原始字符串（用户输入，形如 192.168.31.5:57891 或纯 IP）。 */
+    fun uploadHost(context: Context): String = sp(context).getString(KEY_UPLOAD_HOST, "") ?: ""
+
+    fun setUploadHost(context: Context, value: String) {
+        sp(context).edit().putString(KEY_UPLOAD_HOST, value.trim()).apply()
+    }
+
+    /** 解析为 ws:// URL；无效输入返回 null。容忍「纯 IP」「IP:端口」「ws://…」三种写法。 */
+    fun uploadUrl(context: Context): String? {
+        val raw = uploadHost(context).trim()
+        if (raw.isEmpty()) return null
+        val withScheme = when {
+            raw.startsWith("ws://") || raw.startsWith("wss://") -> raw
+            raw.contains(":") -> "ws://$raw"
+            else -> "ws://$raw:$DEFAULT_UPLOAD_PORT"
+        }
+        return runCatching { java.net.URI(withScheme) }
+            .getOrNull()
+            ?.takeIf { it.host != null && it.port != -1 }
+            ?.toString()
     }
 }

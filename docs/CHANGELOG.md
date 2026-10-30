@@ -22,6 +22,36 @@
 
 ---
 
+## 2026-10-30 · 📷 v0.1.94→v0.2.02 扫码功能里程碑（快递扫码闭环 + 崩溃清零 + PC 上报）
+
+**节点意义**：三条脉络交汇——①快递扫码功能从零到闭环；②保活崩溃三根因连环排查清零；
+③扫码结果上报 PC（扩展 Barcode to PC 协议）。
+
+### 脉络1 · 快递扫码（v0.1.94→v0.1.97，v0.2.02 补完）
+- **v0.1.94**：CameraX 720p + ML Kit 连续 2 帧投票 + 1080p 单帧救援；会话按自然日管理、5 种去重策略、码制白名单。
+- **v0.1.95**：真机 11 条反馈全落地（同码冷却 2500ms、单次扫完停相机、会话/记录管理、返回键入口逻辑等）。
+- **v0.1.96/97**：音效切 USAGE_MEDIA + 用户成品 WAV（扫描咻/重复录入）；返回键统一 goToEntry。
+- **v0.2.02**：扫码成功动画（取景框四角闪色外扩 + 中央绿勾描画徽章 overshoot + 结果卡上滑/重复轻摇）；PC 上报。
+
+### 脉络2 · 保活崩溃清零（v0.1.95→v0.2.01，同签名三根因）
+- **v0.1.98**（弯路）：CrashReporter 上报时序修复（runBlocking 3.5s + 启动补传）——上报链路自此打通，但根因判断错误。
+- **v0.1.99**：根因①promote 吞异常（DiagLog + 350ms×3 重试 + stopSelf）。仍崩。
+- **v0.2.00**：根因②ColorOS 冻结饿死（兜底 goAsync/返回 true 保持「处理中」4s 撑解冻窗口）。仍崩。
+- **v0.2.01**：根因③运行中重复拉起义务悬空（onStartCommand 无条件补挂前台，幂等）+ 同款修复推广到 AudioRelayService/MediaCaptureService + 蓝牙焦点改「正常补获」消除唤醒放大器。**27 分钟观察期（跨 2 次周期 Job）三路证据零崩溃，闭环**。权威文档 `docs/dev/crash-ledger.md`。
+
+### 脉络3 · PC 上报（v0.2.02）
+- 调研 `SalesRecordSystem`（PyQt5 桌面退货系统）：WS 0.0.0.0:57891 收 Barcode to PC 协议，业务=退货签收登记（匹配→已签收+√+xiu+TTS / 重复=chongfuluru / 未匹配=quxiao）。文档 `docs/research/salesrecord-upload-flow.md`。
+- **协议扩展（向后兼容，Barcode to PC 旧客户端零影响）**：服务端 `barcode_received` 信号加回执闭包参数 + 业务槽上报 `scanResult{hit|duplicate|miss}`；Bridge 端 `ScanUploadClient`（OkHttp WS + 15s 心跳 + 指数退避重连）逐条实时上报，扫码页 PC 在线徽标，miss 回执播「取消」+卡片提示。离屏冒烟测试全链路通过。
+
+**关键经验沉淀**
+- **startForegroundService 是「预约一次前台化义务」，按次计**：运行中服务被重复拉起只走 onStartCommand，onCreate 的挂前台覆盖不了；义务 ~30s 无人履行必崩。修崩溃先看 dropbox `Frozen:`/`Process-Runtime:` 区分「冻结饿死」vs「运行中义务悬空」，同签名≠同根因。
+- **崩溃修复必须先确认代码是否执行**：服务端 DiagLog 缺失本身就是证据（v0.1.99 修错层的直接原因）。
+- **兜底组件保持「处理中」4s**（JobService 返回 true/Receiver goAsync）：立即返回=进程瞬间可被冻结，onCreate 饿死；jobFinished 未调会引发 ~44s 崩溃循环，force-stop 止血。
+- **第三方桌面系统集成先全链路读实现再动手**：协议、信号链、音效映射（Bridge 两个音效与服务端 xiu/chongfuluru 同源）都是读源码实锤的，不是猜的。
+- **改共享协议只做「新增」**：信号加参用缺省值兜底、新 action 旧端不读即无感——旧客户端兼容性有测试兜底。
+
+---
+
 ## 2026-10-29→10-30 · 🚀 v0.1.83→v0.1.93 双脉络里程碑（音频中继重连自愈 + 智能控制上线）
 
 **节点意义**：两天内两条主线先后收敛——①音频中继「切网必卡死」的历史顽疾经四版（83→86）
