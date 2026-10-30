@@ -172,15 +172,19 @@ fun ScanPage() {
     }
     var listSessionId by remember { mutableStateOf("") }
 
-    // 返回键（v0.1.96）：记录列表按返回 → 回到入口设置决定的上级
-    // （入口=会话列表 → 会话管理；入口=直接扫码 → 扫码页，今日无会话则跨天提示）。
-    BackHandler(enabled = view == ScanView.SESSION_LIST) {
-        view = when {
+    // 返回键（v0.1.97）：扫码模块内任何「非入口视图」（记录列表/会话管理/跨天提示…），
+    // 返回都先回到「入口设置」决定的入口视图——入口=会话列表 → 会话管理；
+    // 入口=直接扫码 → 扫码页（今日无会话则跨天提示）。已在入口视图时不拦截，
+    // 交给全局返回（主页 Tab 切换 / 退出提示）。
+    val entryOf: () -> ScanView = {
+        when {
             ScanPrefs.entryMode(context) == ScanPrefs.ENTRY_LIST -> ScanView.CHOOSER
             ScanStore.todaySession() != null -> ScanView.SCANNER
             else -> ScanView.CROSS_DAY
         }
     }
+    val goToEntry = { view = entryOf() }
+    BackHandler(enabled = view != entryOf()) { goToEntry() }
 
     // 提示音预热（SoundPool 解码异步，进页面就加载避免首扫无声）
     LaunchedEffect(Unit) { ScanFeedback.init(context) }
@@ -221,9 +225,7 @@ fun ScanPage() {
         ScanView.SESSION_LIST -> ScanSessionListPage(
             sessionId = listSessionId,
             todayTick = todayTick,
-            onBack = {
-                view = if (ScanStore.todaySession() != null) ScanView.SCANNER else ScanView.CROSS_DAY
-            },
+            onBack = goToEntry, // 页内「‹ 返回」按钮与系统返回键行为一致
         )
     }
     // ui 只读引用防未使用告警
