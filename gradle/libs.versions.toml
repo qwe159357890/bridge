@@ -33,6 +33,10 @@ work = "2.9.1"
 # ---- 协程 ----
 coroutines = "1.8.1"
 
+# ---- 扫码（快递扫码：CameraX 采集 + ML Kit 识别）----
+camerax = "1.4.2"
+mlkitBarcode = "17.3.0"
+
 # ---- 日志 ----
 timber = "5.0.1"
 
@@ -81,6 +85,13 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 
 # 协程
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# 扫码（CameraX + ML Kit bundled）
+camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
 
 # 日志
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }

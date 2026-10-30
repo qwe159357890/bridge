@@ -6,4 +6,6 @@
     <external-files-path name="updates" path="updates/" />
     <external-files-path name="media" path="media/" />
     <files-path name="internal_updates" path="updates/" />
+    <!-- 快递扫码：CSV 导出临时文件（系统分享面板用） -->
+    <cache-path name="exports" path="exports/" />
 </paths>

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge · 快递扫码 UI 原型</title>
+<style>
+  :root {
+    --brand: #1A6EE8;
+    --brand-soft: #EAF2FE;
+    --inactive: #8A919F;
+    --bg: #F5F6F8;
+    --card: #FFFFFF;
+    --text: #1F2329;
+    --text-sub: #6B7280;
+    --green: #2E9E5B;
+    --green-soft: #E8F6EE;
+    --orange: #E8862E;
+    --orange-soft: #FDF3E7;
+    --red: #E5484D;
+    --border: #E5E7EB;
+    --dark: #17181C;
+    --phone-w: 375px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    padding: 32px 20px 60px;
+  }
+  h1 { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+  .subtitle { text-align: center; color: var(--text-sub); font-size: 14px; margin-bottom: 8px; }
+  .meta {
+    max-width: 880px; margin: 0 auto 28px; padding: 14px 18px;
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--text-sub);
+  }
+  .meta b { color: var(--text); }
+  .meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 14px; padding-left: 10px; border-left: 4px solid var(--brand); }
+  .grid { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start; }
+  .scene { flex: 1 1 360px; max-width: 460px; min-width: 320px; }
+  .scene-title { text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .scene-desc { text-align: center; font-size: 12px; color: var(--text-sub); margin-bottom: 12px; }
+  .phone { width: var(--phone-w); margin: 0 auto; background: #fff; border-radius: 30px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.10); border: 1px solid var(--border); }
+  .phone svg { display: block; width: 100%; height: auto; }
+  .note { max-width: 880px; margin: 36px auto 0; padding: 16px 20px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 12px; font-size: 13px; color: #92400E; }
+  .note b { color: #78350F; }
+  ul.clean { margin: 8px 0 0 18px; }
+  ul.clean li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>Bridge · 快递扫码 UI 原型 <span style="font-size:14px;color:var(--text-sub)">v1</span></h1>
+<div class="subtitle">扫码快递单号 → 批量上报 Bridge 服务端 → 管理后台实时看板/CSV</div>
+
+<div class="meta">
+  <div style="margin-bottom:6px">
+    <span class="tag">主页新增第 4 个 Tab「快递扫码」（智能控制之后）</span>
+    <span class="tag">CameraX + ML Kit（多帧一致性投票）</span>
+    <span class="tag">协议照 putScanSessions/ACK 语义自定（REST 批量 + 离线对账）</span>
+    <span class="tag">包名 scanner/（区分 switch/ relay/）</span>
+  </div>
+  <div><b>功能范围：</b></div>
+  <div>① <b>扫码主界面</b> —— 相机取景区（四角框 + 命中高亮）+ 模式切换（单次/连续/手动）+ 连接状态胶囊 + 当前会话卡（名称/计数/上报状态）。</div>
+  <div>② <b>扫描反馈</b> —— 成功震动+提示音（可设置）、绿色确认卡「连续 2 帧一致」；重复单号按去重策略静默忽略或 toast 提示。</div>
+  <div>③ <b>会话记录</b> —— 单号列表（格式标签/时间/上报状态点），导出 CSV、清空；每条记录=一次扫码。</div>
+  <div>④ <b>设置弹窗</b> —— 服务器地址、扫描模式、去重策略四选一、格式白名单（快递场景默认 CODE_128/CODE_39/QR）、提示音/震动/手电筒。</div>
+  <div style="margin-top:6px"><b>通信模型</b>：页面生命周期照智能控制——进入 <code>start()</code>、离开 <code>stop()</code>（相机 unbind + 上传停止）；扫码结果本地队列暂存，联网后按会话批量上报，<code>putScanAck</code> 语义确认，断网不丢。</div>
+  <div style="margin-top:6px"><b>会话按自然日管理（已拍板）</b>：每天一个会话、自动按日期命名（如「10月30日 出库单」），同日不支持多会话；同日再开 = 设置项「自动进入今日会话」决定直接进列表或停在选择页；<b>跨天第一次打开</b> = 提示卡「今天还没有今日出库单」→「创建今日出库单」/「查看历史」。</div>
+</div>
+
+<h2>状态一：扫码主界面（连续扫描中）</h2>
+<div class="grid">
+  <div class="scene">
+    <div class="scene-title">取景 + 当前会话 + 最近结果</div>
+    <div class="scene-desc">四角取景框 + 激光线；会话卡显示「今日出库单 · 已上报 23 条」；模式 chips：单次/连续/手动</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="camGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#26282E"/><stop offset="1" stop-color="#0F1013"/>
+          </linearGradient>
+          <linearGradient id="laser" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#2E9E5B" stop-opacity="0"/>
+            <stop offset="0.5" stop-color="#43D17E"/><stop offset="1" stop-color="#2E9E5B" stop-opacity="0"/>
+          </linearGradient>
+          <g id="ic-torch" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 6L8 18h6l-2 8 10-12h-6l2-8z" transform="scale(0.9)"/>
+          </g>
+          <g id="ic-kb" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>
+          </g>
+          <g id="ic-check" fill="none" stroke="#2E9E5B" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+          </g>
+        </defs>
+        <rect width="375" height="667" fill="#fff"/>
+        <!-- status bar -->
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+        <!-- tab bar: 4 tabs -->
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="47" y="71" font-size="14" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="140" y="71" font-size="14" fill="#8A919F" text-anchor="middle">音频中继</text>
+        <text x="234" y="71" font-size="14" fill="#8A919F" text-anchor="middle">智能控制</text>
+        <text x="328" y="71" font-size="14" fill="#1A6EE8" font-weight="600" text-anchor="middle">快递扫码</text>
+        <rect x="296" y="85" width="64" height="3" fill="#1A6EE8"/>
+        <!-- connection pill -->
+        <rect x="14" y="100" width="92" height="26" rx="13" fill="#E8F6EE"/>
+        <circle cx="30" cy="113" r="4" fill="#2E9E5B"/>
+        <text x="40" y="117" font-size="12" fill="#2E9E5B" font-weight="600">已连接</text>
+        <!-- session card -->
+        <rect x="14" y="138" width="347" height="64" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="30" y="163" font-size="14" fill="#1F2329" font-weight="600">10月30日 出库单</text>
+        <text x="30" y="184" font-size="12" fill="#6B7280">连续模式 · 相邻去重</text>
+        <rect x="240" y="146" width="104" height="22" rx="11" fill="#E8F6EE"/>
+        <text x="292" y="161" font-size="11" fill="#2E9E5B" text-anchor="middle" font-weight="600">已上报 23 条</text>
+        <!-- camera viewfinder -->
+        <rect x="14" y="216" width="347" height="270" rx="16" fill="url(#camGrad)"/>
+        <!-- corner brackets -->
+        <g stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.9">
+          <path d="M60 258 v-16 h16"/><path d="M299 242 h16 v16"/>
+          <path d="M315 444 v16 h-16"/><path d="M76 460 h-16 v-16"/>
+        </g>
+        <!-- sample barcode inside finder -->
+        <g transform="translate(112,320)">
+          <rect width="151" height="46" fill="#F5F6F8" rx="4"/>
+          <g fill="#17181C">
+            <rect x="10" y="6" width="3" height="34"/><rect x="16" y="6" width="2" height="34"/><rect x="21" y="6" width="5" height="34"/><rect x="30" y="6" width="2" height="34"/><rect x="35" y="6" width="4" height="34"/><rect x="43" y="6" width="2" height="34"/><rect x="48" y="6" width="6" height="34"/><rect x="58" y="6" width="3" height="34"/><rect x="64" y="6" width="2" height="34"/><rect x="69" y="6" width="5" height="34"/><rect x="78" y="6" width="2" height="34"/><rect x="83" y="6" width="4" height="34"/><rect x="91" y="6" width="3" height="34"/><rect x="97" y="6" width="2" height="34"/><rect x="102" y="6" width="6" height="34"/><rect x="112" y="6" width="3" height="34"/><rect x="118" y="6" width="2" height="34"/><rect x="123" y="6" width="4" height="34"/><rect x="131" y="6" width="2" height="34"/><rect x="136" y="6" width="5" height="34"/>
+          </g>
+          <text x="75" y="60" font-size="9" fill="#6B7280" text-anchor="middle" font-family="monospace">SF 1390 2234 5678</text>
+        </g>
+        <!-- laser line -->
+        <rect x="60" y="341" width="255" height="3" fill="url(#laser)"/>
+        <!-- hint -->
+        <text x="187" y="470" font-size="12" fill="#9AA3B0" text-anchor="middle">将单号条码对准取景框，自动连续扫描</text>
+        <!-- last scan result card -->
+        <rect x="14" y="498" width="347" height="58" rx="12" fill="#E8F6EE"/>
+        <use href="#ic-check" x="26" y="510" width="24" height="24"/>
+        <text x="60" y="522" font-size="14" fill="#1F2329" font-weight="600" font-family="monospace">SF1390223456789</text>
+        <text x="60" y="542" font-size="11" fill="#2E9E5B">CODE_128 · 13:02:11 · 已确认（连续 2 帧一致）</text>
+        <!-- bottom mode chips -->
+        <rect x="14" y="576" width="72" height="34" rx="17" fill="#fff" stroke="#E5E7EB"/>
+        <text x="50" y="597" font-size="13" fill="#6B7280" text-anchor="middle">单次</text>
+        <rect x="94" y="576" width="72" height="34" rx="17" fill="#1A6EE8"/>
+        <text x="130" y="597" font-size="13" fill="#fff" text-anchor="middle" font-weight="600">连续</text>
+        <rect x="174" y="576" width="96" height="34" rx="17" fill="#fff" stroke="#E5E7EB"/>
+        <text x="222" y="597" font-size="13" fill="#6B7280" text-anchor="middle">手动输入</text>
+        <!-- torch + records FAB -->
+        <circle cx="304" cy="593" r="20" fill="#17181C"/>
+        <use href="#ic-torch" x="294" y="583" width="20" height="20"/>
+        <circle cx="345" cy="593" r="20" fill="#EAF2FE"/>
+        <g stroke="#1A6EE8" stroke-width="2" fill="none" stroke-linecap="round">
+          <path d="M337 587h16M337 593h16M337 599h11"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <div class="scene">
+    <div class="scene-title">扫描成功 / 重复单号反馈</div>
+    <div class="scene-desc">成功：命中框变绿 + 确认卡；重复：按策略忽略并 toast 提示（不刷屏）</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="47" y="71" font-size="14" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="140" y="71" font-size="14" fill="#8A919F" text-anchor="middle">音频中继</text>
+        <text x="234" y="71" font-size="14" fill="#8A919F" text-anchor="middle">智能控制</text>
+        <text x="328" y="71" font-size="14" fill="#1A6EE8" font-weight="600" text-anchor="middle">快递扫码</text>
+        <rect x="296" y="85" width="64" height="3" fill="#1A6EE8"/>
+        <!-- duplicate toast -->
+        <rect x="47" y="102" width="281" height="38" rx="19" fill="#FDF3E7" stroke="#E8862E" stroke-opacity="0.35"/>
+        <text x="187" y="126" font-size="12" fill="#B4690F" text-anchor="middle" font-weight="600">重复单号已忽略（相邻去重）· YT7712 3345 6612</text>
+        <!-- viewfinder with green hit -->
+        <rect x="14" y="158" width="347" height="250" rx="16" fill="url(#camGrad)"/>
+        <g stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.9">
+          <path d="M60 200 v-16 h16"/><path d="M299 184 h16 v16"/>
+          <path d="M315 358 v16 h-16"/><path d="M76 374 h-16 v-16"/>
+        </g>
+        <g transform="translate(112,250)">
+          <rect x="-8" y="-10" width="167" height="68" rx="8" fill="none" stroke="#43D17E" stroke-width="3"/>
+          <rect width="151" height="46" fill="#F5F6F8" rx="4"/>
+          <g fill="#17181C">
+            <rect x="10" y="6" width="3" height="34"/><rect x="16" y="6" width="2" height="34"/><rect x="21" y="6" width="5" height="34"/><rect x="30" y="6" width="2" height="34"/><rect x="35" y="6" width="4" height="34"/><rect x="43" y="6" width="2" height="34"/><rect x="48" y="6" width="6" height="34"/><rect x="58" y="6" width="3" height="34"/><rect x="64" y="6" width="2" height="34"/><rect x="69" y="6" width="5" height="34"/><rect x="78" y="6" width="2" height="34"/><rect x="83" y="6" width="4" height="34"/><rect x="91" y="6" width="3" height="34"/><rect x="97" y="6" width="2" height="34"/><rect x="102" y="6" width="6" height="34"/><rect x="112" y="6" width="3" height="34"/><rect x="118" y="6" width="2" height="34"/><rect x="123" y="6" width="4" height="34"/><rect x="131" y="6" width="2" height="34"/><rect x="136" y="6" width="5" height="34"/>
+          </g>
+          <text x="75" y="60" font-size="9" fill="#6B7280" text-anchor="middle" font-family="monospace">YT7712 3345 6612</text>
+        </g>
+        <text x="187" y="392" font-size="12" fill="#9AA3B0" text-anchor="middle">识别中…（同值连续 2 帧后确认）</text>
+        <!-- success card -->
+        <rect x="14" y="424" width="347" height="76" rx="12" fill="#E8F6EE"/>
+        <use href="#ic-check" x="26" y="440" width="28" height="28"/>
+        <text x="64" y="452" font-size="15" fill="#1F2329" font-weight="600" font-family="monospace">SF1390223456789</text>
+        <text x="64" y="472" font-size="11" fill="#2E9E5B">CODE_128 · 已加入会话（第 24 条）· 待上报</text>
+        <text x="64" y="489" font-size="11" fill="#6B7280">震动 ✓ 提示音 ✓ · 展示 800ms 后自动继续</text>
+        <!-- continue dialog (mixed) -->
+        <rect x="47" y="516" width="281" height="108" rx="14" fill="#fff" stroke="#E5E7EB"/>
+        <text x="187" y="544" font-size="14" fill="#1F2329" text-anchor="middle" font-weight="600">继续添加？</text>
+        <text x="187" y="566" font-size="12" fill="#6B7280" text-anchor="middle">5 秒无操作自动继续扫描</text>
+        <rect x="63" y="580" width="112" height="32" rx="16" fill="#fff" stroke="#E5E7EB"/>
+        <text x="119" y="600" font-size="13" fill="#6B7280" text-anchor="middle">结束会话</text>
+        <rect x="199" y="580" width="112" height="32" rx="16" fill="#1A6EE8"/>
+        <text x="255" y="600" font-size="13" fill="#fff" text-anchor="middle" font-weight="600">继续（5s）</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<h2>状态二：会话记录</h2>
+<div class="grid">
+  <div class="scene">
+    <div class="scene-title">单号列表 + 上报状态 + 导出</div>
+    <div class="scene-desc">每条 = 一次扫码；绿点已上报 / 橙点待上报；顶部统计与操作</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="47" y="71" font-size="14" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="140" y="71" font-size="14" fill="#8A919F" text-anchor="middle">音频中继</text>
+        <text x="234" y="71" font-size="14" fill="#8A919F" text-anchor="middle">智能控制</text>
+        <text x="328" y="71" font-size="14" fill="#1A6EE8" font-weight="600" text-anchor="middle">快递扫码</text>
+        <rect x="296" y="85" width="64" height="3" fill="#1A6EE8"/>
+        <!-- header -->
+        <text x="24" y="122" font-size="17" fill="#1F2329" font-weight="700">10月30日 出库单</text>
+        <text x="24" y="144" font-size="12" fill="#6B7280">共 24 条 · 已上报 23 · 待上报 1</text>
+        <rect x="238" y="106" width="60" height="28" rx="14" fill="#EAF2FE"/>
+        <text x="268" y="124" font-size="12" fill="#1A6EE8" text-anchor="middle">导出CSV</text>
+        <rect x="304" y="106" width="56" height="28" rx="14" fill="#fff" stroke="#E5E7EB"/>
+        <text x="332" y="124" font-size="12" fill="#6B7280" text-anchor="middle">清空</text>
+        <!-- rows -->
+        <g font-family="monospace">
+          <rect x="14" y="164" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <circle cx="34" cy="186" r="4" fill="#E8862E"/>
+          <text x="50" y="184" font-size="13" fill="#1F2329" font-weight="600">SF1390223456789</text>
+          <text x="50" y="205" font-size="11" fill="#6B7280">CODE_128 · 13:02:11</text>
+          <rect x="290" y="172" width="58" height="20" rx="10" fill="#FDF3E7"/>
+          <text x="319" y="186" font-size="10" fill="#B4690F" text-anchor="middle">待上报</text>
+
+          <rect x="14" y="228" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <circle cx="34" cy="250" r="4" fill="#2E9E5B"/>
+          <text x="50" y="248" font-size="13" fill="#1F2329" font-weight="600">YT7712334566123</text>
+          <text x="50" y="269" font-size="11" fill="#6B7280">CODE_128 · 13:01:47</text>
+          <text x="345" y="262" font-size="11" fill="#2E9E5B" text-anchor="end">✓</text>
+
+          <rect x="14" y="292" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <circle cx="34" cy="314" r="4" fill="#2E9E5B"/>
+          <text x="50" y="312" font-size="13" fill="#1F2329" font-weight="600">JDV012345678901</text>
+          <text x="50" y="333" font-size="11" fill="#6B7280">QR_CODE · 13:01:12</text>
+          <text x="345" y="326" font-size="11" fill="#2E9E5B" text-anchor="end">✓</text>
+
+          <rect x="14" y="356" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <circle cx="34" cy="378" r="4" fill="#2E9E5B"/>
+          <text x="50" y="376" font-size="13" fill="#1F2329" font-weight="600">753199023471</text>
+          <text x="50" y="397" font-size="11" fill="#6B7280">CODE_39 · 13:00:58 · 手动输入</text>
+          <text x="345" y="390" font-size="11" fill="#2E9E5B" text-anchor="end">✓</text>
+
+          <rect x="14" y="420" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <circle cx="34" cy="442" r="4" fill="#2E9E5B"/>
+          <text x="50" y="440" font-size="13" fill="#1F2329" font-weight="600">9200183345561</text>
+          <text x="50" y="461" font-size="11" fill="#6B7280">ITF · 13:00:31</text>
+          <text x="345" y="454" font-size="11" fill="#2E9E5B" text-anchor="end">✓</text>
+        </g>
+        <text x="187" y="510" font-size="12" fill="#8A919F" text-anchor="middle">↑ 上滑加载更多（共 24 条）</text>
+        <!-- resume scan FAB -->
+        <circle cx="317" cy="591" r="28" fill="#1A6EE8"/>
+        <g stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none" transform="translate(303,577)">
+          <path d="M8 4 v-2 h2"/><path d="M20 2 h2 v2"/><path d="M22 24 v2 h-2"/><path d="M10 26 h-2 v-2"/>
+          <rect x="6" y="9" width="18" height="12" rx="2"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <div class="scene">
+    <div class="scene-title">设置弹窗</div>
+    <div class="scene-desc">服务器 / 模式 / 去重策略 / 格式白名单 / 反馈开关；保存后生效</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#F5F6F8"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <!-- dim -->
+        <rect y="44" width="375" height="623" fill="#000" opacity="0.35"/>
+        <!-- modal -->
+        <rect x="16" y="70" width="343" height="586" rx="18" fill="#fff"/>
+        <text x="187" y="104" font-size="17" fill="#1F2329" text-anchor="middle" font-weight="700">扫码设置</text>
+        <g stroke="#E5E7EB" stroke-width="1.5" stroke-linecap="round">
+          <line x1="32" y1="118" x2="343" y2="118"/>
+        </g>
+        <!-- server -->
+        <text x="32" y="146" font-size="13" fill="#6B7280">服务器地址</text>
+        <rect x="32" y="156" width="311" height="38" rx="9" fill="#F5F6F8" stroke="#E5E7EB"/>
+        <text x="46" y="180" font-size="13" fill="#1F2329" font-family="monospace">http://192.168.1.10:8000</text>
+        <!-- auto enter toggle -->
+        <text x="32" y="230" font-size="13" fill="#6B7280">打开自动进入今日会话</text>
+        <text x="32" y="248" font-size="11" fill="#8A919F">会话按日自动创建，关 = 打开先停在选择页</text>
+        <rect x="300" y="234" width="44" height="24" rx="12" fill="#1A6EE8"/><circle cx="332" cy="246" r="9" fill="#fff"/>
+        <!-- dedup -->
+        <text x="32" y="288" font-size="13" fill="#6B7280">重复单号策略</text>
+        <g font-size="13" fill="#1F2329">
+          <circle cx="44" cy="306" r="10" fill="#fff" stroke="#1A6EE8" stroke-width="2"/>
+          <circle cx="44" cy="306" r="5" fill="#1A6EE8"/>
+          <text x="64" y="311">相邻去重（推荐）</text>
+          <circle cx="44" cy="332" r="10" fill="#fff" stroke="#C9CDD4" stroke-width="2"/>
+          <text x="64" y="337">询问我（弹窗接受/丢弃）</text>
+          <circle cx="44" cy="358" r="10" fill="#fff" stroke="#C9CDD4" stroke-width="2"/>
+          <text x="64" y="363">总是接受</text>
+          <circle cx="44" cy="384" r="10" fill="#fff" stroke="#C9CDD4" stroke-width="2"/>
+          <text x="64" y="389">会话内全去重</text>
+          <circle cx="44" cy="410" r="10" fill="#fff" stroke="#C9CDD4" stroke-width="2"/>
+          <text x="64" y="415">全局去重</text>
+        </g>
+        <text x="140" y="415" font-size="10" fill="#8A919F">所有历史会话出现过即忽略</text>
+        <!-- format whitelist -->
+        <text x="32" y="448" font-size="13" fill="#6B7280">格式白名单（码制）</text>
+        <g font-size="12" text-anchor="middle">
+          <rect x="32" y="458" width="86" height="28" rx="14" fill="#EAF2FE"/><text x="75" y="476" fill="#1A6EE8" font-weight="600">CODE_128 ✓</text>
+          <rect x="126" y="458" width="78" height="28" rx="14" fill="#EAF2FE"/><text x="165" y="476" fill="#1A6EE8" font-weight="600">CODE_39 ✓</text>
+          <rect x="212" y="458" width="56" height="28" rx="14" fill="#EAF2FE"/><text x="240" y="476" fill="#1A6EE8" font-weight="600">QR ✓</text>
+          <rect x="276" y="458" width="60" height="28" rx="14" fill="#fff" stroke="#E5E7EB"/><text x="306" y="476" fill="#8A919F">ITF</text>
+          <rect x="32" y="494" width="98" height="28" rx="14" fill="#fff" stroke="#E5E7EB"/><text x="81" y="512" fill="#8A919F">DATA_MATRIX</text>
+          <rect x="138" y="494" width="70" height="28" rx="14" fill="#fff" stroke="#E5E7EB"/><text x="173" y="512" fill="#8A919F">PDF417</text>
+        </g>
+        <!-- toggles -->
+        <g font-size="13" fill="#1F2329">
+          <text x="32" y="556">提示音</text>
+          <rect x="300" y="542" width="44" height="24" rx="12" fill="#1A6EE8"/><circle cx="332" cy="554" r="9" fill="#fff"/>
+          <text x="32" y="590">震动反馈</text>
+          <rect x="300" y="576" width="44" height="24" rx="12" fill="#1A6EE8"/><circle cx="332" cy="588" r="9" fill="#fff"/>
+        </g>
+        <!-- save -->
+        <rect x="108" y="606" width="160" height="38" rx="19" fill="#1A6EE8"/>
+        <text x="188" y="630" font-size="14" fill="#fff" text-anchor="middle" font-weight="600">保存</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="scene">
+    <div class="scene-title">跨天第一次打开（10月31日）</div>
+    <div class="scene-desc">提示「今天还没有今日出库单」→ 一键创建 / 查看历史（昨日未上报记录照旧自动补传）</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="47" y="71" font-size="14" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="140" y="71" font-size="14" fill="#8A919F" text-anchor="middle">音频中继</text>
+        <text x="234" y="71" font-size="14" fill="#8A919F" text-anchor="middle">智能控制</text>
+        <text x="328" y="71" font-size="14" fill="#1A6EE8" font-weight="600" text-anchor="middle">快递扫码</text>
+        <rect x="296" y="85" width="64" height="3" fill="#1A6EE8"/>
+        <!-- cross-day prompt card -->
+        <rect x="20" y="112" width="335" height="176" rx="16" fill="#fff" stroke="#E5E7EB"/>
+        <circle cx="60" cy="152" r="20" fill="#EAF2FE"/>
+        <g stroke="#1A6EE8" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round" transform="translate(48,140)">
+          <rect x="2" y="4" width="18" height="16" rx="2"/><path d="M8 2v4M14 2v4M2 9h18"/>
+        </g>
+        <text x="92" y="148" font-size="15" fill="#1F2329" font-weight="700">今天是 10月31日</text>
+        <text x="92" y="170" font-size="13" fill="#6B7280">还没有今日出库单</text>
+        <rect x="40" y="196" width="295" height="36" rx="18" fill="#1A6EE8"/>
+        <text x="187" y="219" font-size="14" fill="#fff" text-anchor="middle" font-weight="600">创建今日出库单</text>
+        <rect x="40" y="240" width="295" height="36" rx="18" fill="#fff" stroke="#E5E7EB"/>
+        <text x="187" y="263" font-size="14" fill="#6B7280" text-anchor="middle">查看历史</text>
+        <!-- history sessions list -->
+        <text x="24" y="330" font-size="13" fill="#6B7280">历史会话</text>
+        <g font-family="monospace">
+          <rect x="14" y="344" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <text x="34" y="368" font-size="13" fill="#1F2329" font-weight="600">10月30日 出库单</text>
+          <text x="34" y="389" font-size="11" fill="#6B7280">24 条 · 已全部上报</text>
+          <text x="345" y="378" font-size="11" fill="#2E9E5B" text-anchor="end">✓ 已上报</text>
+
+          <rect x="14" y="408" width="347" height="56" rx="10" fill="#fff" stroke="#E5E7EB"/>
+          <text x="34" y="432" font-size="13" fill="#1F2329" font-weight="600">10月29日 出库单</text>
+          <text x="34" y="453" font-size="11" fill="#6B7280">17 条 · 1 条未上报（重连自动补传）</text>
+          <rect x="288" y="416" width="60" height="20" rx="10" fill="#FDF3E7"/>
+          <text x="318" y="430" font-size="10" fill="#B4690F" text-anchor="middle">待上报 1</text>
+        </g>
+        <text x="187" y="620" font-size="12" fill="#8A919F" text-anchor="middle">每天一个会话 · 按日自动命名</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>实现要点（对应调研文档 §6）：</b>
+  <ul class="clean">
+    <li><b>准确率核心</b>：多帧一致性投票（同值连续 ≥2 帧才确认）+ 格式白名单 + 正则 filter 校验 + EAN/UPC 校验位自验 —— 这是相对参考项目（老 ZXing 一帧一拍）的关键增强。</li>
+    <li><b>速度</b>：CameraX 1280×720 + <code>STRATEGY_KEEP_ONLY_LATEST</code> + YUV_420_888 直通 ML Kit + 连续自动对焦 + 支持设备上 ML Kit 自动变焦。</li>
+    <li><b>交互语义照参考项目</b>：单次/连续/手动三模式、重复码四策略（默认相邻去重）、mixed_continue 的「继续添加？」倒计时弹窗、成功展示 800ms。</li>
+    <li><b>生命周期照智能控制纪律</b>：进入 <code>start()</code>（绑相机 + 启上传器），onDispose <code>stop()</code>（unbind + 清 handler）；状态用不可变快照参数化，杜绝 LazyVerticalGrid 漏刷。</li>
+    <li><b>离线不丢</b>：本地队列 + 会话级批量上报 + ACK 确认 + 重连对账（照 unsynced deleted/restored 设计）。</li>
+    <li><b>会话按自然日管理</b>：每天一个会话、自动按日期命名；同日打开由设置项「自动进入今日会话」决定行为；跨天第一次打开给提示卡「创建今日出库单 / 查看历史」；昨日未上报记录照旧自动补传，不合并（见调研文档 §5.5）。</li>
+  </ul>
+</div>
+
+</body>
+</html>

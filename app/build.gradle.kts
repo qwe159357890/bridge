@@ -20,7 +20,7 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.1.93"
+        versionName = "0.1.94"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -102,6 +102,13 @@ dependencies {
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.gson)
+
+    // ---- 快递扫码（CameraX 采集 + ML Kit bundled 识别）----
+    implementation(libs.camera.core)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -221,7 +221,7 @@ private fun BridgeBottomBar(
 fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         BridgeTabRow(
-            titles = listOf("短信", "音频中继", "智能控制"),
+            titles = listOf("短信", "音频中继", "智能控制", "快递扫码"),
             currentTab = currentTab,
             onTabChange = onTabChange,
         )
@@ -229,6 +229,7 @@ fun HomePage(currentTab: Int, onTabChange: (Int) -> Unit) {
             0 -> SmsConversationsPage() // 真实短信页（v0.1.34，原假数据骨架）
             1 -> AudioRelayPage() // 音频中继页（手机放音，原通讯录占位已移除）
             2 -> RelaySwitchPage() // 智能控制页（ESP32 继电器，原「发现」假数据占位已替换）
+            3 -> ScanPage() // 快递扫码页（v0.1.94 新增，CameraX + ML Kit 纯本地闭环）
         }
     }
 }

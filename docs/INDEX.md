@@ -44,6 +44,7 @@
 | 文档 | 说明 |
 |---|---|
 | [esp32-relay-integration.md](research/esp32-relay-integration.md) | **ESP32 继电器项目集成调研**（参考项目结构/功能清单、与 Bridge 现状对照、集成方案 A/B/C 对比、推荐「客户端直连参考中继服务器」落地设计；**已落地实现**：`switch/` 包 + `ui/RelaySwitchPages.kt` + `ui/RelaySwitchIcons.kt`，含连接生命周期/按钮配色/图标还原/窗格网格等细化决策） |
+| [barcode-scanner-integration.md](research/barcode-scanner-integration.md) | **快递扫码功能集成调研**（Barcode to PC 参考项目：协议层完整还原 helo/ping-pong/putScanSessions-ACK/离线对账、扫描准确率手段、集成方案对比→推荐自研三端（CameraX+ML Kit 多帧投票）、需要实现的清单与坑；**未实现**，原型见 `assets/design/ui-mockup-barcode-scanner.html`） |
 
 ### 管理后台（admin/）
 | 文档 | 说明 |
