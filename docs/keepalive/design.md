@@ -125,3 +125,20 @@ KeepAliveJobService.onStartJob / KeepAliveReceiver.onReceive；v0.1.95~98 共 8 
 （系统取消倒计时，唯一防崩出口），等下次兜底/用户进 App 再拉起；③REFRESH 路径
 同样防护；④AudioRelayService 降级分支裸 startForeground 再抛会穿透崩溃 → 补
 runCatching + stopSelf。根因异常下次出现会带完整堆栈进服务端日志，可精确定位。
+
+## 附录 4：冻结竞态真根因与修复（v0.2.00，2026-10-30）
+
+**v0.1.99 修复后仍崩溃 2 次**（19:15/19:32，dropbox 实锤 v0.1.99）。服务器 DiagLog
+里无「startForeground 失败」日志 + logcat 中崩溃进程零输出 → **Service.onCreate
+在 30 秒窗口内从未执行**——v0.1.99 修在服务内部，修错了层。
+
+**真根因（events log 时间线实锤）**：用户退后台 → MainActivity 销毁（19:21:34）→
+进程缓存化被厂商冻结 → 15 分钟保活闹钟解冻投递 Job → onStartJob 调
+startForegroundService 后**立即返回 false** → 任务结束、进程瞬间再冻结 →
+排队的 Service.onCreate 饿死 → ~30s 超时崩溃。佐证：崩溃重启的新进程（未冻结）
+里同一服务 1 秒内挂前台成功（19:32:28 通知入列）。
+
+**修复（v0.2.00）**：兜底组件保持「处理中」撑住解冻窗口——
+①KeepAliveJobService.onStartJob 返回 true + 4s 后 jobFinished；
+②KeepAliveReceiver.goAsync() + 4s 后 finish。广播/任务组件存活期间系统不冻结
+进程 → onCreate 在窗口内正常派发 → v0.1.99 的重试+stopSelf 防线照常生效。
