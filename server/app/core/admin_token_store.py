@@ -15,8 +15,9 @@ DB 为持久层（写穿透 write-through，读穿透 read-through）。
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Iterator, Optional
 
 import pymysql
 
@@ -32,22 +33,31 @@ class AdminTokenStore:
         self._user = user
         self._password = password
         self._database = database
-        self._conn: Optional[pymysql.connections.Connection] = None
 
     # ------------------------------------------------------------------
     # 连接与建库建表
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        """建立连接；库/表不存在自动创建。可重复调用（已有连接则跳过）。"""
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("管理员 token 存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+        """建库建表（启动时调用一次）。运行期不持有连接，避免并发复用。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("管理员 token 存储 schema 就绪：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
 
+    _CREATE_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS admin_tokens (
+        token VARCHAR(64) PRIMARY KEY,
+        issued_at DOUBLE NOT NULL COMMENT '签发时间戳（epoch 秒）',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+
+    def _new_connection(self) -> pymysql.connections.Connection:
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
             password=self._password, charset="utf8mb4",
@@ -59,37 +69,22 @@ class AdminTokenStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
-        logger.info("管理员 token 存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
+        return conn
 
-    _CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS admin_tokens (
-        token VARCHAR(64) PRIMARY KEY,
-        issued_at DOUBLE NOT NULL COMMENT '签发时间戳（epoch 秒）',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    """
-
-    def _connection(self) -> pymysql.connections.Connection:
-        """取可用连接（惰性建立；断线自动重连）。"""
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每操作独立连接（线程安全），用完即关。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        """应用关闭时释放连接。"""
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 读写
@@ -97,34 +92,30 @@ class AdminTokenStore:
 
     def save(self, token: str, issued_at: float) -> None:
         """写入/覆盖一条 token（写穿透，由 AdminAuth 在签发时调用）。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO admin_tokens (token, issued_at, created_at) VALUES (%s, %s, %s) "
                 "ON DUPLICATE KEY UPDATE issued_at = VALUES(issued_at)",
                 (token, issued_at, datetime.fromtimestamp(issued_at)),
             )
-        conn.commit()
+            conn.commit()
 
     def get(self, token: str) -> Optional[float]:
         """查询单条 token 的签发时间；不存在返回 None（读穿透）。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT issued_at FROM admin_tokens WHERE token = %s", (token,))
             row = cur.fetchone()
         return float(row[0]) if row else None
 
     def load_all(self) -> dict[str, float]:
         """启动时全量加载（预热内存缓存），顺便清掉已过期行由调用方过滤。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT token, issued_at FROM admin_tokens")
             rows = cur.fetchall()
         return {row[0]: float(row[1]) for row in rows}
 
     def delete(self, token: str) -> None:
         """删除一条 token（注销/TTL 过期清理）。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM admin_tokens WHERE token = %s", (token,))
-        conn.commit()
+            conn.commit()

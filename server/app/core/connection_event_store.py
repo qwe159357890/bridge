@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -78,22 +80,15 @@ class ConnectionEventStore:
         self._mysql_args = (host, port, user, password, database)
         self._retention_days = retention_days
         self._max_events = max_events
-        self._conn = None  # pymysql 连接（惰性建立）
         self._mysql_ok = False  # 最近一次 MySQL 操作是否成功（降级/恢复开关）
         self._memory: list[ConnectionEvent] = []  # 降级模式的事件缓冲
         self._last_cleanup = 0.0
 
-    # ---- MySQL 连接管理（照 sms_store 的 ping+reconnect 模式） ----
+    # ---- MySQL 连接管理（每操作独立连接，线程安全） ----
 
-    def _connection(self):
+    def _new_connection(self):
         import pymysql
 
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return self._conn
-            except Exception:
-                self._close_quietly()
         host, port, user, password, database = self._mysql_args
         conn = pymysql.connect(
             host=host, port=port, user=user, password=password, charset="utf8mb4",
@@ -105,19 +100,22 @@ class ConnectionEventStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
         return conn
 
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator:
+        """每操作独立连接（线程安全），用完即关，避免并发复用同一 socket。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-        self._conn = None
 
     # ---- 对外接口（签名与旧内存版完全一致，调用方零改动） ----
 
@@ -125,14 +123,13 @@ class ConnectionEventStore:
         """记录一条事件。MySQL 失败时降级写内存。"""
         e = ConnectionEvent(device_id=device_id, event=event, reason=reason)
         try:
-            conn = self._connection()
-            with conn.cursor() as cur:
+            with self._connection() as conn, conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO connection_events (device_id, event, reason, ts) "
                     "VALUES (%s, %s, %s, %s)",
                     (device_id, event, reason, e.ts),
                 )
-            conn.commit()
+                conn.commit()
             self._mysql_ok = True
         except Exception as exc:
             if self._mysql_ok:
@@ -155,13 +152,12 @@ class ConnectionEventStore:
             return self._list_memory(device_id, limit)
 
     def _list_mysql(self, device_id: str | None, limit: int) -> list[dict]:
-        conn = self._connection()
         conds, args = [], []
         if device_id is not None:
             conds.append("device_id = %s")
             args.append(device_id)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
                 f"SELECT device_id, event, reason, ts FROM connection_events {where} "
                 "ORDER BY ts DESC LIMIT %s",
@@ -182,8 +178,7 @@ class ConnectionEventStore:
 
     def count(self) -> int:
         try:
-            conn = self._connection()
-            with conn.cursor() as cur:
+            with self._connection() as conn, conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM connection_events")
                 return int(cur.fetchone()[0])
         except Exception:
@@ -200,11 +195,10 @@ class ConnectionEventStore:
             return
         self._last_cleanup = now
         try:
-            conn = self._connection()
             cutoff = now - self._retention_days * 86400.0
-            with conn.cursor() as cur:
+            with self._connection() as conn, conn.cursor() as cur:
                 n = cur.execute("DELETE FROM connection_events WHERE ts < %s", (cutoff,))
-            conn.commit()
+                conn.commit()
             if n:
                 logger.info("上下线记录清理 %d 条超龄事件（保留 %d 天）", n, self._retention_days)
         except Exception as exc:

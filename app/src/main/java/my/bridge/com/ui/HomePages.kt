@@ -78,38 +78,6 @@ fun ContactList() {
     }
 }
 
-// ============ 发现 ============
-private val discoverItems = listOf("朋友圈", "小程序", "视频号", "直播", "看一看", "搜一搜")
-
-@Composable
-fun DiscoverList() {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        item { SectionTitle("发现") }
-        items(discoverItems) { item ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { Timber.d("进入发现：$item") },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Avatar(text = item.take(1), background = Color(0xFFFEF3E8), foreground = Color(0xFFE8862E))
-                    Spacer(Modifier.width(12.dp))
-                    Text(item, style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-        }
-    }
-}
-
 // ============ 通用组件 ============
 @Composable
 fun SectionTitle(title: String) {

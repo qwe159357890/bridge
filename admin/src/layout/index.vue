@@ -1,9 +1,9 @@
 <template>
   <el-container class="layout">
-    <el-aside :width="isCollapse ? '64px' : '220px'" class="aside">
+    <el-aside :width="asideWidth" class="aside">
       <div class="logo">
         <el-icon class="logo-icon"><Connection /></el-icon>
-        <span v-if="!isCollapse">Bridge 管理后台</span>
+        <span v-if="!isCollapse">Bridge</span>
       </div>
       <el-menu
         :default-active="$route.path"
@@ -97,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { Fold, Expand } from '@element-plus/icons-vue'
@@ -111,13 +111,43 @@ const auth = useAuthStore()
 
 // ---------------- 侧边栏收缩/展开（localStorage 记忆） ----------------
 const isCollapse = ref(false)
+// 侧栏宽度：收缩态固定 36px；展开态根据最长菜单项文字自动测量（见 measureAsideWidth）
+const asideWidth = ref('220px')
+
 function toggleCollapse() {
   isCollapse.value = !isCollapse.value
+  asideWidth.value = isCollapse.value ? '36px' : measuredExpandedWidth.value
   try {
     localStorage.setItem('bridge_admin_aside_collapse', isCollapse.value ? '1' : '0')
   } catch {
     /* 隐私模式忽略 */
   }
+}
+
+// 展开态测量出的宽度（缓存），默认 220px 兜底
+const measuredExpandedWidth = ref('220px')
+
+/** 展开态下，测量所有菜单项文字的实际宽度，取最长项，加上图标宽 + 左右 padding + 余量，
+ *  让侧栏宽度刚好贴合内容、内容靠左、右边无大空白。 */
+function measureAsideWidth() {
+  if (isCollapse.value) return
+  const asideEl = document.querySelector('.aside') as HTMLElement | null
+  if (!asideEl) return
+  const items = asideEl.querySelectorAll<HTMLElement>('.el-menu-item')
+  let maxText = 0
+  items.forEach((item) => {
+    const span = item.querySelector('span') as HTMLElement | null
+    if (span) {
+      const w = span.getBoundingClientRect().width
+      if (w > maxText) maxText = w
+    }
+  })
+  if (maxText <= 0) return
+  // 展开态水平构成：margin 4 + padding 10 + 图标 24 + 图标右距 5 + 文字 + padding 10 + margin 4 = 57 + 文字；
+  // 再加 10px 余量（右侧太紧，放宽一点）。
+  const width = maxText + 57 + 10
+  measuredExpandedWidth.value = `${width}px`
+  asideWidth.value = `${width}px`
 }
 
 function handleCommand(command: string) {
@@ -268,6 +298,15 @@ onMounted(() => {
   } catch {
     /* 忽略 */
   }
+  if (isCollapse.value) {
+    asideWidth.value = '36px'
+  } else {
+    // 展开态：等 DOM 渲染完成后测量最长菜单项宽度（nextTick + 微延迟等字体）
+    nextTick(() => {
+      measureAsideWidth()
+      window.setTimeout(measureAsideWidth, 150)
+    })
+  }
   connectWS()
 })
 
@@ -295,6 +334,15 @@ onBeforeUnmount(() => {
 .aside {
   background-color: #ffffff;
   border-right: 1px solid #ebeef5;
+  overflow: hidden;
+}
+/* 收缩态：侧栏外壁左右各留 2px 空隙（与屏幕左缘、右侧内容区之间留缝） */
+.aside:has(.el-menu--collapse) {
+  margin: 0 2px;
+}
+.aside :deep(.el-menu) {
+  border-right: none;
+  overflow: hidden;
 }
 .logo {
   height: 60px;
@@ -309,10 +357,21 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
 }
+/* 展开态：logo 文字靠左，图标左缘与菜单项图标左缘对齐（menu margin4 + padding10 = 14px） */
+.aside:not(:has(.el-menu--collapse)) .logo {
+  justify-content: flex-start;
+  padding-left: 14px;
+}
 .logo-icon {
-  font-size: 20px;
+  /* 与菜单项图标同字号（Element Plus 菜单图标默认 18px），
+     保证收缩态下顶部 logo 图标与下方菜单图标宽度一致、垂直对齐 */
+  font-size: 18px;
   color: var(--brand);
   flex-shrink: 0;
+}
+/* 收缩态：logo 区只显示图标，高度降为与菜单项一致（40px），避免过高的顶部空白 */
+.aside:has(.el-menu--collapse) .logo {
+  height: 40px;
 }
 .header-left {
   display: flex;
@@ -341,14 +400,47 @@ onBeforeUnmount(() => {
   transform: translate(-40%, -40%) scale(0.85);
   z-index: 1;
 }
-.aside :deep(.el-menu) {
-  border-right: none;
-}
 .aside :deep(.el-menu-item) {
   height: 48px;
   line-height: 48px;
-  margin: 4px 8px;
+  margin: 4px 4px;
+  padding: 0 10px;
   border-radius: 6px;
+}
+/* 覆盖 Element Plus 垂直菜单非收缩态对 padding-left 的高优先级设置（20px），
+   否则左侧 padding-left 仍为 20px，导致内容不够靠左。 */
+.aside :deep(.el-menu--vertical:not(.el-menu--collapse) .el-menu-item) {
+  padding: 0 10px;
+}
+/* 收缩态：菜单宽度不再被 Element Plus 写死的 64px 卡住，改为跟随侧栏 100%；
+   菜单项去掉左右 margin 和默认 padding(0 20px)，改用 justify-content:center
+   让图标在侧栏内水平居中，左右留白对称、与顶部 logo 图标同一条中心线对齐。 */
+.aside :deep(.el-menu--collapse) {
+  width: 100%;
+  padding: 0 2px;
+}
+.aside :deep(.el-menu--collapse .el-menu-item) {
+  height: 40px;
+  line-height: 40px;
+  margin: 4px 0;
+  padding: 0;
+  justify-content: center;
+}
+/* 收缩态：图标强制为正方形，并撑满父容器（宽度 = 侧栏宽 - 左右留白）。
+   侧栏 36px、左右各留 6px → 图标 24px×24px，svg 用 1em 随字号缩放。 */
+.aside :deep(.el-menu--collapse .el-menu-item .el-icon) {
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
+  font-size: 24px;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 收缩态：短信角标项去掉右侧 margin，避免干扰图标居中 */
+.aside :deep(.el-menu--collapse .el-menu-item .sms-badge) {
+  margin-right: 0;
 }
 .aside :deep(.el-menu-item.is-active) {
   background: rgba(64, 158, 255, 0.1) !important;

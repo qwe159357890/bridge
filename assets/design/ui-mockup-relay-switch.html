@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="K0henyqfEGQkUoSp6TrGF7" style=""><head data-page-node-id="SuM7loV6oanPq61yb0bvVR">
+<meta charset="UTF-8" data-page-node-id="SeeUAO1sG2TLR63ECSxALo">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="JIpAzpI4oHhQHjDBWBFEZD">
+<title data-page-node-id="LFSJLowNQyrX3quxCgz6vC">Bridge · 智能控制（ESP32 继电器）UI 原型</title>
+<style data-page-node-id="znFKAOOzE2rcUYFoCxCSmz">
+  :root {
+    --brand: #1A6EE8;
+    --brand-soft: #EAF2FE;
+    --inactive: #8A919F;
+    --bg: #F5F6F8;
+    --card: #FFFFFF;
+    --text: #1F2329;
+    --text-sub: #6B7280;
+    --green: #2E9E5B;
+    --orange: #E8862E;
+    --red: #E5484D;
+    --border: #E5E7EB;
+    --phone-w: 375px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    padding: 32px 20px 60px;
+  }
+  h1 { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+  .subtitle { text-align: center; color: var(--text-sub); font-size: 14px; margin-bottom: 8px; }
+  .meta {
+    max-width: 860px; margin: 0 auto 28px; padding: 14px 18px;
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--text-sub);
+  }
+  .meta b { color: var(--text); }
+  .meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 14px; padding-left: 10px; border-left: 4px solid var(--brand); }
+  .grid { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start; }
+  .scene { flex: 1 1 360px; max-width: 460px; min-width: 320px; }
+  .scene-title { text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .scene-desc { text-align: center; font-size: 12px; color: var(--text-sub); margin-bottom: 12px; }
+  .phone { width: var(--phone-w); margin: 0 auto; background: #fff; border-radius: 30px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.10); border: 1px solid var(--border); }
+  .phone svg { display: block; width: 100%; height: auto; }
+  .note { max-width: 860px; margin: 36px auto 0; padding: 16px 20px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 12px; font-size: 13px; color: #92400E; }
+  .note b { color: #78350F; }
+  ul.clean { margin: 8px 0 0 18px; }
+  ul.clean li { margin: 4px 0; }
+</style>
+<style id="__dm_no_drag_style__">* { -webkit-user-drag: none !important; }</style><style id="__dm_bindable_badge_style__">[data-sp-bindable="database"]{outline:1px dashed #0088ff;outline-offset:2px;border-radius:4px;}[data-sp-bindable="database"] *{pointer-events:none !important;transition:none !important;animation:none !important;}[data-sp-bindable="database"]{transition:none !important;animation:none !important;}</style></head>
+<body data-page-node-id="R7jnI7SFhKbs0LeXl86uaQ" style="">
+
+<h1 data-page-node-id="iYHsBR10XglguSGl4S21Kv">Bridge · 智能控制 UI 原型 <span style="font-size:14px;color:var(--text-sub)" data-page-node-id="ahs56VzO4vdeIF0ixCCNA7">v1</span></h1>
+<div class="subtitle" data-page-node-id="mLjB5uTChAuUOQUZ9ejV5r">ESP32 继电器控制 — 主页「发现」Tab 替换为「智能控制」</div>
+
+<div class="meta" data-page-node-id="8MDbCfxtzaHHvTFVfbZZ85">
+  <div style="margin-bottom:6px" data-page-node-id="0qaTqOQqVYbiPEQLBqy7uI">
+    <span class="tag" data-page-node-id="UMmo5GAXt4iETXrizq7vIn">方案 A：客户端直连参考中继服务器</span>
+    <span class="tag" data-page-node-id="jQgnvSqVb9rNbNnCnVIuQc">服务端零改动</span>
+    <span class="tag" data-page-node-id="K4EaGOyObvNFHFBZ8a5nOi">包名 switch/（区分音频中继 relay/）</span>
+  </div>
+  <div data-page-node-id="lCVAhA5G2ll4CoTXSKrefR"><b data-page-node-id="ZGZQTwMUf2JCW0Ht7L6dp6">功能范围（严格照 relay-control/src/main.ts 移植）：</b></div>
+  <div data-page-node-id="Dj3CjtsvF0e23FNh8Ux3w6">① <b data-page-node-id="X5vrOwcLfNkfWIyIeGtmDA">单设备卡片</b> —— 电源环（内圈 + 旋转光环 + 脉冲光晕）+ 中心 SVG 线框图标（实线弧=开 / 虚线弧=关 / 虚线圆问号=等待）+ 设备名 + 端口 + 状态徽章（已开启·绿 / 已关闭·灰 / 等待连接·灰 / 获取中·橙）+ 开关按钮（绿=关闭设备 / 红=开启设备 / 灰等待）。</div>
+  <div data-page-node-id="tB0duEXjfciwRAoMNMu7WI">② <b data-page-node-id="TmYuB8CeSoh9ir6pFNgkGl">窗格多设备模式</b> —— 顶部「窗格模式」开关切换，列出全部设备，在线优先 + 服务端顺序排序。</div>
+  <div data-page-node-id="dACghGylE8Zsaq64EETsTH">③ <b data-page-node-id="pQTbdQ0290BytpbGQehnAM">连接状态胶囊</b> + <b data-page-node-id="ovWo3DSJDU3GJnGHUgAqNR">⚙ 设置入口</b> —— 已连接·绿 / 连接中·橙 / 未连接·灰。</div>
+  <div data-page-node-id="e4OGrKDXRXJEcbMi4fbrlW">④ <b data-page-node-id="SnOWFVAF4GtJemRfUHaQ03">关闭二次确认</b> —— 关闭供电前弹窗确认（⚠️ + 红色「确认关闭」）。</div>
+  <div data-page-node-id="WctxM8nho4dMXOHN2rQTma">⑤ <b data-page-node-id="zwh22v4ygKGnHLLp6Sylgp">服务器设置</b> —— 服务器地址 / 设备 ID / 继电器端口(1-9) / API Key，保存后重连生效。</div>
+  <div style="margin-top:6px" data-page-node-id="xxIXg9nR3uwrPCngnKgllm"><b data-page-node-id="A8lw0DmMlQ81GDqnMRJJcj">通信模型</b>：Bridge 客户端作为<b data-page-node-id="s22c7dcjMhBIBBnZF3Xm1v">主动控制方</b>，出站 WS 连接继电器中继服务器（默认 <code data-page-node-id="BUfVXKbERra2IQCNrgK2na">127.0.0.1:15152</code>），沿用 <code data-page-node-id="c1ippbMnnOjqMXCamphlcn">RelaySwitchClient</code>（OkHttp + generation 防竞态 + 指数退避重连 + 心跳判死）。</div>
+</div>
+
+<h2 data-page-node-id="lvdEvOZRxRGX30ivurltv5">状态一：单设备卡片（三种设备状态）</h2>
+<div class="grid" data-page-node-id="QO4l1iDNZkdZ6G2LtdBUuU">
+  <!-- 已开启 -->
+  <div class="scene" data-page-node-id="2Qd7ZslKCSFkuXok3Z9S2W">
+    <div class="scene-title" data-page-node-id="Wwcaf8AwKnFpJEtgS2cwB6">设备已开启（在线）</div>
+    <div class="scene-desc" data-page-node-id="T5BlflfTrRuhFNI1xcTquX">绿色电源环 + 实线弧图标 + 绿色徽章「已开启」+ 绿色「关闭设备」按钮 + 上升粒子</div>
+    <div class="phone" data-page-node-id="IDY9xpEkGEUBQHGDx7o4a4">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg" data-page-node-id="pdMNalJ5AkcCAqcnfmKR82">
+        <defs data-page-node-id="defs_power_on">
+          <!-- 原项目 ICONS（严格照 relay-control/src/main.ts）：
+               viewBox 0 0 24 24, fill=none, stroke=currentColor, stroke-width=2,
+               stroke-linecap/linejoin=round -->
+          <g id="icon-power-on" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v6"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+          </g>
+          <g id="icon-power-off" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v6"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke-dasharray="3 3"/>
+          </g>
+          <g id="icon-power-wait" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" stroke-dasharray="4 4"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+            <circle cx="12" cy="17" r="0.5" fill="currentColor" stroke="none"/>
+          </g>
+          <g id="icon-badge-on" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+          </g>
+          <g id="icon-badge-off" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+          </g>
+          <g id="icon-badge-wait" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" stroke-dasharray="4 4"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </g>
+          <g id="icon-btn-on" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </g>
+          <g id="icon-btn-off" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+          </g>
+          <g id="icon-btn-wait" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" stroke-dasharray="4 4"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </g>
+        </defs>
+        <rect width="375" height="667" fill="#fff" data-page-node-id="e7zNBq5EA6ANX5zkb9Zng8"></rect>
+        <rect width="375" height="44" fill="#fff" data-page-node-id="8QCXEwernGinWuX1ke4R8J"></rect>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600" data-page-node-id="HJew42woLkxQVtQPawuWv7">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329" data-page-node-id="pmj1vDreATaynS2RMzhbjq"></circle><circle cx="352" cy="24" r="3" fill="#1F2329" data-page-node-id="ZTBWthqAIiIpVJQtJDUB5R"></circle><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329" data-page-node-id="BE4gCAIrB4hDBVvALcTZBr"></rect>
+        <rect y="44" width="375" height="44" fill="#fff" data-page-node-id="wDFI8qq8lZEBBL0kJ7Nkzx"></rect>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8" data-page-node-id="eThjYYFh8U0arBOyoTKddO"></rect>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="yvhrCvrmtYr4Ax77MI8btu">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle" data-page-node-id="wi4DX2cUp7muCMCcq65Ppp">智能控制</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="lPFIEqlrgUnyUs2meYc32r">发现</text>
+
+        <!-- 标题 -->
+        <text x="24" y="116" font-size="16" fill="#1F2329" font-weight="600" data-page-node-id="RB723mvF6LozRciobkExPL">智能控制</text>
+
+        <!-- 工具条：窗格模式 + 连接状态 + 设置 -->
+        <rect x="16" y="128" width="164" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="ABzfbFKVGNx9cp20KgpatG"></rect>
+        <text x="32" y="153" font-size="13" fill="#1F2329" data-page-node-id="EPNTKaUby9Y4DIDr9scfE1">窗格模式</text>
+        
+        <circle cx="156" cy="148" r="8" fill="#fff" data-page-node-id="iwLl6cDvwBeawfHP8BBo80"></circle>
+        <rect x="188" y="128" width="108" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="RM9urPOZkSVjJtj5T0i5oO"></rect>
+        <circle cx="204" cy="148" r="4" fill="#2E9E5B" data-page-node-id="SJYZ2PGaT5T3VbCzU2dmiE"></circle>
+        <text x="214" y="153" font-size="12" fill="#2E9E5B" data-page-node-id="8TjqI2HPXxVGcEyjQsAhiF">已连接</text>
+        <rect x="304" y="128" width="55" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="O7Rqd36MY31nAg21XUER7E"></rect>
+        <text x="331" y="153" font-size="16" text-anchor="middle" data-page-node-id="ITXujnVBMxeDlx2IJ47DlH">⚙️</text>
+
+        <!-- 设备卡片 -->
+        <rect x="16" y="180" width="343" height="342" rx="12" fill="#fff" stroke="#E5E7EB" data-page-node-id="beprgorRRF9OWirvGCMqtv"></rect>
+        <!-- 粒子（绿色方块上升） -->
+        <rect x="60" y="330" width="5" height="5" fill="#2E9E5B" opacity="0.5"></rect>
+        <rect x="140" y="300" width="4" height="4" fill="#2E9E5B" opacity="0.35"></rect>
+        <rect x="230" y="340" width="6" height="6" fill="#2E9E5B" opacity="0.4"></rect>
+        <rect x="310" y="280" width="4" height="4" fill="#2E9E5B" opacity="0.3"></rect>
+        <!-- 电源环（内圈 + 旋转光环 + 中心线框图标） -->
+        <circle cx="187" cy="232" r="40" fill="#EAF7EF" data-page-node-id="9hBVuYe1Pm21eCPqsHzglB"></circle>
+        <circle cx="187" cy="232" r="40" fill="none" stroke="#2E9E5B" stroke-width="2" opacity="0.6" stroke-dasharray="60 30 40 30"></circle>
+        <g transform="translate(187,232) scale(1.9) translate(-12,-12)" stroke="#2E9E5B" stroke-width="2"><use href="#icon-power-on"/></g>
+        <text x="187" y="298" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="oNib8hdChOPqajU0rtNjNd">esp32_001</text>
+        <text x="187" y="318" font-size="13" fill="#6B7280" text-anchor="middle" data-page-node-id="6pBpLQJrviE5pP61fhBcwu">GPIO 18 · 继电器端口 6</text>
+        <rect x="157" y="332" width="60" height="22" rx="6" fill="#EAF7EF" data-page-node-id="aM7yct3SxerERzRU6Msf8Q"></rect>
+        <text x="187" y="348" font-size="12" fill="#2E9E5B" text-anchor="middle" font-weight="600" data-page-node-id="M10OincM27hXOCNJkwNjqc">已开启</text>
+        <rect x="36" y="374" width="303" height="46" rx="10" fill="#2E9E5B" data-page-node-id="v4baaIXQdc5EANajQsHBFt"></rect>
+        <text x="187" y="403" font-size="15" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="DI4ZJoraJgZvR8EDjDu0cW">关闭设备</text>
+
+        <!-- 说明 -->
+        <text x="24" y="546" font-size="12" fill="#8A919F" data-page-node-id="7Yp0Sq98uuDDzjEFzqaDrF">控制 ESP32 继电器设备（智能开关）。开启后 Bridge 主动连接继电器服务器，服务器地址与 API Key 可在设置中配置。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB" data-page-node-id="iz6DUMQ2ggzxBLrKGfvFxl"></rect>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle" data-page-node-id="HRegW49oV99zfueqnY9YR5">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle" data-page-node-id="vOiWOT34ndQNWGkVbsHPvG">设置</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 已关闭 -->
+  <div class="scene" data-page-node-id="eMBr1sONYEMhhbR5hFi2GU">
+    <div class="scene-title" data-page-node-id="8yw4gdlIGvrhZa95RlRmHP">设备已关闭（在线）</div>
+    <div class="scene-desc" data-page-node-id="vPqLHdGjFEJmumGSCRaqts">红色电源环 + 虚线弧图标 + 灰色徽章「已关闭」+ 红色「开启设备」按钮 + 下降粒子</div>
+    <div class="phone" data-page-node-id="rxQC3XJ2AGr25BFLPpAuOv">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg" data-page-node-id="lQPgRqUshuYhEkHxFZlhUY">
+        <rect width="375" height="667" fill="#fff" data-page-node-id="oIC5cNr7A2934dOgBRWkEm"></rect>
+        <rect width="375" height="44" fill="#fff" data-page-node-id="qG5uLZYvxYkUBwiLpRjarY"></rect>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600" data-page-node-id="jfn6j0ujYOUnqICfBm0Qkc">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329" data-page-node-id="VnEcwY0L1adYzq5LJLpKs6"></circle><circle cx="352" cy="24" r="3" fill="#1F2329" data-page-node-id="eEQKihT1Qo9FOIc8YV6oDv"></circle><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329" data-page-node-id="EBiridO2D7LbhA4Sto2qku"></rect>
+        <rect y="44" width="375" height="44" fill="#fff" data-page-node-id="Kydzfywyysi545KnOt3BId"></rect>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8" data-page-node-id="dQacpIbLeqJDw1YX5YBBxf"></rect>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="aCxm3RCNNC9F5wS5NrdIRo">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle" data-page-node-id="LzVUSM4IZP032BAARMsGD9">智能控制</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="BJKnGCjGD3vR3f9R0mBKsh">发现</text>
+
+        <text x="24" y="116" font-size="16" fill="#1F2329" font-weight="600" data-page-node-id="POFFUpooeEM70uGZdyTDMp">智能控制</text>
+
+        <rect x="16" y="128" width="164" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="07emR8eghEt5h5NOP7xNCg"></rect>
+        <text x="32" y="153" font-size="13" fill="#1F2329" data-page-node-id="lXR1SMJpFYk43PyKe0BN6v">窗格模式</text>
+        <rect x="150" y="138" width="34" height="20" rx="10" fill="#E5E7EB" data-page-node-id="waTwNJDGwtKCLk5D5alGNu"></rect>
+        <circle cx="156" cy="148" r="8" fill="#fff" data-page-node-id="GPWu3jUbGUvyPNRCrq08md"></circle>
+        <rect x="188" y="128" width="108" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="f4EFIlU81EsxFBfQlmzyW7"></rect>
+        <circle cx="204" cy="148" r="4" fill="#2E9E5B" data-page-node-id="wuxyNdG6c7fRokbkdJGzCC"></circle>
+        <text x="214" y="153" font-size="12" fill="#2E9E5B" data-page-node-id="EvNApQH5NVzhkjjVZ155G6">已连接</text>
+        <rect x="304" y="128" width="55" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="tUUcGAem0lp73Yjgx5McRT"></rect>
+        <text x="331" y="153" font-size="16" text-anchor="middle" data-page-node-id="BilC43HP7OaydaEvU6ZcbM">⚙️</text>
+
+        <rect x="16" y="180" width="343" height="342" rx="12" fill="#fff" stroke="#E5E7EB" data-page-node-id="qQ2HiWAbcd9wknhYZJwwHi"></rect>
+        <!-- 粒子（红色圆点下降） -->
+        <circle cx="70" cy="220" r="2.5" fill="#E5484D" opacity="0.5"></circle>
+        <circle cx="150" cy="250" r="2" fill="#E5484D" opacity="0.35"></circle>
+        <circle cx="240" cy="215" r="3" fill="#E5484D" opacity="0.4"></circle>
+        <circle cx="305" cy="260" r="2" fill="#E5484D" opacity="0.3"></circle>
+        <!-- 电源环（红色内圈 + 虚线光环 + 中心线框图标） -->
+        <circle cx="187" cy="232" r="40" fill="#FDF0F0" data-page-node-id="E3s6LCCg9uB3YiMWSlDeNM"></circle>
+        <circle cx="187" cy="232" r="40" fill="none" stroke="#E5484D" stroke-width="2" opacity="0.5" stroke-dasharray="40 30"></circle>
+        <g transform="translate(187,232) scale(1.9) translate(-12,-12)" stroke="#E5484D" stroke-width="2"><use href="#icon-power-off"/></g>
+        <text x="187" y="298" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="ctzV2lXHUDqEcGHuTfF2PQ">esp32_001</text>
+        <text x="187" y="318" font-size="13" fill="#6B7280" text-anchor="middle" data-page-node-id="aSpN8SCH21k9DFcBgzrq1f">GPIO 18 · 继电器端口 6</text>
+        <rect x="157" y="332" width="60" height="22" rx="6" fill="#F1F3F6" data-page-node-id="gcm0EvEBBwo3EUj297ltgE"></rect>
+        <text x="187" y="348" font-size="12" fill="#6B7280" text-anchor="middle" font-weight="600" data-page-node-id="5tQ5PNGhOiVM02DsaqMo8G">已关闭</text>
+        <rect x="36" y="374" width="303" height="46" rx="10" fill="#E5484D" data-page-node-id="Msql146K9cVqsB2bOo90sv"></rect>
+        <text x="187" y="403" font-size="15" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="dtwIDSuxV4Z9pKDGKNa2ol">开启设备</text>
+
+        <text x="24" y="546" font-size="12" fill="#8A919F" data-page-node-id="1lUldDaAjWGT2iIxxloPfF">控制 ESP32 继电器设备（智能开关）。开启后 Bridge 主动连接继电器服务器，服务器地址与 API Key 可在设置中配置。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB" data-page-node-id="PttCaV0xfCLeZD5nGzTYG8"></rect>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle" data-page-node-id="s38tE9LGha490Zct3ClOEE">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle" data-page-node-id="1wvlMPZaKkj7TISuKQaaep">设置</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 等待连接 -->
+  <div class="scene" data-page-node-id="sctNKwHAbxjzXWS2G5IO3x">
+    <div class="scene-title" data-page-node-id="ThtoHHw7HpXKR3EsKOy559">设备等待连接（离线）</div>
+    <div class="scene-desc" data-page-node-id="0p7len41wDgOul8ICAUMdE">灰色电源环 + 虚线圆问号图标 + 灰色徽章「等待连接」+ 灰色禁用按钮 + 漂浮粒子</div>
+    <div class="phone" data-page-node-id="XoIQdKXbIa3NmQZXxUr5vo">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg" data-page-node-id="6EtYYe756Y0CY8Cy7gdEcD">
+        <rect width="375" height="667" fill="#fff" data-page-node-id="IHSAE2Jf8AoysuMapc5zhN"></rect>
+        <rect width="375" height="44" fill="#fff" data-page-node-id="bxiC7U86MZ1ZRaUg6Bz4hw"></rect>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600" data-page-node-id="DyCrkGlpkWE07KQgyNO2i9">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329" data-page-node-id="DrAprzGn1j8D3UwGn9gMrS"></circle><circle cx="352" cy="24" r="3" fill="#1F2329" data-page-node-id="eeqk8DWpcyQym1GK6Rwh8h"></circle><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329" data-page-node-id="wGz3vRSKJHBej216UtLoJz"></rect>
+        <rect y="44" width="375" height="44" fill="#fff" data-page-node-id="g0fmujwCOHhF9D4mgQRjaf"></rect>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8" data-page-node-id="re5i0eDnP6wvru1pQimgTk"></rect>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="Wz834YQX5src598XqWEnrI">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle" data-page-node-id="ZukLsa5OCr5t9jhyHDM4nQ">智能控制</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="ksEKHOUJPblIHOlA2AlCBp">发现</text>
+
+        <text x="24" y="116" font-size="16" fill="#1F2329" font-weight="600" data-page-node-id="ElZbWsHfixgikERhDASZuf">智能控制</text>
+
+        <rect x="16" y="128" width="164" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="73M4IDQfwklCpJkydkbZKA"></rect>
+        <text x="32" y="153" font-size="13" fill="#1F2329" data-page-node-id="muGwdWF3jQ19X4ULjoCJ8o">窗格模式</text>
+        <rect x="150" y="138" width="34" height="20" rx="10" fill="#E5E7EB" data-page-node-id="XPQuxqtKnzhak6PB5HGWCT"></rect>
+        <circle cx="156" cy="148" r="8" fill="#fff" data-page-node-id="gBbgTgoRCOSlJMgvuRJFe1"></circle>
+        <rect x="188" y="128" width="108" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="GKt03H2nqC0re3cpf1Grsq"></rect>
+        <circle cx="204" cy="148" r="4" fill="#8A919F" data-page-node-id="aMCVPvqbh9rrMZpL0IMRfG"></circle>
+        <text x="214" y="153" font-size="12" fill="#8A919F" data-page-node-id="H77USFF3cTARNcNW1WH8Dd">未连接</text>
+        <rect x="304" y="128" width="55" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="pGYCklWFMxC8hegcFK7bPD"></rect>
+        <text x="331" y="153" font-size="16" text-anchor="middle" data-page-node-id="ukcBBoFTHSrowHmgzR4NKk">⚙️</text>
+
+        <rect x="16" y="180" width="343" height="342" rx="12" fill="#fff" stroke="#E5E7EB" data-page-node-id="zMCktIfNWdrhUHnt2UTlco"></rect>
+        <!-- 粒子（灰色圆点漂浮） -->
+        <circle cx="90" cy="280" r="1.5" fill="#8A919F" opacity="0.5"></circle>
+        <circle cx="200" cy="250" r="1.5" fill="#8A919F" opacity="0.4"></circle>
+        <circle cx="290" cy="290" r="1.5" fill="#8A919F" opacity="0.35"></circle>
+        <!-- 电源环（灰色内圈 + 虚线光环 + 中心线框图标：虚线圆 + 问号） -->
+        <circle cx="187" cy="232" r="40" fill="#F1F3F6" data-page-node-id="vwxjBSAUQlHjhDvcqvSfyO"></circle>
+        <circle cx="187" cy="232" r="40" fill="none" stroke="#8A919F" stroke-width="2" opacity="0.3" stroke-dasharray="20 20"></circle>
+        <g transform="translate(187,232) scale(1.9) translate(-12,-12)" stroke="#8A919F" stroke-width="2"><use href="#icon-power-wait"/></g>
+        <text x="187" y="298" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="TA43x3uUvq2vwFXBDzbM3F">esp32_001</text>
+        <text x="187" y="318" font-size="13" fill="#6B7280" text-anchor="middle" data-page-node-id="UQ0TCUFFU7N1Fy71MPKzw6">GPIO 18 · 继电器端口 6</text>
+        <rect x="147" y="332" width="80" height="22" rx="6" fill="#F1F3F6" data-page-node-id="NnqssYPFwHFpfUDDFIhKE8"></rect>
+        <text x="187" y="348" font-size="12" fill="#6B7280" text-anchor="middle" font-weight="600" data-page-node-id="GviSb4XOLfNGYLDlWwbDJF">等待连接</text>
+        <rect x="36" y="374" width="303" height="46" rx="10" fill="#D5DCE6" data-page-node-id="UqtAv1vCKcZ5EKyN4iiiNl"></rect>
+        <text x="187" y="403" font-size="15" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="WxM3XArIYiJoUkeByQVO5r">等待连接</text>
+
+        <text x="24" y="546" font-size="12" fill="#8A919F" data-page-node-id="kIocMLWHM8ghJfKLsc2FYp">控制 ESP32 继电器设备（智能开关）。开启后 Bridge 主动连接继电器服务器，服务器地址与 API Key 可在设置中配置。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB" data-page-node-id="GGgQVZ8XuIgEzsnzv3RU1c"></rect>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle" data-page-node-id="nXE5sALXohsWG5eOzp1Sa5">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle" data-page-node-id="9zkUslnde2Toz6tANsbdw3">设置</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<h2 data-page-node-id="rZlunPxD8QZP90rrUTcrgE">状态二：窗格多设备模式（每行两列卡片网格）</h2>
+<div class="grid" data-page-node-id="EDDpMAmGKMlKlonCr5Pd0W">
+  <div class="scene" data-page-node-id="CBNAUb2nwkf2qoQ5IZuvDZ">
+    <div class="scene-title" data-page-node-id="ttyc8tElpnJNEXwk0NZ7xb">窗格模式（卡片网格，每行两个）</div>
+    <div class="scene-desc" data-page-node-id="kafyRUIyFOkxPQ7intJP0A">「窗格模式」开 → 每行两列紧凑卡片，同单设备卡结构，在线优先排序</div>
+    <div class="phone" data-page-node-id="ExwFJJ6t6wjoHEv71gatub">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg" data-page-node-id="KQA0pVxZoCFx2Zo5KzDF4v">
+        <defs>
+          <g id="p-icon-power-on" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/></g>
+          <g id="p-icon-power-off" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke-dasharray="3 3"/></g>
+          <g id="p-icon-power-wait" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" stroke-dasharray="4 4"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><circle cx="12" cy="17" r="0.5" fill="currentColor" stroke="none"/></g>
+        </defs>
+        <rect width="375" height="667" fill="#fff" data-page-node-id="O3bER4Ee5jXjUCOAv1r8W9"></rect>
+        <rect width="375" height="44" fill="#fff" data-page-node-id="CeJMx4GMrK9k4N7KflckTy"></rect>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600" data-page-node-id="BpyVBIXV0xTjAXqPT5u88W">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329" data-page-node-id="TQTWwGVPGURogMcVG21dK0"></circle><circle cx="352" cy="24" r="3" fill="#1F2329" data-page-node-id="fXBu5BKJULueLCsT9aHn9C"></circle><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329" data-page-node-id="PEmik6b8SHXR6nIWzYdENC"></rect>
+        <rect y="44" width="375" height="44" fill="#fff" data-page-node-id="SW6piaMr8zpj1G0oUX942p"></rect>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8" data-page-node-id="kaH6ioqS5hhCpMGBDGgkPA"></rect>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="aoBU6YAS6NYAToMzjtuyL9">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle" data-page-node-id="9l3ISuLQmGf27wTJXUYeo0">智能控制</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="vzCZOfuFO58JJORQIySRbu">发现</text>
+
+        <text x="24" y="116" font-size="16" fill="#1F2329" font-weight="600" data-page-node-id="GFNUqhqNMwvZRSLKxzJk2u">设备列表</text>
+
+        <rect x="16" y="128" width="164" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="Uu5DKOswMfiaZjDkvN0aeE"></rect>
+        <text x="32" y="153" font-size="13" fill="#1F2329" data-page-node-id="vvgIUux5rHOx8JS0xyoSgE">窗格模式</text>
+        <rect x="150" y="138" width="34" height="20" rx="10" fill="#1A6EE8" data-page-node-id="V2nvjxNRZDUiHBDFkIh7oQ"></rect>
+        <circle cx="174" cy="148" r="8" fill="#fff" data-page-node-id="LyAoRKn6UGRYcZDtcAabnB"></circle>
+        <rect x="188" y="128" width="108" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="gWupbBwR30lPvIK1DIXHuD"></rect>
+        <circle cx="204" cy="148" r="4" fill="#2E9E5B" data-page-node-id="sjaHfZKSDWL6s3b2Ir4L9k"></circle>
+        <text x="214" y="153" font-size="12" fill="#2E9E5B" data-page-node-id="ViaWj0O3VNUnvinmdd7scV">已连接</text>
+        <rect x="304" y="128" width="55" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="tDJCmJG1GYChPY9F73gfxs"></rect>
+        <text x="331" y="153" font-size="16" text-anchor="middle" data-page-node-id="vehvCC3TGoh2Rq8rgI8yKn">⚙️</text>
+
+        <!-- 第 1 行：卡 1（在线已开启）+ 卡 2（在线已关闭） -->
+        <rect x="16" y="180" width="166" height="200" rx="14" fill="#fff" stroke="#E5E7EB" data-page-node-id="ytnB4X7qxj8k3cZyCJSgl9"></rect>
+        <circle cx="99" cy="224" r="28" fill="#EAF7EF" data-page-node-id="f68ZuBfkTbF8YowzqqPT4A"></circle>
+        <circle cx="99" cy="224" r="28" fill="none" stroke="#2E9E5B" stroke-width="1.5" opacity="0.5" stroke-dasharray="40 20"></circle>
+        <g transform="translate(99,224) scale(1.4) translate(-12,-12)" stroke="#2E9E5B" stroke-width="2"><use href="#p-icon-power-on"/></g>
+        <text x="99" y="268" font-size="14" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="HqKaOzG2h8U4Ort1h01dHx">esp32_001</text>
+        <text x="99" y="284" font-size="10" fill="#6B7280" text-anchor="middle" data-page-node-id="gtWC8OcKBwb9nfxmuLUN9j">GPIO 18 · 端口 6</text>
+        <rect x="63" y="294" width="72" height="20" rx="6" fill="#EAF7EF" data-page-node-id="iU4EdFXYlxgQsUVzBuBUsU"></rect>
+        <text x="99" y="309" font-size="10" fill="#2E9E5B" text-anchor="middle" font-weight="600" data-page-node-id="azHB4Op4pMazEXxKISvsEH">已开启</text>
+        <rect x="32" y="326" width="134" height="38" rx="10" fill="#2E9E5B" data-page-node-id="ae9LQduEfgdDufrbwQAHcH"></rect>
+        <text x="99" y="350" font-size="12" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="5Al227qkSEYOYpV2Fq2FHL">关闭设备</text>
+
+        <rect x="193" y="180" width="166" height="200" rx="14" fill="#fff" stroke="#E5E7EB" data-page-node-id="eNt1Cb2EibtPhAhihZv7qY"></rect>
+        <circle cx="276" cy="224" r="28" fill="#FDF0F0" data-page-node-id="LmT7PE65lNCSFfa0oaUoaO"></circle>
+        <circle cx="276" cy="224" r="28" fill="none" stroke="#E5484D" stroke-width="1.5" opacity="0.4" stroke-dasharray="20 16"></circle>
+        <g transform="translate(276,224) scale(1.4) translate(-12,-12)" stroke="#E5484D" stroke-width="2"><use href="#p-icon-power-off"/></g>
+        <text x="276" y="268" font-size="14" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="GzZzPR6idEl7uHOOcAcboS">esp32_002</text>
+        <text x="276" y="284" font-size="10" fill="#6B7280" text-anchor="middle" data-page-node-id="6WvbVxFM4sdUOn7B9H8nua">GPIO 18 · 端口 6</text>
+        <rect x="240" y="294" width="72" height="20" rx="6" fill="#F1F3F6" data-page-node-id="P236dx01SIUzfwnLkDfhFu"></rect>
+        <text x="276" y="309" font-size="10" fill="#6B7280" text-anchor="middle" font-weight="600" data-page-node-id="ii28lOdUncj5GDvhnjX4Sa">已关闭</text>
+        <rect x="209" y="326" width="134" height="38" rx="10" fill="#E5484D" data-page-node-id="OxHOdDLocGEw6jnJmp5hke"></rect>
+        <text x="276" y="350" font-size="12" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="mjeFkQ0HQ7827GC9u0J5v0">开启设备</text>
+
+        <!-- 第 2 行：卡 3（离线等待）+ 卡 4（在线已开启） -->
+        <rect x="16" y="392" width="166" height="200" rx="14" fill="#fff" stroke="#E5E7EB" data-page-node-id="FuA3HmDfIlNVoK7kmNwPFB"></rect>
+        <circle cx="99" cy="436" r="28" fill="#F1F3F6" data-page-node-id="siW3X8dxeM5t78Fw4qzqWR"></circle>
+        <circle cx="99" cy="436" r="28" fill="none" stroke="#8A919F" stroke-width="1.5" opacity="0.3" stroke-dasharray="14 14"></circle>
+        <g transform="translate(99,436) scale(1.4) translate(-12,-12)" stroke="#8A919F" stroke-width="2"><use href="#p-icon-power-wait"/></g>
+        <text x="99" y="480" font-size="14" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="Us0aWDhkzO7isxSaZrCWED">esp32_003</text>
+        <text x="99" y="496" font-size="10" fill="#6B7280" text-anchor="middle" data-page-node-id="WtOB1Jn19XZHJb9mDClD94">GPIO 18 · 端口 6</text>
+        <rect x="57" y="506" width="84" height="20" rx="6" fill="#F1F3F6" data-page-node-id="FpHBpU4MaLNE2JJAmVudDT"></rect>
+        <text x="99" y="521" font-size="10" fill="#6B7280" text-anchor="middle" font-weight="600" data-page-node-id="NZdFGG4ewRhgnTA1vnKeSG">等待连接</text>
+        <rect x="32" y="538" width="134" height="38" rx="10" fill="#D5DCE6" data-page-node-id="EDIdaAo2anDTBuFY1qHB57"></rect>
+        <text x="99" y="562" font-size="12" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="tHB1oYBfEWwkmlHMHZ4PEm">等待连接</text>
+
+        <rect x="193" y="392" width="166" height="200" rx="14" fill="#fff" stroke="#E5E7EB" data-page-node-id="NUJAoIBEiWoxPhzfHy18Dl"></rect>
+        <circle cx="276" cy="436" r="28" fill="#EAF7EF" data-page-node-id="wrXlI1UrCDk6Fum8O9aqej"></circle>
+        <circle cx="276" cy="436" r="28" fill="none" stroke="#2E9E5B" stroke-width="1.5" opacity="0.5" stroke-dasharray="40 20"></circle>
+        <g transform="translate(276,436) scale(1.4) translate(-12,-12)" stroke="#2E9E5B" stroke-width="2"><use href="#p-icon-power-on"/></g>
+        <text x="276" y="480" font-size="14" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="PNBjrfeZ2yC8SYT9cKlgXN">esp32_004</text>
+        <text x="276" y="496" font-size="10" fill="#6B7280" text-anchor="middle" data-page-node-id="ecRhv2bDiO1pL3eLwmpgIX">GPIO 18 · 端口 6</text>
+        <rect x="240" y="506" width="72" height="20" rx="6" fill="#EAF7EF" data-page-node-id="VGe3AomCGXEXm86iqWxRUo"></rect>
+        <text x="276" y="521" font-size="10" fill="#2E9E5B" text-anchor="middle" font-weight="600" data-page-node-id="pQkhC7sMuFpuiLSH5OT8iO">已开启</text>
+        <rect x="209" y="538" width="134" height="38" rx="10" fill="#2E9E5B" data-page-node-id="75lKghFdHNoHAXBFERtjLw"></rect>
+        <text x="276" y="562" font-size="12" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="Lo1gNZCgaDkNkx1jigLCwp">关闭设备</text>
+
+        <text x="24" y="620" font-size="12" fill="#8A919F" data-page-node-id="399TP5Q0JOrIxi8HmB5No9">控制 ESP32 继电器设备（智能开关）。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB" data-page-node-id="Fco4VDACJeGtcd3X1Mu0jo"></rect>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle" data-page-node-id="Qpq1AiV7rnGARVTY8jHqAp">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle" data-page-node-id="9ANwLLm6mhEr7CEz0sV9pT">设置</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<h2 data-page-node-id="Lfw2pBntEXHnqeS0H8ZtmZ">状态三：交互弹窗（二次确认 + 服务器设置）</h2>
+<div class="grid" data-page-node-id="BVltm85HJNKtuvSrYVrhgU">
+  <!-- 关闭二次确认 -->
+  <div class="scene" data-page-node-id="eBzRIdWGTAxl4vMV7Rgav1">
+    <div class="scene-title" data-page-node-id="SefIPpPxNCBsRRFaJxqcYz">关闭设备 → 二次确认</div>
+    <div class="scene-desc" data-page-node-id="0HYX3O8nOKdkiDi7AhKvKx">⚠️ 图标 + 红色「确认关闭」+「取消」（复用 CoreConfirmDialog 样式）</div>
+    <div class="phone" data-page-node-id="WU0Z1FtKHsDYH0uEELeRZk">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg" data-page-node-id="sh2Dn2JSxsHGsIiGbuDI2o" style="">
+        <rect width="375" height="667" fill="#fff" data-page-node-id="ci7KtuXNLuze5UrqBjEpxD"></rect>
+        <rect width="375" height="44" fill="#fff" data-page-node-id="vhqXzvUMNS1sIBqeyYu4fB"></rect>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600" data-page-node-id="XA69epO7IXT5B1tuzCSqvu">9:41</text>
+        <rect y="44" width="375" height="44" fill="#fff" data-page-node-id="2Vn5ROJMMWnhd9AED6WmBC"></rect>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8" data-page-node-id="Kl2qXyfsvutarMO2zothWE"></rect>
+        
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle" data-page-node-id="IWaz8E1nD6atFr0A4IuJRn">智能控制</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="ddyyfljGBGU9HEolkBM4Mi">发现</text>
+
+        <text x="24" y="116" font-size="16" fill="#1F2329" font-weight="600" data-page-node-id="hKYt9Y72UhTHwwgBQDDkE0">智能控制</text>
+
+        <rect x="16" y="128" width="164" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="VHODpcp4juU5Uafk7dCIbx"></rect>
+        <text x="32" y="153" font-size="13" fill="#1F2329" data-page-node-id="AZ4akF8YgecGOFnvOp0r1C">窗格模式</text>
+        <rect x="150" y="138" width="34" height="20" rx="10" fill="#E5E7EB" data-page-node-id="EDukcrkpyDLPv4HYpHE5VM"></rect>
+        <circle cx="156" cy="148" r="8" fill="#fff" data-page-node-id="OT6alC52xTO8oWGHvU46sh"></circle>
+        <rect x="188" y="128" width="108" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="fgRgjU3Zdi22elLqAJVQlm"></rect>
+        <circle cx="204" cy="148" r="4" fill="#2E9E5B" data-page-node-id="pslfHp6JvXX5gNzvpgwIqq"></circle>
+        <text x="214" y="153" font-size="12" fill="#2E9E5B" data-page-node-id="WRNQHRaTGkHA99gok2ZxBG">已连接</text>
+        <rect x="304" y="128" width="55" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="F8nAx54ukMjoCCTB3wAclF"></rect>
+        <text x="331" y="153" font-size="16" text-anchor="middle" data-page-node-id="JI6NmFJ4ETrLW0RWPk2iPt">⚙️</text>
+
+        <rect x="16" y="180" width="343" height="342" rx="12" fill="#fff" stroke="#E5E7EB" data-page-node-id="FN3cBWuk9n6Wcwo3DvC6jd"></rect>
+        <circle cx="187" cy="232" r="40" fill="#EAF7EF" data-page-node-id="z1Irj5kawSjGmhCzker5XI"></circle>
+        <circle cx="187" cy="232" r="40" fill="none" stroke="#2E9E5B" stroke-width="2" opacity="0.6" stroke-dasharray="60 30 40 30"></circle>
+        <g transform="translate(187,232) scale(1.9) translate(-12,-12)" stroke="#2E9E5B" stroke-width="2"><use href="#icon-power-on"/></g>
+        <text x="187" y="298" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="URJhJKSecmPXbhv7HKFx5l">esp32_001</text>
+        <text x="187" y="318" font-size="13" fill="#6B7280" text-anchor="middle" data-page-node-id="bOfMXqT1xUhEdGEgLzj7c6">GPIO 18 · 继电器端口 6</text>
+        <rect x="157" y="332" width="60" height="22" rx="6" fill="#EAF7EF" data-page-node-id="dMHiKCvHW64AulKdwksIcd"></rect>
+        <text x="187" y="348" font-size="12" fill="#2E9E5B" text-anchor="middle" font-weight="600" data-page-node-id="xz5KJlIrOX34SB1Lz6u7zp">已开启</text>
+        <rect x="36" y="374" width="303" height="46" rx="10" fill="#2E9E5B" data-page-node-id="Eh1F7d7OGFF8ufeiF3pPYA"></rect>
+        <text x="187" y="403" font-size="15" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="SMOECjgUgXuU1WB7yjnEp8">关闭设备</text>
+
+        <text x="24" y="546" font-size="12" fill="#8A919F" data-page-node-id="5x2aDZdf37hlxL5hI98Rvf">控制 ESP32 继电器设备（智能开关）。开启后 Bridge 主动连接继电器服务器，服务器地址与 API Key 可在设置中配置。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB" data-page-node-id="HfjqBpU2Uveb2H1Bcab4IB"></rect>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle" data-page-node-id="uoA4Utz08UUf97hbKXL3k2">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle" data-page-node-id="Jd3fpHat0lhMsusUHSO5Hi">设置</text>
+
+        <!-- 遮罩 + 二次确认弹窗 -->
+        <rect x="0" y="88" width="375" height="579" fill="#000" opacity="0.4" data-page-node-id="DSlSRDETQB9NUPxCUgqD3P"></rect>
+        <rect x="48" y="240" width="279" height="196" rx="16" fill="#fff" data-page-node-id="8M39goELRNJoJqaGGbt4dY"></rect>
+        <text x="187" y="284" font-size="30" text-anchor="middle" data-page-node-id="9GEIt3BNnsOM89MH1Qi3Pe">⚠️</text>
+        <text x="187" y="318" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="OCqCldPnl2FRK4V8O234EN">确认关闭</text>
+        <text x="187" y="342" font-size="12" fill="#6B7280" text-anchor="middle" data-page-node-id="n9W0COeHdicnKuLXU9AE9A">关闭「esp32_001」将停止供电，</text>
+        <text x="187" y="360" font-size="12" fill="#6B7280" text-anchor="middle" data-page-node-id="mfeTGEnbGlBl5Eo3Ys2V9Y">确定要执行此操作吗？</text>
+        <line x1="48" y1="376" x2="327" y2="376" stroke="#F0F1F3" data-page-node-id="fSHFrn9XNJka01VZj01DVR"></line>
+        <line x1="187" y1="376" x2="187" y2="436" stroke="#F0F1F3" data-page-node-id="wfjS9LUKqXp2htKF6nuhaU"></line>
+        <text x="93" y="410" font-size="15" fill="#6B7280" text-anchor="middle" data-page-node-id="DKKdnKHs8N2fbUtsCUzpNf">取消</text>
+        <text x="280" y="410" font-size="15" fill="#E5484D" text-anchor="middle" font-weight="600" data-page-node-id="Q1nXtlDobCTRX2Au3Co6K0">确认关闭</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 服务器设置弹窗 -->
+  <div class="scene" data-page-node-id="gvl7UwXC9eHbrZXuaiZIpa">
+    <div class="scene-title" data-page-node-id="c5RaZEQQp2Tw0ctojzinnt">⚙ 设置 → 服务器设置弹窗</div>
+    <div class="scene-desc" data-page-node-id="gRRFLIa3k9z1gaNR9DdTKG">服务器地址 / 设备 ID / 继电器端口 / API Key，保存后重连生效</div>
+    <div class="phone" data-page-node-id="FVggYy1EHjQGGj7tD62Oww">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg" data-page-node-id="w4PRwOG7aCekAAHGsE6MXv">
+        <rect width="375" height="667" fill="#fff" data-page-node-id="pTsFbfNFn9u03fD02TL8NQ"></rect>
+        <rect width="375" height="44" fill="#fff" data-page-node-id="E4K4xt1ops8gvZMqpA458b"></rect>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600" data-page-node-id="ZTaaZybSFcqlKKzq32kMu7">9:41</text>
+        <rect y="44" width="375" height="44" fill="#fff" data-page-node-id="Xb59exDhzxZuXgEu7dHH3H"></rect>
+        <rect x="125" y="84" width="125" height="3" fill="#1A6EE8" data-page-node-id="Mu8f9dYItwPQqu1uMFiFAT"></rect>
+        <text x="62" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="sTneG5kGsgGAU81sfQdQnl">短信</text>
+        <text x="187" y="71" font-size="15" fill="#1A6EE8" font-weight="600" text-anchor="middle" data-page-node-id="4xXjoy1zFhZfy86ABuBOue">智能控制</text>
+        <text x="312" y="71" font-size="15" fill="#8A919F" text-anchor="middle" data-page-node-id="ya3fJA4U0OCeFbhmkOSzHq">发现</text>
+
+        <text x="24" y="116" font-size="16" fill="#1F2329" font-weight="600" data-page-node-id="VccpZiIaWJY8PNaKhEd1z7">智能控制</text>
+
+        <rect x="16" y="128" width="164" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="9IqV4Yw6EaTXvTdUf1bP51"></rect>
+        <text x="32" y="153" font-size="13" fill="#1F2329" data-page-node-id="wUE5hW48wepzpCsLnWsgxk">窗格模式</text>
+        <rect x="150" y="138" width="34" height="20" rx="10" fill="#E5E7EB" data-page-node-id="NsVr3xMCu0m94ssRBShRYa"></rect>
+        <circle cx="156" cy="148" r="8" fill="#fff" data-page-node-id="SUZnmPjpyPhS4Jr4Kkhxys"></circle>
+        <rect x="188" y="128" width="108" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="FWh4oAN1AdIZChdrsK42K0"></rect>
+        <circle cx="204" cy="148" r="4" fill="#2E9E5B" data-page-node-id="dL1du4qFfyDLX46f7Rc6wd"></circle>
+        <text x="214" y="153" font-size="12" fill="#2E9E5B" data-page-node-id="TQITy66vCKk8LRjqR1su7J">已连接</text>
+        <rect x="304" y="128" width="55" height="40" rx="8" fill="#fff" stroke="#E5E7EB" data-page-node-id="Q2EYr1izNSWgWOs0uUzO2k"></rect>
+        <text x="331" y="153" font-size="16" text-anchor="middle" data-page-node-id="Ja8saSDIU59ose2Xnnmn0C">⚙️</text>
+
+        <rect x="16" y="180" width="343" height="342" rx="12" fill="#fff" stroke="#E5E7EB" data-page-node-id="b6c0dvoCckNcLRkcuXtACp"></rect>
+        <circle cx="187" cy="232" r="40" fill="#EAF7EF" data-page-node-id="3ykCaVsidxyALIWsD6wHRK"></circle>
+        <circle cx="187" cy="232" r="40" fill="none" stroke="#2E9E5B" stroke-width="2" opacity="0.6" stroke-dasharray="60 30 40 30"></circle>
+        <g transform="translate(187,232) scale(1.9) translate(-12,-12)" stroke="#2E9E5B" stroke-width="2"><use href="#icon-power-on"/></g>
+        <text x="187" y="298" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="srvK5aHwQL3ilnrQdEg7js">esp32_001</text>
+        <text x="187" y="318" font-size="13" fill="#6B7280" text-anchor="middle" data-page-node-id="TzPuDrAhzNEc5M7MPhJfLB">GPIO 18 · 继电器端口 6</text>
+        <rect x="157" y="332" width="60" height="22" rx="6" fill="#EAF7EF" data-page-node-id="CHUooJPguRE2wqzTwoeXSv"></rect>
+        <text x="187" y="348" font-size="12" fill="#2E9E5B" text-anchor="middle" font-weight="600" data-page-node-id="bWtRbHf8GqFNu91hKLapAD">已开启</text>
+        <rect x="36" y="374" width="303" height="46" rx="10" fill="#2E9E5B" data-page-node-id="BeuAyQj7TmbwkOginC57A6"></rect>
+        <text x="187" y="403" font-size="15" fill="#fff" font-weight="600" text-anchor="middle" data-page-node-id="YiDb0kHztElczt70y38cL3">关闭设备</text>
+
+        <text x="24" y="546" font-size="12" fill="#8A919F" data-page-node-id="iD5xehGC68eF71ed4u5vyc">控制 ESP32 继电器设备（智能开关）。开启后 Bridge 主动连接继电器服务器，服务器地址与 API Key 可在设置中配置。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB" data-page-node-id="1fJLtHtgQqLANlF8zr0aYm"></rect>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle" data-page-node-id="RJByz3og2g8Eg6FJHIUTrT">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle" data-page-node-id="DGPHsbaXQRDCLHeu6QActa">设置</text>
+
+        <!-- 遮罩 + 设置弹窗 -->
+        <rect x="0" y="88" width="375" height="579" fill="#000" opacity="0.4" data-page-node-id="H9K3UzUdNnuSMwJwu51LC2"></rect>
+        <rect x="32" y="176" width="311" height="348" rx="16" fill="#fff" data-page-node-id="MJA8ktL6gFaoRqNiy46f07"></rect>
+        <text x="187" y="210" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle" data-page-node-id="ARMOOCn83xWBT9AxqI9AV8">服务器设置</text>
+
+        <text x="48" y="240" font-size="12" fill="#6B7280" data-page-node-id="HuMuNTtUUPUUiR9E0Mazw2">服务器地址</text>
+        <rect x="48" y="248" width="279" height="40" rx="8" fill="#F5F6F8" stroke="#1A6EE8" stroke-width="1.5" data-page-node-id="SOH3NE4FbtG9zzJjq1ObqG"></rect>
+        <text x="60" y="273" font-size="14" fill="#1F2329" font-family="monospace" data-page-node-id="Nn9ChvBKwVCmFmlC6R2cWr">127.0.0.1:15152</text>
+
+        <text x="48" y="310" font-size="12" fill="#6B7280" data-page-node-id="NEDpAZUH4isANzaUGY5lgq">设备 ID</text>
+        <rect x="48" y="318" width="279" height="40" rx="8" fill="#F5F6F8" stroke="#E5E7EB" data-page-node-id="Y29DmBn9ObbtJ84XeYSIzz"></rect>
+        <text x="60" y="343" font-size="14" fill="#1F2329" font-family="monospace" data-page-node-id="Ua9TTfsLm50aoMAgDxlTLu">esp32_001</text>
+
+        <text x="48" y="380" font-size="12" fill="#6B7280" data-page-node-id="N3uXVtVjpnaMsaOJXDSR3P">继电器端口 (1-9)</text>
+        <rect x="48" y="388" width="279" height="40" rx="8" fill="#F5F6F8" stroke="#E5E7EB" data-page-node-id="3z6pv8OIc9KRFU4jTs1uRF"></rect>
+        <text x="60" y="413" font-size="14" fill="#1F2329" font-family="monospace" data-page-node-id="YykBRn0sC34j4xFcYozVYJ">6</text>
+
+        <text x="48" y="450" font-size="12" fill="#6B7280" data-page-node-id="VBc1nMqLplIDoinx3Svawa">API Key</text>
+        <rect x="48" y="458" width="279" height="40" rx="8" fill="#F5F6F8" stroke="#E5E7EB" data-page-node-id="oC1AdWETyZDky98LrM6qxz"></rect>
+        <text x="60" y="483" font-size="14" fill="#1F2329" font-family="monospace" data-page-node-id="QeAFUYxQrcUkgGhdiTY8gQ">••••••••</text>
+
+        <line x1="32" y1="508" x2="343" y2="508" stroke="#F0F1F3" data-page-node-id="AEmQTWHwp4ktbNFmxgeyN1"></line>
+        <line x1="187" y1="508" x2="187" y2="524" stroke="#F0F1F3" data-page-node-id="0arrPy3iQQXz8XvQNIzJxh"></line>
+        <text x="93" y="523" font-size="15" fill="#6B7280" text-anchor="middle" data-page-node-id="tRX2VIQtMkHXDbL1oFMb2z">取消</text>
+        <text x="280" y="523" font-size="15" fill="#1A6EE8" text-anchor="middle" font-weight="600" data-page-node-id="LEoCTctxyKavsJVjbsvCMs">保存</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<div class="note" data-page-node-id="Aiy4VtDTx60CIlor1GBi0d">
+  <b data-page-node-id="tBGQOXCbetf8yo5RA7iTli">设计要点与待确认项：</b>
+  <ul class="clean" data-page-node-id="g4FkAYdzzNL3WC0pqfkBzg">
+    <li data-page-node-id="Voeg0vZEFKP70XrKhGBuW8"><b data-page-node-id="hqtyvFkewnO2MYxZEDyJVo">命名隔离</b>：新包 <code data-page-node-id="w5JfsUy3VCNPJeOU5VyCLE">switch/</code>（智能控制继电器），与项目已有 <code data-page-node-id="AeRvcPHKFWSkzYGxoInJol">relay/</code>（音频中继，手机放音）严格区分，二者仅同名不同义。</li>
+    <li data-page-node-id="QZOq4zyFYMpGSw0DWc1Tjo"><b data-page-node-id="vuSfPGiuz9EhbpxHGZJIMv">方案 A 直连</b>：Bridge 客户端为主动控制方，出站 WS 连接参考中继服务器（默认 <code data-page-node-id="v7yCIeMN2YgE8nsGqXk1fs">127.0.0.1:15152</code>），服务端零改动；沿用 <code data-page-node-id="y4NFjMWdt6NwrZFCLf00bK">RelaySwitchClient</code> 的 generation 防竞态 + 指数退避重连 + 心跳判死。</li>
+    <li data-page-node-id="4eaIfHaknC9kfePylaeh1E"><b data-page-node-id="jqNHof7CXJgp6rJcMHYY2y">状态徽章语义</b>：已开启·绿 <code data-page-node-id="hSx6Ubocy6vaQxiKM3d9jV">#2E9E5B</code> / 已关闭·灰 <code data-page-node-id="fJyp07GQvwNyOAoyyJ9ecs">#8A919F</code> / 等待连接·灰 / 获取中·橙 <code data-page-node-id="hmOpBmB92uIYLfPORYJwMZ">#E8862E</code>。按钮颜色表示「点击后要执行的动作」：<b data-page-node-id="0yr3DnVeTp0OA3TdCi7tME">红=「开启设备」（当前已关闭）</b>、<b data-page-node-id="3cWu4FnXndni6gIhqDsHG1">绿=「关闭设备」（当前已开启）</b>、灰=等待禁用 —— 严格照参考项目 <code data-page-node-id="6dMWFicSfyYlMn54XDEeO1">btn-turn-on</code>(红) / <code data-page-node-id="FgQ4a6JrbwVd8uQVJilbAh">btn-turn-off</code>(绿)。</li>
+    <li><b>图标（SVG 线框，非 emoji）</b>：严格复刻参考项目 <code>ICONS</code>（24×24、<code>stroke-width=2</code>、圆角端、<code>stroke=currentColor</code>）：电源环图标 <code>powerOn</code>(实线弧) / <code>powerOff</code>(虚线弧 3 3) / <code>powerWait</code>(虚线圆 4 4 + 问号 + 圆点)；徽章图标 <code>badgeOn</code>(对勾) / <code>badgeOff</code>(圆叉) / <code>badgeWait</code>(感叹号)；按钮图标 <code>btnOn</code>(闪电) / <code>btnOff</code>(电源符) / <code>btnWait</code>。原型用内联 <code>&lt;use&gt;</code> 引用原项目原始 <code>d</code> 数据 1:1 还原；Compose 端用 <code>PathParser</code> 解析同一份 path（<code>RelaySwitchIcons.kt</code>）。</li>
+    <li><b>电源环光晕</b>：中心图标外包「内圈淡色填充 + 旋转光环 + 脉冲光晕」，开启=绿、关闭=红、等待=灰，浅色化（保留光晕与旋转，降低透明度）。</li>
+    <li><b>粒子特效</b>：卡片背景叠加动态粒子 —— 开启态绿色方块上升、关闭态红色圆点下降、等待态灰色圆点漂浮，<code>Canvas</code> + <code>rememberInfiniteTransition</code> 实现（浅色淡色呈现）。</li>
+    <li data-page-node-id="iv4b1R27HlfQGIDULjFynB"><b data-page-node-id="DTT1gnKR7FkI1QQoir00uk">关闭二次确认</b>：复用项目已有 <code data-page-node-id="Z8ERclFbKVk0DknU31WifI">CoreConfirmDialog</code> 样式（⚠️ 大图标 + 标题「确认关闭」+ 说明文案 + 红色「确认关闭」+「取消」）。</li>
+    <li data-page-node-id="enfCerNCcubPh8PKNoNElW"><b data-page-node-id="R1nJEb0bGDZnwjPDBtQnpq">服务器设置</b>：复用项目已有「服务地址」编辑弹窗样式（四字段：服务器地址 / 设备 ID / 继电器端口 1-9 / API Key），保存后 <code data-page-node-id="5GYsoWsfylyB40hQhxSH77">stop() + start()</code> 重连生效。</li>
+    <li data-page-node-id="HB3rY72NnhjOKYHq6kaHEN"><b data-page-node-id="TEceAA64IkaoKU23aFDRM9">窗格模式</b>：进入时对所有设备 <code data-page-node-id="czHH0RaKd9QXWfvu17T1hP">subscribe + getStatus</code>，排序规则「在线优先 → 服务端顺序 → 中文名」。布局为<b data-page-node-id="aJtgCnVKc3P6vPewUVYzCy">卡片网格（每行两列）</b>，卡片结构与单设备卡同构（图标环 + 名称 + 端口 + 状态徽章 + 开关按钮），仅尺寸更紧凑 —— 对应参考项目 <code data-page-node-id="NCA3dOSXiCDgaOvTT8Hy8u">pane-grid</code> 的 <code data-page-node-id="TjzLESUT4HqftaUS4xS3uB">grid-template-columns: repeat(2, 1fr)</code>。</li>
+  </ul>
+</div>
+
+
+
+
+</body></html>

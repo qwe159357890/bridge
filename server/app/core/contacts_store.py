@@ -7,16 +7,17 @@
 数据形状：每行一个联系人；多号码/多邮箱以 JSON 数组存文本列
 （内部管理工具，量级小，不做子表规范化）。
 
-连接策略与 location_store 一致：惰性连接 + 自动重连，库/表自动创建，
-同步阻塞实现（端点用普通 def 走线程池）。
+连接策略与 location_store 一致：**每操作独立连接**（线程安全），
+库/表自动创建，同步阻塞实现（端点用普通 def 走线程池）。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pymysql
 
@@ -32,7 +33,6 @@ class ContactsStore:
         self._user = user
         self._password = password
         self._database = database
-        self._conn: Optional[pymysql.connections.Connection] = None
 
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS contacts (
@@ -53,14 +53,17 @@ class ContactsStore:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("通讯录存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+        """建库建表（启动时调用一次）。运行期不持有连接，避免并发复用。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("通讯录存储 schema 就绪：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
 
+    def _new_connection(self) -> pymysql.connections.Connection:
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
             password=self._password, charset="utf8mb4",
@@ -72,27 +75,22 @@ class ContactsStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
-        logger.info("通讯录存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
+        return conn
 
-    def _connection(self) -> pymysql.connections.Connection:
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每操作独立连接（线程安全），用完即关。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 写入（覆盖快照）
@@ -104,9 +102,8 @@ class ContactsStore:
         ``contacts`` 每项：``{contact_key, name, phones: [str], emails: [str]}``。
         返回 ``{"total": 写入行数, "sync_time": 采集时刻}``。
         """
-        conn = self._connection()
         sync_dt = datetime.now()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM contacts WHERE device_id = %s", (device_id,))
             if contacts:
                 cur.executemany(
@@ -141,14 +138,13 @@ class ContactsStore:
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int, Optional[str]]:
         """查询某设备联系人（姓名/号码/邮箱模糊匹配），返回 (rows, total, sync_time)。"""
-        conn = self._connection()
         where = "WHERE device_id = %s"
         args: list = [device_id]
         if keyword:
             like = f"%{keyword}%"
             where += " AND (name LIKE %s OR phones LIKE %s OR emails LIKE %s)"
             args += [like, like, like]
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS n, MAX(sync_time) AS st FROM contacts {where}", args)
             row = cur.fetchone()
             total = int(row["n"])
@@ -161,8 +157,7 @@ class ContactsStore:
 
     def delete(self, device_id: str) -> int:
         """清空某设备通讯录快照。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             n = cur.execute("DELETE FROM contacts WHERE device_id = %s", (device_id,))
             conn.commit()
             return int(n)

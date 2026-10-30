@@ -1044,6 +1044,12 @@ fun ConnectionSettings() {
         item {
             AudioRelaySettings()
         }
+
+        // ===== 智能控制分区 =====
+        item { SectionTitle("智能控制") }
+        item {
+            RelaySwitchSettings()
+        }
     }
 
     // 昵称编辑弹窗
@@ -1393,4 +1399,118 @@ private fun AutoReconnectConfirmDialog(
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
         },
     )
+}
+
+// ============ 智能控制设置 ============
+
+/**
+ * 智能控制（ESP32 继电器）设置分区（设置 → 连接页）。
+ *
+ * 继电器服务器地址、API Key、当前设备、继电器端口均可编辑。
+ * 后端零改动：客户端主动直连参考项目中继服务器（方案 A）。
+ */
+@Composable
+private fun RelaySwitchSettings() {
+    val context = LocalContext.current
+
+    var server by remember { mutableStateOf(my.bridge.com.switch.RelaySwitchPrefs.server(context)) }
+    var apiKey by remember { mutableStateOf(my.bridge.com.switch.RelaySwitchPrefs.apiKey(context)) }
+    var deviceId by remember { mutableStateOf(my.bridge.com.switch.RelaySwitchPrefs.deviceId(context)) }
+    var pio by remember {
+        mutableStateOf(my.bridge.com.switch.RelaySwitchPrefs.pioForDevice(context, my.bridge.com.switch.RelaySwitchPrefs.deviceId(context)))
+    }
+    var showServerDialog by remember { mutableStateOf(false) }
+    var showDeviceDialog by remember { mutableStateOf(false) }
+    var showPioDialog by remember { mutableStateOf(false) }
+    var showApiKeyDialog by remember { mutableStateOf(false) }
+
+    SettingCard {
+        SettingValueRow(
+            icon = "🌐",
+            title = "继电器服务器",
+            value = server,
+        ) {
+            showServerDialog = true
+        }
+        SettingValueRow(
+            icon = "🆔",
+            title = "当前设备",
+            value = deviceId,
+        ) {
+            showDeviceDialog = true
+        }
+        SettingValueRow(
+            icon = "🔌",
+            title = "继电器端口",
+            value = pio.toString(),
+        ) {
+            showPioDialog = true
+        }
+        SettingValueRow(
+            icon = "🔑",
+            title = "API Key",
+            value = apiKey,
+        ) {
+            showApiKeyDialog = true
+        }
+    }
+
+    if (showServerDialog) {
+        RelayServerDialog(
+            initial = server,
+            onCancel = { showServerDialog = false },
+            onConfirm = { v ->
+                my.bridge.com.switch.RelaySwitchPrefs.setString(context, my.bridge.com.switch.RelaySwitchPrefs.KEY_SERVER, v)
+                server = v
+                showServerDialog = false
+            },
+        )
+    }
+    if (showDeviceDialog) {
+        RelayTextDialog(
+            title = "设置当前设备",
+            label = "设备 ID",
+            placeholder = "如 esp32_001",
+            initial = deviceId,
+            onCancel = { showDeviceDialog = false },
+            onConfirm = { v ->
+                my.bridge.com.switch.RelaySwitchPrefs.setString(context, my.bridge.com.switch.RelaySwitchPrefs.KEY_DEVICE_ID, v)
+                deviceId = v
+                showDeviceDialog = false
+            },
+        )
+    }
+    if (showPioDialog) {
+        RelayTextDialog(
+            title = "设置继电器端口",
+            label = "端口 (1-9)",
+            placeholder = "如 6",
+            initial = pio.toString(),
+            onCancel = { showPioDialog = false },
+            onConfirm = { v ->
+                val n = v.toIntOrNull()
+                if (n == null || n !in 1..9) {
+                    android.widget.Toast.makeText(context, "端口必须在 1-9 之间", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    my.bridge.com.switch.RelaySwitchPrefs.setPioForDevice(context, deviceId, n)
+                    pio = n
+                    showPioDialog = false
+                }
+            },
+        )
+    }
+    if (showApiKeyDialog) {
+        RelayTextDialog(
+            title = "设置 API Key",
+            label = "API Key",
+            placeholder = "留空则不启用认证",
+            initial = apiKey,
+            onCancel = { showApiKeyDialog = false },
+            onConfirm = { v ->
+                my.bridge.com.switch.RelaySwitchPrefs.setString(context, my.bridge.com.switch.RelaySwitchPrefs.KEY_API_KEY, v)
+                apiKey = v
+                showApiKeyDialog = false
+            },
+        )
+    }
 }

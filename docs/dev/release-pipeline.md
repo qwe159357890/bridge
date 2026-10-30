@@ -103,6 +103,15 @@ python tools/release/release.py v0.2.0   # 指定版本号
 3. `releases/` 下载产物不入库。
 4. CI 版本：JDK 17 + Gradle 8.13，与项目 `compileOptions/JVM 17`、AGP 8.13.1 严格匹配。
 
+### 9.1 打包范围 ≠ 提交范围（重要概念澄清）
+
+**「打包 APK」只编 Android 模块，`server/`（Python 后端）与 `admin/`（Vue 管理后台）是独立服务，不参与 Android 编译、不会被编进 APK。**
+
+- **APK 产物**：永远只含 `app/` + `core/` 等 Android 模块的代码。server/admin 的改动**对 APK 内容零影响**。
+- **Git 提交**：`git add -A` 会把工作区里 server/admin 的改动也一起提交进仓库，但那**只是进入版本历史**，与 APK 内容无关。
+
+结论：提交 server/admin 改动不影响打包结果，仅是把它们的改动存进 Git 历史。是否需要提交它们、是否要排除临时文件（日志 `*.json`、调试脚本 `_*_*.py`、历史 `tools/release/push_v*.py`），按需决定即可，二者解耦。
+
 ## 十、git 网络策略：API 通道优先（重要经验）
 
 **背景**：沙箱注入本地代理（`HTTP_PROXY=127.0.0.1:<随机端口>`，WorkBuddy 宿主行为，不可删除），git 走它间歇不稳（502/断连）；直连 github.com 也间歇被 reset。网络路径没有一条永远可靠，**按以下优先级执行（2026-10-25 定版）**：

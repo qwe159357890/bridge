@@ -12,7 +12,9 @@
 火星坐标，高德腾讯底图用），双坐标都存——画图用 GCJ-02，导出/原始用
 WGS-84。转换算法仅中国境内生效，境外自动原样返回。
 
-连接策略：惰性连接 + 自动重连（``conn.ping(reconnect=True)``），
+连接策略：**每操作独立连接**（``contextmanager`` 每次新建、用完即关），
+线程安全，彻底避免并发复用同一 socket 导致的
+``Packet sequence number wrong`` / ``Lost connection`` 等协议错乱。
 启动时 MySQL 不可达不拖垮整个服务（首次使用时报 503 由端点转译）。
 库/表不存在自动创建（应用启动即建，无需手工初始化）。
 
@@ -23,9 +25,10 @@ from __future__ import annotations
 
 import logging
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pymysql
 
@@ -127,27 +130,27 @@ class LocationStore:
         self._user = user
         self._password = password
         self._database = database
-        self._conn: Optional[pymysql.connections.Connection] = None
 
     # ------------------------------------------------------------------
     # 连接与建库建表
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        """建立连接；库/表不存在自动创建。可重复调用（已有连接则跳过）。"""
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("位置存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+        """建库建表（启动时调用一次）。运行期不持有连接，避免并发复用。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("位置存储 schema 就绪：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
 
-        # 先不带库名连接，建库后重连（库可能尚未创建）
+    def _new_connection(self) -> pymysql.connections.Connection:
+        """新建一条独立连接（建库前先不带库名连，再 select_db）。"""
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
-            password=self._password, database=self._database, charset="utf8mb4",
-            connect_timeout=10,
+            password=self._password, charset="utf8mb4", connect_timeout=10,
         )
         with conn.cursor() as cur:
             cur.execute(
@@ -155,11 +158,7 @@ class LocationStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
-        logger.info("位置存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
+        return conn
 
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS locations (
@@ -182,23 +181,20 @@ class LocationStore:
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
 
-    def _connection(self) -> pymysql.connections.Connection:
-        """取可用连接（惰性建立；断线自动重连）。"""
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每操作独立连接（线程安全），用完即关，避免并发复用同一 socket。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        """应用关闭时释放连接。"""
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 写入（含静止合并）
@@ -211,11 +207,10 @@ class LocationStore:
         "distance_m": 与上一条的距离(合并时为合并判定值，新建时为实际距离,
         "report_count": 该行累计上报次数)}``。
         """
-        conn = self._connection()
         fix_dt = datetime.fromtimestamp(record.fix_time_ms / 1000.0) if record.fix_time_ms else datetime.now()
         gcj_lat, gcj_lon = wgs84_to_gcj02(record.latitude, record.longitude)
 
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(
                 "SELECT id, latitude, longitude, accuracy, report_count "
                 "FROM locations WHERE device_id = %s "
@@ -293,9 +288,8 @@ class LocationStore:
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
         """按条件查询（last_fix_time 倒序），返回 (rows, total)。"""
-        conn = self._connection()
         where, args = self._where(device_id, start_ms, end_ms)
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS n FROM locations {where}", args)
             total = int(cur.fetchone()["n"])
             cur.execute(
@@ -317,7 +311,6 @@ class LocationStore:
         before_ms: Optional[int] = None,
     ) -> int:
         """手动清理（至少一个条件，防误删全表）：返回删除行数。"""
-        conn = self._connection()
         conds, args = [], []
         if row_id is not None:
             conds.append("id = %s")
@@ -330,7 +323,7 @@ class LocationStore:
             args.append(datetime.fromtimestamp(before_ms / 1000.0))
         if not conds:
             raise ValueError("delete 需要至少一个条件（id / device_id / before）")
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             n = cur.execute(f"DELETE FROM locations WHERE {' AND '.join(conds)}", args)
             conn.commit()
             return int(n)

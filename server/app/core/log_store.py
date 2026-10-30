@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -103,27 +104,18 @@ class LogStore:
         # MySQL 连接信息；host 为空 = 纯内存模式（测试/无 MySQL 环境）
         self._mysql_host = host
         self._mysql_args = (host, port, user, password, database)
-        self._conn = None  # pymysql 连接（惰性建立）
         self._mysql_enabled = bool(host)  # 是否启用 MySQL（host 非空才启用）
         self._mysql_ok = False  # 最近一次 MySQL 操作是否成功（降级/恢复开关）
         # 内存降级缓冲（始终保留，MySQL 失败时兜底；纯内存模式即主存储）
         self._memory: dict[str, list[LogEntry]] = {}
 
     # ------------------------------------------------------------------
-    # MySQL 连接管理（照 connection_event_store 的 ping+reconnect 模式）
+    # MySQL 连接管理（每操作独立连接，线程安全）
     # ------------------------------------------------------------------
 
-    def _connection(self):
+    def _new_connection(self):
         import pymysql
 
-        if not self._mysql_enabled:
-            raise RuntimeError("MySQL 未配置")
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return self._conn
-            except Exception:
-                self._close_quietly()
         host, port, user, password, database = self._mysql_args
         conn = pymysql.connect(
             host=host, port=port, user=user, password=password, charset="utf8mb4",
@@ -135,26 +127,32 @@ class LogStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
         return conn
 
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator:
+        """每操作独立连接（线程安全），用完即关，避免并发复用同一 socket。"""
+        if not self._mysql_enabled:
+            raise RuntimeError("MySQL 未配置")
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-        self._conn = None
 
     def connect(self) -> None:
         """预连 MySQL（启动时调用；未配置或失败不抛，端点层降级内存）。"""
         if not self._mysql_enabled:
             return
         try:
-            self._connection()
+            with self._connection():
+                pass
             self._ensure_columns()
             self._migrate_legacy_content()
             self._mysql_ok = True
@@ -174,7 +172,6 @@ class LogStore:
         """
         if not self._mysql_enabled:
             return
-        conn = self._connection()
         cols = {
             "ts": "DOUBLE NOT NULL DEFAULT 0",
             "level": "VARCHAR(8) NOT NULL DEFAULT 'I'",
@@ -182,7 +179,7 @@ class LogStore:
             "message": "TEXT NOT NULL",
             "line_hash": "CHAR(32) NOT NULL DEFAULT ''",
         }
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             for name, ddl in cols.items():
                 try:
                     cur.execute(f"ALTER TABLE device_logs ADD COLUMN {name} {ddl}")
@@ -191,24 +188,27 @@ class LogStore:
                     pass
             # 唯一索引去重是本功能的关键，创建失败绝不能静默吞掉——
             # 否则日志会大量重复入库、且无任何告警。这里显式检查并告警。
-            try:
-                cur.execute(
-                    "ALTER TABLE device_logs "
-                    "ADD UNIQUE KEY uk_device_line (device_id, ts, line_hash)"
-                )
-            except Exception as exc:
-                # 常见原因：表里已有历史重复数据导致 Duplicate entry。
-                # 此时必须先清重再补索引，否则 INSERT IGNORE 去重永远失效。
-                logger.warning(
-                    "日志表唯一索引 uk_device_line 创建失败，去重将失效：%s。"
-                    "请先清理 device_logs 中的重复行再重建索引。", exc,
-                )
-            else:
-                logger.info("日志表唯一索引 uk_device_line 已就绪，按行去重生效")
-        conn.commit()
+            # 先查是否已存在（避免每次启动重复 ADD 触发 Duplicate key name 误报）。
+            cur.execute("SHOW INDEX FROM device_logs WHERE Key_name = 'uk_device_line'")
+            if cur.fetchone() is None:
+                try:
+                    cur.execute(
+                        "ALTER TABLE device_logs "
+                        "ADD UNIQUE KEY uk_device_line (device_id, ts, line_hash)"
+                    )
+                except Exception as exc:
+                    # 常见原因：表里已有历史重复数据导致 Duplicate entry。
+                    # 此时必须先清重再补索引，否则 INSERT IGNORE 去重永远失效。
+                    logger.warning(
+                        "日志表唯一索引 uk_device_line 创建失败，去重将失效：%s。"
+                        "请先清理 device_logs 中的重复行再重建索引。", exc,
+                    )
+                else:
+                    logger.info("日志表唯一索引 uk_device_line 已就绪，按行去重生效")
+            conn.commit()
 
     def close(self) -> None:
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     def _migrate_legacy_content(self) -> None:
         """迁移旧格式数据：把整块 content 记录按行拆分为结构化行。
@@ -221,49 +221,49 @@ class LogStore:
         """
         if not self._mysql_enabled:
             return
-        conn = self._connection()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, device_id, device_name, app_version, content, created_at "
-                    "FROM device_logs WHERE message = '' AND content != ''"
-                )
-                rows = cur.fetchall()
-
-            migrated = 0
-            for r in rows:
-                rid, device_id, device_name, app_version, content, created_at = r
-                base_ts = created_at * 1000.0
-                # 解析出所有结构化行
-                parsed = []
-                for raw in content.splitlines():
-                    line = raw.rstrip()
-                    if not line:
-                        continue
-                    level, tag, msg = _parse_line(line)
-                    parsed.append((level, tag, msg))
-
-                if not parsed:
-                    continue
-
+            with self._connection() as conn:
                 with conn.cursor() as cur:
-                    # 删除旧整块记录
-                    cur.execute("DELETE FROM device_logs WHERE id = %s", (rid,))
-                    # 逐行 INSERT（ts 用 base_ts + 偏移，保证单调 + 去重唯一键不冲突）
-                    for i, (level, tag, msg) in enumerate(parsed):
-                        ts = base_ts + i
-                        cur.execute(
-                            "INSERT IGNORE INTO device_logs "
-                            "(device_id, device_name, app_version, ts, level, tag, message, content, line_hash, created_at) "
-                            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                            (device_id, device_name or "", app_version or "", ts, level,
-                             tag, msg, msg, _line_hash(ts, level, tag, msg), created_at),
-                        )
-                migrated += 1
+                    cur.execute(
+                        "SELECT id, device_id, device_name, app_version, content, created_at "
+                        "FROM device_logs WHERE message = '' AND content != ''"
+                    )
+                    rows = cur.fetchall()
 
-            conn.commit()
-            if migrated:
-                logger.info("日志迁移旧格式 %d 条记录为按行结构", migrated)
+                migrated = 0
+                for r in rows:
+                    rid, device_id, device_name, app_version, content, created_at = r
+                    base_ts = created_at * 1000.0
+                    # 解析出所有结构化行
+                    parsed = []
+                    for raw in content.splitlines():
+                        line = raw.rstrip()
+                        if not line:
+                            continue
+                        level, tag, msg = _parse_line(line)
+                        parsed.append((level, tag, msg))
+
+                    if not parsed:
+                        continue
+
+                    with conn.cursor() as cur:
+                        # 删除旧整块记录
+                        cur.execute("DELETE FROM device_logs WHERE id = %s", (rid,))
+                        # 逐行 INSERT（ts 用 base_ts + 偏移，保证单调 + 去重唯一键不冲突）
+                        for i, (level, tag, msg) in enumerate(parsed):
+                            ts = base_ts + i
+                            cur.execute(
+                                "INSERT IGNORE INTO device_logs "
+                                "(device_id, device_name, app_version, ts, level, tag, message, content, line_hash, created_at) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                                (device_id, device_name or "", app_version or "", ts, level,
+                                 tag, msg, msg, _line_hash(ts, level, tag, msg), created_at),
+                            )
+                    migrated += 1
+
+                conn.commit()
+                if migrated:
+                    logger.info("日志迁移旧格式 %d 条记录为按行结构", migrated)
         except Exception as exc:
             logger.debug("日志旧数据迁移跳过：%s", exc)
 
@@ -288,12 +288,11 @@ class LogStore:
         """
         entries = self._build_entries(device_id, content, device_name, app_version, logs)
         if not entries:
-            return []
+            return 0
 
         if self._mysql_enabled:
             try:
-                conn = self._connection()
-                with conn.cursor() as cur:
+                with self._connection() as conn, conn.cursor() as cur:
                     # 批量插入：executemany 一次提交全部行，避免逐行 execute 的 N+1 网络往返。
                     # 之前逐条 INSERT 在公网 MySQL 下 500+ 行要十几秒，且阻塞事件循环导致
                     # 客户端 ping 超时断连；批量后一次往返即可完成。
@@ -321,7 +320,7 @@ class LogStore:
                             ")",
                             (device_id, self._max_entries),
                         )
-                conn.commit()
+                    conn.commit()
                 self._mysql_ok = True
                 self._maybe_cleanup()
                 logger.info("设备 %s 上传日志 %d 行，去重后新入库 %d 行（MySQL）",
@@ -385,6 +384,16 @@ class LogStore:
                 if not line:
                     continue
                 level, tag, msg = _parse_line(line)
+                # 防御性兜底：任何「解析失败」的行（_parse_line 返回 level=I、tag=空，
+                # 即无法解析成 [L] [tag] msg 结构，如异常堆栈碎片 \tat / Caused by /
+                # ... N more，或旧客户端整块文本里任意含换行的多行续行）都归并到上一条，
+                # 不针对具体异常类型——只要解析失败就归并，新出现的未知多行形态同样兜底。
+                if tag == "" and level == "I" and entries:
+                    prev = entries[-1]
+                    # 用 ⏎ 占位符连接（与客户端 flattenNewlines 语义一致），
+                    # 保证 message 里绝无真实 \n，避免污染数据库 message 字段。
+                    prev.message = f"{prev.message}⏎{msg}"
+                    continue
                 entries.append(LogEntry(
                     device_id=device_id,
                     message=msg,
@@ -444,7 +453,6 @@ class LogStore:
         tag: str,
         keyword: str,
     ) -> list[LogEntry]:
-        conn = self._connection()
         sql = (
             "SELECT device_id, device_name, app_version, ts, level, tag, message, created_at "
             "FROM device_logs WHERE device_id = %s"
@@ -463,7 +471,7 @@ class LogStore:
         if limit and limit > 0:
             sql += " LIMIT %s OFFSET %s"
             args += [limit, offset]
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, args)
             rows = cur.fetchall()
         self._mysql_ok = True
@@ -491,12 +499,11 @@ class LogStore:
         removed = 0
         if self._mysql_enabled:
             try:
-                conn = self._connection()
-                with conn.cursor() as cur:
+                with self._connection() as conn, conn.cursor() as cur:
                     removed = int(cur.execute(
                         "DELETE FROM device_logs WHERE device_id = %s", (device_id,)
                     ))
-                conn.commit()
+                    conn.commit()
                 self._mysql_ok = True
                 logger.info("清除设备 %s 的日志（%d 条，MySQL）", device_id, removed)
                 return removed
@@ -512,8 +519,7 @@ class LogStore:
         """列出有日志的设备 id。"""
         if self._mysql_enabled:
             try:
-                conn = self._connection()
-                with conn.cursor() as cur:
+                with self._connection() as conn, conn.cursor() as cur:
                     cur.execute("SELECT DISTINCT device_id FROM device_logs")
                     ids = sorted(r[0] for r in cur.fetchall())
                 self._mysql_ok = True
@@ -547,8 +553,7 @@ class LogStore:
         return result
 
     def _summaries_mysql(self) -> list[dict]:
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT d.device_id, d.log_count, d.last_ts, "
                 "  (SELECT l.device_name FROM device_logs l WHERE l.device_id = d.device_id "
@@ -580,7 +585,6 @@ class LogStore:
         """日志行数统计（不传 device_id 时返回全部行总数；支持 level/tag/keyword 过滤）。"""
         if self._mysql_enabled:
             try:
-                conn = self._connection()
                 sql = "SELECT COUNT(*) FROM device_logs"
                 conds: list[str] = []
                 args: list = []
@@ -598,7 +602,7 @@ class LogStore:
                     args.append(f"%{keyword}%")
                 if conds:
                     sql += " WHERE " + " AND ".join(conds)
-                with conn.cursor() as cur:
+                with self._connection() as conn, conn.cursor() as cur:
                     cur.execute(sql, args)
                     n = int(cur.fetchone()[0])
                 self._mysql_ok = True
@@ -644,13 +648,12 @@ class LogStore:
             return
         self._last_cleanup = now
         try:
-            conn = self._connection()
             cutoff_ms = (now - self._retention_days * 86400.0) * 1000.0
-            with conn.cursor() as cur:
+            with self._connection() as conn, conn.cursor() as cur:
                 n = cur.execute(
                     "DELETE FROM device_logs WHERE ts < %s", (cutoff_ms,)
                 )
-            conn.commit()
+                conn.commit()
             if n:
                 logger.info("日志清理 %d 条超龄记录（保留 %d 天）", n, self._retention_days)
         except Exception as exc:

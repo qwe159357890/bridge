@@ -10,8 +10,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pymysql
 
@@ -29,7 +30,6 @@ class CallLogStore:
         self._user = user
         self._password = password
         self._database = database
-        self._conn: Optional[pymysql.connections.Connection] = None
 
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS call_logs (
@@ -60,14 +60,26 @@ class CallLogStore:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("通话记录存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+        """建库建表 + 列迁移（启动时调用一次）。运行期不持有连接。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+                for col, ddl in self._MIGRATE_COLUMNS:
+                    try:
+                        cur.execute(f"ALTER TABLE call_logs ADD COLUMN {col} {ddl}")
+                        logger.info("通话记录表迁移：新增列 %s", col)
+                    except pymysql.err.OperationalError as e:
+                        if e.args and e.args[0] == 1060:  # Duplicate column：已存在
+                            pass
+                        else:
+                            raise
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("通话记录存储 schema 就绪：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
 
+    def _new_connection(self) -> pymysql.connections.Connection:
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
             password=self._password, charset="utf8mb4",
@@ -79,36 +91,22 @@ class CallLogStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-            for col, ddl in self._MIGRATE_COLUMNS:
-                try:
-                    cur.execute(f"ALTER TABLE call_logs ADD COLUMN {col} {ddl}")
-                    logger.info("通话记录表迁移：新增列 %s", col)
-                except pymysql.err.OperationalError as e:
-                    if e.args and e.args[0] == 1060:  # Duplicate column：已存在
-                        pass
-                    else:
-                        raise
-        conn.commit()
-        self._conn = conn
-        logger.info("通话记录存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
+        return conn
 
-    def _connection(self) -> pymysql.connections.Connection:
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每操作独立连接（线程安全），用完即关。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 写入（覆盖快照）
@@ -120,9 +118,8 @@ class CallLogStore:
         ``records`` 每项：``{call_key, number, name, type, duration, date_ms,
         location, sim_slot, sim_number}``（sim 两项可缺省，缺省按未知 -1/''）。
         """
-        conn = self._connection()
         sync_dt = datetime.now()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM call_logs WHERE device_id = %s", (device_id,))
             if records:
                 cur.executemany(
@@ -164,7 +161,6 @@ class CallLogStore:
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int, Optional[str]]:
         """查询某设备通话记录（号码/联系人模糊匹配），返回 (rows, total, sync_time)。"""
-        conn = self._connection()
         conds, args = ["device_id = %s"], [device_id]
         if call_type is not None:
             conds.append("call_type = %s")
@@ -174,7 +170,7 @@ class CallLogStore:
             conds.append("(number LIKE %s OR cached_name LIKE %s)")
             args += [like, like]
         where = "WHERE " + " AND ".join(conds)
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS n, MAX(sync_time) AS st FROM call_logs {where}", args)
             row = cur.fetchone()
             total = int(row["n"])
@@ -188,8 +184,7 @@ class CallLogStore:
 
     def delete(self, device_id: str) -> int:
         """清空某设备通话记录快照。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             n = cur.execute("DELETE FROM call_logs WHERE device_id = %s", (device_id,))
             conn.commit()
             return int(n)

@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pymysql
 
@@ -26,7 +27,6 @@ class SimStore:
         self._user = user
         self._password = password
         self._database = database
-        self._conn: Optional[pymysql.connections.Connection] = None
 
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS device_sim_info (
@@ -45,14 +45,17 @@ class SimStore:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("SIM 卡存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+        """建库建表（启动时调用一次）。运行期不持有连接。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("SIM 卡存储 schema 就绪：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
 
+    def _new_connection(self) -> pymysql.connections.Connection:
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
             password=self._password, charset="utf8mb4",
@@ -64,27 +67,22 @@ class SimStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
-        logger.info("SIM 卡存储已连接：%s@%s:%s/%s", self._user, self._host, self._port, self._database)
+        return conn
 
-    def _connection(self) -> pymysql.connections.Connection:
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每操作独立连接（线程安全），用完即关。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 写入（覆盖快照）
@@ -95,9 +93,8 @@ class SimStore:
 
         ``sims`` 每项：``{slot_index, subscription_id, number, carrier}``。
         """
-        conn = self._connection()
         sync_dt = datetime.now()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM device_sim_info WHERE device_id = %s", (device_id,))
             if sims:
                 cur.executemany(
@@ -125,8 +122,7 @@ class SimStore:
 
     def list(self, device_id: str) -> tuple[list[dict[str, Any]], Optional[str]]:
         """查询某设备 SIM 卡列表（按卡槽序号排序），返回 (rows, sync_time)。"""
-        conn = self._connection()
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(
                 "SELECT * FROM device_sim_info WHERE device_id = %s ORDER BY slot_index",
                 (device_id,),
@@ -139,8 +135,7 @@ class SimStore:
 
     def delete(self, device_id: str) -> int:
         """清空某设备 SIM 卡快照。"""
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             n = cur.execute("DELETE FROM device_sim_info WHERE device_id = %s", (device_id,))
             conn.commit()
             return int(n)

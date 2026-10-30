@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import logging
 import shutil
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pymysql
 
@@ -50,7 +51,6 @@ class MediaStore:
         self._base_dir = base_dir
         self._max_count = max_count
         self._max_age_days = max_age_days
-        self._conn: Optional[pymysql.connections.Connection] = None
 
     _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS media_files (
@@ -70,17 +70,20 @@ class MediaStore:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.ping(reconnect=True)
-                return
-            except Exception:
-                logger.warning("媒体存储连接失效，重连", exc_info=True)
-                self._close_quietly()
+        """建库建表（启动时调用一次）。运行期不持有连接。"""
+        conn = self._new_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE_SQL)
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("媒体存储 schema 就绪：%s@%s:%s/%s（目录 %s）", self._user, self._host, self._port, self._database, self._base_dir)
 
+    def _new_connection(self) -> pymysql.connections.Connection:
         conn = pymysql.connect(
             host=self._host, port=self._port, user=self._user,
-            password=self._password, database=self._database, charset="utf8mb4",
+            password=self._password, charset="utf8mb4",
             connect_timeout=10,
         )
         with conn.cursor() as cur:
@@ -89,27 +92,22 @@ class MediaStore:
                 "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
             )
         conn.select_db(self._database)
-        with conn.cursor() as cur:
-            cur.execute(self._CREATE_TABLE_SQL)
-        conn.commit()
-        self._conn = conn
-        logger.info("媒体存储已连接：%s@%s:%s/%s（目录 %s）", self._user, self._host, self._port, self._database, self._base_dir)
+        return conn
 
-    def _connection(self) -> pymysql.connections.Connection:
-        self.connect()
-        assert self._conn is not None
-        return self._conn
-
-    def _close_quietly(self) -> None:
-        if self._conn is not None:
+    @contextmanager
+    def _connection(self) -> Iterator[pymysql.connections.Connection]:
+        """每操作独立连接（线程安全），用完即关。"""
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
 
     def close(self) -> None:
-        self._close_quietly()
+        """兼容旧签名：每操作独立连接，无需持有/关闭。"""
 
     # ------------------------------------------------------------------
     # 写入
@@ -157,8 +155,7 @@ class MediaStore:
                 logger.exception("TS→FLV 存档转换失败（保留原 TS）")
         size = target.stat().st_size
 
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO media_files (device_id, kind, filename, size) VALUES (%s, %s, %s, %s)",
                 (device_id, kind, filename, size),
@@ -183,8 +180,7 @@ class MediaStore:
 
     def list(self, limit: int = 200) -> list[dict[str, Any]]:
         """按时间倒序列出媒体记录（新在前）。"""
-        conn = self._connection()
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(
                 "SELECT * FROM media_files ORDER BY created_at DESC, id DESC LIMIT %s",
                 (int(limit),),
@@ -194,8 +190,7 @@ class MediaStore:
 
     def get(self, record_id: int) -> Optional[dict[str, Any]]:
         """按 ID 取一条记录。"""
-        conn = self._connection()
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute("SELECT * FROM media_files WHERE id = %s", (record_id,))
             row = cur.fetchone()
         return self._row_to_dict(row) if row else None
@@ -209,8 +204,7 @@ class MediaStore:
         record = self.get(record_id)
         if record is None:
             return False
-        conn = self._connection()
-        with conn.cursor() as cur:
+        with self._connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM media_files WHERE id = %s", (record_id,))
             conn.commit()
         path = self.file_path_of(record)
@@ -230,8 +224,7 @@ class MediaStore:
     def _cleanup(self) -> int:
         """按数量/时间清理旧记录（保留最新 max_count 条且不过 max_age_days 天）。"""
         removed = 0
-        conn = self._connection()
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        with self._connection() as conn, conn.cursor(pymysql.cursors.DictCursor) as cur:
             # 时间触发：超过 max_age_days 的全部删除
             if self._max_age_days > 0:
                 deadline = datetime.now() - timedelta(days=self._max_age_days)
@@ -264,9 +257,9 @@ class MediaStore:
                     removed += len(overflow)
                     self._remove_files(overflow)
 
-        if removed:
-            conn.commit()
-            logger.info("媒体自动清理：%d 条（max_count=%d, max_age_days=%d）", removed, self._max_count, self._max_age_days)
+            if removed:
+                conn.commit()
+                logger.info("媒体自动清理：%d 条（max_count=%d, max_age_days=%d）", removed, self._max_count, self._max_age_days)
         return removed
 
     def _remove_files(self, rows: list[dict[str, Any]]) -> None:
