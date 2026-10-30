@@ -5,65 +5,55 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * 智能控制（ESP32 继电器）UI 状态快照，**不可变**。
+ * 智能控制 UI 状态快照，**不可变**。
  *
  * 与参考项目 relay-control/src/main.ts 的全局量一一对应：
+ * - [connected] ← setConnected(connected: Boolean) 的 WS 连接态（两态：已连接/未连接）
  * - [devices] / [deviceOrder] ← cachedDevices / cachedDeviceOrder
- * - [deviceStatus] ← deviceStatusCache（deviceId -> 引脚号字符串 -> 电平值）
- * - [pendingDevices] = 本项目扩展的「执行中」提示态集合
- * - [connection] ← setConnected 的 WebSocket 连接态
+ * - [statusCache] ← deviceStatusCache（deviceId -> 引脚号字符串 -> 电平值，0=开 1=关）
  */
 data class SwitchUiState(
+    val connected: Boolean = false,
     val devices: List<RelaySwitchState.Device> = emptyList(),
     val deviceOrder: List<String> = emptyList(),
-    val deviceStatus: Map<String, Map<String, Int>> = emptyMap(),
-    val pendingDevices: Set<String> = emptySet(),
-    val connection: RelaySwitchState.Connection = RelaySwitchState.Connection.DISCONNECTED,
+    val statusCache: Map<String, Map<String, Int>> = emptyMap(),
 )
 
 /**
- * 智能控制全局状态中心。
+ * 智能控制全局状态中心（严格照 main.ts 的三个全局缓存 + setConnected）。
  *
- * ★ 设计要点（v0.1.91 重写，解决「状态必须手动切页才刷新」的顽疾）：
- *
- * 采用**单一不可变快照**而非多个可变字段：任何变更都 `copy` 出全新的 data class，
- * 且其中的 List/Map/Set 也一并生成新实例。Compose 通过结构相等比较即可可靠地检测到
- * 「有变化」并触发重组，彻底避免了过去「某个字段变了但 UI 认为对象引用没变」的漏刷问题。
- *
- * 另外，状态写入发生在 OkHttp 的 IO 线程，Compose 的 snapshot 系统保证线程安全地通知 UI，
- * 因此无需再用 Handler 手动切主线程（过去 `mainHandler.post` 的写法也是漏刷诱因之一）。
+ * ★ 设计要点：
+ * 1. **单一不可变快照**：任何变更都 copy 出全新对象（含内部 List/Map），
+ *    Compose 结构相等比较即可可靠检测变化并重组。
+ * 2. **无中间态**：没有「执行中」「轮询」「离线宽限」等自研概念——
+ *    显示状态完全由 connected + device.online + statusCache 三个量推导，
+ *    与参考项目 renderPaneCard/updateUI 的分支逻辑严格一致。
+ * 3. 状态写入发生在 OkHttp IO 线程，Compose snapshot 系统保证线程安全通知 UI。
  */
 object RelaySwitchState {
 
-    /** 设备信息（id / 名称 / 是否在线），对应 DeviceInfo。 */
+    /** 设备信息（id / 名称 / 是否在线），对应参考的 DeviceInfo。 */
     data class Device(
         val id: String,
         val name: String,
         val online: Boolean,
     )
 
-    /** 连接状态。 */
-    enum class Connection {
-        DISCONNECTED, // 未连接
-        CONNECTING,   // 连接中
-        CONNECTED,    // 已连接
-    }
-
-    /** 收到服务端 error 消息的回调（UI 层弹 Toast）。 */
-    fun interface ErrorListener {
-        fun onError(message: String)
+    /** Toast 通知回调（对应参考的 showToast），由 UI 层注册。 */
+    fun interface ToastListener {
+        fun onToast(message: String)
     }
 
     private var _state by mutableStateOf(SwitchUiState())
 
-    /** UI 唯一观察点：读取该快照即可随状态变化自动重组。 */
+    /** UI 唯一观察点：读取该快照即自动订阅重组。 */
     val state: SwitchUiState get() = _state
 
     @Volatile
-    private var errorListener: ErrorListener? = null
+    private var toastListener: ToastListener? = null
 
-    fun setErrorListener(listener: ErrorListener?) {
-        errorListener = listener
+    fun setToastListener(listener: ToastListener?) {
+        toastListener = listener
     }
 
     /** 统一写入口：产出全新快照对象。 */
@@ -72,13 +62,13 @@ object RelaySwitchState {
     }
 
     // ------------------------------------------------------------------
-    // 读取辅助（纯函数，便于 UI 传入 snapshot 计算，不隐式依赖单例）
+    // 读取辅助（纯函数，供 UI 计算显示态）
     // ------------------------------------------------------------------
 
     /** 取某设备某引脚的电平值：0=开，1=关，null=尚未收到真实状态。 */
     fun pioValue(status: Map<String, Int>?, pio: Int): Int? = status?.get(pio.toString())
 
-    /** 设备排序（照 compareDevices：在线优先 → 服务端顺序 → 中文名）。 */
+    /** 设备排序（照 compareDevices：在线优先 → 服务端 device_order → 中文名）。 */
     fun sortedDevices(devices: List<Device>, order: List<String>): List<Device> {
         if (devices.size <= 1) return devices
         return devices.sortedWith(
@@ -91,73 +81,65 @@ object RelaySwitchState {
         )
     }
 
+    /** 设备显示名（照 getDeviceName：列表里找不到时回退为设备 ID）。 */
+    fun deviceName(devices: List<Device>, deviceId: String): String =
+        devices.find { it.id == deviceId }?.name ?: deviceId
+
     // ------------------------------------------------------------------
-    // 写入（均由客户端在 IO 线程调用）
+    // 写入（均由客户端在 IO 线程调用，逐条对应 handleServerMessage 分支）
     // ------------------------------------------------------------------
 
-    fun updateConnection(connection: Connection) {
-        mutate { if (it.connection == connection) it else it.copy(connection = connection) }
+    /** WS 连接态（照 setConnected）。 */
+    fun setConnected(connected: Boolean) {
+        mutate { if (it.connected == connected) it else it.copy(connected = connected) }
     }
 
-    /** 更新设备列表（ devices_list 消息 / REST 拉取结果）。 */
+    /** 更新设备列表（devices_list 消息 / REST 拉取结果）。 */
     fun updateDevices(newDevices: List<Device>, order: List<String>) {
         mutate {
             it.copy(devices = newDevices.toList(), deviceOrder = order.toList())
         }
     }
 
-    /** 设备上线：已存在则更新，未知设备则追加（照 handleServerMessage 的 device_online 分支）。 */
+    /**
+     * 设备上线（照 device_online 分支）：
+     * 已存在则标记在线并更新名称；未知设备则 push 到列表尾部。
+     */
     fun updateDeviceOnline(id: String, name: String?) {
         mutate { s ->
             val exists = s.devices.any { it.id == id }
             val devices = if (exists) {
                 s.devices.map { if (it.id == id) it.copy(online = true, name = name ?: it.name) else it }
             } else {
-                // 新设备：照参考工程 push 到列表尾部
                 s.devices + Device(id = id, name = name ?: id, online = true)
             }
             s.copy(devices = devices)
         }
     }
 
-    /** 设备离线：标记离线并清除其状态缓存（照 device_offline 分支）。 */
+    /**
+     * 设备离线（照 device_offline 分支）：
+     * 标记离线，并**立即删除其状态缓存**（delete deviceStatusCache[id]），
+     * 卡片随即显示「等待连接」。
+     */
     fun updateDeviceOffline(id: String) {
         mutate { s ->
-            val devices = s.devices.map { if (it.id == id) it.copy(online = false) else it }
             s.copy(
-                devices = devices,
-                deviceStatus = s.deviceStatus - id,
-                pendingDevices = s.pendingDevices - id,
+                devices = s.devices.map { if (it.id == id) it.copy(online = false) else it },
+                statusCache = s.statusCache - id,
             )
         }
     }
 
-    /** 更新某设备的继电器状态；收到真实状态即代表 set 完成，同时退出「执行中」态。 */
+    /** 更新某设备的继电器状态缓存（照 status 分支：deviceStatusCache[id] = data）。 */
     fun updateStatus(deviceId: String, status: Map<String, Int>) {
         mutate { s ->
-            s.copy(
-                deviceStatus = s.deviceStatus + (deviceId to status.toMap()),
-                pendingDevices = s.pendingDevices - deviceId,
-            )
+            s.copy(statusCache = s.statusCache + (deviceId to status.toMap()))
         }
     }
 
-    /** 标记设备进入「执行中」态。 */
-    fun markPending(deviceId: String) {
-        mutate { s ->
-            if (deviceId in s.pendingDevices) s else s.copy(pendingDevices = s.pendingDevices + deviceId)
-        }
-    }
-
-    /** 清除设备的「执行中」态。 */
-    fun clearPending(deviceId: String) {
-        mutate { s ->
-            if (deviceId !in s.pendingDevices) s else s.copy(pendingDevices = s.pendingDevices - deviceId)
-        }
-    }
-
-    /** 通知服务端 error 消息。 */
-    fun notifyError(message: String) {
-        errorListener?.onError(message)
+    /** 弹出 Toast（照 showToast）。 */
+    fun toast(message: String) {
+        toastListener?.onToast(message)
     }
 }

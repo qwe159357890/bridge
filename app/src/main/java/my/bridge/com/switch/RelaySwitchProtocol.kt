@@ -3,9 +3,10 @@ package my.bridge.com.switch
 /**
  * 智能控制（ESP32 继电器）协议常量。
  *
- * 严格照参考项目 references/server（FastAPI 中继服务器）的 WS 协议移植：
- * 客户端连 /ws/client，发送 subscribe/unsubscribe/get_status/set，接收
- * devices_list/status/device_online/device_offline/error。
+ * 严格照参考项目移植，一一对应：
+ * - WS 协议：references/server（FastAPI 中继）——客户端连 /ws/client，
+ *   发送 subscribe/unsubscribe/get_status/set，接收 devices_list/status/device_online/device_offline/error；
+ * - 默认值：references/relay-control/.env（VITE_SERVER_URL/VITE_API_KEY/VITE_DEVICE_ID/VITE_PIO/VITE_RECONNECT_INTERVAL）。
  *
  * 继电器电平语义：value=0 低电平（开启）、value=1 高电平（关闭）。
  * 电平反转由服务器按 devices.yaml 的 inverted_pins 统一处理，客户端无需关心。
@@ -14,6 +15,9 @@ object RelaySwitchProtocol {
 
     /** 客户端连接的服务端 WS 路径（参考 server 的 routes/__init__.py：ws 前缀 + /client）。 */
     const val CLIENT_PATH = "/ws/client"
+
+    /** 设备列表 REST 路径（参考前端 fetchDevicesList：`${serverUrl}/api/devices`）。 */
+    const val DEVICES_API_PATH = "/api/devices"
 
     /** 默认中继服务器地址（host:port，参考 .env 的 VITE_SERVER_URL）。 */
     const val DEFAULT_SERVER = "127.0.0.1:15152"
@@ -27,36 +31,17 @@ object RelaySwitchProtocol {
     /** 默认继电器端口（1-9，参考 .env 的 VITE_PIO）。 */
     const val DEFAULT_PIO = 6
 
-    /** 断线重连间隔（毫秒，参考 .env 的 VITE_RECONNECT_INTERVAL）。 */
+    /** 断线重连间隔（毫秒，参考 .env 的 VITE_RECONNECT_INTERVAL=3000，固定间隔不重避）。 */
     const val RECONNECT_INTERVAL_MS = 3_000L
 
-    /** 心跳超时判死阈值（毫秒）：超过该时长未收到任何数据则强制重连。 */
-    const val HEARTBEAT_TIMEOUT_MS = 60_000L
-
-    /** set 命令发送后首次延迟拉取状态的时长（毫秒）：等设备执行完 set 再 get_status。 */
-    const val STATUS_REFRESH_DELAY_MS = 500L
-
-    /** 状态轮询间隔（毫秒）：首次拉取后每隔该时长再拉一次，兜底设备休眠/未主动上报。 */
-    const val STATUS_POLL_INTERVAL_MS = 2_000L
-
-    /** 状态轮询最大次数：覆盖最坏 10 秒休眠 + 余量（500ms + 8*2s ≈ 16.5s）。 */
-    const val STATUS_POLL_MAX_COUNT = 8
-
-    /** 执行中状态兜底超时（毫秒）：超过该时长仍未收到状态确认，则退出「执行中」态。 */
-    const val PENDING_TIMEOUT_MS = 18_000L
-
     /**
-     * 设备离线宽限期（毫秒）。
+     * OkHttp 协议层 ping 间隔（秒）。
      *
-     * ESP32 为省电会周期性休眠，休眠时 WS 断开、服务端立刻广播 device_offline，
-     * 但设备几秒后就会重连 —— 若收到 offline 立即置灰，UI 会在「在线↔离线」之间反复闪烁，
-     * 表现为「明明在线却显示不在线」。故收到 offline 后先进入宽限观察，
-     * 期间保留旧状态不再变灰；宽限内重新上线则取消，超时未恢复才真正标记离线。
+     * 浏览器 WebSocket 自带 ping/pong，OkHttp 默认关闭——移动网络下 NAT 超时会导致
+     * 半死连接（能发不能收，onFailure 不触发）。开启协议层 ping 后半死连接会被
+     * OkHttp 判定失败并回调 onFailure，从而进入重连。属于传输层保活，不改变交互逻辑。
      */
-    const val OFFLINE_GRACE_MS = 6_000L
-
-    /** 重连退避档位（毫秒），封顶 30 秒。 */
-    val BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
+    const val WS_PING_INTERVAL_SECONDS = 20L
 
     // ------------------------------------------------------------------
     // 客户端 → 服务器消息类型

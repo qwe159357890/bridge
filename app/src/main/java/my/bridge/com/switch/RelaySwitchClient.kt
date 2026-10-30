@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -16,34 +17,28 @@ import java.util.concurrent.TimeUnit
  * 智能控制（ESP32 继电器）WebSocket 客户端。
  *
  * 主动出站连接参考项目中继服务器（方案 A：服务端零改动）。
- * 消息交换逻辑严格照 relay-control/src/main.ts 移植：
+ * **交互流程严格照 references/relay-control/src/main.ts 逐函数移植**：
  *
- * - connectWebSocket：server 地址 `http://host` → WS `ws://host/ws/client`（`https` → `wss`），
- *   URL 可带 `?token=<apiKey>` 认证；
- * - onOpen：先 REST 拉设备列表 `GET /api/devices`（await），再按模式订阅 + 逐个 get_status；
- * - togglePaneMode：窗格模式订阅全部设备；单设备模式只保留当前设备订阅、退订其余；
- * - handleServerMessage：status / device_online / device_offline / devices_list / error；
- * - sendRelayCommandForDevice：只发 set，UI 更新完全靠订阅广播回来。
+ * | 参考（main.ts）            | 本类                          |
+ * |---------------------------|-------------------------------|
+ * | initApp()                 | [start]：先 REST 拉设备列表，再连 WS |
+ * | connectWebSocket()        | [connectOnce]                 |
+ * | ws.onopen                 | onOpen：fetchDevices → 按模式 subscribe + get_status |
+ * | handleServerMessage()     | [handleMessage]：status / device_online / device_offline / devices_list / error |
+ * | sendRelayCommandForDevice | [setRelay]：只发 set + Toast，UI 等设备上报 status 驱动 |
+ * | togglePaneMode()          | [onPaneModeChanged]：窗格订阅全部；单设备退订其它 |
+ * | pane-card click           | [onDeviceSelected]：选中设备并切单卡，退订其它 + 订阅当前 |
+ * | scheduleReconnect()       | 固定 3 秒重连（RECONNECT_INTERVAL_MS） |
  *
- * 本项目在参考实现之上保留了两处增强（经用户确认）：
- * ① set 后进入「执行中」提示态并短轮询兜底（应对 ESP32 休眠不主动上报）；
- * ② device_offline 走宽限延迟确认，避免休眠导致在线↔离线反复闪烁。
- *
- * 连接健壮性借鉴 RelayClient.kt：generation 会话代次防旧回调污染、
- * 指数退避重连（封顶 30s）、心跳超时判死兜底。
+ * 显示状态不在此层做中间态（无「执行中」/轮询/离线宽限）——
+ * 完全由 RelaySwitchState 的 connected + online + statusCache 推导，与参考一致。
  */
 class RelaySwitchClient {
 
     private var httpClient: OkHttpClient? = null
 
-    /** 主线程 Handler：延迟任务（状态轮询、执行中超时、离线宽限）。 */
-    private val statusHandler = Handler(Looper.getMainLooper())
-
-    /** 每个设备的状态轮询计数：deviceId -> 已轮询次数（set 后多次 getStatus 兜底）。 */
-    private val pollCounts = mutableMapOf<String, Int>()
-
-    /** 离线宽限监视任务：deviceId -> 到期执行的 Runnable（宽限期内重新上线即取消）。 */
-    private val offlineWatch = mutableMapOf<String, Runnable>()
+    /** 主线程 Handler：仅用于固定间隔重连定时（对应参考的 reconnectTimer）。 */
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
     private var webSocket: WebSocket? = null
@@ -51,22 +46,20 @@ class RelaySwitchClient {
     @Volatile
     private var running = false
 
+    /** 对应参考的 intentionalClose：主动断开时不自动重连。 */
     @Volatile
     private var intentionalClose = false
 
-    /** 会话代次：每次 start() 自增，作废旧连接残留回调。 */
+    /** 会话代次：每次 start 自增，作废旧连接的残留回调。 */
     @Volatile
     private var generation = 0L
 
-    @Volatile
-    private var lastAliveAt = 0L
+    /** 当前挂起的重连定时任务（对应参考的 reconnectTimer），null 表示无。 */
+    private var pendingReconnect: Runnable? = null
 
-    /** 完成取消订阅的设备集合：用于 set subscribe 范围变化时做增量退订。 */
-    private val subscribed = mutableSetOf<String>()
-
-    private val lock = Any()
-
-    private var retryThread: Thread? = null
+    // ------------------------------------------------------------------
+    // 生命周期（对应 initApp / disconnectWebSocket）
+    // ------------------------------------------------------------------
 
     @Synchronized
     fun start(context: Context) {
@@ -79,9 +72,12 @@ class RelaySwitchClient {
         httpClient = OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
+            // 协议层 ping 保活：浏览器 WS 自带，OkHttp 需显式开启，否则移动网络下半死连接无法察觉
+            .pingInterval(RelaySwitchProtocol.WS_PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
             .build()
 
-        RelaySwitchState.updateConnection(RelaySwitchState.Connection.CONNECTING)
+        // 照 initApp：先拉设备列表，再连 WS（connect 内部 onOpen 还会再拉一次并订阅）
+        fetchDevices(app)
         connectOnce(app)
         DiagLog.i("智能控制", "继电器客户端启动")
     }
@@ -92,72 +88,51 @@ class RelaySwitchClient {
         running = false
         intentionalClose = true
         generation++
+        cancelReconnect()
         closeWebSocket()
         httpClient = null
-        statusHandler.removeCallbacksAndMessages(null)
-        clearTransient()
-        try { retryThread?.interrupt() } catch (e: Exception) { }
-        retryThread = null
-        RelaySwitchState.updateConnection(RelaySwitchState.Connection.DISCONNECTED)
+        RelaySwitchState.setConnected(false)
         DiagLog.i("智能控制", "继电器客户端已停止")
     }
 
     fun isRunning(): Boolean = running
 
-    fun isConnected(): Boolean = webSocket != null && running
-
-    /** 清理瞬时状态（轮询计数、离线宽限、订阅集合）。 */
-    private fun clearTransient() {
-        synchronized(lock) {
-            pollCounts.clear()
-            offlineWatch.clear()
-            subscribed.clear()
-        }
+    /** 设置保存后整体重连（照参考 save-settings：disconnectWebSocket → connectWebSocket）。 */
+    fun restart(context: Context) {
+        stop()
+        start(context)
     }
 
     // ------------------------------------------------------------------
-    // 发送消息（照 main.ts 的 ws.send 调用）
+    // 发送消息（对应 ws.send 调用点）
     // ------------------------------------------------------------------
 
-    /** 发送一条客户端消息（subscribe/unsubscribe/get_status/set）。 */
-    fun send(msg: JSONObject): Boolean {
+    /** 发送一条客户端消息；返回是否成功入队。 */
+    private fun send(msg: JSONObject): Boolean {
         val ws = webSocket ?: return false
         return try {
             ws.send(msg.toString())
-            true
         } catch (e: Exception) {
             DiagLog.w("智能控制", "发送消息失败：${e.message}")
             false
         }
     }
 
-    /** 订阅设备。 */
-    fun subscribe(deviceId: String) {
-        if (deviceId.isBlank()) return
-        if (send(JSONObject().apply {
-                put("type", RelaySwitchProtocol.TYPE_SUBSCRIBE)
-                put("device_id", deviceId)
-            })
-        ) {
-            synchronized(lock) { subscribed.add(deviceId) }
-        }
+    private fun sendSubscribe(deviceId: String) {
+        send(JSONObject().apply {
+            put("type", RelaySwitchProtocol.TYPE_SUBSCRIBE)
+            put("device_id", deviceId)
+        })
     }
 
-    /** 取消订阅设备。 */
-    fun unsubscribe(deviceId: String) {
-        if (deviceId.isBlank()) return
-        if (send(JSONObject().apply {
-                put("type", RelaySwitchProtocol.TYPE_UNSUBSCRIBE)
-                put("device_id", deviceId)
-            })
-        ) {
-            synchronized(lock) { subscribed.remove(deviceId) }
-        }
+    private fun sendUnsubscribe(deviceId: String) {
+        send(JSONObject().apply {
+            put("type", RelaySwitchProtocol.TYPE_UNSUBSCRIBE)
+            put("device_id", deviceId)
+        })
     }
 
-    /** 请求设备状态。 */
-    fun getStatus(deviceId: String) {
-        if (deviceId.isBlank()) return
+    private fun sendGetStatus(deviceId: String) {
         send(JSONObject().apply {
             put("type", RelaySwitchProtocol.TYPE_GET_STATUS)
             put("device_id", deviceId)
@@ -165,102 +140,99 @@ class RelaySwitchClient {
     }
 
     /**
-     * 设置继电器（value：0=开，1=关）。
+     * 设置继电器（对应 sendRelayCommandForDevice）。
      *
-     * 照 sendRelayCommandForDevice：只发 set，不本地改状态；UI 最终由设备上报的
-     * status 广播驱动刷新。发送成功后进入「执行中」提示态并启动短轮询兜底。
+     * value：0=开，1=关。**只发 set 并 Toast 提示，不本地改状态**——
+     * UI 最终由设备执行后上报的 status 广播驱动刷新（与参考完全一致）。
      */
     fun setRelay(deviceId: String, pio: Int, value: Int) {
-        val sent = send(JSONObject().apply {
+        // 对应参考的 ws.readyState === WebSocket.OPEN 判断
+        if (webSocket == null || !RelaySwitchState.state.connected) {
+            RelaySwitchState.toast("未连接到服务器")
+            return
+        }
+        send(JSONObject().apply {
             put("type", RelaySwitchProtocol.TYPE_SET)
             put("device_id", deviceId)
             put("pio", pio)
             put("value", value)
         })
-        DiagLog.i("智能控制", "setRelay device=$deviceId pio=$pio value=$value sent=$sent")
-        if (!sent) {
-            RelaySwitchState.notifyError("未连接到服务器")
+        DiagLog.i("智能控制", "setRelay device=$deviceId pio=$pio value=$value")
+        RelaySwitchState.toast(if (value == 0) "正在开启..." else "正在关闭...")
+    }
+
+    /** 手动刷新当前设备状态（对应设置弹窗的「刷新」按钮 refresh-status）。 */
+    fun refreshCurrent(context: Context) {
+        if (webSocket == null || !RelaySwitchState.state.connected) {
+            RelaySwitchState.toast("未连接到服务器")
             return
         }
-        // 标记「执行中」：服务端 set 后靠设备上报 status 广播；但 ESP32 可能休眠（2~10s 不等），
-        // 故同时启动轮询兜底 —— 首次 500ms 后开始，每隔 2s get_status 一次，最多 8 次；
-        // 一旦收到真实 status（updateStatus）即自动停止轮询并退出「执行中」。
-        RelaySwitchState.markPending(deviceId)
-        synchronized(lock) { pollCounts[deviceId] = 0 }
-        statusHandler.postDelayed(
-            { pollStatus(deviceId) },
-            RelaySwitchProtocol.STATUS_REFRESH_DELAY_MS,
-        )
-        // 兜底超时：即便始终无状态回报，也退出「执行中」，避免卡死。
-        statusHandler.postDelayed(
-            {
-                RelaySwitchState.clearPending(deviceId)
-                DiagLog.w("智能控制", "执行中超时兜底退出 device=$deviceId")
-            },
-            RelaySwitchProtocol.PENDING_TIMEOUT_MS,
-        )
+        sendGetStatus(RelaySwitchPrefs.deviceId(context))
+        RelaySwitchState.toast("正在刷新...")
     }
 
-    /** 状态轮询一次：getStatus，并按最大次数决定是否继续。 */
-    private fun pollStatus(deviceId: String) {
-        if (!running) return
-        getStatus(deviceId)
-        val count = synchronized(lock) {
-            val next = (pollCounts[deviceId] ?: 0) + 1
-            pollCounts[deviceId] = next
-            next
-        }
-        DiagLog.i("智能控制", "轮询 getStatus device=$deviceId 第$count/${RelaySwitchProtocol.STATUS_POLL_MAX_COUNT}次")
-        if (count < RelaySwitchProtocol.STATUS_POLL_MAX_COUNT) {
-            statusHandler.postDelayed(
-                { pollStatus(deviceId) },
-                RelaySwitchProtocol.STATUS_POLL_INTERVAL_MS,
-            )
+    /**
+     * 窗格模式切换（对应 togglePaneMode 的 WS 部分）。
+     *
+     * - 切入窗格：对**所有设备** subscribe + get_status；
+     * - 切回单设备：退订其它设备，只保留当前设备，并对当前设备 get_status。
+     */
+    fun onPaneModeChanged(context: Context, paneMode: Boolean) {
+        if (webSocket == null || !RelaySwitchState.state.connected) return
+        val devices = RelaySwitchState.state.devices
+        if (paneMode) {
+            devices.forEach { device ->
+                sendSubscribe(device.id)
+                sendGetStatus(device.id)
+            }
         } else {
-            DiagLog.w("智能控制", "轮询达上限 device=$deviceId，转由设备主动上报")
+            val currentId = RelaySwitchPrefs.deviceId(context)
+            devices.forEach { device ->
+                if (device.id != currentId) sendUnsubscribe(device.id)
+            }
+            sendGetStatus(currentId)
         }
+        DiagLog.i("智能控制", "切换窗格模式 paneMode=$paneMode")
     }
 
-    /** 停止某设备的状态轮询（收到真实 status 时调用）。 */
-    private fun stopPolling(deviceId: String) {
-        synchronized(lock) { pollCounts.remove(deviceId) }
+    /**
+     * 窗格模式点击卡片选中设备（对应 pane-card click 的 WS 部分）：
+     * 退订其它设备 + 订阅并拉取当前设备状态。deviceId 的持久化由 UI 层完成。
+     */
+    fun onDeviceSelected(context: Context, deviceId: String) {
+        if (webSocket == null || !RelaySwitchState.state.connected) return
+        RelaySwitchState.state.devices.forEach { device ->
+            if (device.id != deviceId) sendUnsubscribe(device.id)
+        }
+        sendSubscribe(deviceId)
+        sendGetStatus(deviceId)
+        DiagLog.i("智能控制", "选中设备 device=$deviceId")
     }
 
     // ------------------------------------------------------------------
-    // 地址归一化（★ 修复：参考的 serverUrl 是带 http:// 前缀的完整 URL）
+    // 地址归一化 + 连接
     // ------------------------------------------------------------------
 
     /**
-     * 解析用户填写的服务器地址，统一成 (httpBase, wsBase)。
+     * 解析服务器地址为 (httpBase, wsBase)。
      *
-     * 参考实现 GET 用 `${serverUrl}/api/devices`、WS 用 `serverUrl.replace(/^http/,'ws')+'/ws/client'`，
-     * 其默认值为 `http://localhost:10888` —— 即**带协议前缀**。
-     * 旧实现直接拼 `ws://$server`，遇 `http://host` 会拼出 `ws://http://host`（DNS 解析 "http" 失败）。
-     * 这里同时兼容四种写法：`http://host`、`https://host`、`host:port`、`//host`。
+     * 参考用法：GET `${serverUrl}/api/devices`、WS `serverUrl.replace(/^http/,'ws')+'/ws/client'`，
+     * 默认 serverUrl 是带协议前缀的完整 URL（http://localhost:10888）。
+     * 这里兼容四种写法：`http://host`、`https://host`、`host:port`、`//host`。
      */
     private fun resolveServer(raw: String): Pair<String, String> {
         var s = raw.trim().trimEnd('/')
         val secure: Boolean
         when {
-            s.startsWith("https://", ignoreCase = true) -> {
-                secure = true
-                s = s.drop(8)
-            }
-            s.startsWith("http://", ignoreCase = true) -> {
-                secure = false
-                s = s.drop(7)
-            }
-            s.startsWith("//") -> {
-                secure = false
-                s = s.drop(2)
-            }
+            s.startsWith("https://", ignoreCase = true) -> { secure = true; s = s.drop(8) }
+            s.startsWith("http://", ignoreCase = true) -> { secure = false; s = s.drop(7) }
+            s.startsWith("//") -> { secure = false; s = s.drop(2) }
             else -> secure = false
         }
         if (s.isBlank()) s = RelaySwitchProtocol.DEFAULT_SERVER
         val hostPort = s.trimEnd('/')
-        val httpBase = (if (secure) "https://" else "http://") + hostPort
-        val wsBase = (if (secure) "wss://" else "ws://") + hostPort
-        return httpBase to wsBase
+        return (if (secure) "https://" else "http://") + hostPort to
+            (if (secure) "wss://" else "ws://") + hostPort
     }
 
     private fun buildWsUrl(server: String, apiKey: String): String {
@@ -272,36 +244,30 @@ class RelaySwitchClient {
         return url
     }
 
-    // ------------------------------------------------------------------
-    // 连接
-    // ------------------------------------------------------------------
-
+    /** 建立一次 WS 连接（对应 connectWebSocket）。 */
     private fun connectOnce(context: Context) {
         val client = httpClient ?: return
         val myGen = generation
+        cancelReconnect()
         val server = RelaySwitchPrefs.server(context)
         val apiKey = RelaySwitchPrefs.apiKey(context)
         val url = buildWsUrl(server, apiKey)
 
-        val request = Request.Builder().url(url).build()
         DiagLog.i("智能控制", "连接 WS url=$url")
-        client.newWebSocket(request, object : WebSocketListener() {
+        client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             private fun isStale(): Boolean = !running || generation != myGen
 
             override fun onOpen(socket: WebSocket, response: Response) {
-                if (isStale()) { try { socket.close(1000, "stale") } catch (e: Exception) {}; return }
+                if (isStale()) { try { socket.close(1000, "stale") } catch (e: Exception) {} ; return }
                 webSocket = socket
-                lastAliveAt = System.currentTimeMillis()
-                RelaySwitchState.updateConnection(RelaySwitchState.Connection.CONNECTED)
+                RelaySwitchState.setConnected(true)
                 DiagLog.i("智能控制", "已连接继电器服务器")
-                synchronized(lock) { subscribed.clear() }
-                // 照参考 onOpen：先 await 设备列表，再订阅 + 取状态
-                fetchDevices(context) { syncSubscriptions(context) }
+                // 照 ws.onopen：先 await 设备列表，再按模式订阅 + 逐个 get_status
+                fetchDevices(context) { subscribeByMode(context) }
             }
 
             override fun onMessage(socket: WebSocket, text: String) {
                 if (isStale()) return
-                lastAliveAt = System.currentTimeMillis()
                 handleMessage(context, text)
             }
 
@@ -309,8 +275,8 @@ class RelaySwitchClient {
                 if (isStale()) return
                 DiagLog.e("智能控制", "连接异常：${t.message}", t)
                 webSocket = null
-                clearTransient()
-                RelaySwitchState.updateConnection(RelaySwitchState.Connection.DISCONNECTED)
+                // 照 ws.onclose：setConnected(false)，UI 随即显示「等待连接」
+                RelaySwitchState.setConnected(false)
                 scheduleReconnect(context)
             }
 
@@ -318,102 +284,116 @@ class RelaySwitchClient {
                 if (isStale()) return
                 DiagLog.i("智能控制", "连接已关闭：code=$code reason=$reason")
                 webSocket = null
-                clearTransient()
-                RelaySwitchState.updateConnection(RelaySwitchState.Connection.DISCONNECTED)
+                RelaySwitchState.setConnected(false)
                 if (!intentionalClose) scheduleReconnect(context)
             }
         })
     }
 
     /**
-     * 按当前模式同步订阅范围并拉取状态（照 onOpen / togglePaneMode 的订阅逻辑）。
-     *
-     * - 窗格模式：**所有设备**都 subscribe + get_status（旧实现只订阅当前设备，
-     *   导致窗格里其它设备永远收不到 status 广播，卡片一直卡在「获取中…」——这正是
-     *   「窗格模式状态不实时」的根因）。
-     * - 单设备模式：只保留当前设备订阅，退订其余，并对当前设备 get_status。
+     * 按当前模式订阅（对应 ws.onopen 的后半段）：
+     * 窗格模式订阅所有设备；单设备模式只订阅当前设备。每个订阅都紧跟一次 get_status。
      */
-    fun syncSubscriptions(context: Context) {
-        if (!running || webSocket == null) return
+    private fun subscribeByMode(context: Context) {
+        if (webSocket == null) return
         val devices = RelaySwitchState.state.devices
-        val paneMode = RelaySwitchPrefs.paneMode(context)
-        val keep = if (paneMode) {
-            devices.map { it.id }.toSet()
-        } else {
-            setOf(RelaySwitchPrefs.deviceId(context))
-        }
-        DiagLog.i("智能控制", "同步订阅 paneMode=$paneMode keep=${keep.size} 台")
-        // 退订范围外设备
-        val stale = synchronized(lock) { subscribed.toSet() } - keep
-        stale.forEach { unsubscribe(it) }
-        // 订阅范围内设备并逐个取真实状态
-        devices.filter { it.id in keep }.forEach { device ->
-            subscribe(device.id)
-            getStatus(device.id)
-        }
-        // 单设备模式下，当前设备可能尚未出现在 devices 列表（服务端未配置该 id）
-        if (!paneMode) {
-            val currentId = RelaySwitchPrefs.deviceId(context)
-            if (devices.none { it.id == currentId }) {
-                subscribe(currentId)
-                getStatus(currentId)
+        if (RelaySwitchPrefs.paneMode(context)) {
+            devices.forEach { device ->
+                sendSubscribe(device.id)
+                sendGetStatus(device.id)
             }
+            DiagLog.i("智能控制", "窗格模式：订阅全部 ${devices.size} 台")
+        } else {
+            val currentId = RelaySwitchPrefs.deviceId(context)
+            sendSubscribe(currentId)
+            sendGetStatus(currentId)
+            DiagLog.i("智能控制", "单设备模式：订阅当前 device=$currentId")
+        }
+    }
+
+    /** 固定间隔重连（对应 scheduleReconnect：reconnectInterval=3000ms，固定不退避）。 */
+    private fun scheduleReconnect(context: Context) {
+        if (!running || intentionalClose) return
+        cancelReconnect()
+        val myGen = generation
+        val task = Runnable {
+            pendingReconnect = null
+            if (!running || intentionalClose || generation != myGen) return@Runnable
+            if (webSocket != null) return@Runnable
+            DiagLog.i("智能控制", "断线重连")
+            connectOnce(context)
+        }
+        pendingReconnect = task
+        mainHandler.postDelayed(task, RelaySwitchProtocol.RECONNECT_INTERVAL_MS)
+    }
+
+    private fun cancelReconnect() {
+        pendingReconnect?.let { mainHandler.removeCallbacks(it) }
+        pendingReconnect = null
+    }
+
+    private fun closeWebSocket() {
+        val ws = webSocket
+        webSocket = null
+        if (ws == null) return
+        try {
+            ws.close(1000, "client closing")
+        } catch (e: Exception) {
+            try { ws.cancel() } catch (e2: Exception) { }
         }
     }
 
     // ------------------------------------------------------------------
-    // 消息处理（照 handleServerMessage）
+    // 消息处理（严格对照 handleServerMessage 五个分支）
     // ------------------------------------------------------------------
 
-    /** 解析服务器消息并更新状态。 */
     private fun handleMessage(context: Context, text: String) {
         try {
             val data = JSONObject(text)
-            val type = data.optString("type")
-            when (type) {
+            when (data.optString("type")) {
+                // 对应 case 'status'：更新状态缓存，UI 自动按当前模式刷新
                 RelaySwitchProtocol.TYPE_STATUS -> {
                     val deviceId = data.optString("device_id")
                     val statusData = data.optJSONObject("data") ?: return
                     val map = mutableMapOf<String, Int>()
-                    statusData.keys().forEach { key ->
-                        map[key] = statusData.optInt(key)
-                    }
-                    DiagLog.i("智能控制", "收到 status device=$deviceId data=$map")
-                    // updateStatus 内部会在收到真实状态时自动退出「执行中」态
+                    statusData.keys().forEach { key -> map[key] = statusData.optInt(key) }
                     RelaySwitchState.updateStatus(deviceId, map)
-                    stopPolling(deviceId)
+                    DiagLog.i("智能控制", "收到 status device=$deviceId data=$map")
                 }
+                // 对应 case 'device_online'
                 RelaySwitchProtocol.TYPE_DEVICE_ONLINE -> {
                     val deviceId = data.optString("device_id")
                     val name = data.optString("name").takeIf { it.isNotBlank() }
-                    DiagLog.i("智能控制", "设备上线 device=$deviceId name=$name")
-                    // 取消离线宽限
-                    cancelOfflineWatch(deviceId)
                     RelaySwitchState.updateDeviceOnline(deviceId, name)
-                    // 照参考 device_online 分支：重新订阅并立即拉一次真实状态
-                    subscribe(deviceId)
-                    getStatus(deviceId)
+                    DiagLog.i("智能控制", "设备上线 device=$deviceId name=$name")
+                    if (RelaySwitchPrefs.paneMode(context)) {
+                        // 窗格模式：订阅新上线的设备并获取状态
+                        sendSubscribe(deviceId)
+                        sendGetStatus(deviceId)
+                    } else if (deviceId == RelaySwitchPrefs.deviceId(context)) {
+                        // 单设备模式且是当前设备：拉一次状态
+                        sendGetStatus(deviceId)
+                    }
                 }
+                // 对应 case 'device_offline'：标记离线 + 删除状态缓存（UI 随即显示等待连接）
                 RelaySwitchProtocol.TYPE_DEVICE_OFFLINE -> {
                     val deviceId = data.optString("device_id")
-                    DiagLog.i("智能控制", "设备离线通知 device=$deviceId（进入 ${RelaySwitchProtocol.OFFLINE_GRACE_MS}ms 宽限）")
-                    handleDeviceOffline(deviceId)
+                    RelaySwitchState.updateDeviceOffline(deviceId)
+                    DiagLog.i("智能控制", "设备离线 device=$deviceId")
                 }
+                // 对应 case 'devices_list'：更新设备列表缓存
                 RelaySwitchProtocol.TYPE_DEVICES_LIST -> {
                     val arr = data.optJSONArray("devices") ?: return
-                    val order = data.optJSONArray("device_order")?.let { orderArr ->
-                        (0 until orderArr.length()).map { orderArr.optString(it) }
-                    } ?: emptyList()
+                    val order = parseOrder(data)
                     val list = parseDeviceArray(arr)
-                    DiagLog.i("智能控制", "收到设备列表 ${list.size} 个")
                     RelaySwitchState.updateDevices(list, order)
-                    // 设备列表就绪后立即同步订阅范围 + 拉状态（保证窗格模式所有卡片都有数据）
-                    syncSubscriptions(context)
+                    DiagLog.i("智能控制", "收到设备列表 ${list.size} 个")
                 }
+                // 对应 case 'error'：Toast 提示
                 RelaySwitchProtocol.TYPE_ERROR -> {
                     val message = data.optString("message", "操作失败")
                     DiagLog.w("智能控制", "收到服务器 error: $message")
-                    RelaySwitchState.notifyError(message)
+                    RelaySwitchState.toast(message)
                 }
             }
         } catch (e: Exception) {
@@ -421,29 +401,37 @@ class RelaySwitchClient {
         }
     }
 
-    /**
-     * 设备离线处理：进入宽限期后再真正标记离线。
-     *
-     * ESP32 休眠会断开 WS，服务端立刻广播 device_offline，但设备几秒后就重连。
-     * 若收到即置灰，UI 会反复闪烁成「等待连接」，表现为「明明在线却显示不在线」。
-     */
-    private fun handleDeviceOffline(deviceId: String) {
-        cancelOfflineWatch(deviceId)
-        val task = Runnable {
-            synchronized(lock) { offlineWatch.remove(deviceId) }
-            RelaySwitchState.updateDeviceOffline(deviceId)
-            DiagLog.i("智能控制", "离线确认（宽限结束）device=$deviceId")
-        }
-        synchronized(lock) { offlineWatch[deviceId] = task }
-        statusHandler.postDelayed(task, RelaySwitchProtocol.OFFLINE_GRACE_MS)
+    // ------------------------------------------------------------------
+    // REST 拉设备列表（对应 fetchDevicesList）
+    // ------------------------------------------------------------------
+
+    private fun fetchDevices(context: Context, onDone: (() -> Unit)? = null) {
+        val server = RelaySwitchPrefs.server(context)
+        val apiKey = RelaySwitchPrefs.apiKey(context)
+        val (httpBase, _) = resolveServer(server)
+        val url = "$httpBase${RelaySwitchProtocol.DEVICES_API_PATH}"
+        Thread({
+            try {
+                val builder = Request.Builder().url(url)
+                if (apiKey.isNotBlank()) {
+                    builder.addHeader("Authorization", "Bearer $apiKey")
+                }
+                val response = httpClient?.newCall(builder.build())?.execute() ?: return@Thread
+                val body = response.body?.string().orEmpty()
+                val result = JSONObject(body)
+                val arr = result.optJSONArray("devices") ?: return@Thread
+                val list = parseDeviceArray(arr)
+                RelaySwitchState.updateDevices(list, parseOrder(result))
+                DiagLog.i("智能控制", "已拉取设备列表 url=$url 共 ${list.size} 个")
+            } catch (e: Exception) {
+                DiagLog.w("智能控制", "拉取设备列表失败 url=$url：${e.message}")
+            } finally {
+                onDone?.let { cb -> mainHandler.post { cb() } }
+            }
+        }, "BridgeSwitchFetch").start()
     }
 
-    private fun cancelOfflineWatch(deviceId: String) {
-        val task = synchronized(lock) { offlineWatch.remove(deviceId) } ?: return
-        statusHandler.removeCallbacks(task)
-    }
-
-    private fun parseDeviceArray(arr: org.json.JSONArray): List<RelaySwitchState.Device> {
+    private fun parseDeviceArray(arr: JSONArray): List<RelaySwitchState.Device> {
         val list = mutableListOf<RelaySwitchState.Device>()
         for (i in 0 until arr.length()) {
             val obj = arr.optJSONObject(i) ?: continue
@@ -458,78 +446,8 @@ class RelaySwitchClient {
         return list
     }
 
-    /** 通过 REST 拉设备列表（照 fetchDevicesList 移植）。 */
-    private fun fetchDevices(context: Context, onDone: (() -> Unit)? = null) {
-        val server = RelaySwitchPrefs.server(context)
-        val apiKey = RelaySwitchPrefs.apiKey(context)
-        val (httpBase, _) = resolveServer(server)
-        val url = "$httpBase/api/devices"
-        Thread({
-            try {
-                val builder = Request.Builder().url(url)
-                if (apiKey.isNotBlank()) {
-                    builder.addHeader("Authorization", "Bearer $apiKey")
-                }
-                val response = httpClient?.newCall(builder.build())?.execute() ?: return@Thread
-                val body = response.body?.string().orEmpty()
-                val result = JSONObject(body)
-                val arr = result.optJSONArray("devices") ?: return@Thread
-                val order = result.optJSONArray("device_order")?.let { orderArr ->
-                    (0 until orderArr.length()).map { orderArr.optString(it) }
-                } ?: emptyList()
-                val list = parseDeviceArray(arr)
-                RelaySwitchState.updateDevices(list, order)
-                DiagLog.i("智能控制", "已拉取设备列表 url=$url 共 ${list.size} 个")
-            } catch (e: Exception) {
-                DiagLog.w("智能控制", "拉取设备列表失败 url=$url：${e.message}")
-            } finally {
-                onDone?.let { cb -> statusHandler.post { cb() } }
-            }
-        }, "BridgeSwitchFetch").start()
-    }
-
-    /** 断线后按退避策略重连（借鉴 RelayClient 的常驻看门狗）。 */
-    private fun scheduleReconnect(context: Context) {
-        if (!running || intentionalClose) return
-        val existing = retryThread
-        if (existing != null && existing.isAlive) return
-        retryThread = Thread({
-            var attempt = 0
-            while (running && !intentionalClose) {
-                if (webSocket != null) {
-                    // 半死连接判死兜底
-                    val lastAlive = lastAliveAt
-                    if (lastAlive > 0 &&
-                        System.currentTimeMillis() - lastAlive >= RelaySwitchProtocol.HEARTBEAT_TIMEOUT_MS
-                    ) {
-                        DiagLog.w("智能控制", "心跳超时判死，强制重连")
-                        closeWebSocket()
-                        continue
-                    }
-                    try { Thread.sleep(500) } catch (e: InterruptedException) { continue }
-                    continue
-                }
-                val index = attempt.coerceAtMost(RelaySwitchProtocol.BACKOFF_MS.size - 1)
-                val delay = RelaySwitchProtocol.BACKOFF_MS[index]
-                attempt++
-                try { Thread.sleep(delay) } catch (e: InterruptedException) { continue }
-                if (!running || intentionalClose) break
-                if (webSocket != null) continue
-                DiagLog.i("智能控制", "第 $attempt 次重连")
-                connectOnce(context)
-                try { Thread.sleep(1000) } catch (e: InterruptedException) { continue }
-            }
-        }, "BridgeSwitchRetry").also { it.start() }
-    }
-
-    private fun closeWebSocket() {
-        val ws = webSocket
-        webSocket = null
-        if (ws == null) return
-        try {
-            ws.close(1000, "client closing")
-        } catch (e: Exception) {
-            try { ws.cancel() } catch (e2: Exception) { }
-        }
-    }
+    private fun parseOrder(data: JSONObject): List<String> =
+        data.optJSONArray("device_order")?.let { orderArr ->
+            (0 until orderArr.length()).map { orderArr.optString(it) }
+        } ?: emptyList()
 }
