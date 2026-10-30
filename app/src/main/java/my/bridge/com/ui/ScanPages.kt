@@ -633,9 +633,16 @@ private fun ScanCameraPage(
             ScanUploadClient(
                 context,
                 onReceipt = { receipt ->
-                    if (receipt.result == "miss") {
-                        lastServerMiss = true
-                        ScanFeedback.miss(context)
+                    when (receipt.result) {
+                        // 重复录入：播「重复录入.wav」（v0.2.03 起改由回执触发重播）
+                        "duplicate" -> ScanFeedback.serverDuplicate(context)
+                        // 未匹配：播「取消.wav」+ 结果卡提示
+                        "miss" -> {
+                            lastServerMiss = true
+                            ScanFeedback.miss(context)
+                        }
+                        // 命中：TTS 播报「receiver town」（与 PC 端 text2speech 文案一致）
+                        "hit" -> ScanFeedback.speakAddress(context, receipt.receiver, receipt.town)
                     }
                 },
                 onStateChanged = { uploadState = it },
@@ -1705,14 +1712,17 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
 // ============ 反馈（提示音 / 震动 / Toast） ============
 
 /**
- * 提示音/震动反馈（v0.1.95 重做感知）。
+ * 提示音/震动/TTS 反馈（v0.1.95 重做感知，v0.2.03 音效映射细化）。
  *
  * 成熟扫码软件惯例（ZXing BeepManager / 工业扫描枪）：
  * - 成功音 = 短促高频音效，重复/警示音 = 明显不同的警示音，播放音量拉满；
  * - 震动 200~300ms。
- * 音效文件（v0.1.96 起为用户提供的成品音效，原始文件在 assets/sounds/）：
- * - res/raw/scan_ok.wav =「扫描咻.wav」（48kHz 16bit 立体声 0.16s）
- * - res/raw/scan_dup.wav =「重复录入.wav」（48kHz 16bit 单声道 0.42s）
+ * 音效文件（原始文件在 assets/sounds/，打包进 res/raw/）：
+ * - res/raw/scan_ok.wav  =「扫描咻.wav」（扫码成功）
+ * - res/raw/warning.wav  =「warning.wav」（本地扫码重复，v0.2.03 由重复录入.wav 换来）
+ * - res/raw/scan_dup.wav =「重复录入.wav」（服务器 scanResult{duplicate} 回执，v0.2.03 起改由回执触发）
+ * - res/raw/scan_miss.wav=「取消.wav」（服务器 scanResult{miss} 回执）
+ * hit 回执走 TTS 播报「receiver town」（与 PC 端 text2speech.play 文案一致）。
  */
 private object ScanFeedback {
 
@@ -1720,9 +1730,25 @@ private object ScanFeedback {
     private var okId = 0
     private var dupId = 0
     private var missId = 0
+    private var warnId = 0
+
+    // TTS（v0.2.03）：hit 回执地址播报。init 期异步预热，避免首次播报无声。
+    private var tts: android.speech.tts.TextToSpeech? = null
+    private var ttsReady = false
 
     /** 页面进入时预热（SoundPool 解码异步，提前加载避免首扫无声）。 */
     fun init(context: android.content.Context) {
+        // TTS 只初始化一次（页面可能反复进出）
+        if (tts == null) {
+            runCatching {
+                tts = android.speech.tts.TextToSpeech(context.applicationContext) { status ->
+                    ttsReady = status == android.speech.tts.TextToSpeech.SUCCESS
+                    if (ttsReady) {
+                        runCatching { tts?.language = java.util.Locale.CHINA }
+                    }
+                }
+            }.onFailure { Timber.tag("快递扫码").e(it, "TTS 初始化失败") }
+        }
         if (soundPool != null) return
         runCatching {
             // v0.1.96：走 USAGE_MEDIA（媒体通道）——SONIFICATION/通知通道系统音量通常
@@ -1739,6 +1765,7 @@ private object ScanFeedback {
             okId = soundPool?.load(context, R.raw.scan_ok, 1) ?: 0
             dupId = soundPool?.load(context, R.raw.scan_dup, 1) ?: 0
             missId = soundPool?.load(context, R.raw.scan_miss, 1) ?: 0
+            warnId = soundPool?.load(context, R.raw.warning, 1) ?: 0
         }.onFailure { Timber.tag("快递扫码").e(it, "提示音初始化失败") }
     }
 
@@ -1753,8 +1780,16 @@ private object ScanFeedback {
         if (ScanPrefs.vibration(context)) vibrate(context, 250)
     }
 
-    /** 重复/警示：低频两短响（与成功音明显区分）。 */
+    /** 本地扫码重复/警示（v0.2.03 换音）：warning.wav 两短警示响。 */
     fun duplicate(context: android.content.Context) {
+        if (ScanPrefs.sound(context)) play(warnId)
+    }
+
+    /**
+     * 服务器重复录入（v0.2.03）：PC 端 scanResult{duplicate} 回执触发。
+     * 音源 = SalesRecordSystem 的「重复录入.wav」（chongfuluru）同源。
+     */
+    fun serverDuplicate(context: android.content.Context) {
         if (ScanPrefs.sound(context)) play(dupId)
     }
 
@@ -1764,6 +1799,26 @@ private object ScanFeedback {
      */
     fun miss(context: android.content.Context) {
         if (ScanPrefs.sound(context)) play(missId)
+    }
+
+    /**
+     * 服务器命中地址播报（v0.2.03）：PC 端 scanResult{hit} 回执触发。
+     * 文案与 PC 端一致：`"{receiver} {town}"`（text2speech.play 同款）。
+     * QUEUE_FLUSH 打断上一条，连续扫码时只播最新地址。跟随「提示音」开关。
+     */
+    fun speakAddress(context: android.content.Context, receiver: String, town: String) {
+        if (!ScanPrefs.sound(context)) return
+        if (!ttsReady) return
+        val text = "$receiver $town".trim()
+        if (text.isEmpty()) return
+        runCatching {
+            tts?.speak(
+                text,
+                android.speech.tts.TextToSpeech.QUEUE_FLUSH,
+                null,
+                "scan_hit",
+            )
+        }.onFailure { Timber.tag("快递扫码").e(it, "地址播报失败") }
     }
 
     private fun vibrate(context: android.content.Context, ms: Long) {
