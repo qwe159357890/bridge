@@ -1435,7 +1435,7 @@ private fun RelaySwitchSettings() {
         SettingValueRow(
             icon = "🆔",
             title = "当前设备",
-            value = deviceId,
+            value = relayDeviceDisplayName(deviceId),
         ) {
             showDeviceDialog = true
         }
@@ -1467,15 +1467,14 @@ private fun RelaySwitchSettings() {
         )
     }
     if (showDeviceDialog) {
-        RelayTextDialog(
-            title = "设置当前设备",
-            label = "设备 ID",
-            placeholder = "如 esp32_001",
-            initial = deviceId,
+        RelayDeviceSelectDialog(
+            currentId = deviceId,
             onCancel = { showDeviceDialog = false },
             onConfirm = { v ->
                 my.bridge.com.switch.RelaySwitchPrefs.setString(context, my.bridge.com.switch.RelaySwitchPrefs.KEY_DEVICE_ID, v)
                 deviceId = v
+                // 切换设备后同步端口为该设备已保存的端口
+                pio = my.bridge.com.switch.RelaySwitchPrefs.pioForDevice(context, v)
                 showDeviceDialog = false
             },
         )
@@ -1513,4 +1512,90 @@ private fun RelaySwitchSettings() {
             },
         )
     }
+}
+
+/** 智能控制「当前设备」显示名：优先昵称，离线加后缀；找不到时回退为设备 ID。 */
+private fun relayDeviceDisplayName(deviceId: String): String {
+    val device = my.bridge.com.switch.RelaySwitchState.devices.find { it.id == deviceId }
+        ?: return deviceId
+    return device.name + if (device.online) "" else " (离线)"
+}
+
+/** 智能控制「选择设备」弹窗：列出服务器上配置的所有设备昵称，单选切换。 */
+@Composable
+private fun RelayDeviceSelectDialog(
+    currentId: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val devices = my.bridge.com.switch.RelaySwitchState.devices
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("选择设备") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp),
+            ) {
+                if (devices.isEmpty()) {
+                    Text(
+                        "暂未获取到设备列表（请先在「智能控制」页连接服务器）",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    val sorted = devices.sortedWith(
+                        java.util.Comparator { a, b ->
+                            val oa = if (a.online) 0 else 1
+                            val ob = if (b.online) 0 else 1
+                            if (oa != ob) return@Comparator oa - ob
+                            val order = my.bridge.com.switch.RelaySwitchState.deviceOrder
+                            val ia = order.indexOf(a.id).let { if (it >= 0) it else Int.MAX_VALUE }
+                            val ib = order.indexOf(b.id).let { if (it >= 0) it else Int.MAX_VALUE }
+                            if (ia != ib) return@Comparator ia - ib
+                            a.name.compareTo(b.name)
+                        },
+                    )
+                    sorted.forEach { device ->
+                        val label = device.name + if (device.online) "" else " (离线)"
+                        val selected = device.id == currentId
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                                    else androidx.compose.ui.graphics.Color.Transparent
+                                )
+                                .clickable { onConfirm(device.id) }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (selected) {
+                                Text("✓", color = MaterialTheme.colorScheme.primary)
+                            }
+                            if (!device.online) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "离线",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
 }

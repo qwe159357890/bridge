@@ -35,6 +35,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -308,6 +313,7 @@ private fun DeviceCard(
     val value = RelaySwitchState.pioValue(device.id, pio)
     val isOn = device.online && value == 0
     val hasValue = device.online && value != null
+    val isPending = RelaySwitchState.isPending(device.id)
 
     // 状态配色（与原项目一致：开启=绿，关闭/点击开启动作=红，等待=灰）
     val ringColor = when {
@@ -376,10 +382,10 @@ private fun DeviceCard(
                 }
                 Spacer(Modifier.height(14.dp))
 
-                // 开关按钮（含 SVG 图标，颜色=点击后要执行的动作）
+                // 开关按钮（含 SVG 图标，颜色=点击后要执行的动作；执行中=转圈置灰）
                 Button(
                     onClick = { onToggle(isOn) },
-                    enabled = device.online && hasValue,
+                    enabled = device.online && hasValue && !isPending,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(46.dp),
@@ -387,29 +393,44 @@ private fun DeviceCard(
                     colors = ButtonDefaults.buttonColors(
                         containerColor = when {
                             !device.online || !hasValue -> SwitchGray
+                            isPending -> SwitchGray
                             isOn -> SwitchGreen
                             else -> SwitchRed
                         },
                     ),
                 ) {
-                    ActionBtnIcon(
-                        isOnline = device.online,
-                        hasValue = hasValue,
-                        isOn = isOn,
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        when {
-                            !device.online -> "等待连接"
-                            !hasValue -> "获取中…"
-                            isOn -> "关闭设备"
-                            else -> "开启设备"
-                        },
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    if (isPending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "执行中…",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    } else {
+                        ActionBtnIcon(
+                            isOnline = device.online,
+                            hasValue = hasValue,
+                            isOn = isOn,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            when {
+                                !device.online -> "等待连接"
+                                !hasValue -> "获取中…"
+                                isOn -> "关闭设备"
+                                else -> "开启设备"
+                            },
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
             }
         }
@@ -427,6 +448,7 @@ private fun PaneCard(
     val value = RelaySwitchState.pioValue(device.id, pio)
     val isOn = device.online && value == 0
     val hasValue = device.online && value != null
+    val isPending = RelaySwitchState.isPending(device.id)
 
     val ringColor = when {
         !device.online -> SwitchGray
@@ -439,107 +461,130 @@ private fun PaneCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // 紧凑电源环（小图标环）
-            Box(
-                modifier = Modifier.size(56.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .graphicsLayer { alpha = if (device.online) 1f else 0.5f }
-                        .background(
-                            ringColor.copy(alpha = if (device.online) 0.12f else 0.08f),
-                            CircleShape,
-                        ),
-                )
-                PowerRingIcon(
-                    online = device.online,
-                    isOn = isOn,
-                    tint = if (device.online) ringColor else SwitchGray,
-                    modifier = Modifier.size(26.dp),
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                device.name,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // 背景粒子特效（与单设备卡一致）
+            ParticleBackground(
+                online = device.online,
+                isOn = isOn,
+                hasValue = hasValue,
             )
-            Text(
-                RelaySwitchProtocol.pioName(pio),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-
-            // 状态徽章（含 SVG 图标）
-            val (badgeText, badgeColor) = when {
-                !device.online -> "等待连接" to SwitchGray
-                !hasValue -> "获取中…" to Color(0xFFE8862E)
-                isOn -> "已开启" to SwitchGreen
-                else -> "已关闭" to SwitchGray
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(badgeColor.copy(alpha = 0.12f))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            ) {
-                BadgeIcon(
-                    isOnline = device.online,
-                    hasValue = hasValue,
-                    isOn = isOn,
-                    tint = badgeColor,
-                    modifier = Modifier.size(12.dp),
-                )
-                Spacer(Modifier.width(3.dp))
-                Text(badgeText, style = MaterialTheme.typography.labelSmall, color = badgeColor)
-            }
-            Spacer(Modifier.height(10.dp))
-
-            // 开关按钮（颜色=点击后要执行的动作）
-            Button(
-                onClick = { onToggle(isOn) },
-                enabled = device.online && hasValue,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(38.dp),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = when {
-                        !device.online || !hasValue -> SwitchGray
-                        isOn -> SwitchGreen
-                        else -> SwitchRed
-                    },
-                ),
+                    .padding(horizontal = 12.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                ActionBtnIcon(
-                    isOnline = device.online,
-                    hasValue = hasValue,
-                    isOn = isOn,
-                    tint = Color.White,
-                    modifier = Modifier.size(14.dp),
-                )
-                Spacer(Modifier.width(5.dp))
+                // 紧凑电源环（小图标环）
+                Box(
+                    modifier = Modifier.size(56.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .graphicsLayer { alpha = if (device.online) 1f else 0.5f }
+                            .background(
+                                ringColor.copy(alpha = if (device.online) 0.12f else 0.08f),
+                                CircleShape,
+                            ),
+                    )
+                    PowerRingIcon(
+                        online = device.online,
+                        isOn = isOn,
+                        tint = if (device.online) ringColor else SwitchGray,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
                 Text(
-                    when {
-                        !device.online -> "等待"
-                        !hasValue -> "获取中"
-                        isOn -> "关闭"
-                        else -> "开启"
-                    },
-                    fontSize = 13.sp,
+                    device.name,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
                 )
+                Text(
+                    RelaySwitchProtocol.pioName(pio),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+
+                // 状态徽章（含 SVG 图标）
+                val (badgeText, badgeColor) = when {
+                    !device.online -> "等待连接" to SwitchGray
+                    !hasValue -> "获取中…" to Color(0xFFE8862E)
+                    isOn -> "已开启" to SwitchGreen
+                    else -> "已关闭" to SwitchGray
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(badgeColor.copy(alpha = 0.12f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
+                    BadgeIcon(
+                        isOnline = device.online,
+                        hasValue = hasValue,
+                        isOn = isOn,
+                        tint = badgeColor,
+                        modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(badgeText, style = MaterialTheme.typography.labelSmall, color = badgeColor)
+                }
+                Spacer(Modifier.height(10.dp))
+
+                // 开关按钮（颜色=点击后要执行的动作；执行中=转圈置灰）
+                Button(
+                    onClick = { onToggle(isOn) },
+                    enabled = device.online && hasValue && !isPending,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = when {
+                            !device.online || !hasValue -> SwitchGray
+                            isPending -> SwitchGray
+                            isOn -> SwitchGreen
+                            else -> SwitchRed
+                        },
+                    ),
+                ) {
+                    if (isPending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            "执行中",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    } else {
+                        ActionBtnIcon(
+                            isOnline = device.online,
+                            hasValue = hasValue,
+                            isOn = isOn,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            when {
+                                !device.online -> "等待"
+                                !hasValue -> "获取中"
+                                isOn -> "关闭"
+                                else -> "开启"
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
             }
         }
     }
@@ -695,6 +740,7 @@ private fun CloseConfirmDialog(
 }
 
 /** 服务器设置弹窗。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RelaySwitchSettingsDialog(
     onDismiss: () -> Unit,
@@ -707,6 +753,10 @@ private fun RelaySwitchSettingsDialog(
     var pio by remember {
         mutableStateOf(RelaySwitchPrefs.pioForDevice(context, RelaySwitchPrefs.deviceId(context)).toString())
     }
+    // 设备下拉框展开状态
+    var deviceDropdownExpanded by remember { mutableStateOf(false) }
+    // 设备列表（来自 RelaySwitchState，已由客户端拉取；含 id + name 昵称 + online）
+    val devices = RelaySwitchState.devices
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -722,15 +772,51 @@ private fun RelaySwitchSettingsDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = deviceId,
-                    onValueChange = { deviceId = it },
-                    label = { Text("设备 ID") },
-                    singleLine = true,
-                    placeholder = { Text("如 esp32_001") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+
+                // 选择设备：下拉框，展示服务器上配置的所有设备昵称，可切换（单卡片显示该设备）
+                ExposedDropdownMenuBox(
+                    expanded = deviceDropdownExpanded,
+                    onExpandedChange = { deviceDropdownExpanded = it },
+                ) {
+                    OutlinedTextField(
+                        value = deviceDisplayName(devices, deviceId),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("选择设备") },
+                        singleLine = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = deviceDropdownExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = deviceDropdownExpanded,
+                        onDismissRequest = { deviceDropdownExpanded = false },
+                    ) {
+                        val sorted = sortedDevices(devices)
+                        if (sorted.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text(deviceId) },
+                                onClick = { deviceDropdownExpanded = false },
+                            )
+                        } else {
+                            sorted.forEach { device ->
+                                val label = device.name + if (device.online) "" else " (离线)"
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        deviceId = device.id
+                                        // 切换设备时同步刷新该设备已保存的端口
+                                        pio = RelaySwitchPrefs.pioForDevice(context, device.id).toString()
+                                        deviceDropdownExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
+
                 OutlinedTextField(
                     value = pio,
                     onValueChange = { pio = it },
@@ -771,6 +857,12 @@ private fun RelaySwitchSettingsDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
+}
+
+/** 设备下拉框显示名：优先昵称，离线加后缀；找不到时回退为设备 ID。 */
+private fun deviceDisplayName(devices: List<RelaySwitchState.Device>, deviceId: String): String {
+    val device = devices.find { it.id == deviceId } ?: return deviceId
+    return device.name + if (device.online) "" else " (离线)"
 }
 
 /** 空状态提示。 */

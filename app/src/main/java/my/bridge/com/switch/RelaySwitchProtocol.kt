@@ -33,6 +33,18 @@ object RelaySwitchProtocol {
     /** 心跳超时判死阈值（毫秒）：超过该时长未收到任何数据则强制重连。 */
     const val HEARTBEAT_TIMEOUT_MS = 60_000L
 
+    /** set 命令发送后首次延迟拉取状态的时长（毫秒）：等设备执行完 set 再 get_status。 */
+    const val STATUS_REFRESH_DELAY_MS = 500L
+
+    /** 状态轮询间隔（毫秒）：首次拉取后每隔该时长再拉一次，兜底设备休眠/未主动上报。 */
+    const val STATUS_POLL_INTERVAL_MS = 2_000L
+
+    /** 状态轮询最大次数：覆盖最坏 10 秒休眠 + 余量（500ms + 8*2s ≈ 16.5s）。 */
+    const val STATUS_POLL_MAX_COUNT = 8
+
+    /** 执行中状态兜底超时（毫秒）：超过该时长仍未收到状态确认，则退出「执行中」态。 */
+    const val PENDING_TIMEOUT_MS = 18_000L
+
     /** 重连退避档位（毫秒），封顶 30 秒。 */
     val BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 

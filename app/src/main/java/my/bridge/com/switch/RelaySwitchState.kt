@@ -49,6 +49,10 @@ object RelaySwitchState {
     @Volatile
     var deviceStatus: Map<String, Map<String, Int>> = emptyMap()
 
+    /** 正在执行 set（等待状态确认）的设备 ID 集合，用于「执行中」提示态。 */
+    @Volatile
+    var pendingDevices: Set<String> = emptySet()
+
     @Volatile
     var connection: Connection = Connection.DISCONNECTED
 
@@ -102,6 +106,22 @@ object RelaySwitchState {
         deviceStatus = deviceStatus + (deviceId to status)
         deviceListener?.onChange()
     }
+
+    /** 标记设备进入「执行中」态并通知 UI。 */
+    fun markPending(deviceId: String) {
+        pendingDevices = pendingDevices + deviceId
+        deviceListener?.onChange()
+    }
+
+    /** 清除设备的「执行中」态并通知 UI。 */
+    fun clearPending(deviceId: String) {
+        if (deviceId !in pendingDevices) return
+        pendingDevices = pendingDevices - deviceId
+        deviceListener?.onChange()
+    }
+
+    /** 判断设备是否处于「执行中」态。 */
+    fun isPending(deviceId: String): Boolean = deviceId in pendingDevices
 
     /** 更新连接状态并通知 UI。 */
     fun updateConnection(state: Connection) {

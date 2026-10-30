@@ -1,6 +1,8 @@
 package my.bridge.com.switch
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import my.bridge.com.core.common.DiagLog
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,6 +27,12 @@ import java.util.concurrent.TimeUnit
 class RelaySwitchClient {
 
     private var httpClient: OkHttpClient? = null
+
+    /** 主线程 Handler：用于 set 后延迟拉取状态刷新。 */
+    private val statusHandler = Handler(Looper.getMainLooper())
+
+    /** 每个设备的状态轮询计数：deviceId -> 已轮询次数（用于 set 后多次 getStatus 兜底）。 */
+    private val pollCounts = mutableMapOf<String, Int>()
 
     @Volatile
     private var webSocket: WebSocket? = null
@@ -70,6 +78,8 @@ class RelaySwitchClient {
         generation++
         closeWebSocket()
         httpClient = null
+        statusHandler.removeCallbacksAndMessages(null)
+        pollCounts.clear()
         try { retryThread?.interrupt() } catch (e: Exception) { }
         retryThread = null
         RelaySwitchState.updateConnection(RelaySwitchState.Connection.DISCONNECTED)
@@ -116,14 +126,48 @@ class RelaySwitchClient {
         })
     }
 
-    /** 设置继电器（value：0=开，1=关）。 */
+    /** 设置继电器（value：0=开，1=关）。发送成功后进入「执行中」态，并轮询 getStatus 兜底刷新。 */
     fun setRelay(deviceId: String, pio: Int, value: Int) {
-        send(JSONObject().apply {
+        val sent = send(JSONObject().apply {
             put("type", RelaySwitchProtocol.TYPE_SET)
             put("device_id", deviceId)
             put("pio", pio)
             put("value", value)
         })
+        if (!sent) return
+        // 标记「执行中」，并启动状态轮询兜底：
+        // 服务端 set 后靠设备上报 status 广播，但 ESP32 可能休眠（2~10s 不等），
+        // 故首次 500ms 后开始，每隔 2s get_status 一次，最多 8 次（约 16.5s）覆盖最坏休眠；
+        // 一旦收到真实 status 即停止轮询并退出「执行中」。
+        RelaySwitchState.markPending(deviceId)
+        pollCounts[deviceId] = 0
+        statusHandler.postDelayed(
+            { pollStatus(deviceId) },
+            RelaySwitchProtocol.STATUS_REFRESH_DELAY_MS,
+        )
+        // 兜底超时：即便始终无状态回报，也退出「执行中」，避免卡死。
+        statusHandler.postDelayed(
+            { RelaySwitchState.clearPending(deviceId) },
+            RelaySwitchProtocol.PENDING_TIMEOUT_MS,
+        )
+    }
+
+    /** 状态轮询一次：getStatus，并按最大次数决定是否继续。 */
+    private fun pollStatus(deviceId: String) {
+        getStatus(deviceId)
+        val count = (pollCounts[deviceId] ?: 0) + 1
+        pollCounts[deviceId] = count
+        if (count < RelaySwitchProtocol.STATUS_POLL_MAX_COUNT) {
+            statusHandler.postDelayed(
+                { pollStatus(deviceId) },
+                RelaySwitchProtocol.STATUS_POLL_INTERVAL_MS,
+            )
+        }
+    }
+
+    /** 停止某设备的状态轮询（收到真实 status 或连接终止时调用）。 */
+    private fun stopPolling(deviceId: String) {
+        pollCounts.remove(deviceId)
     }
 
     /** 拼出 WS URL（server 形如 host:port）。 */
@@ -155,6 +199,10 @@ class RelaySwitchClient {
                 DiagLog.i("智能控制", "已连接继电器服务器")
                 // 拉设备列表（走 REST，需 API Key 作 Bearer）
                 fetchDevices(context)
+                // 订阅当前设备并取状态（照参考项目 onOpen：subscribe + get_status）
+                val deviceId = RelaySwitchPrefs.deviceId(context)
+                subscribe(deviceId)
+                getStatus(deviceId)
             }
 
             override fun onMessage(socket: WebSocket, text: String) {
@@ -194,6 +242,9 @@ class RelaySwitchClient {
                         map[key] = statusData.optInt(key)
                     }
                     RelaySwitchState.updateStatus(deviceId, map)
+                    // 收到真实状态即退出「执行中」态，并停止轮询兜底
+                    RelaySwitchState.clearPending(deviceId)
+                    stopPolling(deviceId)
                 }
                 RelaySwitchProtocol.TYPE_DEVICE_ONLINE -> {
                     val deviceId = data.optString("device_id")
