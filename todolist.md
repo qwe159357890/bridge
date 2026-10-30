@@ -44,3 +44,12 @@
 ## 快递扫码 v0.1.96 三轮反馈：返回键完善（2026-10-30 17:33）→ ✅ 实现于 v0.1.97（待真机验证）
 
 - 返回逻辑统一：扫码模块内任何「非入口视图」（记录列表/会话管理/跨天提示/扫码页）按返回 → 先回到「入口设置」决定的入口视图（入口=会话列表 → 会话管理；入口=直接扫码 → 扫码页）；已在入口视图时不拦截 → 交给全局返回（首页 Tab 切换/退出提示）。记录页「‹ 返回」按钮与系统返回键行为一致（共用 goToEntry）。
+
+## 严重问题排查：偶发「Bridge 已停止运行」崩溃（2026-10-30 17:50）→ v0.1.98 防护+上报修复
+
+**排查方法（证据优先，不猜测）**：①查服务端 MySQL 日志库——0 条 Crash 记录，最近日志只到 v0.1.89（10-30 10:04），无崩溃堆栈可用；②实锤根因 A：**CrashReporter 上报时序 bug**——旧实现崩溃线程里 scope.launch(异步) 后立即交回系统处理器杀进程，协程来不及执行 → **崩溃日志从未上传成功过**（与数据库 0 条 Crash 吻合）；③实锤根因 B：**两处「shutdown 后系统线程迟到回调」崩溃向量**——(a) 扫码页 analysisExecutor 在页面退出时 shutdown，但 CameraX 内部线程仍可能投递帧/1080p 拍摄回调 → RejectedExecutionException 未捕获 → 进程崩溃（v0.1.94 引入，极难复现，与「有时就崩」症状吻合）；(b) 无障碍静默截屏 takeScreenshot 超时分支 executor.shutdown() 后系统迟到回调同款（早于扫码功能就有）。
+
+**v0.1.98 修复**：
+1. ✅ CrashReporter 重写：崩溃堆栈同步落盘 filesDir/crash/last_crash.txt（保底必达）+ 崩溃线程内 runBlocking 3.5s 同步上报 + 启动时补传未送达崩溃。
+2. ✅ 新增 util/safeExecutor 包装（RejectedExecutionException 静默丢弃），应用于扫码 analysisExecutor 与无障碍截屏 executor。
+3. ⏳ 真实堆栈待收集：装 v0.1.98 后若再崩，Crash 记录会出现在服务端日志（tag=Crash）；或手机连 USB 后用 adb shell dumpsys dropbox 拉 data_app_crash 历史堆栈（可追溯到崩溃当日）。

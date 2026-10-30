@@ -89,7 +89,10 @@ class BridgeAccessibilityService : AccessibilityService() {
             val latch = CountDownLatch(1)
             var error: String? = null
             var file: File? = null
-            val executor = Executors.newSingleThreadExecutor()
+            // v0.1.98 防崩：包装 safeExecutor——超时分支 shutdown 后系统仍可能迟到回调，
+            // 直接 execute 会抛 RejectedExecutionException（系统线程未捕获 → 进程崩溃）
+            val executorInner = Executors.newSingleThreadExecutor()
+            val executor = my.bridge.com.util.safeExecutor(executorInner)
             try {
                 svc.takeScreenshot(
                     Display.DEFAULT_DISPLAY,
@@ -126,7 +129,7 @@ class BridgeAccessibilityService : AccessibilityService() {
                     },
                 )
             } catch (e: Exception) {
-                executor.shutdown()
+                executorInner.shutdown()
                 throw IllegalStateException("无障碍截屏调用失败：${e.message}")
             }
             try {
@@ -134,7 +137,7 @@ class BridgeAccessibilityService : AccessibilityService() {
                     throw IllegalStateException("无障碍截屏超时（${timeoutMs / 1000} 秒）")
                 }
             } finally {
-                executor.shutdown()
+                executorInner.shutdown()
             }
             error?.let { throw IllegalStateException(it) }
             return file?.absolutePath ?: throw IllegalStateException("截屏文件未生成")

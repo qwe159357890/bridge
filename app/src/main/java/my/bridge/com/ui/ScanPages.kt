@@ -602,7 +602,10 @@ private fun ScanCameraPage(
     var camera by remember { mutableStateOf<Camera?>(null) }
     val analyzerRef = remember { mutableStateOf<ScanAnalyzer?>(null) }
     val previewViewRef = remember { mutableStateOf<PreviewView?>(null) }
-    val analysisExecutor = remember { Executors.newSingleThreadExecutor { r -> Thread(r, "scan-analyzer") } }
+    // v0.1.98 防崩：包装为 safeExecutor——shutdown 后相机内部线程仍可能投递帧/
+    // 拍摄回调，直接 execute 会抛 RejectedExecutionException（未捕获 → 进程崩溃）。
+    val analysisInner = remember { Executors.newSingleThreadExecutor { r -> Thread(r, "scan-analyzer") } }
+    val analysisExecutor = remember { my.bridge.com.util.safeExecutor(analysisInner) }
 
     // 屏幕常亮
     DisposableEffect(Unit) {
@@ -616,7 +619,7 @@ private fun ScanCameraPage(
             runCatching { camera?.cameraControl?.enableTorch(false) }
             analyzerRef.value?.release()
             analyzerRef.value = null
-            analysisExecutor.shutdown()
+            analysisInner.shutdown()
         }
     }
 
