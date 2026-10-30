@@ -67,6 +67,17 @@ def _parse_version(text: str) -> tuple[int, ...] | None:
         return None
 
 
+def _version_raw(text: str) -> str | None:
+    """取文件名/版本串里的原始版本文本（保留前导零，如 0.2.01）。
+
+    v0.2.01 教训：版本号一旦过 _parse_version 的 int 元组再拼接，前导零会被
+    吃掉（0.2.01 → 0.2.1），与 APK 清单里的 versionName 对不上，触发客户端
+    「改名冒充」防伪校验误伤，用户报障「服务器上面的 v0.2.1 实际是 v0.2.01」。
+    """
+    m = _VERSION_RE.search(text)
+    return m.group(1) if m else None
+
+
 def _scan_latest() -> dict | None:
     """扫描更新目录，取版本最高的 APK。返回最新文件信息或 None。"""
     directory = _updates_dir()
@@ -90,16 +101,22 @@ def _scan_latest() -> dict | None:
 
     # 可选 update.json：{"version": "...", "notes": "..."}
     notes = ""
+    meta_version = ""
     meta_path = directory / "update.json"
     if meta_path.is_file():
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             notes = str(meta.get("notes", "")).strip()
+            meta_version = str(meta.get("version", "")).strip()
         except Exception:
             logger.warning("update.json 解析失败（忽略）", exc_info=True)
 
+    # 对外版本串：update.json 显式声明 > 文件名原文（都保留 0.2.01 的前导零），
+    # 绝不用 int 元组回拼（会吃前导零 → 客户端防伪校验误伤，见 _version_raw 注释）
+    version_str = meta_version or _version_raw(path.stem) or ".".join(str(p) for p in version)
+
     return {
-        "version": ".".join(str(p) for p in version),
+        "version": version_str,
         "filename": path.name,
         "size_bytes": path.stat().st_size,
         "path": path,

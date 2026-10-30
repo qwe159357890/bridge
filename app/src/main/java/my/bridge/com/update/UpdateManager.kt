@@ -154,9 +154,14 @@ object UpdateManager {
                     }
                     // ★ 安装前版本号校验（最根本的兜底）：读 APK 清单的实际 versionName，
                     //   防「服务器文件源头就错」（0.1.43 改名冒充 0.1.44——md5 只能防
-                    //   下载损坏，防不了源头错；清单版本号直接识破冒名顶替）
+                    //   下载损坏，防不了源头错；清单版本号直接识破冒名顶替）。
+                    //   v0.2.01 修正：比较用数值归一化（按段转 int），"0.2.1" 与
+                    //   "0.2.01" 视为相同——前导零格式差异不应触发防伪误伤
+                    //   （服务端旧版把 0.2.01 回拼成 0.2.1 曾导致用户无法更新）。
                     val apkVersion = apkVersionName(context, target)
-                    if (apkVersion != null && apkVersion != latest.version) {
+                    if (apkVersion != null && latest.version.isNotBlank() &&
+                        !versionEqualsNormalized(apkVersion, latest.version)
+                    ) {
                         target.delete()
                         throw IllegalStateException(
                             "服务器上的 v${latest.version} 实际是 v$apkVersion（文件可能被改名冒充），" +
@@ -303,6 +308,11 @@ object UpdateManager {
             false
         }
     }
+
+    /** 版本号数值归一化比较：按段转 int 逐段比，"0.2.1" 与 "0.2.01" 视为相同。 */
+    private fun versionEqualsNormalized(a: String, b: String): Boolean =
+        a.split('.').map { it.trim().toIntOrNull() ?: 0 } ==
+            b.split('.').map { it.trim().toIntOrNull() ?: 0 }
 
     /** 读 APK 清单的实际 versionName（安装前识破「改名冒充」）；解析失败返回 null（不阻断）。 */
     private fun apkVersionName(context: Context, apk: File): String? = try {
