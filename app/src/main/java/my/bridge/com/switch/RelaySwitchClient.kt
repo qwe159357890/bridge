@@ -134,12 +134,14 @@ class RelaySwitchClient {
             put("pio", pio)
             put("value", value)
         })
+        DiagLog.i("智能控制", "setRelay device=$deviceId pio=$pio value=$value sent=$sent")
         if (!sent) return
         // 标记「执行中」，并启动状态轮询兜底：
         // 服务端 set 后靠设备上报 status 广播，但 ESP32 可能休眠（2~10s 不等），
         // 故首次 500ms 后开始，每隔 2s get_status 一次，最多 8 次（约 16.5s）覆盖最坏休眠；
         // 一旦收到真实 status 即停止轮询并退出「执行中」。
         RelaySwitchState.markPending(deviceId)
+        DiagLog.i("智能控制", "已标记执行中 device=$deviceId")
         pollCounts[deviceId] = 0
         statusHandler.postDelayed(
             { pollStatus(deviceId) },
@@ -147,7 +149,10 @@ class RelaySwitchClient {
         )
         // 兜底超时：即便始终无状态回报，也退出「执行中」，避免卡死。
         statusHandler.postDelayed(
-            { RelaySwitchState.clearPending(deviceId) },
+            {
+                RelaySwitchState.clearPending(deviceId)
+                DiagLog.w("智能控制", "执行中超时兜底退出 device=$deviceId")
+            },
             RelaySwitchProtocol.PENDING_TIMEOUT_MS,
         )
     }
@@ -157,11 +162,14 @@ class RelaySwitchClient {
         getStatus(deviceId)
         val count = (pollCounts[deviceId] ?: 0) + 1
         pollCounts[deviceId] = count
+        DiagLog.i("智能控制", "轮询 getStatus device=$deviceId 第$count/${RelaySwitchProtocol.STATUS_POLL_MAX_COUNT}次")
         if (count < RelaySwitchProtocol.STATUS_POLL_MAX_COUNT) {
             statusHandler.postDelayed(
                 { pollStatus(deviceId) },
                 RelaySwitchProtocol.STATUS_POLL_INTERVAL_MS,
             )
+        } else {
+            DiagLog.w("智能控制", "轮询达上限 device=$deviceId，停止主动轮询（等待设备主动上报）")
         }
     }
 
@@ -233,7 +241,9 @@ class RelaySwitchClient {
     private fun handleMessage(text: String) {
         try {
             val data = JSONObject(text)
-            when (data.optString("type")) {
+            val type = data.optString("type")
+            DiagLog.i("智能控制", "收到服务器消息 type=$type")
+            when (type) {
                 RelaySwitchProtocol.TYPE_STATUS -> {
                     val deviceId = data.optString("device_id")
                     val statusData = data.optJSONObject("data") ?: return
@@ -241,6 +251,7 @@ class RelaySwitchClient {
                     statusData.keys().forEach { key ->
                         map[key] = statusData.optInt(key)
                     }
+                    DiagLog.i("智能控制", "收到 status device=$deviceId data=$map")
                     RelaySwitchState.updateStatus(deviceId, map)
                     // 收到真实状态即退出「执行中」态，并停止轮询兜底
                     RelaySwitchState.clearPending(deviceId)
@@ -249,10 +260,12 @@ class RelaySwitchClient {
                 RelaySwitchProtocol.TYPE_DEVICE_ONLINE -> {
                     val deviceId = data.optString("device_id")
                     val name = data.optString("name").takeIf { it.isNotBlank() }
+                    DiagLog.i("智能控制", "设备上线 device=$deviceId name=$name")
                     RelaySwitchState.updateDeviceOnline(deviceId, name)
                 }
                 RelaySwitchProtocol.TYPE_DEVICE_OFFLINE -> {
                     val deviceId = data.optString("device_id")
+                    DiagLog.i("智能控制", "设备离线 device=$deviceId")
                     RelaySwitchState.updateDeviceOffline(deviceId)
                 }
                 RelaySwitchProtocol.TYPE_DEVICES_LIST -> {
@@ -271,10 +284,12 @@ class RelaySwitchClient {
                             )
                         )
                     }
+                    DiagLog.i("智能控制", "收到设备列表 ${list.size} 个")
                     RelaySwitchState.updateDevices(list, order)
                 }
                 RelaySwitchProtocol.TYPE_ERROR -> {
                     val message = data.optString("message", "操作失败")
+                    DiagLog.w("智能控制", "收到服务器 error: $message")
                     RelaySwitchState.notifyError(message)
                 }
             }

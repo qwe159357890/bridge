@@ -90,6 +90,7 @@ fun RelaySwitchPage() {
 
     // UI 状态（由 RelaySwitchState 驱动）
     var devices by remember { mutableStateOf(RelaySwitchState.devices) }
+    var revision by remember { mutableStateOf(RelaySwitchState.revision) }
     var connection by remember { mutableStateOf(RelaySwitchState.connection) }
     var paneMode by remember { mutableStateOf(RelaySwitchPrefs.paneMode(context)) }
 
@@ -103,7 +104,10 @@ fun RelaySwitchPage() {
     // 订阅状态变化（切主线程写 Compose snapshot state）
     DisposableEffect(Unit) {
         RelaySwitchState.setDeviceListener {
-            mainHandler.post { devices = RelaySwitchState.devices }
+            mainHandler.post {
+                devices = RelaySwitchState.devices
+                revision = RelaySwitchState.revision
+            }
         }
         RelaySwitchState.setConnectionListener { state ->
             mainHandler.post { connection = state }
@@ -183,7 +187,7 @@ fun RelaySwitchPage() {
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
                 ) {
                     gridItems(sorted) { device ->
-                        PaneCard(device) { isOn ->
+                        PaneCard(device, revision) { isOn ->
                             if (isOn) pendingCloseDevice = device
                             else client.setRelay(device.id, RelaySwitchPrefs.pioForDevice(context, device.id), 0)
                         }
@@ -200,7 +204,7 @@ fun RelaySwitchPage() {
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                DeviceCard(device) { isOn ->
+                DeviceCard(device, revision) { isOn ->
                     if (isOn) pendingCloseDevice = device
                     else client.setRelay(device.id, RelaySwitchPrefs.pioForDevice(context, device.id), 0)
                 }
@@ -306,6 +310,7 @@ private fun ConnectionPill(state: RelaySwitchState.Connection) {
 @Composable
 private fun DeviceCard(
     device: RelaySwitchState.Device,
+    revision: Long,
     onToggle: (isOn: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -441,6 +446,7 @@ private fun DeviceCard(
 @Composable
 private fun PaneCard(
     device: RelaySwitchState.Device,
+    revision: Long,
     onToggle: (isOn: Boolean) -> Unit,
 ) {
     val context = LocalContext.current

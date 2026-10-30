@@ -56,6 +56,11 @@ object RelaySwitchState {
     @Volatile
     var connection: Connection = Connection.DISCONNECTED
 
+    /** 状态版本号：任何状态（设备/状态/pending）变化都自增，用于驱动 Compose 重组。 */
+    @Volatile
+    var revision: Long = 0L
+        private set
+
     @Volatile
     private var deviceListener: DeviceListener? = null
 
@@ -81,6 +86,7 @@ object RelaySwitchState {
     fun updateDevices(newDevices: List<Device>, order: List<String>) {
         devices = newDevices
         deviceOrder = order
+        revision++
         deviceListener?.onChange()
     }
 
@@ -89,6 +95,7 @@ object RelaySwitchState {
         devices = devices.map {
             if (it.id == id) it.copy(online = true, name = name ?: it.name) else it
         }
+        revision++
         deviceListener?.onChange()
     }
 
@@ -98,18 +105,21 @@ object RelaySwitchState {
             if (it.id == id) it.copy(online = false) else it
         }
         deviceStatus = deviceStatus - id
+        revision++
         deviceListener?.onChange()
     }
 
     /** 更新某设备的继电器状态并通知 UI。 */
     fun updateStatus(deviceId: String, status: Map<String, Int>) {
         deviceStatus = deviceStatus + (deviceId to status)
+        revision++
         deviceListener?.onChange()
     }
 
     /** 标记设备进入「执行中」态并通知 UI。 */
     fun markPending(deviceId: String) {
         pendingDevices = pendingDevices + deviceId
+        revision++
         deviceListener?.onChange()
     }
 
@@ -117,6 +127,7 @@ object RelaySwitchState {
     fun clearPending(deviceId: String) {
         if (deviceId !in pendingDevices) return
         pendingDevices = pendingDevices - deviceId
+        revision++
         deviceListener?.onChange()
     }
 
