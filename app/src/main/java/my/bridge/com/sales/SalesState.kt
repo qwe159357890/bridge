@@ -92,6 +92,19 @@ object SalesState {
         }
     }
 
+    /** 刷新用户信息（/auth/me）：只更新 user/登录态/产品类型，不清空已加载的列表数据。
+     *  与 loginSuccess 的区别是后者用于登录场景需清空旧数据，此处是会话内刷新，清空会
+     *  与并发的 loadList 产生竞态，导致列表先填后被清空（表格空白）。 */
+    fun refreshUser(user: SalesUser, productType: SalesProductType) {
+        mutate {
+            it.copy(
+                loggedIn = true,
+                user = user,
+                productType = productType,
+            )
+        }
+    }
+
     fun logoutLocal() {
         mutate {
             SalesUiState(

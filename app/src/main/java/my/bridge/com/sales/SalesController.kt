@@ -125,7 +125,7 @@ object SalesController {
             try {
                 val user = api!!.me()
                 SalesPrefs.saveLogin(context.applicationContext, SalesPrefs.token(context), user)
-                SalesState.loginSuccess(user, initialProductType(user, SalesState.state.productType))
+                SalesState.refreshUser(user, initialProductType(user, SalesState.state.productType))
             } catch (e: Exception) {
                 handleApiError(e, silent = true)
             }
