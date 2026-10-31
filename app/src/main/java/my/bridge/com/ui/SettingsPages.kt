@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -38,8 +39,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -54,9 +57,17 @@ import timber.log.Timber
 
 // ============ 通用设置 ============
 @Composable
-fun GeneralSettings() {
+fun GeneralSettings(
+    homeTabOrder: List<Int> = listOf(0, 1, 2, 3),
+    homeTabNames: List<String> = listOf("", "", "", ""),
+    onHomeTabOrderChange: (List<Int>) -> Unit = {},
+    onHomeTabNameChange: (List<String>) -> Unit = {},
+) {
     var darkMode by remember { mutableStateOf(false) }
     var dnd by remember { mutableStateOf(true) }
+    // 改名弹窗：非空 = 正在为该页面 id 改名，输入框预填当前显示名
+    var renameTarget by remember { mutableStateOf<Int?>(null) }
+    var renameText by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -82,6 +93,120 @@ fun GeneralSettings() {
                 SettingValueRow(icon = "🧹", title = "清理缓存", value = "12.4 MB") { Timber.d("清理缓存") }
             }
         }
+        item { SectionTitle("主页页面排序") }
+        item {
+            // v0.2.08：主页顶部页面顺序/名称自定义（改动即时生效并持久化）。
+            // 只调显示层，页面 id 与功能零改动。
+            SettingCard {
+                homeTabOrder.forEachIndexed { pos, pageId ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${pos + 1}. ",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(TabOrderPrefs.PAGE_ICONS[pageId], fontSize = 16.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            // 显示名：自定义名优先，否则默认名
+                            Text(
+                                TabOrderPrefs.displayName(homeTabNames, pageId),
+                                fontSize = 15.sp,
+                            )
+                            if (homeTabNames.getOrNull(pageId)?.isNotBlank() == true) {
+                                Text(
+                                    "原名：${TabOrderPrefs.PAGE_TITLES[pageId]}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                renameTarget = pageId
+                                renameText = TabOrderPrefs.displayName(homeTabNames, pageId)
+                            },
+                        ) { Text("改名", fontSize = 13.sp) }
+                        // 上移（首位禁用）
+                        TextButton(
+                            onClick = {
+                                if (pos > 0) {
+                                    val next = homeTabOrder.toMutableList()
+                                    next[pos - 1] = homeTabOrder[pos].also { next[pos] = next[pos - 1] }
+                                    onHomeTabOrderChange(next)
+                                }
+                            },
+                            enabled = pos > 0,
+                        ) { Text("上移", fontSize = 13.sp) }
+                        // 下移（末位禁用）
+                        TextButton(
+                            onClick = {
+                                if (pos < homeTabOrder.size - 1) {
+                                    val next = homeTabOrder.toMutableList()
+                                    next[pos + 1] = homeTabOrder[pos].also { next[pos] = next[pos + 1] }
+                                    onHomeTabOrderChange(next)
+                                }
+                            },
+                            enabled = pos < homeTabOrder.size - 1,
+                        ) { Text("下移", fontSize = 13.sp) }
+                    }
+                }
+            }
+        }
+        item {
+            Row {
+                TextButton(onClick = { onHomeTabOrderChange(listOf(0, 1, 2, 3)) }) {
+                    Text("恢复默认排序", fontSize = 13.sp)
+                }
+                TextButton(onClick = { onHomeTabNameChange(List(4) { "" }) }) {
+                    Text("恢复默认名称", fontSize = 13.sp)
+                }
+            }
+        }
+    }
+
+    // 改名弹窗：输入新名称（≤8 字），清空 = 恢复默认名
+    renameTarget?.let { pageId ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = {
+                Text(
+                    "修改「${TabOrderPrefs.PAGE_TITLES[pageId]}」名称",
+                    fontSize = 16.sp,
+                )
+            },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it.take(TabOrderPrefs.NAME_MAX_LEN) },
+                    singleLine = true,
+                    placeholder = { Text("留空恢复默认名") },
+                    supportingText = { Text("${renameText.length}/${TabOrderPrefs.NAME_MAX_LEN}，留空恢复默认") },
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        val next = homeTabNames.toMutableList()
+                        while (next.size < 4) next.add("")
+                        next[pageId] = renameText.trim()
+                        onHomeTabNameChange(next)
+                        renameTarget = null
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { renameTarget = null }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 }
 
