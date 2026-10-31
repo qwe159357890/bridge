@@ -82,8 +82,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -1089,24 +1091,45 @@ private fun SalesTable(
         if (ui.records.isEmpty() && !ui.pageLoading) {
             EmptySalesBox(if (ui.keyword.isBlank()) "暂无售后记录" else "未找到匹配记录")
         } else {
-            // 数据体：横向滚动容器（与表头共享 scrollState 同步）包裹 LazyColumn（纵向滚动）。
-            // 关键：LazyColumn 必须在「有确定高度」的容器里（这里 Box 用 weight(1f) 占满剩余高度），
-            // 不能直接放进 horizontalScroll 的 Column 里——否则视口高度约束被放宽，item 不渲染。
+            // 数据体：双向滚动表格的「官方标准模式」——横向滚动与纵向滚动分离到两个
+            // 不同组件，避免同一容器叠加两个 scroll 或 horizontalScroll 包裹 LazyColumn
+            // 导致的测量塌缩（此前 v0.2.12~0.2.14 只 compose 1 个 item 的根因）。
+            // 结构：Box(weight 确定高度) → Row(horizontalScroll，宽=totalWidth) →
+            //       Column(verticalScroll，高=确定高度) → 逐行渲染。
+            // 行数仅 100（当前页），无需 LazyColumn 惰性加载，全量渲染性能足够。
+            val density = LocalDensity.current
+            val verticalScrollState = rememberScrollState()
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .horizontalScroll(scrollState),
-            ) {
-                LazyColumn(modifier = Modifier.width(totalWidth.dp).matchParentSize()) {
-                    items(ui.records, key = { it.id }) { record ->
-                        SalesTableRow(
-                            ui = ui,
-                            record = record,
-                            visibleColumns = visibleColumns,
-                            onCellDouble = onCellDouble,
-                            onRowLong = onRowLong,
+                    .onGloballyPositioned { c ->
+                        my.bridge.com.core.common.DiagLog.i(
+                            "销售页",
+                            "数据体 Box 尺寸：w=${c.size.width} h=${c.size.height}px = ${with(density) { c.size.height.toDp() }}"
                         )
+                    },
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .horizontalScroll(scrollState),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(totalWidth.dp)
+                            .fillMaxHeight()
+                            .verticalScroll(verticalScrollState),
+                    ) {
+                        ui.records.forEach { record ->
+                            SalesTableRow(
+                                ui = ui,
+                                record = record,
+                                visibleColumns = visibleColumns,
+                                onCellDouble = onCellDouble,
+                                onRowLong = onRowLong,
+                            )
+                        }
                     }
                 }
             }
