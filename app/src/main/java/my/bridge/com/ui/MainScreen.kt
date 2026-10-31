@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
@@ -54,22 +55,29 @@ private val BrandBlue = Color(0xFF1A6EE8)
 private val InactiveColor = Color(0xFF8A919F)
 
 /**
- * 应用主界面：底部导航（主页 / 设置）+ 各页二级 Tab。
+ * 应用主界面：底部导航（主页 / 销售 / 设置）+ 各页二级 Tab。
  *
  * 返回键全局策略（v0.1.36）：
  * - 非首 tab（通讯录/发现/连接/保活/关于）→ 切回当前页首 tab；
  * - 首 tab 第 1 次按 → 底部冒泡提醒「再按一次返回退出」；2 秒内再按 → 退出应用；
  * - 二级页面（短信会话详情）由页内 BackHandler 处理（注册更晚，优先级更高）；
  * - 页内弹窗（material3 AlertDialog）系统默认返回键关闭，无需处理。
+ *
+ * 销售页沉浸导航（v0.2.09）：
+ * - 点击底部「销售」→ 隐藏底部导航，销售页顶栏/登录页提供「返回导航」恢复；
+ * - 恢复导航不退出销售页、不清空产品类型/筛选/分页/表格数据；再点「销售」重新沉浸。
  */
 @Composable
 fun MainScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    // 底部导航当前选中项
+    // 底部导航当前选中项：0=主页 1=销售 2=设置
     var selectedBottom by rememberSaveable { mutableIntStateOf(0) }
     // 各页二级 Tab 当前选中项
     var homeTab by rememberSaveable { mutableIntStateOf(0) }
     var settingsTab by rememberSaveable { mutableIntStateOf(0) }
+    // 销售页沉浸模式：进入销售页即隐藏底部导航；页内「返回导航」置 true 重新显示，
+    // 再次点击「销售」则重新沉浸（不退出销售页、不丢表格状态）。
+    var salesNavVisible by rememberSaveable { mutableStateOf(false) }
     // 主页页面显示顺序（v0.2.08，设置→通用可调）：homeTabOrder[位置]=页面 id。
     // 持有在顶层使设置页改动即时反映到主页 Tab（HomePage 与设置页共享此状态）。
     var homeTabOrder by remember { mutableStateOf(TabOrderPrefs.load(context)) }
@@ -84,6 +92,21 @@ fun MainScreen(modifier: Modifier = Modifier) {
     // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），
     // 这样页内 BackHandler（短信详情）在其启用时优先接管
     BackHandler {
+        // 销售页（沉浸，无二级 tab）：导航已恢复时按返回 → 重新沉浸；否则走「再按一次退出」
+        if (selectedBottom == 1) {
+            if (salesNavVisible) {
+                salesNavVisible = false
+                return@BackHandler
+            }
+            val now = System.currentTimeMillis()
+            if (now - lastBackAt < 2000) {
+                (context as? android.app.Activity)?.finishAffinity()
+            } else {
+                lastBackAt = now
+                showExitHint = true
+            }
+            return@BackHandler
+        }
         val onLanding = if (selectedBottom == 0) homeTab == 0 else settingsTab == 0
         if (!onLanding) {
             // 非首 tab：切回当前页的首 tab
@@ -124,7 +147,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     tabOrder = homeTabOrder,
                     onTabChange = { homeTab = it },
                 )
-                1 -> SettingsPage(
+                1 -> SalesPage(
+                    onShowBottomBar = { salesNavVisible = true },
+                )
+                2 -> SettingsPage(
                     currentTab = settingsTab,
                     homeTabOrder = homeTabOrder,
                     homeTabNames = homeTabNames,
@@ -188,11 +214,18 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
-        // 底部导航
-        BridgeBottomBar(
-            selected = selectedBottom,
-            onSelect = { selectedBottom = it },
-        )
+        // 底部导航：销售页沉浸时隐藏（selectedBottom==1 且未点「返回导航」）。
+        // 点击任意 Tab 时重置 salesNavVisible，保证再次进入销售页回到沉浸态。
+        if (selectedBottom != 1 || salesNavVisible) {
+            BridgeBottomBar(
+                selected = selectedBottom,
+                onSelect = { idx ->
+                    selectedBottom = idx
+                    // 点击「销售」→ 重新沉浸；点其它 Tab → 复位，下次进销售仍是沉浸
+                    salesNavVisible = idx != 1
+                },
+            )
+        }
     }
 }
 
@@ -201,6 +234,7 @@ private data class BottomTab(val label: String, val icon: ImageVector)
 
 private val bottomTabs = listOf(
     BottomTab("主页", Icons.Filled.Home),
+    BottomTab("销售", Icons.Filled.Store),
     BottomTab("设置", Icons.Filled.Settings),
 )
 
