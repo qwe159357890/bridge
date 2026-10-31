@@ -40,8 +40,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -83,6 +85,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -165,6 +168,25 @@ private enum class ScanMode(val label: String) {
  * v0.1.95：入口设置（会话列表/直接扫码）、会话自由增删改、记录级编辑删除、
  * 同码冷却节流、相机按需启停（单次扫完/手动输入/离开页面即释放）。
  */
+/**
+ * scanResult 回执统一分发（v0.2.04）：扫码实时上报 / 重复补报 / 记录页单击 / 批量发送共用。
+ * 映射：duplicate→「重复录入」 / miss→「取消」+可选卡片标记 / hit→TTS 地址播报。
+ */
+private fun dispatchScanReceipt(
+    context: android.content.Context,
+    receipt: ScanUploadClient.Receipt,
+    onMissCard: (() -> Unit)? = null,
+) {
+    when (receipt.result) {
+        "duplicate" -> ScanFeedback.serverDuplicate(context)
+        "miss" -> {
+            onMissCard?.invoke()
+            ScanFeedback.miss(context)
+        }
+        "hit" -> ScanFeedback.speakAddress(context, receipt.receiver, receipt.town)
+    }
+}
+
 @Composable
 fun ScanPage() {
     val context = LocalContext.current
@@ -633,17 +655,7 @@ private fun ScanCameraPage(
             ScanUploadClient(
                 context,
                 onReceipt = { receipt ->
-                    when (receipt.result) {
-                        // 重复录入：播「重复录入.wav」（v0.2.03 起改由回执触发重播）
-                        "duplicate" -> ScanFeedback.serverDuplicate(context)
-                        // 未匹配：播「取消.wav」+ 结果卡提示
-                        "miss" -> {
-                            lastServerMiss = true
-                            ScanFeedback.miss(context)
-                        }
-                        // 命中：TTS 播报「receiver town」（与 PC 端 text2speech 文案一致）
-                        "hit" -> ScanFeedback.speakAddress(context, receipt.receiver, receipt.town)
-                    }
+                    dispatchScanReceipt(context, receipt) { lastServerMiss = true }
                 },
                 onStateChanged = { uploadState = it },
             )
@@ -984,6 +996,18 @@ private fun ScanCameraPage(
                         .graphicsLayer { translationX = shakeX.value }
                         .clip(RoundedCornerShape(12.dp))
                         .background(if (lastIsDuplicate) ScanOrangeSoft else ScanGreenSoft)
+                        // v0.2.04：重复卡点击 = 不入库、补报 PC（回执处理与扫码一致）
+                        .clickable {
+                            val value = lastValue
+                            if (lastIsDuplicate && value != null) {
+                                if (uploadState == ScanUploadClient.State.ONLINE) {
+                                    uploadClient?.uploadText(session, value)
+                                    ScanFeedback.toast(context, "已补报 PC：$value")
+                                } else {
+                                    ScanFeedback.toast(context, "PC 离线或未开启上传，无法补报")
+                                }
+                            }
+                        }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1002,9 +1026,10 @@ private fun ScanCameraPage(
                             maxLines = 1,
                         )
                         Text(
-                            // v0.2.02：服务器回执 miss 时追加提示（PC 端退货库中没有该单号）
+                            // v0.2.02：服务器回执 miss 时追加提示；v0.2.04 重复卡提示可点击补报
                             if (lastServerMiss && !lastIsDuplicate) "$lastFormat · 已加入会话 · 服务器未匹配"
-                            else "$lastFormat · ${if (lastIsDuplicate) "重复" else "已加入会话"}",
+                            else if (lastIsDuplicate) "$lastFormat · 重复 · 点击可补报 PC"
+                            else "$lastFormat · 已加入会话",
                             fontSize = 11.sp,
                             color = if (lastIsDuplicate) ScanOrange else ScanGreen,
                         )
@@ -1329,8 +1354,9 @@ private fun ScanFlashBadge(
     }
 }
 
-// ============ 会话记录页（记录级管理：复制 / 编辑 / 删除） ============
+// ============ 会话记录页（记录级管理：复制 / 编辑 / 删除 / 上报 / 多选批量发送） ============
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ScanSessionListPage(
     sessionId: String,
@@ -1349,6 +1375,33 @@ private fun ScanSessionListPage(
     val timeFmt = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
     val clipboard = remember {
         context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    }
+
+    // —— 上报到 PC（v0.2.04）：单击上报 + 多选批量发送，回执处理与扫码页同构 ——
+    var uploadState by remember { mutableStateOf(ScanUploadClient.State.IDLE) }
+    val uploadClient = remember {
+        ScanUploadClient(
+            context,
+            onReceipt = { receipt ->
+                dispatchScanReceipt(context, receipt) {
+                    ScanFeedback.toast(context, "服务器未匹配：${receipt.text}")
+                }
+            },
+            onStateChanged = { uploadState = it },
+        )
+    }
+    DisposableEffect(uploadClient) {
+        uploadClient.start()
+        onDispose { uploadClient.stop() }
+    }
+
+    // —— 多选模式（v0.2.04）：长按进入 → 勾选 → 全选/全取消 → 全部发送 ——
+    var selectionMode by remember { mutableStateOf(false) }
+    val selected = remember { mutableStateListOf<Long>() }
+    // 多选模式下返回键 = 退出多选（不退出页面）
+    BackHandler(enabled = selectionMode) {
+        selectionMode = false
+        selected.clear()
     }
 
     Column(
@@ -1401,6 +1454,43 @@ private fun ScanSessionListPage(
                 }
             }
         }
+        // 多选操作行（v0.2.04）：全选/全取消切换 + 全部发送 + 退出
+        if (selectionMode) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    if (selected.size == records.size) {
+                        selected.clear()
+                    } else {
+                        selected.clear()
+                        selected.addAll(records.map { it.id })
+                    }
+                }) {
+                    Text(
+                        if (selected.size == records.size) "全取消" else "全选",
+                        color = ScanBrand,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = {
+                        if (uploadState == ScanUploadClient.State.ONLINE) {
+                            val targets = records.filter { it.id in selected }
+                            targets.forEach { uploadClient.uploadText(session, it.value) }
+                            ScanFeedback.toast(context, "已上报 ${targets.size} 条到 PC")
+                        } else {
+                            ScanFeedback.toast(context, "PC 离线或未开启上传，无法发送")
+                        }
+                        selectionMode = false
+                        selected.clear()
+                    },
+                    enabled = selected.isNotEmpty(),
+                ) { Text("全部发送(${selected.size})", color = ScanBrand) }
+                TextButton(onClick = {
+                    selectionMode = false
+                    selected.clear()
+                }) { Text("退出多选", color = ScanSub) }
+            }
+        }
         Spacer(Modifier.height(8.dp))
         if (session == null) {
             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
@@ -1414,12 +1504,43 @@ private fun ScanSessionListPage(
             LazyColumn(Modifier.weight(1f)) {
                 items(records, key = { it.id }) { record ->
                     var menuOpen by remember { mutableStateOf(false) }
+                    val isSelected = record.id in selected
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            // v0.2.04：单击=上报 PC（多选模式=切换勾选）；长按=进入多选
+                            .combinedClickable(
+                                onClick = {
+                                    if (selectionMode) {
+                                        if (isSelected) selected.remove(record.id)
+                                        else selected.add(record.id)
+                                    } else if (uploadState == ScanUploadClient.State.ONLINE) {
+                                        uploadClient.uploadText(session, record.value)
+                                        ScanFeedback.toast(context, "已上报：${record.value}")
+                                    } else {
+                                        ScanFeedback.toast(context, "PC 离线或未开启上传，无法上报")
+                                    }
+                                },
+                                onLongClick = {
+                                    if (!selectionMode) {
+                                        selectionMode = true
+                                        selected.clear()
+                                        selected.add(record.id)
+                                    }
+                                },
+                            )
                             .padding(vertical = 6.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (selectionMode) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { checked ->
+                                    if (checked) selected.add(record.id)
+                                    else selected.remove(record.id)
+                                },
+                            )
+                        }
                         Column(Modifier.weight(1f)) {
                             Text(
                                 record.value,
@@ -1434,39 +1555,59 @@ private fun ScanSessionListPage(
                                 color = ScanSub, fontSize = 11.sp,
                             )
                         }
-                        Text("✓", color = ScanGreen, fontSize = 13.sp)
-                        Spacer(Modifier.width(4.dp))
-                        Box {
+                        if (selectionMode) {
                             Text(
-                                "⋮",
-                                fontSize = 16.sp,
-                                color = ScanSub,
-                                modifier = Modifier
-                                    .clickable { menuOpen = true }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                if (isSelected) "已选" else "未选",
+                                color = if (isSelected) ScanBrand else ScanSub,
+                                fontSize = 11.sp,
                             )
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("复制单号") },
-                                    onClick = {
-                                        menuOpen = false
-                                        clipboard?.setPrimaryClip(
-                                            ClipData.newPlainText("单号", record.value)
-                                        )
-                                        ScanFeedback.toast(context, "已复制单号")
-                                    },
+                        } else {
+                            Text("✓", color = ScanGreen, fontSize = 13.sp)
+                            Spacer(Modifier.width(4.dp))
+                            Box {
+                                Text(
+                                    "⋮",
+                                    fontSize = 16.sp,
+                                    color = ScanSub,
+                                    modifier = Modifier
+                                        .clickable { menuOpen = true }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("编辑") },
-                                    onClick = { menuOpen = false; editTarget = record },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("删除", color = ScanOrange) },
-                                    onClick = {
-                                        menuOpen = false
-                                        ScanStore.deleteRecord(context, sessionId, record.id)
-                                    },
-                                )
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("复制单号") },
+                                        onClick = {
+                                            menuOpen = false
+                                            clipboard?.setPrimaryClip(
+                                                ClipData.newPlainText("单号", record.value)
+                                            )
+                                            ScanFeedback.toast(context, "已复制单号")
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("上报 PC") },
+                                        onClick = {
+                                            menuOpen = false
+                                            if (uploadState == ScanUploadClient.State.ONLINE) {
+                                                uploadClient.uploadText(session, record.value)
+                                                ScanFeedback.toast(context, "已上报：${record.value}")
+                                            } else {
+                                                ScanFeedback.toast(context, "PC 离线或未开启上传，无法上报")
+                                            }
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("编辑") },
+                                        onClick = { menuOpen = false; editTarget = record },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("删除", color = ScanOrange) },
+                                        onClick = {
+                                            menuOpen = false
+                                            ScanStore.deleteRecord(context, sessionId, record.id)
+                                        },
+                                    )
+                                }
                             }
                         }
                     }

@@ -183,6 +183,38 @@ class ScanUploadClient(
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
             .format(java.util.Date(ts))
 
+    /**
+     * 补报/手动上报（v0.2.04）：把任意单号包成单条 scanSession 发送，不入本地库。
+     * 用于：①重复提示卡点击补报；②记录列表单击上报；③多选批量发送。
+     * [session] 传 null 时用合成会话名。回执 scanResult 与扫码路径完全同构。
+     */
+    fun uploadText(session: ScanSession?, text: String) {
+        if (state != State.ONLINE) return
+        val socket = ws ?: return
+        if (text.isBlank()) return
+        runCatching {
+            val scanning = JSONObject()
+                .put("id", java.util.UUID.randomUUID().toString())
+                .put("repeated", true)
+                .put("date", formatTime(System.currentTimeMillis()))
+                .put("text", text)
+                .put("displayValue", text)
+            val sessionJson = JSONObject()
+                .put("id", session?.key ?: "bridge-manual")
+                .put("name", session?.name ?: "Bridge 手动上报")
+                .put("date", session?.date ?: formatTime(System.currentTimeMillis()).take(10))
+                .put("selected", true)
+                .put("scannings", JSONArray().put(scanning))
+            val payload = JSONObject()
+                .put("action", "putScanSessions")
+                .put("sendKeystrokes", false)
+                .put("deviceId", "bridge-scanner")
+                .put("scanSessions", JSONArray().put(sessionJson))
+            socket.send(payload.toString())
+            Timber.tag(TAG).d("补报上报：%s", text)
+        }.onFailure { Timber.tag(TAG).w(it, "补报失败（不影响本地闭环）") }
+    }
+
     private companion object {
         const val TAG = "快递扫码"
     }
