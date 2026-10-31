@@ -116,7 +116,49 @@ def main():
         api("POST", "/actions/workflows/release.yml/dispatches",
             {"ref": f"refs/tags/{TAG}"})
         print(f"[5] dispatch release.yml ref={TAG} 已发出")
+
+    # [6] 追平本地 git（消除「本地 vs 远端分叉」）——方案 B 自动化。
+    # API 通道是基于远端 HEAD 新造提交、不并入本地历史，会导致本地 HEAD 与
+    # origin/main 分叉。这里发布成功后立刻 fetch + reset --hard 把本地追平到
+    # 远端权威历史，下次 git status 就不会再冒出「假差异/分叉」。
+    # 仅当本地有未提交改动时才跳过（保护工作区，避免误清用户未保存内容）。
+    sync_local_git()
     return 0
+
+
+def sync_local_git():
+    """发布后把本地 git 追平到远端 origin/main（清代理直连，网络策略②）。
+
+    目标：消除 API 通道导致的本地/远端分叉。步骤：
+    1. 若工作区有未提交改动则跳过（不强制清工作区，交给用户决定）；
+    2. git fetch origin main（清代理直连，规避沙箱代理间歇 502）；
+    3. git reset --hard origin/main（本地 HEAD/index 对齐远端权威历史）。
+    """
+    import os
+    import subprocess
+
+    # 1. 保护工作区：有未提交改动（含未跟踪）就不动，避免误清用户内容
+    st = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    if st.stdout.strip():
+        print("[6] 工作区有未提交改动，跳过本地 git 追平（交用户手动处理）。")
+        return
+
+    # 2. 清代理直连 fetch（API 通道用的是 urllib，fetch 用 git，需绕过沙箱代理）
+    env = dict(os.environ)
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env.pop(k, None)
+    print("[6] 追平本地 git（fetch origin/main，清代理直连）...")
+    fr = subprocess.run(["git", "fetch", "origin", "main"], capture_output=True, text=True, env=env)
+    if fr.returncode != 0:
+        print(f"[6] fetch 失败（{fr.stderr.strip()[:120]}），跳过追平，可稍后手动执行。")
+        return
+
+    # 3. reset --hard 对齐远端权威历史（丢弃本地 release.py 遗留的垃圾提交）
+    rr = subprocess.run(["git", "reset", "--hard", "origin/main"], capture_output=True, text=True)
+    if rr.returncode == 0:
+        print("[6] 本地 git 已追平 origin/main（分叉消除）。")
+    else:
+        print(f"[6] reset 失败（{rr.stderr.strip()[:120]}），可稍后手动执行。")
 
 
 if __name__ == "__main__":

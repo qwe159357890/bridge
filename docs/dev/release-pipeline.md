@@ -150,6 +150,28 @@ python scripts/gh_api.py --repo qwe159357890/bridge dispatch release.yml v0.1.6
 3. **改 tag 指向新提交**：先 `DELETE /repos/{repo}/git/refs/tags/vX`，再重建 tag，再 dispatch。
 4. **本地 git 历史与远程（API 提交链）会分叉**：API push 是基于「远程 HEAD」新造提交，不会并入本地 git 历史。属正常现象，后续发布继续走 API 即可，本地 git 仅作参考。
 
+### 发布后追平本地 git（消除分叉，双保险）
+
+**背景**：API 通道发布是「基于远端 HEAD 新造提交」，本地 git 的 HEAD 完全不前进，导致本地与
+远端长期分叉。分叉会让后续 `git status` 冒出一堆「假差异」（远端已有的文件在本地 index 里显示为
+未跟踪/删除），干扰判断，也容易在「本地提交」时误操作（把远端正确内容当删除推上去覆盖）。
+
+**铁律（方案 A，手动约定）**：每次走 API 通道发布后，**立即**执行下面两条命令把本地追平：
+
+```bash
+# 清代理直连 fetch（规避沙箱代理间歇 502）
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy git fetch origin main
+git reset --hard origin/main
+```
+
+- **前置条件**：执行前先 `git status --porcelain` 确认工作区干净；有未提交改动先处理（提交或 stash），
+  否则 `reset --hard` 会丢弃工作区改动。
+- **效果**：本地 HEAD/index 对齐远端权威历史，`git status` 干净，分叉消除。
+
+**方案 B（脚本自动化）**：`push_v0xxx.py` 脚本内置了 `sync_local_git()`，发布成功推完 tag 后会自动
+执行上述 fetch + reset（工作区不干净时自动跳过）。因此**新建 push 脚本必须保留 sync_local_git() 调用**
+（从上一版 push 脚本复制即可），双保险才持续生效。
+
 ### 查看构建 / 下载 APK
 
 ```bash
