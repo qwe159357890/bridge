@@ -32,6 +32,18 @@ class SalesApiClient(context: Context) {
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * 释放底层 HTTP 连接池与线程池（退出销售页省电）。
+     *
+     * 对照智能控制/快递扫码：它们的 client 在 stop() 里置 null 彻底释放；
+     * 销售页此前只断开 WS，OkHttp 的 keep-alive 连接与 Dispatcher 线程一直常驻。
+     * 退出页面时调用，空闲连接被立刻回收、线程池停止，进入页面时再懒重建。
+     */
+    fun close() {
+        client.connectionPool.evictAll()
+        client.dispatcher.executorService.shutdown()
+    }
+
     // ------------------------------------------------------------------
     // 认证
     // ------------------------------------------------------------------

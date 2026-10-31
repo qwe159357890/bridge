@@ -43,7 +43,6 @@ object SalesController {
         val app = context.applicationContext
         if (appContext == null) {
             appContext = app
-            api = SalesApiClient(app)
             val user = SalesPrefs.user(app)
             val token = SalesPrefs.token(app)
             val initialType = initialProductType(user, SalesPrefs.productType(app))
@@ -55,6 +54,10 @@ object SalesController {
                 pageSize = if (SalesPrefs.virtualScroll(app)) 9999 else SalesPrefs.pageSize(app),
                 toolbarCollapsed = SalesPrefs.toolbarCollapsed(app),
             )
+        }
+        // exitPage 省电释放后会置 null，这里懒重建 HTTP 客户端（连接池/线程池）。
+        if (api == null) {
+            api = SalesApiClient(app)
         }
     }
 
@@ -75,6 +78,13 @@ object SalesController {
         fetchGeneration++
         ws.disconnect()
         SalesState.setWsConnected(false)
+        // 省电加固（对照智能控制/快递扫码的 stop()）：退出页面即释放 HTTP 连接池与线程池，
+        // 并在途请求全部作废；再次进入页面时 enterPage → ensureInit 会懒重建。
+        api?.close()
+        api = null
+        SalesState.setPageLoading(false)
+        SalesState.setActionLoading(false)
+        SalesState.setExporting(false)
     }
 
     // ------------------------------------------------------------------
