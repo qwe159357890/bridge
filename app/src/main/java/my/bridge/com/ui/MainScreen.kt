@@ -92,19 +92,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
     // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），
     // 这样页内 BackHandler（短信详情）在其启用时优先接管
     BackHandler {
-        // 销售页（沉浸，无二级 tab）：导航已恢复时按返回 → 重新沉浸；否则走「再按一次退出」
+        // 销售页（沉浸，无二级 tab）：按返回键 = 点击左上角「返回导航」箭头。
+        // 第 1 次按 → 显示底部导航栏；再次按 → 隐藏导航栏（重新沉浸），如此循环。
         if (selectedBottom == 1) {
-            if (salesNavVisible) {
-                salesNavVisible = false
-                return@BackHandler
-            }
-            val now = System.currentTimeMillis()
-            if (now - lastBackAt < 2000) {
-                (context as? android.app.Activity)?.finishAffinity()
-            } else {
-                lastBackAt = now
-                showExitHint = true
-            }
+            salesNavVisible = !salesNavVisible
             return@BackHandler
         }
         val onLanding = if (selectedBottom == 0) homeTab == 0 else settingsTab == 0

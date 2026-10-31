@@ -63,8 +63,6 @@ fun GeneralSettings(
     onHomeTabOrderChange: (List<Int>) -> Unit = {},
     onHomeTabNameChange: (List<String>) -> Unit = {},
 ) {
-    var darkMode by remember { mutableStateOf(false) }
-    var dnd by remember { mutableStateOf(true) }
     // 改名弹窗：非空 = 正在为该页面 id 改名，输入框预填当前显示名
     var renameTarget by remember { mutableStateOf<Int?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -74,25 +72,6 @@ fun GeneralSettings(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        item { SectionTitle("通用设置") }
-        item {
-            SettingCard {
-                SettingSwitchRow(
-                    icon = "🌙",
-                    title = "深色模式",
-                    checked = darkMode,
-                    onCheckedChange = { darkMode = it; Timber.d("切换：深色模式 -> ${if (it) "开" else "关"}") },
-                )
-                SettingSwitchRow(
-                    icon = "🔕",
-                    title = "消息免打扰",
-                    checked = dnd,
-                    onCheckedChange = { dnd = it; Timber.d("切换：消息免打扰 -> ${if (it) "开" else "关"}") },
-                )
-                SettingValueRow(icon = "🌐", title = "语言", value = "简体中文") { Timber.d("选择语言") }
-                SettingValueRow(icon = "🧹", title = "清理缓存", value = "12.4 MB") { Timber.d("清理缓存") }
-            }
-        }
         item { SectionTitle("主页页面排序") }
         item {
             // v0.2.08：主页顶部页面顺序/名称自定义（改动即时生效并持久化）。

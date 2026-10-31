@@ -955,7 +955,7 @@ private fun SalesToolbar(
                         keyboard?.hide()
                         onSearch(searchText.trim(), ui.globalSearch)
                     }),
-                    modifier = Modifier.weight(1f).height(48.dp),
+                    modifier = Modifier.weight(1f).height(44.dp),
                     trailingIcon = {
                         IconButton(onClick = {
                             keyboard?.hide()
@@ -1260,7 +1260,7 @@ private fun SalesPaginationBar(ui: SalesUiState, onPage: (Int) -> Unit, onPageSi
                 }
                 TextButton(onClick = { if (ui.page < ui.totalPages) onPage(ui.page + 1) }, enabled = ui.page < ui.totalPages) { Text("▶") }
                 Box {
-                    TextButton(onClick = { sizeMenu = true }) { Text("${ui.size}/页", fontSize = 12.sp) }
+                    TextButton(onClick = { sizeMenu = true }) { Text("${ui.size}/页", fontSize = 12.sp, maxLines = 1, softWrap = false) }
                     DropdownMenu(expanded = sizeMenu, onDismissRequest = { sizeMenu = false }) {
                         listOf(20, 50, 100, 200, 9999).forEach { size ->
                             DropdownMenuItem(text = { Text(if (size == 9999) "全量" else "$size/页") }, onClick = {
