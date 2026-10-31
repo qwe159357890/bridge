@@ -1089,17 +1089,17 @@ private fun SalesTable(
         if (ui.records.isEmpty() && !ui.pageLoading) {
             EmptySalesBox(if (ui.keyword.isBlank()) "暂无售后记录" else "未找到匹配记录")
         } else {
-            // 数据体：纵向滚动 + 横向滚动（共享 scrollState 与表头横向同步）。
-            // 注意：不能用 LazyColumn——它放在 horizontalScroll 容器里会因高度约束被放宽
-            // 而测不出视口高度，导致 item 不渲染（表格空白）。100/页全量渲染对移动端无压力。
-            Column(
+            // 数据体：横向滚动容器（与表头共享 scrollState 同步）包裹 LazyColumn（纵向滚动）。
+            // 关键：LazyColumn 必须在「有确定高度」的容器里（这里 Box 用 weight(1f) 占满剩余高度），
+            // 不能直接放进 horizontalScroll 的 Column 里——否则视口高度约束被放宽，item 不渲染。
+            Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .weight(1f)
+                    .fillMaxWidth()
                     .horizontalScroll(scrollState),
             ) {
-                Column(Modifier.width(totalWidth.dp)) {
-                    ui.records.forEach { record ->
+                LazyColumn(modifier = Modifier.width(totalWidth.dp).fillMaxHeight()) {
+                    items(ui.records, key = { it.id }) { record ->
                         SalesTableRow(
                             ui = ui,
                             record = record,
@@ -1123,6 +1123,9 @@ private fun SalesTableRow(
     onRowLong: (SalesRecord, SalesColumn) -> Unit,
 ) {
     val rowBg = parseRowColor(record.row_color)?.copy(alpha = 0.18f) ?: MaterialTheme.colorScheme.surface
+    if (record.id <= 1052 && record.id >= 1050) {
+        my.bridge.com.core.common.DiagLog.i("销售页", "SalesTableRow 渲染 id=${record.id} receiver=${record.receiver} goods=${record.goods}")
+    }
     Row(Modifier.fillMaxWidth().heightIn(min = 42.dp).background(rowBg)) {
         if (ui.selectMode) {
             Box(Modifier.width(46.dp).fillMaxHeight().clickable { SalesState.toggleSelected(record.id) }, contentAlignment = Alignment.Center) {
