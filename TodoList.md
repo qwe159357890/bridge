@@ -5,67 +5,51 @@
 > - 用户未确认完成的事项**一直累积保留**，作为跨轮次跟踪清单；
 > - 每轮回复格式：先「本轮改动总结」（逐项归纳），后「生效提示」表格。
 
----
 
-## 未了结事项（2026-10-28 14:36 三项功能调研）
 
-1. 【管理后台】侧边栏 tab 收缩/展开功能（收缩态不占位、不影响交互）。✅ 已实现（layout/index.vue，未实测浏览器交互）
-2. 【管理后台】新短信实时提醒：全局冒泡 + 声音 + 侧边栏未读角标。✅ 已实现（服务端 data.py + 前端 layout/index.vue，未实测端到端）
-3. 【客户端】蓝牙耳机按键监听（最小验证版 MediaSession + Toast）。❌ 已剥离（2026-10-28 18:53 因 Android 焦点竞争无法抢过出声中的其它 App，用户决定移除；经验教训见 docs/keepalive/design.md）
+## 快递扫码 v0.1.94 真机反馈 11 条（2026-10-30 15:41）→ ✅ 全部实现于 v0.1.95（2026-10-30 16:1x，待真机验证）
 
-## 打包记录（2026-10-28 14:58）
-- 已打包 v0.1.60（API 通道推送 + tag + dispatch 触发 CI，构建成功）。
-- APK：releases/app-debug-v0.1.60.apk（18800020 字节，AXML 验证 versionName=0.1.60）。
-- 已同步到更新目录 server/data/updates/bridge-v0.1.60.apk（check_update 可提示升级）。
+> 归纳为 4 类。P0=影响可用性/安全性，P1=日常使用完整度，P2=体验打磨。
 
-## 打包记录（2026-10-28 15:57）
-- 已打包 v0.1.61（API 通道推送 + tag + dispatch 触发 CI，构建成功，job build 全 success）。
-- 本轮改动：蓝牙按键 setActive 激活（修复收不到按键）+ 新短信事件改 async 端点（修复事件广播失效）+ 服务端日志落盘 + 三端加日志。
-- APK：releases/app-debug-v0.1.61.apk（18800020 字节，AXML 验证 versionName=0.1.61）。
-- 已同步到更新目录 server/data/updates/bridge-v0.1.61.apk。
+### P0 — 可用性 / 安全性
 
-## 修复记录（2026-10-28 16:0x 三项问题）
-1. 【角标位置】短信红点角标从右下角改到图标左上角（el-badge 包住图标 + CSS 定位）。✅
-2. 【重复通知】新短信重复通知修复：服务端 save_batch 返回 new_messages 精确区分新增，逐条广播 + 60s 内存去重；前端同样加 sms_key 去重（双保险）。✅
-3. 【蓝牙按键收不到】根因：Bridge 未请求音频焦点，媒体按键只发给持焦点会话。修复：requestAudioFocus(AUDIOFOCUS_GAIN_TRANSIENT) 瞬时焦点，收到按键后立即 abandon 还焦点。✅ 编译通过，待真机验证。
+1. ✅【去重·同码节流】对准一个包裹扫码后，手移动需要时间，摄像头会反复识别同一单号：「询问」连续弹窗骚扰、「总是接受」连续入库同一条号（危险）。修：**同值冷却窗口**（同一单号处理后 N 秒内默认 2~3s 再次识别 → 完全静默忽略，不弹窗/不响音/不提示），先于五种去重策略执行、对所有策略生效（工业扫描枪 same-symbol timeout 惯例）；可选进阶：同值需离开画面再回来才允许再次触发。文件：`ScanStore.kt`（Decision 前加一层）+ `ScanPrefs.kt`（冷却时长可设置）。这些都设置用户可调。
+2. ✅【提示音感知太弱】成功音与重复音区分度不够。调研结论（ZXing BeepManager / zxing-android-embedded / 工业枪惯例）：成功音=短促单音 **100~300ms**（ZXing 默认 beep.ogg≈150ms）、频率 **2~4kHz** 穿透力最好、音量调大（0.7+ 或走通知通道）；重复音=**明显不同**的低音调或「两短响」；震动 **200~300ms**（当前偏短）。实现：`res/raw/` 内置 scan_ok.ogg / scan_dup.ogg 两枚音效替换现有提示，音量/震动一并调大。
+3. ✅【单次模式扫完即停相机】现状扫完一个后取景框仍在、相机还在跑。修：单次确认一个 → unbind 全部相机用例（预览+分析+拍摄）、取景框隐藏显示结果；再点「单次」或「连续」chip 才重新 bind。
 
-## 打包记录（2026-10-28 16:15）
-- 已打包 v0.1.62（API 通道推送 + tag + dispatch 触发 CI，构建成功 #122）。
-- 本轮改动：短信角标左上角 + 重复通知去重（服务端逐条广播+60s去重 / 前端去重）+ 蓝牙按键请求音频焦点。
-- APK：releases/app-debug-v0.1.62.apk（18800020 字节，sha256=773fa54f… 与 Release digest 一致，AXML 验证 versionName=0.1.62）。
-- 已同步到更新目录 server/data/updates/bridge-v0.1.62.apk。
+### P1 — 功能完整度
 
-## 修复记录（2026-10-28 16:22 两项问题）
-1. 【短信图标消失+角标不消】根因：el-badge 用 v-if 在未读为 0 时连图标一起移除；角标只在刷新时清零。修：el-badge 始终渲染、用 :hidden 控制角标显隐；加 watch 路由进 /sms 即清零角标。✅
-2. 【蓝牙按键无反应+服务端无日志】根因：①按键事件只在本地 Timber（release 不输出）+Toast，完全没上报服务端；②MediaSession 未设 PlaybackState（系统不路由按键）；③焦点请求结果无法远程确认。修：客户端加 PlaybackState(含 PLAY/PAUSE/NEXT/PREV 等 action) + 按键经 WS 上报 media_button 事件；服务端 ws.py 加 _handle_media_button 处理（记录日志+广播）；启动时上报 started 状态（含 has_focus/session_active）便于远程排查。✅ 编译通过，待真机验证。
+4. ✅【会话编辑】会话支持重命名、删除（入口：记录页顶栏或长按）。
+5. ✅【记录级管理】会话记录列表每条支持编辑（改单号）、删除、复制单号（行尾 ⋮ 菜单或长按），不只「是否上传」对号。
+6. ✅【会话列表页自由增删改】选择会话页支持自由创建/删除/编辑会话。⚠️ 与此前「每天一个会话不可多会话」拍板冲突，按新反馈放开：会话可自由增删改、名称可自定义，「按日命名」降级为默认建议值；同步修订文档 §5.5。
+7. ✅【首次创建弹窗改版】首次进入不直接创建，弹窗确认：默认文本「10月30日」（**不带「出库单」后缀**），**可编辑**，确认后创建，取消留在会话选择页。
+8. ✅【入口设置项】设置新增「进入快递扫码页时」：① 进入会话列表（手动选）② 直接进入扫码页（现状行为），替代/升级现有「打开自动进入今日会话」开关。
 
-## 打包记录（2026-10-28 16:39）
-- 已打包 v0.1.63（API 通道推送 + tag + dispatch 触发 CI，构建成功 #124）。
-- 本轮改动：短信角标图标消失修复 + 选中短信 tab 清零角标 + 蓝牙按键 PlaybackState + media_button 上报链路。
-- APK：releases/app-debug-v0.1.63.apk（18800020 字节，sha256=8bd52ba1… 与 Release digest 一致，AXML 验证 versionName=0.1.63）。
-- 已同步到更新目录 server/data/updates/bridge-v0.1.63.apk。
+### P2 — 体验 / 省电
 
-## 日志排查 + 时序修复（2026-10-28 16:45）
-- 读 server/logs/server.log 发现：服务端 16:43:14 重启、设备 16:43:19 连接、16:43:21 下发 v0.1.63、16:43:42 断开（装新 APK）、16:43:43 重连。**但全程无任何「蓝牙耳机按键上报/started/media_button」日志**。
-- 根因定位：`bluetoothHeadsetObserver.start()` 在 `BridgeApplication.onCreate` 里执行，此时 WS 尚未握手（handshakeReady=false），`reportToServer` 里 `sendBusinessMessage` 静默丢弃 → started 状态根本没发出去。
-- 修复：`BluetoothHeadsetObserver` 增加监听 `webSocketClient.handshakeReady.collect`，握手完成后补报 started 状态（与 MusicStateReporter 同模式）。✅ 编译通过。
-- **待打包 v0.1.64**：装新 APK 后重启服务端，看日志是否有 started（key_code=-1）上报，据此判断 MediaSession 是否注册、焦点是否授予。
+9. ✅【顶部 Tab 换行】4 个 Tab 文字换行。修：标题 `maxLines=1` + `softWrap=false`，TabRow 外层 `horizontalScroll`，超宽屏左右滑动标题而非换行。文件：`ui/MainScreen.kt`（BridgeTabRow）。
+10. ✅【手动输入不调相机】手动输入弹窗打开期间不启动相机（未 bind 保持未 bind；已 bind 先 unbind，关闭后按当前模式恢复）。
+11. ✅【离开页面资源释放排查】逐项确认 DisposableEffect onDispose：unbindAll、analyzer.release()、ImageCapture 回收、**分析线程池 executor.shutdown()（疑似漏）**、手电筒关闭；与 3/10 合并验证：进页面→马上退出，`dumpsys media.camera` 确认句柄释放。
 
-## 客户端版本上报 + v0.1.64 打包（2026-10-28 16:51）
-- 用户建议：上报时带上客户端版本号，避免怀疑版本问题。已实现：
-  - hello 握手消息加 `app_version` 字段（BridgeWebSocketClient 加 appVersionProvider，NetworkModule 注入 BuildConfig.VERSION_NAME）；
-  - 蓝牙 media_button 上报加 `app_version`；
-  - 服务端 HelloData 加 app_version 字段 + 连接建立日志打印 `version=...`。
-- 同时修复蓝牙 started 上报时序（handshakeReady 握手后补报）。
-- 已打包 v0.1.64（API 通道推送 + tag + dispatch，构建 #126 success）。
-- APK：releases/app-debug-v0.1.64.apk（sha256=e57602d9… 与 digest 一致，AXML versionName=0.1.64）。已同步 server/data/updates/bridge-v0.1.64.apk。
-- **下一步验证**：装 v0.1.64 + 重启服务端，日志应出现「连接建立成功（version=0.1.64）」+「蓝牙耳机按键上报：key_code=-1 action=started has_focus=...」。
+### 配套
+- [x] 文档修订：`docs/research/barcode-scanner-integration.md` §5.5 会话管理改「可自由增删改 + 按日默认命名」、§6.6 增补同值冷却窗口设计。
+- [ ] 完成后版本号 → v0.1.95，编译 → API 提交 → tag → gh-proxy 下载 → 更新 update.json（照发布链路）。
 
-## 蓝牙按键功能剥离（2026-10-28 18:53）
-- 用户决定：因 Android 音频焦点「一对一」竞争，Bridge 无法抢过**正在出声**的其它媒体 App（如 Aurelay），按键监听功能无法达到「无论何时都正常」的目标，故**彻底剥离**该功能。
-- 剥离范围（已全部完成）：
-  - 客户端：删除 `app/.../media/BluetoothHeadsetObserver.kt`；`BridgeApplication.kt` 移除 `bluetoothHeadsetObserver` 注入与 `start()` 调用。
-  - 服务端：`server/app/api/ws.py` 删除 `_handle_media_button()` 函数与 `event == "media_button"` 分支。
-  - **保留**（与蓝牙按键无关，勿误删）：保活 `SilentPlayer`（无声播放锚点，受「后台资源占用→无声播放」开关控制）、保活 BLE 扫描（`ResourceHolder`）、版本上报 `app_version`（hello/日志/崩溃通用）。
-- 经验教训已沉淀到 `docs/keepalive/design.md` 附录。
-- 编译校验：`:app:compileDebugKotlin` BUILD SUCCESSFUL；`ws.py` 语法 OK。
+## 快递扫码 v0.1.95 二轮反馈 3 条（2026-10-30 17:10）→ ✅ 全部实现于 v0.1.96（待真机验证）
+
+1. ✅【提示音调最大】双管齐下：①音源通道从 USAGE_ASSISTANCE_SONIFICATION（通知通道，系统音量偏低且可被勿扰静音）切到 **USAGE_MEDIA（媒体通道）**；②音效文件换成用户提供的成品音效（assets/sounds/扫描咻.wav=成功、重复录入.wav=重复，48kHz 16bit PCM），SoundPool 播放音量 1.0。应用侧已全部拉满；绝对上限=系统媒体音量（App 不能越过），测试时把媒体音量调高。
+2. ✅【返回键】记录列表加 BackHandler：返回 → 由「进入扫码页时」入口设置决定——入口=会话列表 → 会话管理；入口=直接扫码 → 扫码页（今日无会话则跨天提示）。
+3. ✅【MP3 疑问】已答复：Android 支持 MP3 音效，但 <0.5s 短音效不推荐（MP3 编码器延迟会让起音慢 25~50ms、首尾带静音垫片，短促感变差）；WAV/OGG 才是短音效最佳实践，已直接采用用户的 WAV。
+
+## 快递扫码 v0.1.96 三轮反馈：返回键完善（2026-10-30 17:33）→ ✅ 实现于 v0.1.97（待真机验证）
+
+- 返回逻辑统一：扫码模块内任何「非入口视图」（记录列表/会话管理/跨天提示/扫码页）按返回 → 先回到「入口设置」决定的入口视图（入口=会话列表 → 会话管理；入口=直接扫码 → 扫码页）；已在入口视图时不拦截 → 交给全局返回（首页 Tab 切换/退出提示）。记录页「‹ 返回」按钮与系统返回键行为一致（共用 goToEntry）。
+
+## 严重问题排查：偶发「Bridge 已停止运行」崩溃（2026-10-30 17:50）→ v0.1.98 防护+上报修复
+
+**排查方法（证据优先，不猜测）**：①查服务端 MySQL 日志库——0 条 Crash 记录，最近日志只到 v0.1.89（10-30 10:04），无崩溃堆栈可用；②实锤根因 A：**CrashReporter 上报时序 bug**——旧实现崩溃线程里 scope.launch(异步) 后立即交回系统处理器杀进程，协程来不及执行 → **崩溃日志从未上传成功过**（与数据库 0 条 Crash 吻合）；③实锤根因 B：**两处「shutdown 后系统线程迟到回调」崩溃向量**——(a) 扫码页 analysisExecutor 在页面退出时 shutdown，但 CameraX 内部线程仍可能投递帧/1080p 拍摄回调 → RejectedExecutionException 未捕获 → 进程崩溃（v0.1.94 引入，极难复现，与「有时就崩」症状吻合）；(b) 无障碍静默截屏 takeScreenshot 超时分支 executor.shutdown() 后系统迟到回调同款（早于扫码功能就有）。
+
+**v0.1.98 修复**：
+1. ✅ CrashReporter 重写：崩溃堆栈同步落盘 filesDir/crash/last_crash.txt（保底必达）+ 崩溃线程内 runBlocking 3.5s 同步上报 + 启动时补传未送达崩溃。
+2. ✅ 新增 util/safeExecutor 包装（RejectedExecutionException 静默丢弃），应用于扫码 analysisExecutor 与无障碍截屏 executor。
+3. ⏳ 真实堆栈待收集：装 v0.1.98 后若再崩，Crash 记录会出现在服务端日志（tag=Crash）；或手机连 USB 后用 adb shell dumpsys dropbox 拉 data_app_crash 历史堆栈（可追溯到崩溃当日）。
