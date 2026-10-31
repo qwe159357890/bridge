@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +34,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -82,12 +84,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -945,22 +949,48 @@ private fun SalesToolbar(
             }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
+                // 紧凑搜索框（对照参考项目 .search-row input：height 32px / padding 0 10px）。
+                // 弃用 OutlinedTextField：其默认 minHeight 56dp + contentPadding 上下各 16dp，
+                // 用 height(36dp) 强制压缩会导致文字/占位符垂直裁剪，只显示上半部分。
+                // 改用 BasicTextField 自绘边框，完全控制高度与内边距。
+                BasicTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
-                    placeholder = { Text("搜索收货人/电话/单号", fontSize = 12.sp) },
                     singleLine = true,
+                    textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(SalesBrand),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
                         keyboard?.hide()
                         onSearch(searchText.trim(), ui.globalSearch)
                     }),
-                    modifier = Modifier.weight(1f).height(44.dp),
-                    trailingIcon = {
-                        IconButton(onClick = {
-                            keyboard?.hide()
-                            onSearch(searchText.trim(), ui.globalSearch)
-                        }) { Icon(Icons.Filled.Search, contentDescription = "搜索") }
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .border(1.dp, SalesBorder, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp),
+                    decorationBox = { innerTextField ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) {
+                                if (searchText.isEmpty()) {
+                                    Text("搜索收货人/电话/单号", fontSize = 12.sp, color = SalesSub)
+                                }
+                                innerTextField()
+                            }
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = "搜索",
+                                tint = SalesBrand,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clickable {
+                                        keyboard?.hide()
+                                        onSearch(searchText.trim(), ui.globalSearch)
+                                    },
+                            )
+                        }
                     },
                 )
                 Spacer(Modifier.width(6.dp))
@@ -1238,14 +1268,18 @@ private fun StatusTag(text: String, color: Color) {
 private fun SalesPaginationBar(ui: SalesUiState, onPage: (Int) -> Unit, onPageSize: (Int) -> Unit, onReading: () -> Unit) {
     var sizeMenu by remember { mutableStateOf(false) }
     val virtual = ui.size >= 9999
+    // 紧凑分页栏（对照参考项目 .pager：height 32px / gap 6px）。TextButton 默认
+    // contentPadding 左右各 12dp + minWidth 58dp 太宽，会把「100/页」挤出屏幕被裁剪，
+    // 这里统一压缩 contentPadding，让「阅读」「◀ 页码 ▶」「100/页」都能完整显示。
+    val btnPadding = PaddingValues(horizontal = 4.dp)
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onReading) { Text("阅读", color = SalesBrand) }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onReading, contentPadding = btnPadding) { Text("阅读", color = SalesBrand, fontSize = 12.sp) }
             Spacer(Modifier.weight(1f))
             if (virtual) {
                 Text("共 ${ui.total} 条（已加载全部）", fontSize = 12.sp, color = SalesSub)
             } else {
-                TextButton(onClick = { if (ui.page > 1) onPage(ui.page - 1) }, enabled = ui.page > 1) { Text("◀") }
+                TextButton(onClick = { if (ui.page > 1) onPage(ui.page - 1) }, enabled = ui.page > 1, contentPadding = btnPadding) { Text("◀", fontSize = 12.sp) }
                 pageNumbers(ui.page, ui.totalPages).forEach { page ->
                     Text(
                         page.toString(),
@@ -1255,12 +1289,12 @@ private fun SalesPaginationBar(ui: SalesUiState, onPage: (Int) -> Unit, onPageSi
                             .clip(RoundedCornerShape(6.dp))
                             .background(if (page == ui.page) SalesBrand else Color.Transparent)
                             .clickable { onPage(page) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
                     )
                 }
-                TextButton(onClick = { if (ui.page < ui.totalPages) onPage(ui.page + 1) }, enabled = ui.page < ui.totalPages) { Text("▶") }
+                TextButton(onClick = { if (ui.page < ui.totalPages) onPage(ui.page + 1) }, enabled = ui.page < ui.totalPages, contentPadding = btnPadding) { Text("▶", fontSize = 12.sp) }
                 Box {
-                    TextButton(onClick = { sizeMenu = true }) { Text("${ui.size}/页", fontSize = 12.sp, maxLines = 1, softWrap = false) }
+                    TextButton(onClick = { sizeMenu = true }, contentPadding = btnPadding) { Text("${ui.size}/页", fontSize = 12.sp, maxLines = 1, softWrap = false) }
                     DropdownMenu(expanded = sizeMenu, onDismissRequest = { sizeMenu = false }) {
                         listOf(20, 50, 100, 200, 9999).forEach { size ->
                             DropdownMenuItem(text = { Text(if (size == 9999) "全量" else "$size/页") }, onClick = {
