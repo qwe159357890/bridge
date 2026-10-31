@@ -1098,7 +1098,7 @@ private fun SalesTable(
                     .fillMaxWidth()
                     .horizontalScroll(scrollState),
             ) {
-                LazyColumn(modifier = Modifier.width(totalWidth.dp).fillMaxHeight()) {
+                LazyColumn(modifier = Modifier.width(totalWidth.dp).matchParentSize()) {
                     items(ui.records, key = { it.id }) { record ->
                         SalesTableRow(
                             ui = ui,
