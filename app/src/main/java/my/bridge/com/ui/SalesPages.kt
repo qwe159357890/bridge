@@ -211,11 +211,24 @@ fun SalesPage(onShowBottomBar: () -> Unit) {
     BackHandler(enabled = headerMenu != null) { headerMenu = null }
     BackHandler(enabled = rowMenu != null) { rowMenu = null }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { c ->
+                my.bridge.com.core.common.DiagLog.i("销售页", "SalesPage 顶层 Box(fillMaxSize) 尺寸：w=${c.size.width} h=${c.size.height}")
+            },
+    ) {
         if (!ui.loggedIn) {
             SalesLoginPage(onShowBottomBar = onShowBottomBar)
         } else {
-            Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .onGloballyPositioned { c ->
+                        my.bridge.com.core.common.DiagLog.i("销售页", "SalesPage 主 Column(fillMaxSize) 尺寸：w=${c.size.width} h=${c.size.height}")
+                    },
+            ) {
                 if (!ui.readingMode) {
                     SalesTopBar(
                         ui = ui,
@@ -264,7 +277,17 @@ fun SalesPage(onShowBottomBar: () -> Unit) {
                     }
                 }
 
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .onGloballyPositioned { c ->
+                            my.bridge.com.core.common.DiagLog.i(
+                                "销售页",
+                                "SalesPage 外层 Box(weight) 尺寸：w=${c.size.width} h=${c.size.height}"
+                            )
+                        },
+                ) {
                     SalesTable(
                         ui = ui,
                         visibleColumns = visibleColumns,
@@ -1036,7 +1059,13 @@ private fun SalesTable(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface),
+            .background(MaterialTheme.colorScheme.surface)
+            .onGloballyPositioned { c ->
+                my.bridge.com.core.common.DiagLog.i(
+                    "销售页",
+                    "SalesTable Column 尺寸：w=${c.size.width} h=${c.size.height}"
+                )
+            },
     ) {
         // 表头（固定，横向滚动；与数据行共享 scrollState 实现横向同步）
         Row(
