@@ -75,6 +75,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -83,6 +84,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -224,6 +226,10 @@ fun ScanPage() {
 
     // 提示音预热（SoundPool 解码异步，进页面就加载避免首扫无声）
     LaunchedEffect(Unit) { ScanFeedback.init(context) }
+    // 离开扫码模块（切 Tab）→ 释放 TTS 引擎服务绑定（v0.2.05 省电；下次进入自动重连）
+    DisposableEffect(Unit) {
+        onDispose { ScanFeedback.releaseTts() }
+    }
 
     // 跨天监听：页面停留期间跨过 0 点 → 下次入库自动切新会话，此处在扫码页顶部
     // 显示的会话名需要跟着变。用一个轻量定时刷新 todayKey 即可。
@@ -1704,6 +1710,7 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
     var formats by remember { mutableStateOf(ScanPrefs.formats(context)) }
     var sound by remember { mutableStateOf(ScanPrefs.sound(context)) }
     var vibration by remember { mutableStateOf(ScanPrefs.vibration(context)) }
+    var volume by remember { mutableFloatStateOf(ScanPrefs.volume(context)) }
     var uploadOn by remember { mutableStateOf(ScanPrefs.uploadEnabled(context)) }
     var uploadHost by remember { mutableStateOf(ScanPrefs.uploadHost(context)) }
 
@@ -1807,6 +1814,18 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
                     Text("提示音", fontSize = 14.sp, modifier = Modifier.weight(1f))
                     Switch(checked = sound, onCheckedChange = { sound = it })
                 }
+                // 音量滑杆（v0.2.05）：App 播放系数 0~100%，与系统媒体音量相乘；
+                // 音源已归一化满幅，这里是唯一需要日常调的地方
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("提示音音量", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Text("${(volume * 100).toInt()}%", fontSize = 12.sp, color = ScanSub)
+                }
+                Slider(
+                    value = volume,
+                    onValueChange = { volume = it },
+                    enabled = sound,
+                    valueRange = 0f..1f,
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("震动反馈", fontSize = 14.sp, modifier = Modifier.weight(1f))
                     Switch(checked = vibration, onCheckedChange = { vibration = it })
@@ -1841,6 +1860,7 @@ private fun ScanSettingsDialog(onDismiss: () -> Unit, onSaved: () -> Unit) {
                 ScanPrefs.setFormats(context, if (formats.isEmpty()) ScanFormats.ALL.toSet() else formats)
                 ScanPrefs.setSound(context, sound)
                 ScanPrefs.setVibration(context, vibration)
+                ScanPrefs.setVolume(context, volume)
                 ScanPrefs.setUploadEnabled(context, uploadOn)
                 ScanPrefs.setUploadHost(context, uploadHost)
                 onSaved()
@@ -1910,20 +1930,20 @@ private object ScanFeedback {
         }.onFailure { Timber.tag("快递扫码").e(it, "提示音初始化失败") }
     }
 
-    private fun play(id: Int) {
+    private fun play(id: Int, volume: Float) {
         val pool = soundPool ?: return
-        if (id != 0) runCatching { pool.play(id, 1f, 1f, 1, 0, 1f) }
+        if (id != 0) runCatching { pool.play(id, volume, volume, 1, 0, 1f) }
     }
 
     /** 扫码成功：高频短 beep + 长震动。 */
     fun success(context: android.content.Context) {
-        if (ScanPrefs.sound(context)) play(okId)
+        if (ScanPrefs.sound(context)) play(okId, ScanPrefs.volume(context))
         if (ScanPrefs.vibration(context)) vibrate(context, 250)
     }
 
     /** 本地扫码重复/警示（v0.2.03 换音）：warning.wav 两短警示响。 */
     fun duplicate(context: android.content.Context) {
-        if (ScanPrefs.sound(context)) play(warnId)
+        if (ScanPrefs.sound(context)) play(warnId, ScanPrefs.volume(context))
     }
 
     /**
@@ -1931,7 +1951,7 @@ private object ScanFeedback {
      * 音源 = SalesRecordSystem 的「重复录入.wav」（chongfuluru）同源。
      */
     fun serverDuplicate(context: android.content.Context) {
-        if (ScanPrefs.sound(context)) play(dupId)
+        if (ScanPrefs.sound(context)) play(dupId, ScanPrefs.volume(context))
     }
 
     /**
@@ -1939,7 +1959,7 @@ private object ScanFeedback {
      * 音源 = SalesRecordSystem 的「取消.wav」（quxiao）同源。
      */
     fun miss(context: android.content.Context) {
-        if (ScanPrefs.sound(context)) play(missId)
+        if (ScanPrefs.sound(context)) play(missId, ScanPrefs.volume(context))
     }
 
     /**
@@ -1953,13 +1973,25 @@ private object ScanFeedback {
         val text = "$receiver $town".trim()
         if (text.isEmpty()) return
         runCatching {
-            tts?.speak(
-                text,
-                android.speech.tts.TextToSpeech.QUEUE_FLUSH,
-                null,
-                "scan_hit",
-            )
+            // 音量系数走 KEY_PARAM_VOLUME（0~1），与 SoundPool 同一设置源
+            val params = android.os.Bundle().apply {
+                putFloat(
+                    android.speech.tts.TextToSpeech.Engine.KEY_PARAM_VOLUME,
+                    ScanPrefs.volume(context),
+                )
+            }
+            tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, params, "scan_hit")
         }.onFailure { Timber.tag("快递扫码").e(it, "地址播报失败") }
+    }
+
+    /** 离开扫码模块时释放 TTS 引擎绑定（v0.2.05 省电）：SoundPool 保留（解码慢、空闲功耗可忽略）。 */
+    fun releaseTts() {
+        runCatching {
+            tts?.stop()
+            tts?.shutdown()
+        }
+        tts = null
+        ttsReady = false
     }
 
     private fun vibrate(context: android.content.Context, ms: Long) {

@@ -35,6 +35,10 @@ object ScanPrefs {
     const val KEY_SOUND = "scan_sound"
     const val KEY_VIBRATION = "scan_vibration"
 
+    // 提示音音量（v0.2.05）：0~1 播放系数，乘在 SoundPool/TTS 输出上，
+    // 最终响度 = 音源满幅 × 该系数 × 系统媒体音量。
+    const val KEY_VOLUME = "scan_sound_volume"
+
     // 上传到 PC（v0.2.02，扩展 Barcode to PC 协议）：开关 + 目标地址「IP:端口」
     const val KEY_UPLOAD_ENABLED = "scan_upload_enabled"
     const val KEY_UPLOAD_HOST = "scan_upload_host"
@@ -90,6 +94,13 @@ object ScanPrefs {
 
     fun setVibration(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_VIBRATION, value).apply()
+    }
+
+    /** 提示音音量系数（0~1，默认 1.0 = 满幅天花板）。 */
+    fun volume(context: Context): Float = sp(context).getFloat(KEY_VOLUME, 1.0f)
+
+    fun setVolume(context: Context, value: Float) {
+        sp(context).edit().putFloat(KEY_VOLUME, value.coerceIn(0f, 1f)).apply()
     }
 
     /** 上传到 PC 总开关（v0.2.02）。 */
