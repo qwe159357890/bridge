@@ -68,6 +68,10 @@ class ScanUploadClient(
     @Volatile
     private var pendingReceipts = 0
 
+    /** 能力标志（v0.2.07）：pong 带 server 字段 = 新版，连接即确认，无需上传验证。 */
+    @Volatile
+    private var hasCapability = false
+
     private fun scheduleLegacyCheck() {
         scope.launch {
             delay(6_000)
@@ -112,6 +116,7 @@ class ScanUploadClient(
                 if (stopped) return
                 backoffMs = 5_000L
                 pendingReceipts = 0  // 重连重置：旧判定不作数，重新观察
+                hasCapability = false
                 setState(State.ONLINE)
                 // helo 握手（Barcode to PC 协议原样，服务端 debug 日志+回执）
                 webSocket.send(
@@ -122,6 +127,17 @@ class ScanUploadClient(
                         .put("deviceId", "bridge-scanner")
                         .toString(),
                 )
+                // 能力探测（v0.2.07）：连接即发一次应用层 ping——
+                // 新版 pong 带 server 字段 → 立即确认 ONLINE；旧版 pong 无此字段
+                // → 等 3s 无能力确认且无回执 → LEGACY。与上传后的回执检测互为兜底。
+                webSocket.send(JSONObject().put("action", "ping").toString())
+                scope.launch {
+                    delay(3_000)
+                    if (!stopped && !hasCapability && state == State.ONLINE) {
+                        Timber.tag(TAG).w("3s 无能力标志且无回执，判定 PC 端为旧版本")
+                        setState(State.LEGACY)
+                    }
+                }
                 Timber.tag(TAG).i("已连接 %s", url)
             }
 
@@ -129,22 +145,30 @@ class ScanUploadClient(
                 if (stopped) return
                 runCatching {
                     val obj = JSONObject(text)
-                    if (obj.optString("action") != "scanResult") return
-                    // 收到回执：待回计数递减；若曾误判 LEGACY（服务器只是慢），自愈回 ONLINE
-                    pendingReceipts = (pendingReceipts - 1).coerceAtLeast(0)
-                    if (state == State.LEGACY) setState(State.ONLINE)
-                    val results = obj.optJSONArray("results") ?: return
-                    for (i in 0 until results.length()) {
-                        val r = results.optJSONObject(i) ?: continue
-                        onReceipt(
-                            Receipt(
-                                id = r.optString("id"),
-                                text = r.optString("text"),
-                                result = r.optString("result", "miss"),
-                                receiver = r.optString("receiver"),
-                                town = r.optString("town"),
-                            ),
-                        )
+                    when (obj.optString("action")) {
+                        // 能力标志：pong 带 server 字段 = 新版（支持 scanResult 回执）
+                        "pong" -> if (obj.optString("server").isNotEmpty()) {
+                            hasCapability = true
+                            if (state == State.LEGACY) setState(State.ONLINE)
+                        }
+                        "scanResult" -> {
+                            // 收到回执：待回计数递减；若曾误判 LEGACY（服务器只是慢），自愈回 ONLINE
+                            pendingReceipts = (pendingReceipts - 1).coerceAtLeast(0)
+                            if (state == State.LEGACY) setState(State.ONLINE)
+                            val results = obj.optJSONArray("results") ?: return
+                            for (i in 0 until results.length()) {
+                                val r = results.optJSONObject(i) ?: continue
+                                onReceipt(
+                                    Receipt(
+                                        id = r.optString("id"),
+                                        text = r.optString("text"),
+                                        result = r.optString("result", "miss"),
+                                        receiver = r.optString("receiver"),
+                                        town = r.optString("town"),
+                                    ),
+                                )
+                            }
+                        }
                     }
                 }.onFailure { Timber.tag(TAG).w(it, "回执解析失败：%s", text) }
             }
