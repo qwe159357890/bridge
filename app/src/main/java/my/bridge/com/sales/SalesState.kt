@@ -145,6 +145,8 @@ object SalesState {
 
     fun setList(result: SalesListResult) = mutate {
         it.copy(records = result.records, total = result.total, page = result.page, size = result.size, pageLoading = false)
+    }.also {
+        my.bridge.com.core.common.DiagLog.i("销售页", "setList 完成：records=${_state.records.size} pageLoading=${_state.pageLoading} total=${_state.total} 首条id=${_state.records.firstOrNull()?.id}")
     }
 
     fun setSelectMode(enabled: Boolean) = mutate {

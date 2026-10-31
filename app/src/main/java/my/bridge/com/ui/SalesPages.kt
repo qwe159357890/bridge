@@ -1029,67 +1029,85 @@ private fun SalesTable(
         return
     }
 
+    my.bridge.com.core.common.DiagLog.i("销售页", "SalesTable 渲染：records=${ui.records.size} visibleColumns=${visibleColumns.size} pageLoading=${ui.pageLoading}")
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .horizontalScroll(scrollState)
             .background(MaterialTheme.colorScheme.surface),
     ) {
-        // 表头
-        Row(Modifier.width(totalWidth.dp).heightIn(min = 44.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
-            if (ui.selectMode) {
-                Box(Modifier.width(46.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    Checkbox(
-                        checked = ui.selectedIds.size == ui.records.size && ui.records.isNotEmpty(),
-                        onCheckedChange = { checked -> SalesState.setSelected(if (checked) ui.records.map { it.id }.toSet() else emptySet()) },
-                    )
+        // 表头（固定，横向滚动；与数据行共享 scrollState 实现横向同步）
+        Row(
+            modifier = Modifier
+                .horizontalScroll(scrollState)
+                .heightIn(min = 44.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Row(Modifier.width(totalWidth.dp).fillMaxHeight()) {
+                if (ui.selectMode) {
+                    Box(Modifier.width(46.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                        Checkbox(
+                            checked = ui.selectedIds.size == ui.records.size && ui.records.isNotEmpty(),
+                            onCheckedChange = { checked -> SalesState.setSelected(if (checked) ui.records.map { it.id }.toSet() else emptySet()) },
+                        )
+                    }
                 }
-            }
-            visibleColumns.forEach { column ->
-                Column(
-                    modifier = Modifier
-                        .width(column.width.dp)
-                        .fillMaxHeight()
-                        .combinedClickable(onClick = {}, onLongClick = { onHeaderLong(column) })
-                        .padding(horizontal = 6.dp, vertical = 5.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(column.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        if (ui.filters.sortColumn == column.prop) {
-                            Text(if (ui.filters.sortOrder == "asc") "↑" else "↓", fontSize = 11.sp, color = SalesBrand)
+                visibleColumns.forEach { column ->
+                    Column(
+                        modifier = Modifier
+                            .width(column.width.dp)
+                            .fillMaxHeight()
+                            .combinedClickable(onClick = {}, onLongClick = { onHeaderLong(column) })
+                            .padding(horizontal = 6.dp, vertical = 5.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(column.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            if (ui.filters.sortColumn == column.prop) {
+                                Text(if (ui.filters.sortOrder == "asc") "↑" else "↓", fontSize = 11.sp, color = SalesBrand)
+                            }
+                            if (ui.columnFilters.containsKey(column.prop)) {
+                                Box(Modifier.padding(start = 3.dp).size(6.dp).background(SalesBrand, CircleShape))
+                            }
                         }
                         if (ui.columnFilters.containsKey(column.prop)) {
-                            Box(Modifier.padding(start = 3.dp).size(6.dp).background(SalesBrand, CircleShape))
+                            var value by remember(column.prop, ui.columnFilters[column.prop]) { mutableStateOf(ui.columnFilters[column.prop] ?: "") }
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                singleLine = true,
+                                placeholder = { Text("搜索此列", fontSize = 10.sp) },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(onSearch = { SalesController.setColumnFilter(context, column.prop, value) }),
+                                modifier = Modifier.fillMaxWidth().height(34.dp),
+                                textStyle = MaterialTheme.typography.bodySmall,
+                            )
                         }
-                    }
-                    if (ui.columnFilters.containsKey(column.prop)) {
-                        var value by remember(column.prop, ui.columnFilters[column.prop]) { mutableStateOf(ui.columnFilters[column.prop] ?: "") }
-                        OutlinedTextField(
-                            value = value,
-                            onValueChange = { value = it },
-                            singleLine = true,
-                            placeholder = { Text("搜索此列", fontSize = 10.sp) },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = { SalesController.setColumnFilter(context, column.prop, value) }),
-                            modifier = Modifier.fillMaxWidth().height(34.dp),
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
                     }
                 }
             }
         }
         if (ui.records.isEmpty() && !ui.pageLoading) {
-            EmptySalesBox(if (ui.keyword.isBlank()) "暂无售后记录" else "未找到匹配记录", modifier = Modifier.width(totalWidth.dp))
+            EmptySalesBox(if (ui.keyword.isBlank()) "暂无售后记录" else "未找到匹配记录")
         } else {
-            LazyColumn(modifier = Modifier.width(totalWidth.dp).fillMaxHeight()) {
-                items(ui.records, key = { it.id }) { record ->
-                    SalesTableRow(
-                        ui = ui,
-                        record = record,
-                        visibleColumns = visibleColumns,
-                        onCellDouble = onCellDouble,
-                        onRowLong = onRowLong,
-                    )
+            // 数据体：纵向滚动 + 横向滚动（共享 scrollState 与表头横向同步）。
+            // 注意：不能用 LazyColumn——它放在 horizontalScroll 容器里会因高度约束被放宽
+            // 而测不出视口高度，导致 item 不渲染（表格空白）。100/页全量渲染对移动端无压力。
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .horizontalScroll(scrollState),
+            ) {
+                Column(Modifier.width(totalWidth.dp)) {
+                    ui.records.forEach { record ->
+                        SalesTableRow(
+                            ui = ui,
+                            record = record,
+                            visibleColumns = visibleColumns,
+                            onCellDouble = onCellDouble,
+                            onRowLong = onRowLong,
+                        )
+                    }
                 }
             }
         }
