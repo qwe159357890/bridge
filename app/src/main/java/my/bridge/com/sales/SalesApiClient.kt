@@ -3,6 +3,7 @@ package my.bridge.com.sales
 import android.content.Context
 import android.os.Build
 import my.bridge.com.BuildConfig
+import my.bridge.com.core.common.DiagLog
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -258,8 +259,10 @@ class SalesApiClient(context: Context) {
         auth: Boolean = true,
     ): String {
         val request = buildRequest(method, path, params, body, auth)
+        DiagLog.i("销售页", "REST $method $path -> ${request.url}")
         client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
+            DiagLog.i("销售页", "REST $method $path 响应：code=${response.code} len=${text.length}")
             if (!response.isSuccessful) {
                 throw toApiException(response.code, text)
             }

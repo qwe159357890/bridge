@@ -62,6 +62,7 @@ object SalesController {
         ensureInit(context)
         pageActive = true
         val state = SalesState.state
+        DiagLog.i(TAG, "进入销售页：loggedIn=${state.loggedIn} user=${state.user?.username} type=${state.productType.key} serverUrl=${state.serverUrl}")
         if (state.loggedIn) {
             connectWs(context)
             refreshMe(context)
@@ -123,10 +124,13 @@ object SalesController {
         if (!SalesState.state.loggedIn) return
         scope.launch {
             try {
+                DiagLog.i(TAG, "refreshMe 开始请求 /api/auth/me")
                 val user = api!!.me()
+                DiagLog.i(TAG, "refreshMe 成功：username=${user.username} role=${user.role} allowed=${user.allowed_product_types}")
                 SalesPrefs.saveLogin(context.applicationContext, SalesPrefs.token(context), user)
                 SalesState.refreshUser(user, initialProductType(user, SalesState.state.productType))
             } catch (e: Exception) {
+                DiagLog.w(TAG, "refreshMe 失败：${e.message}")
                 handleApiError(e, silent = true)
             }
         }
@@ -296,6 +300,7 @@ object SalesController {
         SalesState.setPageLoading(true)
         scope.launch {
             try {
+                DiagLog.i(TAG, "loadList 开始请求：type=${snapshot.productType.key} page=${snapshot.page} size=${snapshot.size} keyword='${snapshot.keyword}'")
                 val result = api!!.list(
                     type = snapshot.productType,
                     page = snapshot.page,
@@ -304,10 +309,12 @@ object SalesController {
                     filters = snapshot.filters,
                     columnFilters = snapshot.columnFilters,
                 )
+                DiagLog.i(TAG, "loadList 成功：total=${result.total} records=${result.records.size}")
                 if (myGen != fetchGeneration) return@launch
                 SalesState.setList(result)
                 maybePromptGlobalSearch(context, snapshot, result)
             } catch (e: Exception) {
+                DiagLog.w(TAG, "loadList 失败：${e.message}")
                 if (myGen == fetchGeneration) {
                     SalesState.setPageLoading(false)
                     handleApiError(e)
