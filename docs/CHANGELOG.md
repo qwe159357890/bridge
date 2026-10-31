@@ -22,6 +22,134 @@
 
 ---
 
+## 2026-10-31 · 🛒 v0.2.09 销售页集成里程碑（售后管理系统吞并 + 沉浸导航）
+
+**节点意义**：把参考项目 `references/SalesRecordRemote`（售后管理系统）的**客户端功能**完整移植进 Bridge，
+在主页与设置之间新增底部导航「销售」页，客户端直连参考服务器（Bridge 服务端零改动）；
+辅线是移动端沉浸导航适配（销售表格多列需要更多横向空间）。
+
+### 脉络1 · 销售页功能移植（客户端直连参考服务器）
+
+- **调研与原型先行**：通读参考项目三端（FastAPI 后端 + Vue3 前端 + uniapp H5Plus 打包产物），
+  产出集成调研 `docs/research/salesrecord-remote-integration.md` 与可交互原型
+  `assets/design/ui-mockup-sales-page.html`，经用户核验后落地。
+- **数据层自研**：新增独立 `app/.../sales/` 包——`SalesModels`（15 列模型 + 角色权限 admin/manager/operator
+  + 列配置）、`SalesPrefs`（登录态/token/服务器地址/产品类型/列配置持久化）、
+  `SalesApiClient`（OkHttp 直连，Bearer 鉴权 + 409 强登 + 智能填充 + 物流查询）、
+  `SalesWsClient`（心跳 30s/判死 60s/重连 3s + 编辑锁 + 他人操作通知 + 强制下线）、
+  `SalesState`/`SalesController`（状态容器 + 业务编排）。
+- **UI 复刻**：`ui/SalesPages.kt` 复刻登录/产品切换/搜索筛选/表格/双击单元格编辑/长按行菜单/
+  签收取件切换/物流查询与智能提示/新增（智能自动填充）/列配置/导出/阅读模式/权限差异。
+- **移动适配**：表格移动端默认 4 列、阅读模式 5 列；双击=编辑、长按=行菜单（参考 APK 未实现长按，
+  Bridge 补做）；阅读模式进入锁横屏/退出恢复原方向；REF- 电话前缀仅展示剥离；编辑锁义务按次释放。
+
+### 脉络2 · 沉浸导航（销售页专属，不影响现有页面）
+
+- 底部导航由「主页·设置」扩为「主页·销售·设置」，销售页进入即隐藏底部导航、表格区自动增高；
+- 销售页顶栏与登录页提供「返回导航」，点击仅恢复导航、不退出销售页、不清空产品类型/筛选/分页/表格数据；
+- 再次点击「销售」重新沉浸；主页 4 页面排序（TabOrder id 0..3）与设置页逻辑零改动；
+- 返回键：销售页沉浸时走「再按一次退出」，导航已恢复时按返回重新沉浸。
+
+### 关键经验沉淀
+
+- **参考项目只读，移植自成体系**：`references/` 全程零改动；Vue 源码做业务依据、
+  APK 打包产物做移动行为校准；移植用 Kotlin/Compose 复刻语义而非照搬 Web 技术，避免影响 Bridge 保活/权限体系。
+- **语言差异是 bug 高发点**：表格横向滚动/双击与长按手势分层/409 强登文案/编辑锁释放路径，
+  均需在移植时显式处理而非假设等价。
+- **大功能分层推进、逐层编译**：先数据层（编译通过）→ UI 层（编译通过）→ 导航接入（编译通过），
+  每步 `compileDebugKotlin` 兜底，避免一次性大改引入难定位问题。
+
+### 脉络3 · 表格空白修复（v0.2.10→v0.2.17，约 10 轮排查）
+
+- **v0.2.10 竞态根因（第一层）**：进入销售页 `enterPage` 并发触发 `refreshMe`（`GET /auth/me`）
+  与 `refreshAll`（拉列表）。`refreshMe` 复用 `loginSuccess` 把 `records` 清空为 `emptyList`；
+  当 `me` 比列表晚返回时，刚填充的记录被清空 → 表格空白。修复：新增 `SalesState.refreshUser`
+  （只更新 user/登录态/产品类型，不清列表），`refreshMe` 改用它。
+- **v0.2.11~v0.2.12 数据层定位**：加诊断日志确认「loadList 成功 total=1018 records=100」数据已进 state，
+  ADB 截图 + uiautomator dump 铁证表格数据区零节点（表头、分页栏正常）。曾误判为 LazyColumn 在
+  horizontalScroll 内测不出有界视口，改普通 `Column+verticalScroll+horizontalScroll`（仍是补丁）。
+- **v0.2.13~v0.2.14 视口塌缩**：数据体 `fillMaxHeight`/`matchParentSize` 在 horizontalScroll 容器内
+  高度测出≈0，LazyColumn 只 compose 1 个 item（id 固定 1052）且不绘制（仍是补丁）。
+- **v0.2.15~v0.2.16 高度链诊断**：四处 `onGloballyPositioned` 打印整条高度链，
+  锁定 `数据体 Box(weight) h=0`。
+- **v0.2.17 真凶（根治）**：表头 Row 用 `heightIn(min=44.dp)`（只有 min 无 max）+ 内部
+  `Row(fillMaxHeight)` + 每列 `Column(fillMaxHeight)`，在 Column 测量时把表头撑满整个剩余空间，
+  `weight(1f)` 的数据体分到 0。修复：表头 Row 改固定 `height(44.dp)`，数据体正确分到高度，100 行正常显示。
+
+### 脉络4 · 交互与省电收尾（v0.2.18→v0.2.20）
+
+- **v0.2.18 四项优化**：①返回键适配——销售页沉浸态按返回=点左上角退回箭头（显示底部导航栏），
+  再按=隐藏导航栏（重新沉浸），替代原「再按一次退出」；②搜索框高度调低；③分页栏「每页」防换行
+  （换行会撑高分页栏挤占表格高度）；④删除设置→通用中的纯占位符（深色模式/消息免打扰/语言/清理缓存）。
+- **v0.2.19 对照参考项目修正**：搜索框弃用 OutlinedTextField（默认 minHeight 56dp + contentPadding
+  上下 16dp，height(36dp) 硬压导致文字垂直裁剪），改 `BasicTextField` 自绘边框（对照 `.search-row input`
+  height 32px/padding 0 10px）；分页栏 TextButton 默认 contentPadding 左右 12dp + minWidth 58dp 太宽，
+  把「100/页」挤出屏幕，压缩到左右 4dp、字号 12sp（对照 `.pager` height 32px/gap 6px）。
+- **v0.2.20 退出资源释放省电加固**：对照智能控制/快递扫码 `stop()` 彻底释放模式，补齐销售页退出释放——
+  `SalesApiClient.close()`（`connectionPool.evictAll` + `dispatcher.executorService.shutdown` 回收空闲连接、
+  停线程池），`exitPage()` 调用 `api?.close(); api=null` 并清残留 loading 状态，`ensureInit` 懒重建。
+
+---
+
+### 关键经验沉淀（销售页空白 10 轮排查的最终教训）
+
+- **`weight(1f)` 分到 0 高度，先看排在前面的兄弟节点**：别只盯着 `weight` 那一层——要先查同一 Column 里
+  排它前面的兄弟是否用 `heightIn(min=xx)`（无 max）+ 内部 `fillMaxHeight` 把剩余空间全吃掉。固定高度的
+  兄弟必须用 `height(固定值)` 而非 `heightIn(min)`。排查顺序：先看「谁吃掉高度」再看「谁没分到高度」。
+- **LazyColumn 只 compose 1 个 item = 视口高度塌缩**（不是数据问题）；用 `onGloballyPositioned` 打印
+  各层真实尺寸可一次锁定塌缩层。
+- **横向/纵向滚动必须分离**：`Row(horizontalScroll)` 包 `Column(verticalScroll)`，绝不能同一 Column 叠加
+  双 scroll（maxHeight=0），也不能 horizontalScroll 包 LazyColumn（视口塌缩）。
+- **Material3 输入框要紧凑高度须自绘**：OutlinedTextField 有默认 minHeight 56dp + contentPadding 上下 16dp，
+  用 `height()` 硬压会垂直裁剪文字，必须改 BasicTextField 自绘边框。
+- **省电对照检查法**：新页面接入时对照已有页面的 `stop()/onDispose` 释放清单逐项核对（WS 断开、连接池回收、
+  线程池 shutdown、监听器置空、残留状态清理），避免「主体正确但漏一处」的隐性耗电。
+
+---
+
+## 2026-10-31 · 📦 v0.2.03→v0.2.07 扫码 PC 协同里程碑（音效对齐 + 上报通路多样化 + 服务器状态识别）
+
+**节点意义**：一条主脉络贯穿——快递扫码从「本地闭环」升级为「与 PC 端销售记录系统深度协同」：
+音效/播报与 PC 一一对齐 → 上报通路从单一扫码扩展到四处 → PC 端新旧状态可视可判；
+辅线为扫码模块省电审计收敛。**最新客户端 v0.2.07。**
+
+### 脉络1 · PC 协同深化（v0.2.03→v0.2.07）
+
+- **v0.2.03 音效四路对齐**：本地重复→warning、回执 duplicate→重复录入（改由回执触发重播）、
+  miss→取消、hit→新增系统 TTS 播报「receiver town」（文案与 PC 端 text2speech 一致，
+  QUEUE_FLUSH 连续扫码只播最新）；TTS 随 SoundPool 进页预热防首播无声。
+- **v0.2.04 上报通路多样化**：①扫码页重复提示卡点击补报（不入库不重复自动上报，点卡片才报）；
+  ②记录列表单击=上报；③长按多选 + 全选/全取消切换 + 全部发送(N) 批量上报；
+  回执分发统一 `dispatchScanReceipt`（四条路径同构），新增 `uploadText()` 免记录补报。
+- **v0.2.05 音量治理**：设置新增「提示音音量」滑杆（SoundPool+TTS 同源系数 0~100%）；
+  实测揭穿 v0.1.96「音源已满幅」的错误注释——5 个 wav 实为 -2.7~-12.6 dBFS，全部归一化
+  到 0dBFS；省电审计：相机/WS/分析器释放链路复核通过，补上唯一漏网 TTS 引擎释放。
+- **v0.2.06 旧版识别（回执特征）**：新增 `LEGACY` 状态——上传后 6s 无 scanResult 回执即判
+  「PC旧版·无回执」（新版每条上传必回、旧版只回空确认，纯行为特征零版本维护）；
+  回执迟到自愈回 ONLINE；LEGACY 下上报仍放行（旧版也能收单）。
+- **v0.2.07 旧版识别提速（连接即判）**：v0.2.06 需上传一次才能判定 → PC 端 pong 附加固定
+  能力标志 `server:'SalesRecordSystem'`（能力标志非版本号，App 只判字段存在性，一次改动
+  永久有效）；Bridge 连接即发应用层 ping，3s 内无标志 pong 即判 LEGACY。
+
+### 脉络2 · 事故复盘驱动的可观测性（贯穿）
+
+用户实测「PC 播音手机不响」→ 排查发现 PC 端跑的是 7 月编译的旧 exe（源码已升级但进程
+未更新）。此事故直接催生 v0.2.06/07 的服务器状态识别体系（OFFLINE/LEGACY/ONLINE 三态）。
+
+**关键经验沉淀**
+- **音量天花板三段相乘**：最终响度 = 音源电平 × App 音量 × 系统媒体音量；「播放参数拉满」
+  ≠「实际响度拉满」，音源电平要用实测（PCM 峰值）验证而非信注释；16bit 硬顶 0dBFS，
+  突破即削波失真——调响只能向下（滑杆）或向上（系统音量），App 无法超越物理极限。
+- **识别远端版本用「行为特征/能力标志」，不用版本号**：版本号需要两端同步维护必腐化；
+  行为差异（回不回 scanResult）零维护但需触发一次，能力标志（pong 带字段）零维护且
+  连接即判——两者叠加互为兜底是最优解。
+- **打包产物与源码脱节是隐形事故源**：桌面程序「平时 exe、开发时源码」双运行方式下，
+  排查先核对进程启动时间 vs 代码修改时间（本例差 3 个半月）。
+- **回执分发要一开始就抽公共函数**：四条上报路径共用 `dispatchScanReceipt`，
+  v0.2.03→07 五次音效/判定演进每版只改一处。
+
+---
+
 ## 2026-10-30 · 📷 v0.1.94→v0.2.02 扫码功能里程碑（快递扫码闭环 + 崩溃清零 + PC 上报）
 
 **节点意义**：三条脉络交汇——①快递扫码功能从零到闭环；②保活崩溃三根因连环排查清零；

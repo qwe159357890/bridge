@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge · 销售页（售后管理）功能原型</title>
+<style>
+:root {
+  --brand: #1A6EE8;
+  --brand-soft: #EAF2FE;
+  --inactive: #8A919F;
+  --bg: #F5F6F8;
+  --card: #FFFFFF;
+  --text: #1F2329;
+  --text-sub: #6B7280;
+  --green: #67C23A;
+  --green-soft: #E8F6EE;
+  --orange: #E6A23C;
+  --orange-soft: #FDF3E7;
+  --red: #E5484D;
+  --red-soft: #FEECEC;
+  --border: #E5E7EB;
+  --danger: #F56C6C;
+  --warning: #E6A23C;
+  --success: #67C23A;
+  --info: #909399;
+  --phone-w: 375px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6;
+  padding: 32px 20px 60px;
+}
+h1 { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+.subtitle { text-align: center; color: var(--text-sub); font-size: 13px; margin-bottom: 8px; }
+.meta {
+  max-width: 920px; margin: 0 auto 24px; padding: 14px 18px;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  font-size: 13px; color: var(--text-sub);
+}
+.meta b { color: var(--text); }
+.meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+.demo-panel {
+  max-width: 920px; margin: 0 auto 24px; padding: 14px 18px;
+  background: #F0F7FF; border: 1px solid #BBD8F7; border-radius: 12px;
+  font-size: 13px;
+}
+.demo-panel b { color: var(--brand); }
+.demo-panel button {
+  font-size: 12px; padding: 4px 10px; margin: 2px 6px 2px 0; cursor: pointer;
+  background: #fff; border: 1px solid var(--brand); color: var(--brand);
+  border-radius: 6px;
+}
+.demo-panel button:hover { background: var(--brand); color: #fff; }
+
+/* ============ 手机壳 ============ */
+.phone-wrap { display: flex; justify-content: center; }
+.phone {
+  width: var(--phone-w); height: 760px; background: #fff; border-radius: 30px;
+  overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.12); border: 1px solid var(--border);
+  position: relative; display: flex; flex-direction: column;
+}
+.statusbar {
+  height: 28px; display: flex; justify-content: space-between; align-items: center;
+  padding: 0 16px; font-size: 13px; font-weight: 600; flex-shrink: 0;
+  background: #fff;
+}
+.statusbar .icons { display: flex; align-items: center; gap: 4px; }
+.statusbar .battery { width: 16px; height: 8px; border: 1px solid var(--text); border-radius: 2px; position: relative; }
+.statusbar .battery::after { content: ""; position: absolute; right: -3px; top: 2px; width: 2px; height: 4px; background: var(--text); }
+.content { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+.bottombar {
+  height: 56px; background: #fff; border-top: 1px solid var(--border);
+  display: flex; flex-shrink: 0;
+}
+.bottombar .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; font-size: 10px; color: var(--inactive); }
+.bottombar .nav-item svg { width: 22px; height: 22px; }
+.bottombar .nav-item.active { color: var(--brand); font-weight: 600; }
+/* 销售页沉浸模式：进入即隐藏 Bridge 底部导航，内容区自动增高 */
+.phone.sales-immersive .bottombar { display: none; }
+.phone:not(.sales-immersive) .nav-return { display: none; }
+.login-nav-back {
+  position: absolute; top: 12px; left: 12px; z-index: 5;
+  border: 1px solid rgba(255,255,255,.55); border-radius: 16px;
+  background: rgba(255,255,255,.16); color: #fff; padding: 5px 10px;
+  font-size: 12px; cursor: pointer;
+}
+
+/* ============ 登录页 ============ */
+#page-login {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 24px;
+}
+.login-card {
+  width: 100%; background: #fff; border-radius: 12px; padding: 20px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+.login-header { text-align: center; margin-bottom: 16px; }
+.login-header h2 { font-size: 18px; }
+.login-header p { font-size: 13px; color: var(--text-sub); }
+.login-card input[type=text], .login-card input[type=password] {
+  width: 100%; height: 40px; border: 1px solid #DCDFE6; border-radius: 6px;
+  padding: 0 12px; font-size: 14px; margin-bottom: 14px; outline: none;
+}
+.login-card input:focus { border-color: var(--brand); }
+.remember-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 14px; color: var(--text); }
+.login-btn {
+  width: 100%; height: 40px; background: var(--brand); color: #fff; border: none;
+  border-radius: 6px; font-size: 15px; cursor: pointer; letter-spacing: 4px;
+}
+.login-btn:active { opacity: .85; }
+.server-link { text-align: center; margin-top: 10px; }
+.server-link button { background: none; border: none; color: var(--info); font-size: 12px; cursor: pointer; }
+.acct-hist { position: relative; }
+.acct-list {
+  position: absolute; top: 100%; left: 0; right: 0; background: #fff; z-index: 30;
+  border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.1);
+  max-height: 150px; overflow-y: auto; display: none;
+}
+.acct-list.show { display: block; }
+.acct-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+.acct-item:hover { background: var(--brand-soft); }
+.acct-item .del { color: var(--text-sub); cursor: pointer; font-size: 12px; padding: 2px 4px; }
+.acct-item .del:hover { color: var(--red); }
+
+/* ============ 销售主页 ============ */
+#page-sales { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+#page-sales.show { display: flex; }
+
+/* 顶栏（照 MainLayout 移动端 44px） */
+.sales-header {
+  height: 44px; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 12px;
+  flex-shrink: 0; border-bottom: 1px solid var(--border); background: #fff;
+}
+.sales-header .title { font-size: 16px; font-weight: 600; margin-right: 6px; }
+.ws-tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; flex-shrink: 0; }
+.ws-tag.ok { background: var(--green-soft); color: var(--green); }
+.ws-tag.bad { background: var(--red-soft); color: var(--red); }
+.hbtn {
+  width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border);
+  background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 14px; position: relative; flex-shrink: 0;
+}
+.hbtn .badge {
+  position: absolute; top: -4px; right: -6px; background: var(--red); color: #fff;
+  border-radius: 8px; font-size: 9px; min-width: 15px; height: 15px; line-height: 15px; text-align: center; padding: 0 3px;
+}
+.online-pop {
+  position: absolute; top: 46px; right: 8px; width: 300px; background: #fff;
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  z-index: 60; padding: 12px; display: none;
+}
+.online-pop.show { display: block; }
+.online-pop .t { font-size: 13px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid #EBEEF5; margin-bottom: 8px; }
+.ou-item { padding: 6px 0; border-bottom: 1px dashed #EBEEF5; }
+.ou-main { display: flex; justify-content: space-between; align-items: center; }
+.ou-name { font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.role-tag { font-size: 10px; padding: 0 6px; border-radius: 8px; }
+.role-tag.admin { background: var(--red-soft); color: var(--danger); }
+.role-tag.manager { background: var(--orange-soft); color: var(--warning); }
+.role-tag.operator { background: #F4F4F5; color: var(--info); }
+.ou-time { font-size: 11px; color: var(--text-sub); }
+.ou-devices { margin-top: 4px; background: #F5F7FA; border-radius: 6px; padding: 4px 8px; }
+.ou-device { display: flex; gap: 8px; font-size: 11px; color: var(--text-sub); padding: 2px 0; }
+.dev-type { background: #fff; padding: 0 6px; border-radius: 3px; min-width: 40px; text-align: center; flex-shrink: 0; }
+
+/* 工具栏（照移动端紧凑 6px 8px） */
+.toolbar { padding: 6px 8px; background: #fff; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.type-row { display: flex; margin-bottom: 6px; }
+.type-btn {
+  flex: 1; text-align: center; font-size: 13px; padding: 5px 0; cursor: pointer;
+  border: 1px solid #DCDFE6; background: #fff; color: var(--text);
+}
+.type-btn:first-child { border-radius: 4px 0 0 4px; }
+.type-btn:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.type-btn.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+.search-row { display: flex; gap: 6px; margin-bottom: 6px; }
+.search-row input {
+  flex: 1; height: 32px; border: 1px solid #DCDFE6; border-radius: 4px; padding: 0 10px; font-size: 13px; outline: none;
+}
+.search-row input:focus { border-color: var(--brand); }
+.search-row .go {
+  width: 36px; border: 1px solid #DCDFE6; background: #fff; border-radius: 4px; cursor: pointer; font-size: 14px;
+}
+.global-chk { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text); margin-bottom: 6px; }
+.btn-row { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.tbtn {
+  font-size: 12px; padding: 5px 10px; border: 1px solid #DCDFE6; background: #fff;
+  border-radius: 4px; cursor: pointer; color: var(--text); display: flex; align-items: center; gap: 3px;
+}
+.tbtn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.tbtn.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.filter-panel { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 8px; display: none; }
+.filter-panel.show { display: block; }
+.filter-panel .frow { display: flex; gap: 6px; margin-bottom: 6px; }
+.filter-panel select, .filter-panel input {
+  flex: 1; height: 30px; border: 1px solid #DCDFE6; border-radius: 4px; font-size: 12px; padding: 0 6px; background: #fff;
+}
+
+/* 表格（照移动端紧凑 12px/4px padding） */
+.table-zone { flex: 1; overflow: auto; background: #fff; position: relative; }
+table.sales { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+table.sales th, table.sales td {
+  border: 1px solid #EBEEF5; padding: 4px 6px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;
+}
+table.sales th {
+  background: #F5F7FA; font-weight: 600; position: sticky; top: 0; z-index: 5; text-align: left; cursor: pointer;
+}
+table.sales tr.stripe:nth-child(even) td { background: #FAFAFA; }
+table.sales tbody tr { cursor: pointer; }
+table.sales tr.selected td { background: #D9ECFF !important; }
+.colored td { background: inherit !important; }
+.tag-cell { display: inline-block; font-size: 11px; padding: 0 8px; border-radius: 8px; line-height: 20px; }
+.tag-cell.signed-ok { background: var(--green-soft); color: var(--green); }
+.tag-cell.signed-no { background: var(--orange-soft); color: var(--warning); }
+.tag-cell.picked-ok { background: var(--green-soft); color: var(--green); }
+.tag-cell.picked-no { background: #F4F4F5; color: var(--info); }
+.has-filter-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--brand); margin-left: 4px; }
+.sort-ind { color: var(--brand); font-weight: 700; margin-left: 2px; }
+.col-search-box { padding: 2px 0; }
+.col-search-box input { width: 100%; height: 24px; border: 1px solid #DCDFE6; border-radius: 3px; font-size: 11px; padding: 0 4px; }
+.lock-flag { font-size: 10px; color: var(--warning); margin-left: 2px; }
+
+/* 分页栏（照移动端 24px 高 + 阅读按钮） */
+.pager {
+  height: 32px; display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  padding: 4px 8px; border-top: 1px solid var(--border); background: #fff; flex-shrink: 0; font-size: 12px;
+}
+.pager .read-btn { color: var(--brand); cursor: pointer; margin-right: auto; }
+.pager .pg-arrow { color: var(--brand); cursor: pointer; padding: 0 3px; }
+.pager .pg-arrow.dis { color: #C0C4CC; cursor: not-allowed; }
+.pager .pg-num { color: var(--text-sub); min-width: 32px; text-align: center; }
+
+/* 阅读模式底部控制条（24px 毛玻璃） */
+.reading-bar {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 24px;
+  background: rgba(255,255,255,.85); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border); display: none; align-items: center; justify-content: center; gap: 4px;
+  font-size: 13px; z-index: 20; padding: 0 8px;
+}
+.reading-bar.show { display: flex; }
+.rb-btn { color: var(--brand); cursor: pointer; padding: 0 6px; font-size: 13px; }
+.rb-btn.dis { color: #C0C4CC; cursor: not-allowed; }
+.rb-sep { width: 1px; height: 14px; background: var(--border); margin: 0 4px; }
+.rb-num { color: var(--text-sub); min-width: 32px; text-align: center; }
+.landscape-hint {
+  position: absolute; top: 6px; left: 0; right: 0; display: none; justify-content: center; z-index: 19; pointer-events: none;
+}
+.landscape-hint.show { display: flex; }
+.landscape-hint .inner {
+  background: var(--orange-soft); border: 1px solid #F3D19E; border-radius: 8px;
+  padding: 4px 16px; font-size: 12px; color: #B88230; animation: hintFade 3s forwards;
+}
+@keyframes hintFade { 0%{opacity:0} 15%{opacity:1} 80%{opacity:1} 100%{opacity:0} }
+
+/* 弹窗通用（照 el-dialog 移动端 95vw 风格） */
+.dialog-mask {
+  position: absolute; inset: 0; background: rgba(0,0,0,.5); z-index: 80;
+  display: none; align-items: center; justify-content: center; padding: 12px;
+}
+.dialog-mask.show { display: flex; }
+.dialog {
+  width: 100%; max-height: 90%; overflow-y: auto; background: #fff; border-radius: 10px;
+  padding: 14px; font-size: 13px;
+}
+.dialog h3 { font-size: 15px; margin-bottom: 12px; }
+.dialog .drow { display: flex; align-items: center; margin-bottom: 10px; gap: 8px; }
+.dialog .drow label { width: 76px; flex-shrink: 0; color: var(--text-sub); font-size: 12px; }
+.dialog .drow input, .dialog .drow select {
+  flex: 1; height: 32px; border: 1px solid #DCDFE6; border-radius: 4px; padding: 0 8px; font-size: 13px;
+}
+.dialog .drow textarea { flex: 1; border: 1px solid #DCDFE6; border-radius: 4px; padding: 6px 8px; font-size: 13px; min-height: 48px; }
+.dfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.dbtn { padding: 7px 16px; border-radius: 5px; border: 1px solid #DCDFE6; background: #fff; cursor: pointer; font-size: 13px; }
+.dbtn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.dbtn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.hint-box {
+  background: #F5F7FA; border-radius: 4px; padding: 8px 12px; font-size: 11px; color: var(--text-sub); line-height: 1.8; margin-bottom: 8px;
+}
+.confirm-body { text-align: center; padding: 6px 0; }
+.confirm-body .icon { font-size: 40px; margin-bottom: 8px; }
+.confirm-body p { font-size: 14px; margin-bottom: 6px; }
+.confirm-body .sub { font-size: 12px; color: var(--text-sub); }
+
+/* 右键/长按菜单（照 context-menu 样式） */
+.ctx-menu {
+  position: absolute; background: #fff; border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12); padding: 4px 0; min-width: 150px; z-index: 90; display: none;
+}
+.ctx-menu.show { display: block; }
+.ctx-menu .note-title { font-size: 10px; color: var(--text-sub); padding: 2px 16px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.mi { display: flex; align-items: center; gap: 8px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
+.mi:hover { background: var(--brand-soft); color: var(--brand); }
+.mi.danger:hover { background: var(--red-soft); color: var(--red); }
+.mi .dot { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+.mi-divider { height: 1px; background: var(--border); margin: 4px 0; }
+.color-row { display: flex; gap: 8px; padding: 6px 16px; }
+.color-row .c { width: 26px; height: 26px; border-radius: 5px; cursor: pointer; }
+.color-row .c.clear { background: transparent; border: 1px dashed #999; }
+
+/* Toast（照 ElMessage） */
+.toast-zone { position: absolute; top: 40px; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 100; pointer-events: none; }
+.toast {
+  background: #fff; border: 1px solid #EBEEF5; border-radius: 6px; padding: 8px 16px;
+  font-size: 13px; box-shadow: 0 2px 12px rgba(0,0,0,.1); display: flex; align-items: center; gap: 6px;
+  animation: tIn .25s;
+}
+.toast.ok::before { content: "✔"; color: var(--green); }
+.toast.err::before { content: "✖"; color: var(--red); }
+.toast.warn::before { content: "⚠"; color: var(--warning); }
+@keyframes tIn { from { opacity: 0; transform: translateY(-8px);} to { opacity: 1; transform: none;} }
+
+/* 通知卡片（照 ElNotification 桌面通知） */
+.notif-zone { position: absolute; top: 40px; right: 10px; z-index: 100; display: flex; flex-direction: column; gap: 8px; width: 250px; pointer-events: none; }
+.notif {
+  background: #fff; border: 1px solid #EBEEF5; border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.1); animation: tIn .25s;
+}
+.notif .nt { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.notif .nm { font-size: 12px; color: var(--text-sub); }
+
+/* 物流 timeline */
+.express-result { max-height: 240px; overflow-y: auto; margin-top: 10px; }
+.timeline { padding-left: 14px; border-left: 2px solid #EBEEF5; }
+.timeline .tl { position: relative; padding: 0 0 14px 14px; }
+.timeline .tl::before {
+  content: ""; position: absolute; left: -7px; top: 4px; width: 12px; height: 12px;
+  border-radius: 50%; background: var(--brand); border: 2px solid #fff;
+}
+.timeline .tl:first-child::before { background: var(--green); }
+.timeline .tt { font-size: 11px; color: var(--text-sub); margin-bottom: 2px; }
+.timeline .td { font-size: 12px; }
+
+/* 列配置 */
+.col-cfg-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #F2F6FC; }
+.col-cfg-item .idx { color: #C0C4CC; font-size: 11px; }
+
+/* ============ 说明区 ============ */
+.notes { max-width: 920px; margin: 28px auto 0; }
+.note-card { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 12px; padding: 16px 20px; font-size: 13px; color: #92400E; margin-bottom: 14px; }
+.note-card b { color: #78350F; }
+.note-card.blue { background: #F0F7FF; border-color: #BBD8F7; color: #1D4E89; }
+.note-card.blue b { color: #0B3A6B; }
+ul.clean { margin: 6px 0 0 18px; }
+ul.clean li { margin: 4px 0; }
+table.map { width: 100%; border-collapse: collapse; margin-top: 6px; background: #fff; }
+table.map th, table.map td { border: 1px solid var(--border); padding: 6px 10px; font-size: 12px; text-align: left; }
+table.map th { background: #F5F7FA; }
+</style>
+</head>
+<body>
+
+<h1>Bridge · 销售页（售后管理）功能原型</h1>
+<div class="subtitle">复刻 SalesRecordRemote 客户端（uniapp APK 版）· 底部导航插「销售」Tab（主页与设置之间）</div>
+
+<div class="meta">
+  <div style="margin-bottom:6px">
+    <span class="tag">底部导航新增第 3 个 Tab「销售」</span>
+    <span class="tag">销售页沉浸模式：隐藏底部导航，顶栏「‹」恢复</span>
+    <span class="tag">客户端直连参考服务器（服务端零改动）</span>
+    <span class="tag">REST + WS 契约照抄（登录/列表/单元格编辑/物流/导出/编辑锁/通知）</span>
+    <span class="tag">新包 sales/（第 4 套独立连接体系）</span>
+  </div>
+  <div><b>测试账号（照参考项目默认）</b>：admin/admin123（管理员·全功能）、manager/manager123（经理·可增删改）、operator1/operator123（操作员·只读+导出，限海绵类型+部分列）</div>
+  <div><b>下面手机内所有功能均可用模拟数据实际操作</b>：登录→切换产品→搜索/筛选→双击单元格编辑→长按/右键行菜单→签收取件切换→物流查询→新增（智能填充）→列配置→⚙系统设置→阅读模式→导出→退出。销售页默认隐藏底部导航，顶栏「‹」或登录页「返回导航」可恢复。</div>
+</div>
+
+<div class="demo-panel">
+  <b>演示触发器</b>（模拟其他在线用户的操作/服务端事件，核验通知与实时同步用）：
+  <button onclick="demoNotify('update')">模拟他人更新记录</button>
+  <button onclick="demoNotify('sign_change')">模拟他人切换签收</button>
+  <button onclick="demoNotify('create')">模拟他人新增记录</button>
+  <button onclick="demoLockConflict()">模拟编辑锁冲突</button>
+  <button onclick="demoForceLogout()">模拟被强制下线</button>
+  <button onclick="demoLoginConflict()">模拟登录冲突(409)</button>
+  <span style="color:#6B7280">（登录后点击生效；登录冲突在登录页点击）</span>
+</div>
+
+<div class="phone-wrap">
+<div class="phone sales-immersive" id="phone">
+  <div class="statusbar"><span>9:41</span><span class="icons"><span>●●●</span><span class="battery"></span></span></div>
+  <div class="content">
+
+    <!-- ===== 登录页 ===== -->
+    <div id="page-login">
+      <button class="login-nav-back nav-return" onclick="showBottomNav()">‹ 返回导航</button>
+      <div class="login-card">
+        <div class="login-header"><h2>售后管理系统</h2><p>远程协同版</p></div>
+        <div class="acct-hist">
+          <input type="text" id="login-user" placeholder="请输入用户名（点看历史账号）" autocomplete="off" onfocus="showAcctList(true)" oninput="showAcctList(true)">
+          <div class="acct-list" id="acct-list"></div>
+        </div>
+        <input type="password" id="login-pwd" placeholder="请输入密码">
+        <div class="remember-row"><input type="checkbox" id="login-remember"><label for="login-remember">记住密码</label></div>
+        <button class="login-btn" id="login-btn" onclick="handleLogin()">登 录</button>
+        <div class="server-link"><button onclick="openDialog('dlg-server')">服务器地址: <span id="server-url-label">http://192.168.31.226:15153</span></button></div>
+      </div>
+    </div>
+
+    <!-- ===== 销售主页 ===== -->
+    <div id="page-sales">
+      <!-- 顶栏 -->
+      <div class="sales-header" id="sales-header">
+        <button class="hbtn nav-return" id="btn-show-nav" title="显示底部导航" onclick="showBottomNav()">‹</button>
+        <span class="title">售后</span>
+        <span class="ws-tag ok" id="ws-tag">已连接</span>
+        <span style="flex:1"></span>
+        <button class="hbtn" title="刷新数据" onclick="handleRefresh()">⟳</button>
+        <button class="hbtn" title="在线用户" onclick="toggleOnlinePop()"><span style="font-size:12px">👥</span><span class="badge" id="online-count">3</span></button>
+        <button class="hbtn" title="切换主题" onclick="toast('warn','主题切换：将跟随 Bridge 全局主题（待核验）')">🌙</button>
+        <button class="hbtn" title="用户菜单" onclick="openDialog('dlg-logout')">👤</button>
+      </div>
+      <!-- 在线用户弹层 -->
+      <div class="online-pop" id="online-pop">
+        <div class="t">在线用户 (3)</div>
+        <div class="ou-item">
+          <div class="ou-main"><span class="ou-name">管理员 <span class="role-tag admin">管理员</span> <span class="role-tag" style="background:#FDF3E7;color:#E6A23C">2设备</span></span><span class="ou-time">09:12 上线</span></div>
+          <div class="ou-devices">
+            <div class="ou-device"><span class="dev-type">网页</span><span class="dev-type">Windows · Chrome</span><span>09:12</span></div>
+            <div class="ou-device"><span class="dev-type">APK</span><span>Android · Bridge销售页</span><span>09:30</span></div>
+          </div>
+        </div>
+        <div class="ou-item">
+          <div class="ou-main"><span class="ou-name">经理小张 <span class="role-tag manager">经理</span></span><span class="ou-time">08:55 上线</span></div>
+          <div class="ou-devices"><div class="ou-device"><span class="dev-type">网页</span><span>Linux · Chrome</span><span>08:55</span></div></div>
+        </div>
+        <div class="ou-item">
+          <div class="ou-main"><span class="ou-name">操作员一号 <span class="role-tag operator">操作员</span></span><span class="ou-time">09:40 上线</span></div>
+          <div class="ou-devices"><div class="ou-device"><span class="dev-type">APK</span><span>Android · 原版APK</span><span>09:40</span></div></div>
+        </div>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar" id="toolbar">
+        <div class="type-row" id="type-row"></div>
+        <div class="search-row">
+          <input type="text" id="search-kw" placeholder="搜索关键词..." onkeydown="if(event.key==='Enter')handleSearch()">
+          <button class="go" onclick="handleSearch()">🔍</button>
+        </div>
+        <div class="global-chk"><input type="checkbox" id="enhanced"><label for="enhanced">全域（当前产品无结果时自动搜索其他产品类型）</label></div>
+        <div class="btn-row">
+          <button class="tbtn" onclick="toggleFilterPanel()">筛选</button>
+          <button class="tbtn" onclick="openDialog('dlg-colcfg')">列配置</button>
+          <button class="tbtn" id="btn-settings" title="系统设置：服务器地址 + 百度Cookie" onclick="openDialog('dlg-setting')">⚙</button>
+          <button class="tbtn" id="btn-select" onclick="toggleSelectMode()">☐ 选择</button>
+          <button class="tbtn" onclick="handleExport()">导出Excel</button>
+          <button class="tbtn primary" id="btn-add" onclick="openAddForm()">＋ 新增记录</button>
+        </div>
+        <!-- 筛选面板 -->
+        <div class="filter-panel" id="filter-panel">
+          <div class="frow">
+            <select id="f-signed"><option value="">签收状态</option><option>未签收</option><option>已签收</option></select>
+            <select id="f-express"><option value="">退货快递</option><option value="1">有退货快递</option><option value="0">无退货快递</option></select>
+          </div>
+          <div class="frow">
+            <input type="date" id="f-d1"> <span style="color:var(--text-sub);font-size:12px">至</span> <input type="date" id="f-d2">
+          </div>
+          <div class="frow">
+            <select id="f-shop"><option value="">店铺筛选</option></select>
+          </div>
+          <div class="frow" style="justify-content:flex-end">
+            <button class="tbtn primary" onclick="applyFilters()">应用筛选</button>
+            <button class="tbtn" onclick="resetFilters()">重置</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 表格 -->
+      <div class="table-zone" id="table-zone">
+        <table class="sales" id="sales-table"></table>
+      </div>
+
+      <!-- 分页栏 -->
+      <div class="pager" id="pager">
+        <span class="read-btn" onclick="toggleReadingMode(true)">阅读</span>
+        <span class="pg-arrow" id="pg-prev" onclick="pagePrev()">◀</span>
+        <span class="pg-num" id="pg-info">1/1</span>
+        <span class="pg-arrow" id="pg-next" onclick="pageNext()">▶</span>
+      </div>
+
+      <!-- 阅读模式控制条 -->
+      <div class="reading-bar" id="reading-bar">
+        <span class="rb-btn" onclick="toggleReadingMode(false)">退出阅读</span><span class="rb-sep"></span>
+        <span class="rb-btn" onclick="openDialog('dlg-colcfg')">列</span><span class="rb-sep"></span>
+        <span class="rb-btn" id="rb-prev" onclick="pagePrev()">◀</span><span class="rb-num" id="rb-info">1/1</span>
+        <span class="rb-btn" id="rb-next" onclick="pageNext()">▶</span>
+      </div>
+      <div class="landscape-hint" id="landscape-hint"><div class="inner">📱↔️ 建议横屏查看以获得更好的阅读体验</div></div>
+
+      <!-- 通知/Toast -->
+      <div class="notif-zone" id="notif-zone"></div>
+      <div class="toast-zone" id="toast-zone"></div>
+
+      <!-- 行/表头菜单 -->
+      <div class="ctx-menu" id="ctx-row">
+        <div class="note-title">行菜单（移动端=长按行）</div>
+        <div class="mi" data-act="edit" onclick="ctxAction('edit')">✏️ 编辑记录</div>
+        <div class="mi" data-act="sign" onclick="ctxAction('sign')">🔁 切换签收</div>
+        <div class="mi" data-act="picked" onclick="ctxAction('picked')">🔁 切换取件</div>
+        <div class="mi" data-act="express" onclick="ctxAction('express')">🚚 查询物流</div>
+        <div class="mi-divider"></div>
+        <div style="padding:4px 16px;font-size:12px;color:var(--text-sub)">标记颜色：</div>
+        <div class="color-row">
+          <span class="c" style="background:#F56C6C" onclick="ctxColor('#F56C6C')"></span>
+          <span class="c" style="background:#E6A23C" onclick="ctxColor('#E6A23C')"></span>
+          <span class="c" style="background:#67C23A" onclick="ctxColor('#67C23A')"></span>
+          <span class="c" style="background:#409EFF" onclick="ctxColor('#409EFF')"></span>
+          <span class="c clear" title="清除颜色" onclick="ctxColor('')"></span>
+        </div>
+        <div class="mi-divider"></div>
+        <div class="mi danger" onclick="ctxAction('delete')">🗑 删除记录</div>
+      </div>
+      <div class="ctx-menu" id="ctx-head">
+        <div class="note-title">列头菜单（移动端=长按列头）</div>
+        <div class="mi" onclick="headAction('sort-asc')">↑ 升序排列</div>
+        <div class="mi" onclick="headAction('sort-desc')">↓ 降序排列</div>
+        <div class="mi" onclick="headAction('sort-clear')">✕ 清除排序</div>
+        <div class="mi-divider"></div>
+        <div class="mi" onclick="headAction('filter')">🔍 搜索此列</div>
+        <div class="mi" onclick="headAction('filter-clear')">✕ 清除列搜索</div>
+        <div class="mi-divider"></div>
+        <div class="mi" onclick="headAction('hide')">🚫 隐藏此列</div>
+      </div>
+
+      <!-- ===== 弹窗组 ===== -->
+      <div class="dialog-mask" id="dlg-celledit">
+        <div class="dialog">
+          <h3>编辑单元格</h3>
+          <div class="drow"><label id="cell-edit-label">字段</label><input type="text" id="cell-edit-input"></div>
+          <div class="hint-box">Enter 保存 / 返回键取消；Ctrl+C 复制并关闭（桌面）。编辑时该记录已被锁定，其他人无法同时编辑。</div>
+          <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-celledit')">取消</button><button class="dbtn primary" onclick="saveCellEdit()">保存</button></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-form">
+        <div class="dialog">
+          <h3 id="form-title">新增售后记录</h3>
+          <div class="hint-box" id="form-match-hint" style="display:none;color:#67C23A;background:#F0F9EB">✔ 已自动匹配并填充销售记录信息（输入订单号/收货人/电话/发货快递后失焦触发）</div>
+          <div class="drow"><label>日期 *</label><input type="date" id="fm-date" onblur="autoMatch('date')"></div>
+          <div class="drow"><label>收货人 *</label><input type="text" id="fm-receiver" placeholder="请输入收货人" onblur="autoMatch('receiver')"></div>
+          <div class="drow"><label>电话 *</label><input type="text" id="fm-phone" placeholder="如 13800138000" onblur="autoMatch('phone')"></div>
+          <div class="drow"><label>订单号</label><input type="text" id="fm-order" placeholder="请输入订单号" onblur="autoMatch('order_no')"></div>
+          <div class="drow"><label>货物 *</label><input type="text" id="fm-goods" onblur="autoMatch('goods')"></div>
+          <div class="drow"><label>发货快递</label><input type="text" id="fm-send" placeholder="发货快递单号" onblur="autoMatch('send_express')"></div>
+          <div class="drow"><label>退货快递</label><input type="text" id="fm-return" placeholder="退货快递单号"></div>
+          <div class="drow"><label>快递公司</label><input type="text" id="fm-company" placeholder="退货快递公司"></div>
+          <div class="drow"><label>退货运费</label><input type="number" id="fm-freight" value="0"></div>
+          <div class="drow"><label>签收状态</label><select id="fm-signed"><option>未签收</option><option>已签收</option></select></div>
+          <div class="drow"><label>备注</label><textarea id="fm-remarks"></textarea></div>
+          <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-form')">取消</button><button class="dbtn primary" onclick="saveForm()">保存</button></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-express">
+        <div class="dialog">
+          <h3>快递物流查询</h3>
+          <div class="drow"><label>快递单号</label><input type="text" id="ex-no" placeholder="请输入快递单号"></div>
+          <div id="ex-info" style="display:none;margin-bottom:8px"><span class="tag-cell" style="background:#F4F4F5;color:#909399" id="ex-company">圆通速递</span> <span class="tag-cell signed-ok" id="ex-state">已签收</span></div>
+          <div id="ex-loading" style="display:none;text-align:center;padding:12px;color:var(--text-sub)">查询中...</div>
+          <div class="express-result" id="ex-result" style="display:none">
+            <div class="timeline" id="ex-timeline"></div>
+          </div>
+          <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-express')">关闭</button><button class="dbtn primary" onclick="queryExpress()">查询</button></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-colcfg">
+        <div class="dialog">
+          <h3 id="colcfg-title">表格列配置</h3>
+          <div id="colcfg-list"></div>
+          <div class="dfoot"><button class="dbtn" onclick="resetColCfg()">恢复默认</button><button class="dbtn primary" onclick="saveColCfg()">保存</button></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-setting">
+        <div class="dialog">
+          <h3>系统设置</h3>
+          <h4 style="font-size:13px;margin:4px 0 8px">服务器地址</h4>
+          <div class="drow"><label>当前地址</label><span id="set-url" style="font-size:12px"></span></div>
+          <div class="drow"><label>服务器地址</label><input type="text" id="set-url-input" placeholder="例如: http://192.168.1.100:8001"></div>
+          <div class="hint-box"><p>请输入完整地址，包含协议和端口，例如：</p><p>• http://192.168.1.100:8001</p><p>• https://example.com:8001</p><p>WebSocket 地址将自动推导（http→ws, https→wss）</p></div>
+          <div class="dfoot"><button class="dbtn danger" onclick="resetServerUrl()">恢复默认</button><button class="dbtn primary" onclick="saveServerUrl()">保存并重载</button></div>
+          <h4 style="font-size:13px;margin:16px 0 8px">百度Cookie（物流查询）</h4>
+          <div class="drow"><label>当前状态</label><span class="tag-cell signed-ok">已配置（23 项）</span></div>
+          <div class="drow"><label>Cookie</label><textarea placeholder="粘贴百度Cookie（格式：key1=value1; key2=value2; ...）" style="min-height:64px"></textarea></div>
+          <div class="hint-box">获取：百度登录 → F12 网络 → 搜索单号 → 复制请求标头 Cookie。Cookie 过期会导致物流查询失败。</div>
+          <div class="dfoot"><button class="dbtn primary" onclick="toast('ok','百度Cookie保存成功')">保存Cookie</button></div>
+          <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-setting')">关闭</button></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-export">
+        <div class="dialog">
+          <h3>导出Excel</h3>
+          <div class="drow"><label>产品类型</label><input type="text" id="export-type" disabled></div>
+          <div class="drow"><label>时间段 *</label><input type="date" id="export-d1"> <span style="color:var(--text-sub)">至</span> <input type="date" id="export-d2"></div>
+          <div class="drow"><label>签收状态</label><select id="export-signed"><option value="">全部</option><option>已签收</option><option>未签收</option></select></div>
+          <div class="drow"><label>关键词</label><input type="text" id="export-kw" placeholder="可选，搜索关键词"></div>
+          <div class="hint-box">导出当前可见列；勾选行后导出则直接导出选中行（文件名：售后记录_海绵_选中N条.xlsx）。手机端将保存到下载目录（形式待核验）。</div>
+          <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-export')">取消</button><button class="dbtn primary" onclick="confirmExport()">确认导出</button></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-confirm">
+        <div class="dialog" style="max-width:320px">
+          <div class="confirm-body" id="confirm-body"></div>
+          <div class="dfoot" id="confirm-foot"></div>
+        </div>
+      </div>
+
+      <div class="dialog-mask" id="dlg-logout">
+        <div class="dialog" style="max-width:300px">
+          <div class="confirm-body">
+            <p style="font-size:14px"><b id="logout-name">admin</b> <span class="role-tag" id="logout-role" style="background:#FEECEC;color:#F56C6C">管理员</span></p>
+            <p class="sub">退出登录将断开实时同步连接</p>
+          </div>
+          <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-logout')">取消</button><button class="dbtn danger" onclick="doLogout()">退出登录</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 登录页与销售页共用的弹窗（置于两页容器之外，登录阶段 page-sales 隐藏不影响显示） -->
+    <div class="dialog-mask" id="dlg-conflict">
+      <div class="dialog" style="max-width:320px">
+        <div class="confirm-body">
+          <div class="icon">⚠️</div>
+          <p id="conflict-msg">该账号已在其他设备登录</p>
+          <p class="sub">是否强制登录？强制登录将使已登录的设备自动下线。</p>
+        </div>
+        <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-conflict')">取消登录</button><button class="dbtn danger" onclick="forceLogin()">强制登录</button></div>
+      </div>
+    </div>
+
+    <div class="dialog-mask" id="dlg-server">
+      <div class="dialog">
+        <h3>服务器地址</h3>
+        <div class="drow"><label>服务器地址</label><input type="text" id="login-server-input" placeholder="例如: http://192.168.1.100:8001"></div>
+        <div class="hint-box"><p>请输入完整地址，包含协议和端口，例如：</p><p>• http://192.168.1.100:8001</p><p>WebSocket 地址将自动推导（http→ws, https→wss）</p></div>
+        <div class="dfoot"><button class="dbtn" onclick="closeDialog('dlg-server')">取消</button><button class="dbtn danger" onclick="resetLoginServer()">恢复默认</button><button class="dbtn primary" onclick="saveLoginServer()">保存并重载</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部导航（主页 | 销售 | 设置）；销售页默认隐藏，顶栏「‹」可重新显示 -->
+  <div class="bottombar" id="bottombar">
+    <div class="nav-item" onclick="toast('warn','原型只实现「销售」页；主页/设置为 Bridge 现有页面')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span>主页</span>
+    </div>
+    <div class="nav-item active" id="nav-sales" onclick="enterSalesMode()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17"/><circle cx="9" cy="20" r="1"/><circle cx="17" cy="20" r="1"/></svg>
+      <span>销售</span>
+    </div>
+    <div class="nav-item" onclick="toast('warn','原型只实现「销售」页；主页/设置为 Bridge 现有页面')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>设置</span>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="notes">
+  <div class="note-card">
+    <b>① 交互映射（桌面 → 触屏，重点核验）</b>——原项目是 Vue 网页，桌面交互（右键菜单/双击/Ctrl 快捷键）在手机触屏上天然不可用，Bridge 集成按 Android 惯例映射：
+    <table class="map">
+      <tr><th>原项目（桌面网页）</th><th>Bridge 销售页（触屏）</th><th>原型中的体验方式</th></tr>
+      <tr><td>行右键菜单（编辑/签收/取件/物流/颜色/删除）</td><td><b>长按行</b>弹出底部菜单</td><td>鼠标<b>右键行</b>或触屏长按</td></tr>
+      <tr><td>表头右键菜单（排序/列搜索/隐藏列）</td><td><b>长按列头</b>弹菜单</td><td>鼠标右键表头</td></tr>
+      <tr><td>双击单元格编辑 / 双击签收、取件 tag</td><td>双击（同手势，Compose onDoubleTap）</td><td>鼠标双击</td></tr>
+      <tr><td>Ctrl+F 搜索 / Ctrl+N 新增</td><td>工具栏按钮（移动端工具栏本就有）</td><td>工具栏按钮</td></tr>
+      <tr><td>弹窗 Esc 关闭</td><td>Android 返回键逐层关闭（Handler 栈）</td><td>原型用取消按钮代替</td></tr>
+      <tr><td>主页双击返回退桌面</td><td>复用 Bridge 现有「再按一次返回退出」</td><td>—</td></tr>
+      <tr><td>阅读模式横屏锁定</td><td>进入时锁定横屏、退出恢复</td><td>分页栏「阅读」按钮体验</td></tr>
+    </table>
+  </div>
+  <div class="note-card blue">
+    <b>② 功能范围（照抄源码，未凭空添加）</b>
+    <ul class="clean">
+      <li><b>登录</b>：账号历史（自动回填+删除）、记住密码、服务器地址（http:// 校验）、409 冲突→强制登录、强制下线（被踢回登录页）。</li>
+      <li><b>售后主页</b>：产品类型切换（权限过滤）· 关键词搜索+全域增强（无结果→提示切换类型）· 筛选（签收/日期/退货快递/店铺）· 15 列表格（移动端默认 4 列：收货人/货物/退货快递/取件）· 列配置 · 双击单元格编辑（编辑锁+冲突+强制解锁）· 签收/取件切换（确认弹窗）· 行颜色标记 · 物流查询（轨迹 timeline + 智能提示：退货已签收→问更新签收；识别公司→问填充）· 新增/编辑表单（必填 4 项 + 智能自动填充）· 选择模式多选导出 · 导出筛选弹窗 · 分页 ◀▶ · 阅读模式（隐藏工具栏+底部控制条+竖屏提示）· 在线用户 · 操作通知 · 编辑锁冲突通知 · 实时同步（他人增删改本地更新）· 刷新（重拉用户信息+数据）。</li>
+      <li><b>系统设置</b>（销售页工具栏「列配置」右侧的 <b>⚙</b>）：服务器地址 + 百度 Cookie（物流依赖）。</li>
+      <li><b>admin 专属页面（用户管理/操作日志）首期不集成</b>——待核验确认（PC 网页端管理更合适）。</li>
+    </ul>
+  </div>
+  <div class="note-card">
+    <b>③ 演示数据说明</b>：海绵 10 条 / 手摇器 8 条 / 桃树枝 6 条；产品经理小张、操作员一号为模拟在线用户；「模拟××」按钮触发 WS 事件演示（通知/锁冲突/强制下线/登录冲突）。智能填充演示：新增表单电话输入 <code>13800138001</code> 或订单号输入 <code>DD20260001</code> 后点击其它输入框（失焦）即可看到自动填充。</div>
+  <div class="note-card">
+    <b>④ 不影响现有功能的边界</b>：新包 <code>sales/</code> + <code>ui/SalesPages.kt</code>；MainScreen 仅加底部导航一项、when 分支与销售页条件隐藏导航；主页 4 页面排序（TabOrder id 0..3）零改动；命令/保活/上报/扫码链路零触碰。销售页连接生命周期照智能控制：进入 start / 离开 stop。点击「销售」后底部导航隐藏，销售页顶栏「‹」只恢复导航、不退出页面、不清空数据；再次点击「销售」重新隐藏。
+  </div>
+</div>
+
+<script>
+/* ================= 模拟数据与状态 ================= */
+const USERS = {
+  admin:    { pwd: 'admin123',    role: 'admin',    display_name: '管理员',   visible_columns: null, editable_columns: null, allowed_types: null },
+  manager:  { pwd: 'manager123',  role: 'manager',  display_name: '经理小张', visible_columns: null, editable_columns: null, allowed_types: null },
+  operator1:{ pwd: 'operator123', role: 'operator', display_name: '操作员一号', visible_columns: ['serial','shop_serial','date','receiver','phone','goods','order_no','send_express','return_express','return_express_company','return_freight','signed','picked_up','remarks'], editable_columns: ['picked_up'], allowed_types: ['sponge'] },
+};
+const TYPES = [ {key:'sponge',label:'海绵'}, {key:'crank',label:'手摇器'}, {key:'peach_branch',label:'桃树枝'} ];
+const COLS = [
+  { prop:'serial', label:'序号', width:60, mobile:true },
+  { prop:'shop_serial', label:'店铺序号', width:70, mobile:false },
+  { prop:'date', label:'日期', width:85, mobile:false },
+  { prop:'receiver', label:'收货人', width:70, mobile:true },
+  { prop:'phone', label:'电话', width:95, mobile:false },
+  { prop:'goods', label:'货物', width:110, mobile:true },
+  { prop:'order_no', label:'订单号', width:110, mobile:false },
+  { prop:'send_express', label:'发货快递', width:100, mobile:false },
+  { prop:'return_express', label:'退货快递', width:100, mobile:true },
+  { prop:'return_express_company', label:'退货快递公司', width:70, mobile:false },
+  { prop:'return_freight', label:'运费', width:45, mobile:false },
+  { prop:'signed', label:'签收', width:56, mobile:false },
+  { prop:'picked_up', label:'取件', width:56, mobile:true },
+  { prop:'created_at', label:'创建时间', width:100, mobile:false },
+  { prop:'remarks', label:'备注', width:90, mobile:false },
+];
+const EDITABLE = ['serial','shop_serial','date','receiver','phone','goods','order_no','send_express','return_express','return_express_company','return_freight','picked_up','remarks','row_color'];
+
+function mk(id, arr) { const r = {id}; COLS.forEach(c=>r[c.prop]=''); Object.assign(r, arr); return r; }
+const DB = {
+  sponge: [
+    mk(101,{serial:'36', shop_serial:'5-2', date:'2026-10-28', receiver:'王丽', phone:'REF-13800138001', goods:'海绵枕头×2', order_no:'DD20260001', send_express:'SF1390223456789', return_express:'YT9876543210', return_express_company:'', return_freight:12, signed:'已签收', picked_up:1, remarks:'', row_color:'#F56C6C', created_at:'2026-10-28 10:12:00'}),
+    mk(102,{serial:'37', shop_serial:'5-3', date:'2026-10-27', receiver:'李强', phone:'REF-13900139002', goods:'海绵床垫', order_no:'DD20260002', send_express:'ZTO12345678', return_express:'', return_freight:0, signed:'未签收', picked_up:0, remarks:'客户要求换货', row_color:'', created_at:'2026-10-27 16:40:00'}),
+    mk(103,{serial:'38', shop_serial:'5-1', date:'2026-10-26', receiver:'张敏', phone:'REF-13700137003', goods:'海绵坐垫×4', order_no:'DD20260003', send_express:'YD000111222', return_express:'JD111222333', return_express_company:'京东', return_freight:8, signed:'已签收', picked_up:0, remarks:'', row_color:'#E6A23C', created_at:'2026-10-26 09:05:00'}),
+    mk(104,{serial:'39', shop_serial:'5-2', date:'2026-10-25', receiver:'赵云', phone:'REF-13600136004', goods:'海绵枕头×1', order_no:'DD20260004', send_express:'', return_express:'', return_freight:0, signed:'未签收', picked_up:0, remarks:'仅咨询', row_color:'', created_at:'2026-10-25 11:30:00'}),
+    mk(105,{serial:'40', shop_serial:'5-4', date:'2026-10-24', receiver:'孙悦', phone:'REF-13500135005', goods:'海绵床垫+枕头', order_no:'DD20260005', send_express:'SF1390000011', return_express:'EMS222333444', return_express_company:'EMS', return_freight:15, signed:'未签收', picked_up:1, remarks:'等待取件', row_color:'', created_at:'2026-10-24 14:20:00'}),
+    mk(106,{serial:'41', shop_serial:'5-2', date:'2026-10-23', receiver:'周涛', phone:'REF-13400134006', goods:'海绵靠垫', order_no:'DD20260006', send_express:'STO555666777', return_express:'', return_freight:0, signed:'已签收', picked_up:1, remarks:'', row_color:'#67C23A', created_at:'2026-10-23 08:55:00'}),
+    mk(107,{serial:'42', shop_serial:'5-5', date:'2026-10-22', receiver:'吴兰', phone:'REF-13300133007', goods:'海绵枕头×3', order_no:'DD20260007', send_express:'YT888999000', return_express:'YT111000999', return_express_company:'圆通', return_freight:10, signed:'未签收', picked_up:0, remarks:'', row_color:'', created_at:'2026-10-22 17:10:00'}),
+    mk(108,{serial:'43', shop_serial:'5-3', date:'2026-10-21', receiver:'郑华', phone:'REF-13200132008', goods:'海绵床垫', order_no:'DD20260008', send_express:'', return_express:'SF1399887766', return_express_company:'顺丰', return_freight:22, signed:'已签收', picked_up:0, remarks:'运费到付', row_color:'', created_at:'2026-10-21 10:40:00'}),
+    mk(109,{serial:'44', shop_serial:'5-1', date:'2026-10-20', receiver:'冯静', phone:'REF-13100131009', goods:'海绵坐垫', order_no:'DD20260009', send_express:'JD444555666', return_express:'', return_freight:0, signed:'未签收', picked_up:0, remarks:'', row_color:'#409EFF', created_at:'2026-10-20 13:25:00'}),
+    mk(110,{serial:'45', shop_serial:'5-4', date:'2026-10-19', receiver:'陈晨', phone:'REF-13000130010', goods:'海绵枕头', order_no:'DD20260010', send_express:'', return_express:'', return_freight:0, signed:'已签收', picked_up:1, remarks:'', row_color:'', created_at:'2026-10-19 09:15:00'}),
+  ],
+  crank: [
+    mk(201,{serial:'18', shop_serial:'8-1', date:'2026-10-27', receiver:'刘洋', phone:'REF-13811138001', goods:'手摇器×1', order_no:'DD20260051', send_express:'SF1395566778', return_express:'YT900011122', return_express_company:'', return_freight:9, signed:'未签收', picked_up:0, remarks:'把手损坏', row_color:'#F56C6C', created_at:'2026-10-27 15:00:00'}),
+    mk(202,{serial:'19', shop_serial:'8-2', date:'2026-10-26', receiver:'杨柳', phone:'REF-13822239002', goods:'手摇器×2', order_no:'DD20260052', send_express:'', return_express:'', return_freight:0, signed:'未签收', picked_up:0, remarks:'', row_color:'', created_at:'2026-10-26 10:30:00'}),
+    mk(203,{serial:'20', shop_serial:'8-1', date:'2026-10-24', receiver:'黄海', phone:'REF-13833337003', goods:'手摇器摇臂', order_no:'DD20260053', send_express:'ZTO99887766', return_express:'JD999888777', return_express_company:'京东', return_freight:7, signed:'已签收', picked_up:1, remarks:'', row_color:'', created_at:'2026-10-24 09:20:00'}),
+    mk(204,{serial:'21', shop_serial:'8-3', date:'2026-10-22', receiver:'徐磊', phone:'REF-13844434004', goods:'手摇器×1', order_no:'DD20260054', send_express:'', return_express:'STO777666555', return_express_company:'中通', return_freight:6, signed:'未签收', picked_up:0, remarks:'', row_color:'#E6A23C', created_at:'2026-10-22 16:45:00'}),
+    mk(205,{serial:'22', shop_serial:'8-2', date:'2026-10-20', receiver:'何雪', phone:'REF-13855535005', goods:'手摇器全套', order_no:'DD20260055', send_express:'YD555444333', return_express:'', return_freight:0, signed:'已签收', picked_up:1, remarks:'', row_color:'', created_at:'2026-10-20 11:10:00'}),
+    mk(206,{serial:'23', shop_serial:'8-4', date:'2026-10-18', receiver:'高峰', phone:'REF-13866636006', goods:'手摇器×3', order_no:'DD20260056', send_express:'', return_express:'', return_freight:0, signed:'未签收', picked_up:0, remarks:'批量退', row_color:'', created_at:'2026-10-18 08:35:00'}),
+    mk(207,{serial:'24', shop_secret:'', shop_serial:'8-1', date:'2026-10-16', receiver:'罗丹', phone:'REF-13877733007', goods:'手摇器底座', order_no:'DD20260057', send_express:'EMS123123123', return_express:'', return_freight:0, signed:'已签收', picked_up:0, remarks:'', row_color:'', created_at:'2026-10-16 14:55:00'}),
+    mk(208,{serial:'25', shop_serial:'8-3', date:'2026-10-14', receiver:'梁波', phone:'REF-13888832008', goods:'手摇器', order_no:'DD20260058', send_express:'', return_express:'SF1391231231', return_express_company:'顺丰', return_freight:12, signed:'未签收', picked_up:1, remarks:'', row_color:'#67C23A', created_at:'2026-10-14 10:05:00'}),
+  ],
+  peach_branch: [
+    mk(301,{serial:'9', shop_serial:'P-1', date:'2026-10-26', receiver:'宋佳', phone:'REF-13911131001', goods:'桃树枝×5斤', order_no:'DD20260081', send_express:'SF1390002223', return_express:'', return_freight:0, signed:'未签收', picked_up:0, remarks:'枝条干枯', row_color:'', created_at:'2026-10-26 08:50:00'}),
+    mk(302,{serial:'10', shop_serial:'P-2', date:'2026-10-23', receiver:'唐笑', phone:'REF-13922232002', goods:'桃树枝×3斤', order_no:'DD20260082', send_express:'', return_express:'YT555444333', return_express_company:'', return_freight:8, signed:'已签收', picked_up:0, remarks:'', row_color:'#E6A23C', created_at:'2026-10-23 15:35:00'}),
+    mk(303,{serial:'11', shop_serial:'P-1', date:'2026-10-21', receiver:'韩雪', phone:'REF-13933333003', goods:'桃树枝×10斤', order_no:'DD20260083', send_express:'ZTO777888999', return_express:'', return_freight:0, signed:'未签收', picked_up:1, remarks:'', row_color:'', created_at:'2026-10-21 09:45:00'}),
+    mk(304,{serial:'12', shop_serial:'P-3', date:'2026-10-19', receiver:'曹阳', phone:'REF-13944434004', goods:'桃树枝', order_no:'DD20260084', send_express:'', return_express:'', return_freight:0, signed:'已签收', picked_up:1, remarks:'', row_color:'', created_at:'2026-10-19 13:20:00'}),
+    mk(305,{serial:'13', shop_serial:'P-2', date:'2026-10-17', receiver:'彭磊', phone:'REF-13955535005', goods:'桃树枝×2斤', order_no:'DD20260085', send_express:'JD666777888', return_express:'EMS444555666', return_express_company:'EMS', return_freight:18, signed:'未签收', picked_up:0, remarks:'件数不对', row_color:'#F56C6C', created_at:'2026-10-17 10:55:00'}),
+    mk(306,{serial:'14', shop_serial:'P-1', date:'2026-10-15', receiver:'潘婷', phone:'REF-13966636006', goods:'桃树枝×8斤', order_no:'DD20260086', send_express:'', return_express:'', return_freight:0, signed:'已签收', picked_up:0, remarks:'', row_color:'', created_at:'2026-10-15 17:05:00'}),
+  ],
+};
+// 模拟销售记录（供新增表单智能填充）
+const SALES_MATCH = {
+  phone: { '13800138001': {serial:'36',shop_serial:'5-2',date:'2026-10-28',goods:'海绵枕头×2',order_no:'DD20260001',send_express:'SF1390223456789',receiver:'王丽'} },
+  order_no: { 'DD20260001': {serial:'36',shop_serial:'5-2',date:'2026-10-28',goods:'海绵枕头×2',send_express:'SF1390223456789',receiver:'王丽',phone:'REF-13800138001'} },
+  receiver: { '王丽': {serial:'36',shop_serial:'5-2',date:'2026-10-28',goods:'海绵枕头×2',order_no:'DD20260001',send_express:'SF1390223456789',phone:'REF-13800138001'} },
+};
+
+const state = {
+  user: null, type: 'sponge', keyword: '', enhanced: false,
+  page: 1, size: 100, sortColumn: 'date', sortOrder: 'desc',
+  colFilters: {}, columnVisible: {}, selectionMode: false, selected: new Set(),
+  readingMode: false, editLocks: {}, cellEdit: null, editingId: null,
+  filter: { signed:'', d1:'', d2:'', express:'', shop:'' },
+};
+let savedAccounts = [
+  { username:'admin', password:'admin123', lastUsed: 1 },
+  { username:'manager', password:'', lastUsed: 2 },
+];
+
+/* ================= 工具 ================= */
+const $ = id => document.getElementById(id);
+function toast(type, msg) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type; el.textContent = msg;
+  $('toast-zone').appendChild(el);
+  setTimeout(()=>el.remove(), 2600);
+}
+function notif(title, msg, dur) {
+  const el = document.createElement('div');
+  el.className = 'notif';
+  el.innerHTML = `<div class="nt">${title}</div><div class="nm">${msg}</div>`;
+  $('notif-zone').appendChild(el);
+  setTimeout(()=>el.remove(), dur || 3000);
+}
+function openDialog(id){ $(id).classList.add('show'); }
+function closeDialog(id){ $(id).classList.remove('show'); if(id==='dlg-celledit' && state.cellEdit){ state.editLocks = {}; state.cellEdit = null; } }
+
+/* ================= 登录 ================= */
+function showAcctList(show) {
+  const list = $('acct-list');
+  if (!show) { list.classList.remove('show'); return; }
+  const kw = $('login-user').value.toLowerCase();
+  list.innerHTML = '';
+  savedAccounts.filter(a=>a.username.includes(kw)).forEach(a=>{
+    const div = document.createElement('div');
+    div.className = 'acct-item';
+    div.innerHTML = `<span class="acct-name">${a.username}</span><span class="del" title="删除记录">✕</span>`;
+    div.querySelector('.acct-name').onclick = ()=>selectAccount(a.username);
+    div.onclick = (e)=>{ if(!e.target.classList.contains('del')) selectAccount(a.username); };
+    div.querySelector('.del').onclick = (e)=>{
+      e.stopPropagation();
+      savedAccounts = savedAccounts.filter(x=>x.username!==a.username);
+      toast('ok', `已删除账号 ${a.username} 的记录`); showAcctList(true);
+    };
+    list.appendChild(div);
+  });
+  list.classList.add('show');
+}
+function selectAccount(u) {
+  $('login-user').value = u;
+  const a = savedAccounts.find(x=>x.username===u);
+  if (a && a.password) { $('login-pwd').value = a.password; $('login-remember').checked = true; }
+  $('acct-list').classList.remove('show');
+}
+document.addEventListener('click', e=>{ if(!e.target.closest('.acct-hist')) $('acct-list')?.classList.remove('show'); });
+// 默认回填最近账号（照源码 onMounted 行为）
+(function(){ const last = savedAccounts[0]; if(last){ $('login-user').value=last.username; if(last.password){ $('login-pwd').value=last.password; $('login-remember').checked=true; } } })();
+
+let pendingLogin = null;
+function handleLogin() {
+  const u = $('login-user').value.trim(), p = $('login-pwd').value;
+  if (!u || !p) { toast('warn','请输入用户名和密码'); return; }
+  pendingLogin = {u, p};
+  demoLoginConflict();
+}
+function demoLoginConflict() {
+  if (!pendingLogin) { toast('warn','请先在登录页输入账号密码点登录'); return; }
+  const {u, p} = pendingLogin;
+  const user = USERS[u];
+  if (!user || user.pwd !== p) { toast('err', u==='admin'?'用户名或密码错误':'用户名或密码错误'); return; }
+  // 模拟 409（allow_multi_device=false 的账号）——admin 演示冲突弹窗
+  if (u === 'admin' && !window.__forceFlag) { $('conflict-msg').textContent = '该账号已在其他设备登录'; openDialog('dlg-conflict'); return; }
+  doLogin(u);
+}
+function forceLogin() { window.__forceFlag = true; doLogin(pendingLogin.u); window.__forceFlag = false; }
+function doLogin(u) {
+  const user = USERS[u];
+  state.user = { username: u, role: user.role, display_name: user.display_name,
+    visible_columns: user.visible_columns, editable_columns: user.editable_columns, allowed_types: user.allowed_types };
+  // 保存账号（记住密码）
+  const a = savedAccounts.find(x=>x.username===u);
+  const remember = $('login-remember').checked;
+  if (a) { a.lastUsed = Date.now(); a.password = remember ? pendingLogin.p : ''; }
+  else savedAccounts.push({username:u, password: remember?pendingLogin.p:'', lastUsed:Date.now()});
+  savedAccounts.sort((x,y)=>y.lastUsed-x.lastUsed);
+  closeDialog('dlg-conflict');
+  $('page-login').style.display = 'none';
+  $('page-sales').classList.add('show');
+  $('logout-name').textContent = user.display_name + ' (' + u + ')';
+  const rt = $('logout-role'); rt.textContent = user.role==='admin'?'管理员':user.role==='manager'?'经理':'操作员';
+  rt.className = 'role-tag ' + user.role;
+  state.type = 'sponge'; state.page = 1;
+  renderTypes(); initColumns(); renderShopFilter(); fetchRecords();
+  toast('ok','登录成功');
+  setTimeout(()=>notif('操作通知','网页端admin 更新了一条记录'), 2500);
+}
+function doLogout() {
+  closeDialog('dlg-logout');
+  state.user = null;
+  $('page-sales').classList.remove('show');
+  $('page-login').style.display = 'flex';
+  toast('ok','已退出登录');
+}
+
+/* ================= 权限 ================= */
+function isManager() { return state.user && (state.user.role==='admin'||state.user.role==='manager'); }
+function canEditColumn(col) {
+  if (isManager()) return true;
+  if (state.user.role!=='operator') return true;
+  const cols = state.user.editable_columns;
+  if (cols===undefined) return false;
+  return cols.includes(col);
+}
+function canSeeColumn(col) {
+  if (isManager()) return true;
+  if (state.user.role!=='operator') return true;
+  const cols = state.user.visible_columns;
+  if (cols===undefined) return true;
+  if (cols.length===0) return false;
+  return cols.includes(col);
+}
+function canAccessType(key) {
+  if (isManager()) return true;
+  if (state.user.role!=='operator') return true;
+  const t = state.user.allowed_types;
+  if (t===undefined || t.length===0) return false;
+  return t.includes(key);
+}
+
+/* ================= 列配置（移动端默认 4 列） ================= */
+const MOBILE_DEFAULT = ['receiver','goods','return_express','picked_up'];
+const READING_DEFAULT = ['receiver','goods','return_express','signed','picked_up'];
+function initColumns() {
+  const defaults = state.readingMode ? READING_DEFAULT : MOBILE_DEFAULT;
+  state.columnVisible = {};
+  COLS.forEach(c=>state.columnVisible[c.prop] = defaults.includes(c.prop));
+}
+function currentCols() { return COLS.filter(c=>state.columnVisible[c.prop] && canSeeColumn(c.prop)); }
+function renderColCfg() {
+  const box = $('colcfg-list'); box.innerHTML = '';
+  COLS.forEach((c,i)=>{
+    if (!canSeeColumn(c.prop)) return;
+    const div = document.createElement('div');
+    div.className = 'col-cfg-item';
+    div.innerHTML = `<label><input type="checkbox" ${state.columnVisible[c.prop]?'checked':''} data-prop="${c.prop}"> ${c.label}</label><span class="idx">${i+1}</span>`;
+    box.appendChild(div);
+  });
+  $('colcfg-title').textContent = state.readingMode ? '阅读模式列配置' : '表格列配置';
+}
+function openColCfg(){ renderColCfg(); openDialog('dlg-colcfg'); }
+function saveColCfg() {
+  document.querySelectorAll('#colcfg-list input').forEach(cb=>{
+    state.columnVisible[cb.dataset.prop] = cb.checked;
+  });
+  closeDialog('dlg-colcfg'); fetchRecords(); toast('ok','列配置已保存');
+}
+function resetColCfg() { initColumns(); renderColCfg(); fetchRecords(); toast('ok','已恢复默认列配置'); }
+
+/* ================= 数据获取/过滤/排序/分页（模拟服务端） ================= */
+function fetchRecords() {
+  renderTable(); renderPager();
+}
+function filteredRecords() {
+  let list = [...DB[state.type]];
+  // 关键词
+  if (state.keyword) {
+    const kw = state.keyword.toLowerCase();
+    list = list.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(kw)));
+  }
+  // 筛选
+  const f = state.filter;
+  if (f.signed) list = list.filter(r=>r.signed===f.signed);
+  if (f.d1) list = list.filter(r=>r.date>=f.d1);
+  if (f.d2) list = list.filter(r=>r.date<=f.d2);
+  if (f.express!=='') list = list.filter(r=> f.express==='1' ? !!r.return_express : !r.return_express);
+  if (f.shop) list = list.filter(r=>r.shop_serial===f.shop);
+  // 列搜索 AND
+  Object.entries(state.colFilters).forEach(([col,val])=>{
+    if (val) list = list.filter(r=> String(r[col]??'').toLowerCase().includes(String(val).toLowerCase()));
+  });
+  // 排序
+  const col = state.sortColumn, order = state.sortOrder==='asc'?1:-1;
+  list.sort((a,b)=>{
+    const av=a[col]??'', bv=b[col]??'';
+    const an=Number(av), bn=Number(bv);
+    if (!isNaN(an)&&!isNaN(bn)&&av!=='') return (an-bn)*order;
+    return String(av).localeCompare(String(bv),'zh')*order;
+  });
+  return list;
+}
+function pagedRecords() {
+  const list = filteredRecords();
+  if (state.size>=9999) return list;
+  return list.slice((state.page-1)*state.size, state.page*state.size);
+}
+
+/* ================= 渲染 ================= */
+function renderTypes() {
+  const row = $('type-row'); row.innerHTML='';
+  TYPES.filter(t=>canAccessType(t.key)).forEach(t=>{
+    const b = document.createElement('div');
+    b.className = 'type-btn' + (state.type===t.key?' on':'');
+    b.textContent = t.label;
+    b.onclick = ()=>{ if(state.type!==t.key){ state.type=t.key; state.keyword=''; $('search-kw').value=''; state.colFilters={}; state.page=1; state.filter={signed:'',d1:'',d2:'',express:'',shop:''}; syncFilterInputs(); renderShopFilter(); renderTypes(); fetchRecords(); toast('','已切换到'+t.label); } };
+    row.appendChild(b);
+  });
+  // 权限守卫：当前类型不可访问则回到首个可访问
+  if (!canAccessType(state.type)) { const first = TYPES.find(t=>canAccessType(t.key)); if(first) state.type=first.key; }
+  $('btn-add').style.display = isManager() ? '' : 'none';
+}
+function renderShopFilter() {
+  const shops = [...new Set(DB[state.type].map(r=>r.shop_serial).filter(Boolean))];
+  const sel = $('f-shop');
+  sel.innerHTML = '<option value="">店铺筛选</option>' + shops.map(s=>`<option>${s}</option>`).join('');
+  sel.value = state.filter.shop || '';
+}
+function syncFilterInputs() {
+  $('f-signed').value = state.filter.signed; $('f-d1').value = state.filter.d1; $('f-d2').value = state.filter.d2;
+  $('f-express').value = state.filter.express; $('f-shop').value = state.filter.shop;
+}
+function renderTable() {
+  const cols = currentCols();
+  const rows = pagedRecords();
+  const t = $('sales-table');
+  let html = '<thead><tr>';
+  if (state.selectionMode) html += '<th style="width:32px"><input type="checkbox" onclick="toggleSelAll(this.checked)"></th>';
+  cols.forEach(c=>{
+    const hasFilter = state.colFilters[c.prop]!==undefined;
+    html += `<th data-prop="${c.prop}" style="width:${c.width}px">
+      <div style="display:inline-flex;align-items:center;gap:2px">
+        <span>${c.label}</span>
+        ${state.sortColumn===c.prop?`<span class="sort-ind">${state.sortOrder==='asc'?'↑':'↓'}</span>`:''}
+        ${hasFilter?'<span class="has-filter-dot"></span>':''}
+      </div>
+      ${hasFilter?`<div class="col-search-box" onclick="event.stopPropagation()"><input type="text" value="${state.colFilters[c.prop]||''}" placeholder="搜索..." data-cf="${c.prop}" onkeydown="if(event.key==='Enter')colFilterConfirm('${c.prop}',this.value)" oninput="colFilterConfirm('${c.prop}',this.value)"></div>`:''}
+    </th>`;
+  });
+  html += '</tr></thead><tbody>';
+  rows.forEach(r=>{
+    const locked = state.editLocks[state.type+':'+r.id];
+    html += `<tr class="stripe ${r.row_color?'colored':''} ${state.selected.has(r.id)?'selected':''}" data-id="${r.id}" style="${r.row_color?'background:'+r.row_color:''}">`;
+    if (state.selectionMode) html += `<td><input type="checkbox" ${state.selected.has(r.id)?'checked':''} onclick="event.stopPropagation();toggleSel(${r.id})"></td>`;
+    cols.forEach((c,ci)=>{
+      const v = r[c.prop];
+      let cell = '';
+      if (c.prop==='signed') cell = `<span class="tag-cell ${v==='已签收'?'signed-ok':'signed-no'}" title="双击切换签收">${v}</span>`;
+      else if (c.prop==='picked_up') cell = `<span class="tag-cell ${v===1?'picked-ok':'picked-no'}" title="双击切换取件">${v===1?'已取件':'未取件'}</span>`;
+      else if (c.prop==='phone') cell = String(v||'').startsWith('REF-') ? String(v).slice(4) : (v||'');
+      else cell = (v===0||v)===null?'':(v??'');
+      html += `<td data-prop="${c.prop}">${cell}${(locked&&ci===0)?'<span class="lock-flag">🔒</span>':''}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  t.innerHTML = html;
+  // 事件绑定：双击编辑 / 右键+长按菜单
+  t.querySelectorAll('tbody tr').forEach(tr=>{
+    const id = Number(tr.dataset.id);
+    tr.addEventListener('dblclick', e=>{ const td = e.target.closest('td'); if(td && td.dataset.prop) handleCellDblClick(id, td.dataset.prop); });
+    tr.addEventListener('contextmenu', e=>{ e.preventDefault(); const td=e.target.closest('td'); showRowMenu(id, td?td.dataset.prop:'', e); });
+    // 触屏长按
+    let timer=null, moved=false;
+    tr.addEventListener('touchstart', e=>{ moved=false; timer=setTimeout(()=>{ const td=document.elementFromPoint(e.touches[0].clientX,e.touches[0].clientY)?.closest('td'); showRowMenuAt(id, td?td.dataset.prop:'', e.touches[0].clientX, e.touches[0].clientY); },500); },{passive:true});
+    tr.addEventListener('touchmove', ()=>{moved=true; clearTimeout(timer);},{passive:true});
+    tr.addEventListener('touchend', ()=>clearTimeout(timer));
+  });
+  t.querySelectorAll('thead th[data-prop]').forEach(th=>{
+    th.addEventListener('contextmenu', e=>{ e.preventDefault(); showHeadMenu(th.dataset.prop, e); });
+    th.addEventListener('touchstart', e=>{ const prop=th.dataset.prop; const x=e.touches[0].clientX, y=e.touches[0].clientY; let tm=setTimeout(()=>showHeadMenuAt(prop,x,y),500); th.addEventListener('touchend',()=>clearTimeout(tm),{once:true}); },{passive:true});
+  });
+}
+function renderPager() {
+  const total = filteredRecords().length;
+  const pages = Math.max(1, Math.ceil(total/state.size));
+  if (state.page>pages) state.page=pages;
+  $('pg-info').textContent = state.page+'/'+pages;
+  $('rb-info').textContent = state.page+'/'+pages;
+  $('pg-prev').className = 'pg-arrow'+(state.page<=1?' dis':'');
+  $('pg-next').className = 'pg-arrow'+(state.page>=pages?' dis':'');
+  $('rb-prev').className = 'rb-btn'+(state.page<=1?' dis':'');
+  $('rb-next').className = 'rb-btn'+(state.page>=pages?' dis':'');
+}
+function pagePrev(){ if(state.page>1){state.page--;fetchRecords();} }
+function pageNext(){ const pages=Math.max(1,Math.ceil(filteredRecords().length/state.size)); if(state.page<pages){state.page++;fetchRecords();} }
+
+/* ================= 搜索/筛选 ================= */
+function handleSearch() {
+  state.keyword = $('search-kw').value;
+  state.page = 1;
+  fetchRecords();
+  // 全域搜索演示
+  if ($('enhanced').checked && state.keyword && filteredRecords().length===0) {
+    const results = TYPES.filter(t=>t.key!==state.type).map(t=>({t, n: DB[t.key].filter(r=>Object.values(r).some(v=>String(v).includes(state.keyword))).length})).filter(x=>x.n>0);
+    if (results.length) {
+      const msg = '当前产品类型无搜索结果，在其他类型中找到：\n' + results.map(x=>`· ${x.t.label}：${x.n}条`).join('\n') + '\n是否切换到首个有结果的产品类型？';
+      confirmBox('增强搜索', msg.replace(/\n/g,'<br>'), '切换', ()=>{
+        const target = results[0].t; state.type=target.key; renderTypes(); renderShopFilter(); fetchRecords();
+      });
+    }
+  }
+}
+function toggleFilterPanel(){ $('filter-panel').classList.toggle('show'); }
+function applyFilters() {
+  state.filter = { signed:$('f-signed').value, d1:$('f-d1').value, d2:$('f-d2').value, express:$('f-express').value, shop:$('f-shop').value };
+  state.page=1; fetchRecords();
+}
+function resetFilters() {
+  state.filter={signed:'',d1:'',d2:'',express:'',shop:''}; syncFilterInputs();
+  state.colFilters={}; state.page=1; fetchRecords(); $('filter-panel').classList.remove('show');
+}
+function colFilterConfirm(prop, val) {
+  if (val) state.colFilters[prop]=val; else delete state.colFilters[prop];
+  state.page=1; fetchRecords();
+}
+
+/* ================= 行/表头菜单 ================= */
+let ctxRowId=null, ctxCol=null, ctxHeadProp=null;
+function posMenu(menu, x, y) {
+  const zone = $('page-sales').getBoundingClientRect();
+  menu.style.left = Math.min(x-zone.left, 340)+'px';
+  menu.style.top = Math.min(y-zone.top, 520)+'px';
+  menu.classList.add('show');
+}
+function showRowMenu(id, col, e){ ctxRowId=id; ctxCol=col; hideMenus(); posMenu($('ctx-row'), e.clientX, e.clientY); }
+function showRowMenuAt(id, col, x, y){ ctxRowId=id; ctxCol=col; hideMenus(); posMenu($('ctx-row'), x, y); }
+function showHeadMenu(prop, e){ ctxHeadProp=prop; hideMenus(); posMenu($('ctx-head'), e.clientX, e.clientY); }
+function showHeadMenuAt(prop, x, y){ ctxHeadProp=prop; hideMenus(); posMenu($('ctx-head'), x, y); }
+function hideMenus(){ $('ctx-row').classList.remove('show'); $('ctx-head').classList.remove('show'); }
+document.addEventListener('click', e=>{ if(!e.target.closest('.ctx-menu')) hideMenus(); });
+document.addEventListener('contextmenu', e=>{ if(!e.target.closest('table.sales')) hideMenus(); });
+
+function findRec(id){ return DB[state.type].find(r=>r.id===id); }
+function ctxAction(act) {
+  hideMenus();
+  const row = findRec(ctxRowId); if(!row) return;
+  if (act==='edit') openEditForm(row);
+  else if (act==='sign') handleToggleSign(row);
+  else if (act==='picked') handleTogglePickedUp(row);
+  else if (act==='delete') handleDelete(row);
+  else if (act==='express') {
+    const no = (ctxCol==='send_express') ? row.send_express : row.return_express;
+    if (!no) { toast('warn','该列无快递单号，无法查询物流'); return; }
+    $('ex-no').value = no; $('ex-info').style.display='none'; $('ex-result').style.display='none';
+    openDialog('dlg-express'); setTimeout(queryExpress, 300);
+  }
+}
+function ctxColor(color) {
+  hideMenus();
+  const row = findRec(ctxRowId); if(!row) return;
+  if (!canEditColumn('row_color')) { toast('err','权限不足'); return; }
+  row.row_color = color; fetchRecords();
+  toast('ok', color?'已标记颜色':'已清除颜色');
+}
+function headAction(act) {
+  hideMenus();
+  const prop = ctxHeadProp; if(!prop) return;
+  if (act==='sort-asc') { state.sortColumn=prop; state.sortOrder='asc'; fetchRecords(); }
+  else if (act==='sort-desc') { state.sortColumn=prop; state.sortOrder='desc'; fetchRecords(); }
+  else if (act==='sort-clear') { state.sortColumn='date'; state.sortOrder='desc'; fetchRecords(); }
+  else if (act==='filter') { if(state.colFilters[prop]===undefined){ state.colFilters[prop]=''; fetchRecords(); } }
+  else if (act==='filter-clear') { delete state.colFilters[prop]; fetchRecords(); }
+  else if (act==='hide') { state.columnVisible[prop]=false; fetchRecords(); toast('ok','已隐藏，可在列配置中恢复'); }
+}
+
+/* ================= 签收/取件/删除 ================= */
+function confirmBox(title, html, okText, onOk, okClass) {
+  $('confirm-body').innerHTML = `<div class="icon" style="font-size:36px">${title.includes('删除')?'⚠️':'❓'}</div><p><b>${title}</b></p><p class="sub" style="line-height:1.8">${html}</p>`;
+  $('confirm-foot').innerHTML = `<button class="dbtn">取消</button><button class="dbtn ${okClass||'primary'}">${okText}</button>`;
+  const [cancel, ok] = $('confirm-foot').querySelectorAll('button');
+  cancel.onclick = ()=>closeDialog('dlg-confirm');
+  ok.onclick = ()=>{ closeDialog('dlg-confirm'); onOk(); };
+  openDialog('dlg-confirm');
+}
+function handleToggleSign(row) {
+  if (!canEditColumn('signed')) { toast('err','权限不足：该列不可编辑'); return; }
+  const newSign = row.signed==='已签收'?'未签收':'已签收';
+  const desc = newSign==='已签收' ? '确定将此记录标记为"已签收"？签收后表示货物已收到。' : '确定将此记录的签收状态改回"未签收"？此操作需谨慎。';
+  confirmBox(newSign==='已签收'?'确认签收':'取消签收', desc, newSign==='已签收'?'确认签收':'取消签收', ()=>{ row.signed=newSign; fetchRecords(); toast('ok',`已切换为${newSign}`); });
+}
+function handleTogglePickedUp(row) {
+  if (!canEditColumn('picked_up')) { toast('err','权限不足：该列不可编辑'); return; }
+  const nv = row.picked_up===1?0:1;
+  confirmBox(nv===1?'确认取件':'取消取件', `确定将此记录标记为"${nv===1?'已取件':'未取件'}"？`, nv===1?'确认取件':'取消取件', ()=>{ row.picked_up=nv; fetchRecords(); toast('ok',`已切换为${nv===1?'已取件':'未取件'}`); });
+}
+function handleDelete(row) {
+  if (!isManager()) { toast('err','权限不足'); return; }
+  confirmBox('删除', `确定删除该售后记录（ID: ${row.id}）？删除不可恢复。`, '删除', ()=>{
+    DB[state.type] = DB[state.type].filter(r=>r.id!==row.id); fetchRecords(); toast('ok','删除成功');
+  }, 'danger');
+}
+
+/* ================= 双击单元格编辑（含编辑锁） ================= */
+function handleCellDblClick(id, prop) {
+  if (!EDITABLE.includes(prop)) return;
+  if (!canEditColumn(prop)) { toast('err','权限不足：该列不可编辑'); return; }
+  const row = findRec(id); if(!row) return;
+  const lock = state.editLocks[state.type+':'+id];
+  if (lock) {
+    const myLevel = {admin:3,manager:2,operator:1}[state.user.role]||0;
+    const lockLevel = {admin:3,manager:2,operator:1}[lock.role]||0;
+    if (myLevel<=lockLevel) {
+      notif('编辑锁定', lock.username===state.user.username?'该记录正被你在其他窗口编辑，同级别无法强制解锁':`该记录正被 ${lock.display_name} 编辑，您无权强制解锁`, 3000);
+      return;
+    }
+    confirmBox('编辑锁定', `该记录正被 ${lock.display_name} 编辑，是否强制解锁？`, '强制解锁', ()=>{
+      delete state.editLocks[state.type+':'+id]; setTimeout(()=>openCellEdit(id, prop), 200);
+    });
+    return;
+  }
+  openCellEdit(id, prop);
+}
+function openCellEdit(id, prop) {
+  const row = findRec(id);
+  state.editLocks[state.type+':'+id] = { username:'self', display_name:state.user.display_name, role:state.user.role };
+  state.cellEdit = { id, prop };
+  const label = ({serial:'序号',shop_serial:'店铺序号',date:'日期',receiver:'收货人',phone:'电话',goods:'货物',order_no:'订单号',send_express:'发货快递',return_express:'退货快递',return_express_company:'退货快递公司',return_freight:'运费',picked_up:'取件',remarks:'备注',row_color:'行颜色'})[prop] || prop;
+  $('cell-edit-label').textContent = label;
+  $('cell-edit-input').value = String(row[prop]??'');
+  renderTable();
+  openDialog('dlg-celledit');
+}
+function saveCellEdit() {
+  if (!state.cellEdit) return;
+  const row = findRec(state.cellEdit.id);
+  const val = $('cell-edit-input').value;
+  row[state.cellEdit.prop] = (['picked_up','return_freight'].includes(state.cellEdit.prop)) ? Number(val) : val;
+  delete state.editLocks[state.type+':'+state.cellEdit.id];
+  state.cellEdit = null;
+  closeDialog('dlg-celledit'); fetchRecords(); toast('ok','保存成功');
+}
+$('cell-edit-input')?.addEventListener('keydown', e=>{
+  if (e.key==='Enter') saveCellEdit();
+  if (e.ctrlKey && e.key==='c') { e.preventDefault(); navigator.clipboard?.writeText($('cell-edit-input').value); closeDialog('dlg-celledit'); toast('ok','已复制到剪贴板'); }
+});
+
+/* ================= 新增/编辑表单 + 智能填充 ================= */
+function openAddForm() {
+  state.editingId = null;
+  $('form-title').textContent = '新增售后记录';
+  ['date','receiver','phone','order','goods','send','return','company','freight','remarks'].forEach(x=>$('fm-'+x).value='');
+  $('fm-freight').value = 0; $('fm-signed').value = '未签收';
+  $('form-match-hint').style.display = 'none';
+  openDialog('dlg-form');
+}
+function openEditForm(row) {
+  if (!isManager()) { toast('err','权限不足'); return; }
+  state.editingId = row.id;
+  $('form-title').textContent = '编辑售后记录';
+  $('fm-date').value=row.date; $('fm-receiver').value=row.receiver; $('fm-phone').value=row.phone;
+  $('fm-order').value=row.order_no; $('fm-goods').value=row.goods; $('fm-send').value=row.send_express;
+  $('fm-return').value=row.return_express; $('fm-company').value=row.return_express_company;
+  $('fm-freight').value=row.return_freight||0; $('fm-signed').value=row.signed||'未签收'; $('fm-remarks').value=row.remarks||'';
+  $('form-match-hint').style.display = 'none';
+  openDialog('dlg-form');
+}
+function autoMatch(field) {
+  if (state.editingId) return; // 编辑模式不匹配（照源码）
+  const val = {date:$('fm-date').value, receiver:$('fm-receiver').value, phone:$('fm-phone').value, order_no:$('fm-order').value, goods:$('fm-goods').value, send_express:$('fm-send').value}[field];
+  if (!val || !val.trim()) return;
+  // 模拟 match/sales 唯一匹配（真实实现走服务端）
+  const source = SALES_MATCH[field==='phone'?'phone':field==='order_no'?'order_no':'receiver'] || {};
+  const hit = source[val.trim()];
+  if (hit) {
+    let filled = false;
+    if (hit.serial && !$('fm-date').dataset.filled && false) {} // serial/shop_serial 表单里省略展示
+    if (hit.date && !$('fm-date').value) { $('fm-date').value=hit.date; filled=true; }
+    if (hit.goods && !$('fm-goods').value) { $('fm-goods').value=hit.goods; filled=true; }
+    if (hit.order_no && !$('fm-order').value) { $('fm-order').value=hit.order_no; filled=true; }
+    if (hit.send_express && !$('fm-send').value) { $('fm-send').value=hit.send_express; filled=true; }
+    if (hit.receiver && !$('fm-receiver').value) { $('fm-receiver').value=hit.receiver; filled=true; }
+    if (hit.phone && !$('fm-phone').value) { $('fm-phone').value=hit.phone; filled=true; }
+    if (filled) { $('form-match-hint').style.display='block'; }
+  }
+}
+function saveForm() {
+  if (!$('fm-date').value||!$('fm-receiver').value||!$('fm-phone').value||!$('fm-goods').value) {
+    toast('warn','请填写必填项：日期/收货人/电话/货物'); return;
+  }
+  if (state.editingId) {
+    const r = findRec(state.editingId);
+    r.date=$('fm-date').value; r.receiver=$('fm-receiver').value; r.phone=$('fm-phone').value;
+    r.goods=$('fm-goods').value; r.order_no=$('fm-order').value; r.send_express=$('fm-send').value;
+    r.return_express=$('fm-return').value; r.return_express_company=$('fm-company').value;
+    r.return_freight=Number($('fm-freight').value)||0; r.signed=$('fm-signed').value; r.remarks=$('fm-remarks').value;
+    toast('ok','更新成功');
+  } else {
+    const ids = DB[state.type].map(r=>r.id);
+    const nid = (ids.length?Math.max(...ids):100)+1;
+    DB[state.type].unshift(mk(nid,{
+      serial:String(ids.length+1), date:$('fm-date').value, receiver:$('fm-receiver').value,
+      phone:$('fm-phone').value.startsWith('REF-')?$('fm-phone').value:($('fm-phone').value?'REF-'+$('fm-phone').value:''),
+      goods:$('fm-goods').value, order_no:$('fm-order').value, send_express:$('fm-send').value,
+      return_express:$('fm-return').value, return_express_company:$('fm-company').value,
+      return_freight:Number($('fm-freight').value)||0, signed:$('fm-signed').value, picked_up:0,
+      remarks:$('fm-remarks').value, row_color:'', created_at:new Date().toISOString().slice(0,19).replace('T',' '),
+    }));
+    toast('ok','添加成功');
+  }
+  closeDialog('dlg-form'); state.page=1; fetchRecords();
+}
+
+/* ================= 物流查询（模拟百度快递查询） ================= */
+function queryExpress() {
+  const no = $('ex-no').value.trim();
+  if (!no) { toast('warn','请输入快递单号'); return; }
+  $('ex-loading').style.display='block'; $('ex-result').style.display='none'; $('ex-info').style.display='none';
+  setTimeout(()=>{
+    $('ex-loading').style.display='none';
+    // 模拟：含 YT 圆通已签收；SF 顺丰运输中；其它未查到
+    let company='', stateTxt='', tracks=[];
+    if (no.startsWith('YT')) {
+      company='圆通速递'; stateTxt='已签收';
+      tracks=[
+        {time:'2026-10-30 14:32:15', desc:'【代收点】您的快件已签收（家人代收），感谢使用圆通速递'},
+        {time:'2026-10-30 08:10:03', desc:'【派送中】快件正在派送途中，请您保持电话畅通'},
+        {time:'2026-10-29 22:41:50', desc:'已到达【虎丘转运中心】'},
+        {time:'2026-10-29 10:05:12', desc:'已发出，下一站【苏州转运中心】'},
+        {time:'2026-10-28 18:30:00', desc:'【商家】已打包发出'},
+      ];
+    } else if (no.startsWith('SF')) {
+      company='顺丰速运'; stateTxt='运输中';
+      tracks=[
+        {time:'2026-10-31 07:22:41', desc:'快件离开【无锡集散中心】，正发往下一站'},
+        {time:'2026-10-30 21:15:33', desc:'已到达【无锡集散中心】'},
+        {time:'2026-10-30 15:08:20', desc:'顺丰速运已揽收'},
+      ];
+    } else {
+      toast('warn','未查询到物流信息（Cookie 可能过期）'); return;
+    }
+    $('ex-company').textContent=company; $('ex-state').textContent=stateTxt;
+    $('ex-state').className='tag-cell '+(stateTxt==='已签收'?'signed-ok':'signed-no');
+    $('ex-info').style.display='block';
+    $('ex-timeline').innerHTML = tracks.map(t=>`<div class="tl"><div class="tt">${t.time}</div><div class="td">${t.desc}</div></div>`).join('');
+    $('ex-result').style.display='block';
+    // 智能提示（照源码：仅退货快递列触发）
+    if (ctxCol==='return_express' && stateTxt==='已签收') {
+      const row = findRec(ctxRowId);
+      if (row && row.signed!=='已签收') {
+        confirmBox('签收状态更新','物流显示已签收，但当前记录签收状态未更新。<br>是否将签收状态设置为"已签收"？','更新',()=>{
+          row.signed='已签收'; fetchRecords(); toast('ok','签收状态已更新');
+        });
+      }
+    }
+    if (ctxCol==='return_express' && company) {
+      const row = findRec(ctxRowId);
+      if (row && !row.return_express_company) {
+        confirmBox('自动填充',`识别到退货快递公司：${company}，是否自动填充到"退货快递公司"列？`,'填充',()=>{
+          row.return_express_company=company; fetchRecords(); toast('ok','退货快递公司已填充');
+        });
+      }
+    }
+  }, 700);
+}
+
+/* ================= 选择模式 / 导出 ================= */
+function toggleSelectMode() {
+  state.selectionMode = !state.selectionMode;
+  state.selected = new Set();
+  $('btn-select').className = 'tbtn'+(state.selectionMode?' on':'');
+  $('btn-select').textContent = state.selectionMode?'☑ 选择':'☐ 选择';
+  fetchRecords();
+}
+function toggleSel(id){ if(state.selected.has(id)) state.selected.delete(id); else state.selected.add(id); renderTable(); }
+function toggleSelAll(on){ state.selected = on ? new Set(filteredRecords().map(r=>r.id)) : new Set(); renderTable(); }
+function handleExport() {
+  if (state.selected.size>0) {
+    toast('ok',`导出成功：售后记录_海绵_选中${state.selected.size}条.xlsx（保存到下载目录）`);
+    state.selected=new Set(); state.selectionMode=false; $('btn-select').className='tbtn'; $('btn-select').textContent='☐ 选择'; fetchRecords();
+    return;
+  }
+  const now = new Date(); const ago = new Date(now.getFullYear(), now.getMonth()-1, now.getDate());
+  const fmt = d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  $('export-type').value = TYPES.find(t=>t.key===state.type).label;
+  $('export-d1').value = fmt(ago); $('export-d2').value = fmt(now);
+  $('export-signed').value=''; $('export-kw').value='';
+  openDialog('dlg-export');
+}
+function confirmExport() {
+  if (!$('export-d1').value || !$('export-d2').value) { toast('warn','请选择导出的时间段'); return; }
+  closeDialog('dlg-export');
+  toast('ok',`导出成功：售后记录_海绵_${$('export-d1').value}_${$('export-d2').value}.xlsx`);
+}
+
+/* ================= 阅读模式 ================= */
+function toggleReadingMode(on) {
+  state.readingMode = on;
+  $('sales-header').style.display = on?'none':'flex';
+  $('toolbar').style.display = on?'none':'block';
+  $('pager').style.display = on?'none':'flex';
+  $('reading-bar').classList.toggle('show', on);
+  const defaults = on?READING_DEFAULT:MOBILE_DEFAULT;
+  if (!window.__colCfgCustom) { COLS.forEach(c=>state.columnVisible[c.prop]=defaults.includes(c.prop)); }
+  fetchRecords();
+  if (on) {
+    $('landscape-hint').classList.add('show');
+    setTimeout(()=>$('landscape-hint').classList.remove('show'), 3000);
+    toast('','已进入阅读模式：横屏锁定（原型以竖屏展示）');
+  } else { toast('','已退出阅读模式'); }
+}
+
+/* ================= Bridge 导航 / 在线用户 / 刷新 / 设置 ================= */
+function showBottomNav() {
+  $('phone').classList.remove('sales-immersive');
+  toast('','已显示底部导航；点击「销售」可再次隐藏，销售数据保持不变');
+}
+function enterSalesMode() {
+  $('phone').classList.add('sales-immersive');
+}
+function toggleOnlinePop(){ $('online-pop').classList.toggle('show'); }
+document.addEventListener('click', e=>{ if(!e.target.closest('#online-pop')&&!e.target.closest('.hbtn')) $('online-pop')?.classList.remove('show'); });
+function handleRefresh() {
+  if (!state.user) return;
+  renderTypes(); fetchRecords(); renderShopFilter();
+  toast('ok','数据已刷新');
+}
+function saveServerUrl() {
+  const url = $('set-url-input').value.trim();
+  if (!url) { toast('warn','请输入服务器地址'); return; }
+  if (!/^https?:\/\/.+/.test(url)) { toast('warn','地址必须以 http:// 或 https:// 开头'); return; }
+  $('server-url-label').textContent = url; $('set-url').textContent = url;
+  closeDialog('dlg-setting');
+  confirmBox('提示','服务器地址已修改，需要重新加载页面才能生效。<br>是否立即重新加载？','重新加载',()=>{ toast('','原型演示：已重载（真实实现为重连）'); });
+}
+function resetServerUrl(){ $('set-url-input').value=''; toast('','已恢复默认服务器地址'); }
+function saveLoginServer() {
+  const url = $('login-server-input').value.trim();
+  if (!url) { toast('warn','请输入服务器地址'); return; }
+  if (!/^https?:\/\/.+/.test(url)) { toast('warn','地址必须以 http:// 或 https:// 开头'); return; }
+  $('server-url-label').textContent = url;
+  closeDialog('dlg-server'); toast('ok','服务器地址已保存');
+}
+function resetLoginServer(){ $('login-server-input').value=''; toast('','已恢复默认'); }
+
+/* ================= 演示触发器（模拟 WS 事件） ================= */
+const ACTION_TEXT = { create:'新增了一条记录', update:'更新了一条记录', delete:'删除了一条记录', sign_change:'切换了签收状态', picked_up_change:'切换了取件状态', color_mark:'标记了行颜色' };
+function demoNotify(action) {
+  if (!state.user) { toast('warn','请先登录'); return; }
+  notif('操作通知', `网页端经理小张 ${ACTION_TEXT[action]||action}`);
+  // 实时同步：本地更新（真实实现为 WS 推送后本地增量合并）
+  if (action==='update') {
+    const r = DB[state.type][0]; if (r) { r.remarks = (r.remarks?r.remarks+'；':'')+'他人更新于'+new Date().toLocaleTimeString(); fetchRecords(); }
+  } else if (action==='sign_change') {
+    const r = DB[state.type].find(x=>x.signed==='未签收'); if (r) { r.signed='已签收'; fetchRecords(); }
+  } else if (action==='create') {
+    const ids = DB[state.type].map(r=>r.id);
+    DB[state.type].unshift(mk((Math.max(...ids))+1, {serial:String(ids.length+1), date:'2026-10-31', receiver:'新客('+Math.floor(Math.random()*90+10)+')', phone:'REF-13000000000', goods:'网页端新增记录', signed:'未签收', picked_up:0, created_at:new Date().toLocaleString()}));
+    fetchRecords();
+  }
+}
+function demoLockConflict() {
+  if (!state.user) { toast('warn','请先登录'); return; }
+  state.editLocks = { [state.type+':'+DB[state.type][0].id]: { username:'operator1', display_name:'操作员一号', role:'operator' } };
+  renderTable();
+  notif('编辑锁定冲突', '记录已被 操作员一号 锁定编辑（您有权强制解锁，可重新双击尝试）', 5000);
+}
+function demoForceLogout() {
+  if (!state.user) { toast('warn','请先登录'); return; }
+  doLogout();
+  notif('强制下线','您已被管理员强制下线');
+}
+</script>
+</body>
+</html>
