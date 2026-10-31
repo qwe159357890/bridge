@@ -62,3 +62,6 @@ server/data/report_config.json
 server/logs/
 # 临时诊断产物
 tools/debug/diag_page.png
+
+# 本地待办清单（个人跨轮次跟踪，不入库）
+TodoList.md
