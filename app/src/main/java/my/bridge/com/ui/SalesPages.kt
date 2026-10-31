@@ -1067,11 +1067,13 @@ private fun SalesTable(
                 )
             },
     ) {
-        // 表头（固定，横向滚动；与数据行共享 scrollState 实现横向同步）
+        // 表头（固定高度 44dp，横向滚动；与数据行共享 scrollState 实现横向同步）。
+        // 关键修复：不能只用 heightIn(min=44)（无上限），否则内层 fillMaxHeight 会
+        // 在 Column 测量时把表头撑满整个剩余高度，导致 weight(1f) 的数据体分到 0。
         Row(
             modifier = Modifier
                 .horizontalScroll(scrollState)
-                .heightIn(min = 44.dp)
+                .height(44.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             Row(Modifier.width(totalWidth.dp).fillMaxHeight()) {
