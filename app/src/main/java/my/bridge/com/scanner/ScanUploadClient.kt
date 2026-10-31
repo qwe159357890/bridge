@@ -33,7 +33,7 @@ class ScanUploadClient(
     private val onStateChanged: (State) -> Unit = {},
 ) {
 
-    enum class State { IDLE, CONNECTING, ONLINE, OFFLINE }
+    enum class State { IDLE, CONNECTING, ONLINE, OFFLINE, LEGACY }
 
     /** 服务端 scanResult 回执（result: hit=命中首扫 / duplicate=重复 / miss=未匹配）。 */
     data class Receipt(
@@ -58,6 +58,25 @@ class ScanUploadClient(
     private var ws: WebSocket? = null
     private var backoffMs = 5_000L
     private var stopped = false
+
+    /**
+     * 旧版服务器识别（v0.2.06，纯信息特征、零版本维护）：
+     * 新版 PC 每条上传必回 scanResult；旧版只回空确认 {}。
+     * 每次上传 pendingReceipts++ 并起一个 6s 检测——期间没有任何 scanResult
+     * 到达（计数未减）→ LEGACY；之后若真回执来了（只是慢）自愈回 ONLINE。
+     */
+    @Volatile
+    private var pendingReceipts = 0
+
+    private fun scheduleLegacyCheck() {
+        scope.launch {
+            delay(6_000)
+            if (!stopped && pendingReceipts > 0 && state == State.ONLINE) {
+                Timber.tag(TAG).w("上传 6s 无 scanResult 回执，判定 PC 端为旧版本")
+                setState(State.LEGACY)
+            }
+        }
+    }
 
     fun start() {
         if (state != State.IDLE || stopped) return
@@ -92,6 +111,7 @@ class ScanUploadClient(
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
                 if (stopped) return
                 backoffMs = 5_000L
+                pendingReceipts = 0  // 重连重置：旧判定不作数，重新观察
                 setState(State.ONLINE)
                 // helo 握手（Barcode to PC 协议原样，服务端 debug 日志+回执）
                 webSocket.send(
@@ -110,6 +130,9 @@ class ScanUploadClient(
                 runCatching {
                     val obj = JSONObject(text)
                     if (obj.optString("action") != "scanResult") return
+                    // 收到回执：待回计数递减；若曾误判 LEGACY（服务器只是慢），自愈回 ONLINE
+                    pendingReceipts = (pendingReceipts - 1).coerceAtLeast(0)
+                    if (state == State.LEGACY) setState(State.ONLINE)
                     val results = obj.optJSONArray("results") ?: return
                     for (i in 0 until results.length()) {
                         val r = results.optJSONObject(i) ?: continue
@@ -154,7 +177,7 @@ class ScanUploadClient(
      * （putScanSessions 为 Barcode to PC 原生 action，服务端零改动即可消费）。
      */
     fun upload(session: ScanSession, record: ScanRecord) {
-        if (state != State.ONLINE) return
+        if (state != State.ONLINE && state != State.LEGACY) return  // LEGACY（旧版）也能收单，只是无回执
         val socket = ws ?: return
         runCatching {
             val scanning = JSONObject()
@@ -175,6 +198,8 @@ class ScanUploadClient(
                 .put("deviceId", "bridge-scanner")
                 .put("scanSessions", JSONArray().put(sessionJson))
             socket.send(payload.toString())
+            pendingReceipts++
+            scheduleLegacyCheck()
             Timber.tag(TAG).d("已上报：%s", record.value)
         }.onFailure { Timber.tag(TAG).w(it, "上报失败（不影响本地闭环）") }
     }
@@ -189,7 +214,7 @@ class ScanUploadClient(
      * [session] 传 null 时用合成会话名。回执 scanResult 与扫码路径完全同构。
      */
     fun uploadText(session: ScanSession?, text: String) {
-        if (state != State.ONLINE) return
+        if (state != State.ONLINE && state != State.LEGACY) return  // LEGACY（旧版）也能收单，只是无回执
         val socket = ws ?: return
         if (text.isBlank()) return
         runCatching {
@@ -211,6 +236,8 @@ class ScanUploadClient(
                 .put("deviceId", "bridge-scanner")
                 .put("scanSessions", JSONArray().put(sessionJson))
             socket.send(payload.toString())
+            pendingReceipts++
+            scheduleLegacyCheck()
             Timber.tag(TAG).d("补报上报：%s", text)
         }.onFailure { Timber.tag(TAG).w(it, "补报失败（不影响本地闭环）") }
     }

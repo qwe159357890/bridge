@@ -804,6 +804,7 @@ private fun ScanCameraPage(
                     ScanUploadClient.State.ONLINE -> ScanGreen to "PC在线"
                     ScanUploadClient.State.CONNECTING -> ScanOrange to "连接中"
                     ScanUploadClient.State.OFFLINE -> Color(0xFFD64545) to "PC离线"
+                    ScanUploadClient.State.LEGACY -> ScanOrange to "PC旧版·无回执"
                     ScanUploadClient.State.IDLE -> ScanSub to "未连接"
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1006,7 +1007,7 @@ private fun ScanCameraPage(
                         .clickable {
                             val value = lastValue
                             if (lastIsDuplicate && value != null) {
-                                if (uploadState == ScanUploadClient.State.ONLINE) {
+                                if ((uploadState == ScanUploadClient.State.ONLINE || uploadState == ScanUploadClient.State.LEGACY)) {
                                     uploadClient?.uploadText(session, value)
                                     ScanFeedback.toast(context, "已补报 PC：$value")
                                 } else {
@@ -1479,7 +1480,7 @@ private fun ScanSessionListPage(
                 Spacer(Modifier.weight(1f))
                 TextButton(
                     onClick = {
-                        if (uploadState == ScanUploadClient.State.ONLINE) {
+                        if ((uploadState == ScanUploadClient.State.ONLINE || uploadState == ScanUploadClient.State.LEGACY)) {
                             val targets = records.filter { it.id in selected }
                             targets.forEach { uploadClient.uploadText(session, it.value) }
                             ScanFeedback.toast(context, "已上报 ${targets.size} 条到 PC")
@@ -1520,7 +1521,7 @@ private fun ScanSessionListPage(
                                     if (selectionMode) {
                                         if (isSelected) selected.remove(record.id)
                                         else selected.add(record.id)
-                                    } else if (uploadState == ScanUploadClient.State.ONLINE) {
+                                    } else if ((uploadState == ScanUploadClient.State.ONLINE || uploadState == ScanUploadClient.State.LEGACY)) {
                                         uploadClient.uploadText(session, record.value)
                                         ScanFeedback.toast(context, "已上报：${record.value}")
                                     } else {
@@ -1594,7 +1595,7 @@ private fun ScanSessionListPage(
                                         text = { Text("上报 PC") },
                                         onClick = {
                                             menuOpen = false
-                                            if (uploadState == ScanUploadClient.State.ONLINE) {
+                                            if ((uploadState == ScanUploadClient.State.ONLINE || uploadState == ScanUploadClient.State.LEGACY)) {
                                                 uploadClient.uploadText(session, record.value)
                                                 ScanFeedback.toast(context, "已上报：${record.value}")
                                             } else {
