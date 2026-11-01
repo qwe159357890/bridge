@@ -51,11 +51,20 @@ class WechatWsClient {
         private const val PONG_TIMEOUT_MS = 30_000L
 
         /**
-         * REST 地址 → WS 地址。服务端 WS 路由是 `/ws/client`（`api/app.py:133`），
-         * 鉴权走 query `token`（`api/auth.py:83`）。
-         * 公开给 [WechatRuntime]：设置页要展示实际端点，便于排查「REST 通但 WS 连不上」。
+         * REST 地址 → WS 地址（**返回字符串**，不再返回 [okhttp3.HttpUrl]）。
+         * 服务端 WS 路由是 `/ws/client`（`api/app.py:133`），鉴权走 query `token`（`api/auth.py:83`）。
+         *
+         * ⚠️ 致命坑（v0.2.23 修复的真机问题 #1）：**OkHttp 的 `HttpUrl` 只支持 http/https**，
+         * jar 里 `HttpUrl.class` 根本搜不到 `wss` 字样，`toHttpUrlOrNull()` 遇到 `ws://`/`wss://`
+         * 一律返回 null。老代码拼出 `ws://…` 后直接 `toHttpUrlOrNull()` ⇒ **恒为 null** ⇒
+         * `connect()` 第一行就 return false，**从未真正发起过握手**（设置页因此一直显示
+         * 「地址无效，无法推导 WS 地址 · 实时推送连接中」，且新消息/通知/提示音全哑）。
+         *
+         * okhttp 支持 ws 的正确入口是 `Request.Builder.url(String)`——它内部有
+         * 「Silently replace web socket URLs with HTTP URLs」的 `ws→http` / `wss→https` 转换。
+         * 所以这里只产出字符串，解析交给它；本函数仅用「换回 http 试解析」做一次合法性校验。
          */
-        fun toWsUrl(serverUrl: String): okhttp3.HttpUrl? {
+        fun toWsUrl(serverUrl: String): String? {
             if (serverUrl.isBlank()) return null
             val s = serverUrl.trim().trimEnd('/')
             val ws = when {
@@ -64,7 +73,20 @@ class WechatWsClient {
                 s.startsWith("ws://") || s.startsWith("wss://") -> s
                 else -> "ws://$s"
             }
-            return (ws + "/ws/client").toHttpUrlOrNull()
+            val raw = ws + "/ws/client"
+            val probe = when {
+                raw.startsWith("wss://") -> "https://" + raw.removePrefix("wss://")
+                raw.startsWith("ws://") -> "http://" + raw.removePrefix("ws://")
+                else -> raw
+            }
+            return if (probe.toHttpUrlOrNull() != null) raw else null
+        }
+
+        /** 带鉴权 token 的 WS 地址（连接用；[toWsUrl] 的无参版供设置页展示，不带密钥）。 */
+        fun toWsUrl(serverUrl: String, apiKey: String): String? {
+            val base = toWsUrl(serverUrl) ?: return null
+            val sep = if (base.contains("?")) "&" else "?"
+            return base + sep + "token=" + java.net.URLEncoder.encode(apiKey, "UTF-8")
         }
     }
 
@@ -103,13 +125,15 @@ class WechatWsClient {
     /** 连接；已在连接/已连上则忽略。返回是否发起了新连接。 */
     fun connect(serverUrl: String, apiKey: String, deviceId: String, deviceName: String): Boolean {
         if (socket != null) return false
-        val wsUrl = toWsUrl(serverUrl) ?: run {
+        // 【v0.2.23】用带 token 的字符串版地址；Request.Builder.url(String) 内部会把
+        // ws/wss 换成 http/https 再交给 HttpUrl 解析（HttpUrl 本身不认 ws，见 toWsUrl 注释）。
+        val url = toWsUrl(serverUrl, apiKey) ?: run {
             DiagLog.w(TAG, "服务器地址无法转换为 WS：$serverUrl")
             return false
         }
         intentionalClose = false
         val gen = ++generation
-        val url = wsUrl.newBuilder().addQueryParameter("token", apiKey).build()
+        DiagLog.i(TAG, "连接 WS：$url")
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {

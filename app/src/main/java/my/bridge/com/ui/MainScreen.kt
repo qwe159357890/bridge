@@ -97,6 +97,15 @@ fun MainScreen(modifier: Modifier = Modifier) {
             my.bridge.com.wechat.WechatState.clearPendingOpenSession()
         }
     }
+    // 「退出微信」后回主页（v0.2.23）：微信页设置里点「确认退出」会自增该令牌，
+    // 这里观察到变化就切到「主页」Tab（令牌为 0 是首次组合，跳过）。
+    val exitToHome = my.bridge.com.wechat.WechatState.state.exitToHomeToken
+    LaunchedEffect(exitToHome) {
+        if (exitToHome > 0) {
+            selectedBottom = 0
+            wechatNavVisible = true
+        }
+    }
 
     // 主页页面显示顺序（v0.2.08，设置→通用可调）：homeTabOrder[位置]=页面 id。
     // 持有在顶层使设置页改动即时反映到主页 Tab（HomePage 与设置页共享此状态）。
@@ -245,6 +254,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     wechatNavVisible = idx != 1
                     salesNavVisible = idx != 2
                 },
+                onDoubleTap = { idx ->
+                    // 双击「微信」→ 跳到最新一条未读会话（与页内「聊天」Tab 同一语义）
+                    if (idx == 1) my.bridge.com.wechat.WechatState.requestJumpUnread()
+                },
             )
         }
     }
@@ -265,6 +278,7 @@ private fun BridgeBottomBar(
     selected: Int,
     unreadWechat: Int = 0,
     onSelect: (Int) -> Unit,
+    onDoubleTap: (Int) -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -285,7 +299,8 @@ private fun BridgeBottomBar(
                 modifier = Modifier
                     .weight(1f)
                     .height(56.dp)
-                    .clickable { onSelect(index) },
+                    // 双击「微信」Tab → 跳到最新一条未读会话（v0.2.23）
+                    .tabClickable(index = index, onSelect = onSelect, onDoubleTap = onDoubleTap),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {

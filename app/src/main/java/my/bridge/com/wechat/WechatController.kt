@@ -64,6 +64,15 @@ object WechatController {
 
     fun refreshSessions() = WechatRuntime.refreshSessions()
 
+    /** 加载下一页会话（列表滑到底调用，v0.2.23）。 */
+    fun loadMoreSessions() = WechatRuntime.loadMoreSessions()
+
+    /** 加载下一页联系人（列表滑到底调用，v0.2.23）。 */
+    fun loadMoreContacts() = WechatRuntime.loadMoreContacts()
+
+    /** 最新一条未读会话（双击「聊天」按钮跳过去），没有未读返回 null。 */
+    fun latestUnreadSession(): WechatSession? = WechatRuntime.latestUnreadSession()
+
     /** 设置页展示用：实际 WS 端点。 */
     fun wsEndpoint(context: Context): String = WechatRuntime.wsEndpoint(context)
 

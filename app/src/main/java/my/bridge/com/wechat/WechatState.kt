@@ -36,6 +36,21 @@ data class WechatUiState(
     val messageVersion: Int = 0,
     /** 是否已释放（用户主动退出微信 / 开启离开即释放后离开页面）。UI 据此显示「已退出」态。 */
     val released: Boolean = false,
+    /** 会话分页：是否已拉到最后一批（列表据此显示「已经加载全部」）。 */
+    val sessionsEnded: Boolean = false,
+    /** 会话分页：正在加载下一页（防重入）。 */
+    val loadingMoreSessions: Boolean = false,
+    /** 联系人分页：是否已拉到最后一批。 */
+    val contactsEnded: Boolean = false,
+    /** 联系人分页：正在加载下一页（防重入）。 */
+    val loadingMoreContacts: Boolean = false,
+    /**
+     * 「退出微信后回主页」事件令牌（v0.2.23）：MainScreen 观察该计数，>0 且变化时
+     * 切到底部「主页」Tab。用自增计数器而非 Boolean，保证连续两次退出也能被感知。
+     */
+    val exitToHomeToken: Int = 0,
+    /** 「双击聊天按钮 → 跳到最新未读会话」事件令牌（同 [exitToHomeToken] 的用法）。 */
+    val jumpUnreadToken: Int = 0,
 ) {
     /** 当前账号实例（发送上下文）。 */
     val currentInstance: WechatInstance?
@@ -100,6 +115,52 @@ object WechatState {
         it.copy(sessions = list, unreadTotal = unreadTotal, loadingSessions = false)
     }
 
+    /** 追加一页会话（去重后加在尾部），并更新「是否已到底」。 */
+    fun appendSessions(more: List<WechatSession>, ended: Boolean): Int = run {
+        var added = 0
+        mutate { st ->
+            val known = st.sessions.map { it.userWxid }.toSet()
+            val fresh = more.filter { it.userWxid !in known }
+            added = fresh.size
+            st.copy(
+                sessions = st.sessions + fresh,
+                loadingMoreSessions = false,
+                sessionsEnded = ended,
+            )
+        }
+        added
+    }
+
+    fun setSessionsEnded(ended: Boolean) = mutate { it.copy(sessionsEnded = ended) }
+
+    fun setLoadingMoreSessions(v: Boolean) = mutate { it.copy(loadingMoreSessions = v) }
+
+    fun setContactsEnded(ended: Boolean) = mutate { it.copy(contactsEnded = ended) }
+
+    fun setLoadingMoreContacts(v: Boolean) = mutate { it.copy(loadingMoreContacts = v) }
+
+    /** 追加一页联系人（去重后加在尾部），并更新「是否已到底」。返回新增条数。 */
+    fun appendContacts(more: List<WechatContact>, ended: Boolean): Int = run {
+        var added = 0
+        mutate { st ->
+            val known = st.contacts.map { it.wxid }.toSet()
+            val fresh = more.filter { it.wxid !in known }
+            added = fresh.size
+            st.copy(
+                contacts = st.contacts + fresh,
+                loadingMoreContacts = false,
+                contactsEnded = ended,
+            )
+        }
+        added
+    }
+
+    /** 退出微信后请求回到 APP 主页（自增令牌，MainScreen 观察）。 */
+    fun requestExitToHome() = mutate { it.copy(exitToHomeToken = it.exitToHomeToken + 1) }
+
+    /** 请求跳到最新一条未读会话（自增令牌，微信页观察）。 */
+    fun requestJumpUnread() = mutate { it.copy(jumpUnreadToken = it.jumpUnreadToken + 1) }
+
     fun setLoadingSessions(loading: Boolean) = mutate { it.copy(loadingSessions = loading) }
 
     fun setSessionMode(mode: String) = mutate { it.copy(sessionMode = mode) }
@@ -138,6 +199,10 @@ object WechatState {
             unreadTotal = 0,
             connState = WechatConnState.DISCONNECTED,
             pendingOpenSession = "",
+            sessionsEnded = false,
+            loadingMoreSessions = false,
+            contactsEnded = false,
+            loadingMoreContacts = false,
         )
     }
 

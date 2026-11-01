@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.bridge.com.wechat.WechatAttachment
 import my.bridge.com.wechat.WechatController
+import my.bridge.com.wechat.WechatEmoji
 import my.bridge.com.wechat.WechatDownloader
 import my.bridge.com.wechat.WechatImageLoader
 import my.bridge.com.wechat.WechatMessage
@@ -207,7 +208,8 @@ fun WechatMessageContent(
         WechatMsgType.EMOJI -> {
             val obj = att.emojiObject
             if (obj.isBlank()) {
-                Text(msg.content.ifBlank { "[表情]" }, fontSize = 13.sp)
+                // v0.2.23：`[微笑]` 这类文本表情代码要渲染成 emoji（照前端 replaceEmojiCodes）
+                Text(WechatEmoji.replaceCodes(msg.content).ifBlank { "[表情]" }, fontSize = 13.sp)
             } else {
                 WechatRemoteImage(
                     url = WechatController.attachmentUrl(context, obj),
@@ -247,7 +249,7 @@ fun WechatMessageContent(
 
         WechatMsgType.VOIP -> Text("[语音/视频通话]", fontSize = 13.sp)
 
-        WechatMsgType.TEXT -> Text(msg.content, fontSize = 14.sp)
+        WechatMsgType.TEXT -> Text(WechatEmoji.replaceCodes(msg.content), fontSize = 14.sp)
 
         else -> {
             // 文件（attachment.path）与其它未覆盖类型
@@ -267,7 +269,7 @@ fun WechatMessageContent(
                     }
                 }
             } else {
-                Text(msg.content.ifBlank { "[消息]" }, fontSize = 13.sp)
+                Text(WechatEmoji.replaceCodes(msg.content).ifBlank { "[消息]" }, fontSize = 13.sp)
             }
         }
     }

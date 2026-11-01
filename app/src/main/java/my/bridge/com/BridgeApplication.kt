@@ -69,6 +69,10 @@ class BridgeApplication : Application() {
         my.bridge.com.media.BridgeApplicationContextHolder.init(this)
         bluetoothMediaButtonListener.start(this)
 
+        // 提示音预热（v0.2.23）：SoundPool 解码是异步的，启动时 load 好，
+        // 避免第一条新消息「无声」（音源照参考 PC 客户端 MSN消息.wav）。
+        my.bridge.com.wechat.WechatSound.init(this)
+
         // 微信（center-server）**进程级**运行时：连接常开，不随页面销毁而断。
         // 离开微信页仍要实时收消息并通知，因此这里就启动；未配置服务器时内部自行跳过。
         // 不新增前台服务——进程存活复用上面的 KeepAliveService 保活体系。

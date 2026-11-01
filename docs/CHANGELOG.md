@@ -22,6 +22,53 @@
 
 ---
 
+## 2026-11-01 · 🐞 v0.2.23 微信页第二批真机问题修复（9 项，含一个「从未连上」的根因）
+
+**节点意义**：v0.2.22 装上真机后用户又反馈 9 项。其中 **WS 从未连接过**是根因级 bug——
+一次修复同时解决了「实时消息不刷新 / 不弹通知 / 不响提示音」三个现象（问题 1、3、9 同源）。
+台账（改前/改后/回滚配方）：`docs/dev/wechat-fix-ledger-v0.2.23.md`。
+
+- **① WS 地址永远推导失败（根治，问题 1/3/9 同源）**：`WechatWsClient.toWsUrl()` 拼出 `ws://…` 后
+  直接调 OkHttp 的 `toHttpUrlOrNull()`，而 **OkHttp 的 `HttpUrl` 只支持 http/https**
+  （jar 里 `HttpUrl.class` 搜不到 `wss`，只有 `Request$Builder` 有 `ws→http` 静默转换）→ **恒为 null**
+  → `connect()` 首行 return false，**从未发起过握手**；且无任何回调，状态永远卡在 CONNECTING
+  （连 2s 重连循环都进不去）。改为**返回字符串**交给 `Request.Builder.url(String)` 由 OkHttp 内部转换；
+  并发起失败时把状态打回 DISCONNECTED（不再假装在连接）。
+- **② 会话/通讯录分页 + 「已经加载全部」**：原先一次性拉 200 条会话 / 100 条联系人，**之后滑动不再请求**，
+  也没有终点提示。改为 50 条一页、滑到接近底部追加（`loadMoreSessions` / `loadMoreContacts`），
+  底部状态条区分「加载中 / 滑动加载更多 / **已经加载全部 · 共 N 条**」。
+- **③ 未读角标 + 双击跳未读**：会话行头像**右上角**补 `BadgedBox` 未读角标（免打扰灰点）；
+  新增 `tabClickable`（400ms 内连击判定），双击页内「聊天」Tab 或底部「微信」Tab →
+  跳到最新一条未读会话并播「叮一声」（照参考 PC 客户端的跳未读交互）。
+- **④ 退出微信回主页**：原来只释放资源、仍停在微信页。`logout()` 现在自增 `exitToHomeToken`，
+  MainScreen 观察后切到「主页」Tab。
+- **⑤ 聊天输入框高度（补漏）**：v0.2.22 只改了两处搜索框，漏了聊天输入框（仍是
+  `OutlinedTextField` + `heightIn(min=36.dp)`，被 M3 的 56dp 最小高度顶住）。新增
+  `WechatChatInputField`（BasicTextField 自绘，36dp）替换。
+- **⑥ 发送后自动滚到底部**：发送文本/文件成功后 `listState.animateScrollToItem(messages.lastIndex)`。
+- **⑦ 表情全集（148 个）**：新增 `wechat/WechatEmoji.kt`，从参考项目
+  `pc-client/gui/utils/emoji_data.py`（web 端 `emoji.ts` 同源）1:1 生成；面板改为可滚动 8 列网格；
+  并照前端 `replaceEmojiCodes` 在消息/会话摘要渲染时把 `[微笑]` 这类代码**渲染成 emoji**。
+- **⑧ 提示音（照 PC 客户端）**：原先播系统默认通知铃声（多数 ROM 上是「无」⇒ 完全无声）。
+  改为 SoundPool 播放自带音源 `res/raw/wechat_msg.wav`（= PC 端 `MSN消息.wav`），
+  跳未读播 `wechat_jump.wav`（= `叮一声.wav`）；**通知渠道改为静音**（`_v2` 换 id 规避渠道属性不可变），
+  避免「通知声 + 自播声」双响。
+- **⑨ 通知**：随 ① 修复后 `onIncomingMessage` 正常回调，通知与提示音链路才真正被触发。
+
+### 关键经验沉淀
+
+- **「连接状态显示异常」要优先怀疑地址推导，而不是服务端**：本次设置页已经打印了
+  「地址无效，无法推导 WS 地址」，但被当成显示瑕疵；真相是 WS **一次都没连过**。
+  **结论：状态文案里的「无效/失败」是硬信号，不是文案问题。**
+- **OkHttp 用 ws 只认 `Request.Builder.url(String)`**：`HttpUrl` 与 `toHttpUrlOrNull()` 不支持 ws/wss，
+  任何「先拼 ws 再 toHttpUrl」的写法都会静默返回 null。
+- **连接发起失败必须显式回退状态**：没有回调 ⇒ 状态机卡死 ⇒ 连重连都不会触发；
+  凡是「发起即失败」的路径都要自己把状态置回 DISCONNECTED。
+- **分页要给终点提示**：没有「已经加载全部」时，用户无法区分「到顶了」和「卡住了」，
+  会把正常行为报成 bug。
+
+---
+
 ## 2026-11-01 · 🐞 v0.2.22 微信页首批真机问题修复（8 项，用户逐条反馈）
 
 **节点意义**：v0.2.21 首次装上真机后，用户逐条反馈了 8 类问题。本里程碑按「一个一个解决」全部修复，

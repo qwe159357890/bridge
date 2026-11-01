@@ -34,6 +34,10 @@ object WechatRuntime : WechatWsClient.Listener {
     private const val TAG = "微信"
     private const val RECONNECT_MS = 2_000L
 
+    /** 分页页大小：会话与联系人都改成「滚到底再拉下一页」，不再一次拉 200 条（v0.2.23）。 */
+    private const val SESSION_PAGE = 50
+    private const val CONTACT_PAGE = 50
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
@@ -145,31 +149,44 @@ object WechatRuntime : WechatWsClient.Listener {
         stopped = true
     }
 
-    /** 用户主动退出微信（设置页「退出微信」按钮）。 */
+    /** 用户主动退出微信（设置页「退出微信」按钮）：释放资源 + 通知 UI 回到 APP 主页。 */
     fun logout(context: Context) {
         app = context.applicationContext
         stopAll("用户主动退出微信")
+        // v0.2.23：用户反馈「点了退出还停在微信页」。退出后跳回主页 Tab（MainScreen 观察该令牌）。
+        WechatState.requestExitToHome()
     }
 
     // ------------------------------------------------------------------
     // 连接与重连
     // ------------------------------------------------------------------
 
-    private fun connect() {
-        val ctx = app ?: return
+    /**
+     * 发起连接。返回**是否真的发起了握手**（false = 未配置 / 已在连接 / 地址无法推导成 WS）。
+     *
+     * v0.2.23：地址推导失败时立刻把状态打回 DISCONNECTED——老代码会让状态永远停在
+     * CONNECTING（没有任何回调触发），用户看到的就是「实时推送连接中」却永远连不上。
+     */
+    private fun connect(): Boolean {
+        val ctx = app ?: return false
         if (!WechatPrefs.configured(ctx)) {
             DiagLog.i(TAG, "未配置服务器，跳过连接")
             WechatState.setConnState(WechatConnState.DISCONNECTED)
-            return
+            return false
         }
-        if (ws.isConnected()) return
+        if (ws.isConnected()) return true
         WechatState.setConnState(WechatConnState.CONNECTING)
-        ws.connect(
+        val launched = ws.connect(
             serverUrl = WechatPrefs.serverUrl(ctx),
             apiKey = WechatPrefs.apiKey(ctx),
             deviceId = WechatPrefs.deviceId(ctx),
             deviceName = android.os.Build.MODEL,
         )
+        if (!launched) {
+            WechatState.setConnState(WechatConnState.DISCONNECTED)
+            DiagLog.w(TAG, "WS 连接未能发起，请检查服务器地址：${WechatPrefs.serverUrl(ctx)}")
+        }
+        return launched
     }
 
     private fun reconnectNow(reason: String) {
@@ -184,7 +201,13 @@ object WechatRuntime : WechatWsClient.Listener {
         reconnectJob = scope.launch {
             while (isActive && !ws.isConnected()) {
                 delay(RECONNECT_MS)
-                if (!ws.isConnected()) connect()
+                if (!ws.isConnected()) {
+                    // 连不上且不是「已在连接中」（如地址非法、未配置）：停止空转重试，
+                    // 等配置变更或网络恢复再触发——否则会 2s 一次无意义地打日志。
+                    // ⚠️ 只能用 break 退出本循环，绝不能调 cancel()——那会取消共享的
+                    // Runtime scope（SupervisorJob），把整个微信运行时一起干掉。
+                    if (!connect()) break
+                }
             }
         }
     }
@@ -364,7 +387,7 @@ object WechatRuntime : WechatWsClient.Listener {
         WechatMsgType.EMOJI -> "[表情]"
         WechatMsgType.LOCATION -> "[位置]"
         WechatMsgType.XML -> "[应用消息]"
-        else -> content.ifBlank { "[消息]" }
+        else -> WechatEmoji.replaceCodes(content).ifBlank { "[消息]" }
     }
 
     // ------------------------------------------------------------------
@@ -396,15 +419,29 @@ object WechatRuntime : WechatWsClient.Listener {
         }
     }
 
+    /**
+     * 首页会话（v0.2.23 起分页）：拉第 1 页并把「是否已到底」写进状态。
+     * 之后由 [loadMoreSessions] 追加；列表滑到底才会继续请求。
+     */
+    /**
+     * 最新一条有未读的会话（双击「聊天」按钮跳转用，v0.2.23）。
+     * 参考 PC 客户端同一交互（快捷键跳未读会话，并播「叮一声」）。
+     * [WechatUiState.visibleSessions] 已按「置顶 + 更新时间倒序」排好，取第一个未读即可。
+     */
+    fun latestUnreadSession(): WechatSession? =
+        WechatState.state.visibleSessions.firstOrNull { it.unreadCount > 0 }
+
     fun refreshSessions() {
         val ctx = app ?: return
         if (WechatState.state.loadingSessions) return
         WechatState.setLoadingSessions(true)
         scope.launch {
             runCatching {
-                val list = api!!.sessions(limit = 200)
+                val list = api!!.sessions(limit = SESSION_PAGE, offset = 0)
                 withContext(Dispatchers.Main.immediate) {
                     WechatState.setSessions(list, list.filter { !it.isMuted }.sumOf { it.unreadCount })
+                    // 返回条数不足一页 ⇒ 后面没有了（列表据此显示「已经加载全部」）
+                    WechatState.setSessionsEnded(list.size < SESSION_PAGE)
                 }
             }.onFailure {
                 DiagLog.w(TAG, "拉取会话失败：${it.message}")
@@ -413,21 +450,71 @@ object WechatRuntime : WechatWsClient.Listener {
         }
     }
 
+    /** 加载下一页会话（列表滑到底调用）。已在加载 / 已到底则直接返回。 */
+    fun loadMoreSessions() {
+        val ctx = app ?: return
+        val st = WechatState.state
+        if (st.loadingMoreSessions || st.sessionsEnded || st.loadingSessions) return
+        WechatState.setLoadingMoreSessions(true)
+        scope.launch {
+            runCatching {
+                val offset = WechatState.state.sessions.size
+                val list = api!!.sessions(limit = SESSION_PAGE, offset = offset)
+                withContext(Dispatchers.Main.immediate) {
+                    WechatState.appendSessions(list, list.size < SESSION_PAGE)
+                }
+            }.onFailure {
+                DiagLog.w(TAG, "加载更多会话失败：${it.message}")
+                WechatState.setLoadingMoreSessions(false)
+            }
+        }
+    }
+
+    /** 首页联系人（v0.2.23 起分页）。 */
     fun refreshContacts() {
         val ctx = app ?: return
         scope.launch {
             runCatching {
                 val account = WechatPrefs.currentWxid(ctx)
                 val filter = WechatPrefs.contactsFilter(ctx)
-                var list = api!!.contacts(accountWxid = account, filter = filter)
+                var list = api!!.contacts(accountWxid = account, filter = filter, limit = CONTACT_PAGE, offset = 0)
                 // 兜底（v0.2.22 修复「通讯录空空如也」）：contacts 表里的 account_wxid 未必回填完整，
                 // 此时带账号过滤会永远返回空列表。空结果时再不带账号拉一次全局联系人。
                 if (list.isEmpty() && account.isNotBlank()) {
                     DiagLog.i(TAG, "按账号过滤无联系人，回退拉取全部联系人")
-                    list = api!!.contacts(accountWxid = "", filter = filter)
+                    list = api!!.contacts(accountWxid = "", filter = filter, limit = CONTACT_PAGE, offset = 0)
                 }
-                withContext(Dispatchers.Main.immediate) { WechatState.setContacts(list) }
+                val ended = list.size < CONTACT_PAGE
+                withContext(Dispatchers.Main.immediate) {
+                    WechatState.setContacts(list)
+                    WechatState.setContactsEnded(ended)
+                }
             }.onFailure { DiagLog.w(TAG, "拉取联系人失败：${it.message}") }
+        }
+    }
+
+    /** 加载下一页联系人（列表滑到底调用）。 */
+    fun loadMoreContacts() {
+        val ctx = app ?: return
+        val st = WechatState.state
+        if (st.loadingMoreContacts || st.contactsEnded) return
+        WechatState.setLoadingMoreContacts(true)
+        scope.launch {
+            runCatching {
+                val account = WechatPrefs.currentWxid(ctx)
+                val filter = WechatPrefs.contactsFilter(ctx)
+                val offset = WechatState.state.contacts.size
+                var list = api!!.contacts(accountWxid = account, filter = filter, limit = CONTACT_PAGE, offset = offset)
+                if (list.isEmpty() && account.isNotBlank()) {
+                    list = api!!.contacts(accountWxid = "", filter = filter, limit = CONTACT_PAGE, offset = offset)
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    WechatState.appendContacts(list, list.size < CONTACT_PAGE)
+                }
+            }.onFailure {
+                DiagLog.w(TAG, "加载更多联系人失败：${it.message}")
+                WechatState.setLoadingMoreContacts(false)
+            }
         }
     }
 
@@ -558,7 +645,7 @@ object WechatRuntime : WechatWsClient.Listener {
 
     /** 设置页展示用：实际 WS 端点（排查「REST 通但 WS 连不上」时第一手信息）。 */
     fun wsEndpoint(context: Context): String =
-        WechatWsClient.toWsUrl(WechatPrefs.serverUrl(context))?.toString()
+        WechatWsClient.toWsUrl(WechatPrefs.serverUrl(context))
             ?: "（地址无效，无法推导 WS 地址）"
 
     /** 保存附件到 `/sdcard/bridge/wechat/{images,videos,voice,files}`。 */

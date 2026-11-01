@@ -51,6 +51,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
@@ -68,6 +69,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,9 +94,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import my.bridge.com.wechat.WechatConnState
 import my.bridge.com.wechat.WechatContact
 import my.bridge.com.wechat.WechatController
+import my.bridge.com.wechat.WechatEmoji
 import my.bridge.com.wechat.WechatMessage
 import my.bridge.com.wechat.WechatMsgType
 import my.bridge.com.wechat.WechatSession
+import my.bridge.com.wechat.WechatSound
 import my.bridge.com.wechat.WechatState
 
 // ============ 主题色（微信绿，不套 Bridge 蓝） ============
@@ -153,6 +157,96 @@ private fun WechatSearchField(
     )
 }
 
+/**
+ * 聊天输入框（v0.2.23）——与 [WechatSearchField] 同理。
+ *
+ * 原实现是 `OutlinedTextField` + `heightIn(min = 36.dp)`：M3 自带 **minHeight 56dp**，
+ * `heightIn(min)` 压不下去（最小尺寸约束优先），所以 v0.2.22 改了搜索框却漏了这里，
+ * 真机上「发送消息的输入框高度没调小」。改用 BasicTextField 自绘后高度完全可控。
+ */
+@Composable
+private fun WechatChatInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        enabled = enabled,
+        textStyle = TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(WechatGreen),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        modifier = modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (enabled) MaterialTheme.colorScheme.surface else WechatPageBg)
+            .border(1.dp, WechatBorder, RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp),
+        decorationBox = { inner ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxHeight()) {
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) Text(placeholder, fontSize = 13.sp, color = WechatSub, maxLines = 1)
+                    inner()
+                }
+            }
+        },
+    )
+}
+
+/**
+ * 分页列表底部状态条（v0.2.23）：用户要求「加载完了就显示『已经加载全部』」，
+ * 以此区分「到顶了」与「卡住了」。
+ */
+@Composable
+private fun WechatListFooter(loading: Boolean, ended: Boolean, count: Int) {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            loading -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = WechatSub)
+                    Spacer(Modifier.width(6.dp))
+                    Text("加载中...", fontSize = 11.sp, color = WechatSub)
+                }
+            }
+            ended -> Text("已经加载全部 · 共 $count 条", fontSize = 11.sp, color = WechatSub)
+            else -> Text("滑动到底部加载更多", fontSize = 11.sp, color = WechatSub)
+        }
+    }
+}
+
+/**
+ * Tab 点击（含**双击**判定，v0.2.23）：双击页内「聊天」/ 底部「微信」按钮 →
+ * 跳到最新一条未读会话（照参考 PC 客户端的「跳未读会话」交互，并播「叮一声」）。
+ */
+@Composable
+internal fun Modifier.tabClickable(
+    index: Int,
+    onSelect: (Int) -> Unit,
+    onDoubleTap: (Int) -> Unit,
+): Modifier {
+    var lastTapAt by remember { mutableLongStateOf(0L) }
+    var lastTapIndex by remember { mutableIntStateOf(-1) }
+    return clickable {
+        val now = System.currentTimeMillis()
+        if (lastTapIndex == index && now - lastTapAt < 400) {
+            lastTapAt = 0L
+            lastTapIndex = -1
+            onDoubleTap(index)
+        } else {
+            lastTapAt = now
+            lastTapIndex = index
+            onSelect(index)
+        }
+    }
+}
+
 private const val WECHAT_DOWNLOAD_ROOT = "/sdcard/bridge/wechat/"
 
 /**
@@ -204,6 +298,20 @@ fun WechatPage(
         if (initialSessionWxid != null) {
             openSession = initialSessionWxid
             WechatController.openSession(context, initialSessionWxid)
+        }
+    }
+    // 双击「聊天」按钮 → 跳到最新一条未读会话（v0.2.23）。令牌为 0 时是首次组合，跳过。
+    val jumpToken = ui.jumpUnreadToken
+    LaunchedEffect(jumpToken) {
+        if (jumpToken == 0) return@LaunchedEffect
+        val target = WechatController.latestUnreadSession()
+        if (target == null) {
+            wechatToast(context, "没有未读会话")
+        } else {
+            subTab = 0
+            openSession = target.userWxid
+            WechatController.openSession(context, target.userWxid)
+            WechatSound.playJump(context)
         }
     }
     DisposableEffect(Unit) {
@@ -302,7 +410,12 @@ private fun WechatSubBar(
                     modifier = Modifier
                         .weight(1f)
                         .height(54.dp)
-                        .clickable { onSelect(index) },
+                        // v0.2.23：双击「聊天」→ 跳到最新一条未读会话（令牌由页面消费）
+                        .tabClickable(
+                            index = index,
+                            onSelect = onSelect,
+                            onDoubleTap = { WechatState.requestJumpUnread() },
+                        ),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -400,16 +513,40 @@ private fun WechatSessionList(onOpen: (String) -> Unit) {
             }
         }
         val list = ui.visibleSessions.filter {
-            keyword.value.isBlank() || it.userNickname.contains(keyword.value, true) || it.lastMsg.contains(keyword.value, true)
+            keyword.value.isBlank() || it.userNickname.contains(keyword.value, true) ||
+                it.lastMsg.contains(keyword.value, true)
         }
         if (list.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("暂无会话", fontSize = 13.sp, color = WechatSub)
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            val listState = rememberLazyListState()
+            // 滑到接近底部就拉下一页（v0.2.23）。搜索状态下不自动翻页——
+            // 过滤后的条数与服务端 offset 对不上，翻页会错位。
+            val needMore by remember {
+                derivedStateOf {
+                    if (keyword.value.isNotBlank()) return@derivedStateOf false
+                    if (ui.loadingMoreSessions || ui.sessionsEnded) return@derivedStateOf false
+                    val info = listState.layoutInfo
+                    val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
+                    // 列表末尾还挂了一个 footer item（index == list.size），故用 -2 提前触发
+                    last.index >= list.size - 2
+                }
+            }
+            LaunchedEffect(needMore) {
+                if (needMore) WechatController.loadMoreSessions()
+            }
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(list, key = { it.userWxid }) { s ->
                     WechatSessionRow(s, onOpen)
+                }
+                item {
+                    WechatListFooter(
+                        loading = ui.loadingMoreSessions,
+                        ended = ui.sessionsEnded,
+                        count = list.size,
+                    )
                 }
             }
         }
@@ -433,7 +570,21 @@ private fun WechatSessionRow(session: WechatSession, onOpen: (String) -> Unit) {
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            WechatAvatar(wxid = session.userWxid, name = session.userNickname, size = 40.dp)
+            // v0.2.23：未读除了行尾计数，还要在**头像右上角挂角标**（用户反馈「没有角标」）。
+            // 免打扰用灰点（与行尾计数同色），普通用红点。
+            if (session.unreadCount > 0) {
+                BadgedBox(
+                    badge = {
+                        Badge(containerColor = if (session.isMuted) Color(0xFFC0C4CC) else WechatRed) {
+                            Text(if (session.unreadCount > 99) "99+" else session.unreadCount.toString())
+                        }
+                    },
+                ) {
+                    WechatAvatar(wxid = session.userWxid, name = session.userNickname, size = 40.dp)
+                }
+            } else {
+                WechatAvatar(wxid = session.userWxid, name = session.userNickname, size = 40.dp)
+            }
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -441,7 +592,14 @@ private fun WechatSessionRow(session: WechatSession, onOpen: (String) -> Unit) {
                     if (session.isPinned) Text(" 置顶", fontSize = 10.sp, color = WechatOrange)
                     if (session.isMuted) Text(" 免打扰", fontSize = 10.sp, color = WechatSub)
                 }
-                Text(session.lastMsg, fontSize = 12.sp, color = WechatSub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // v0.2.23：`[微笑]` 这类文本表情代码渲染成 emoji
+                Text(
+                    WechatEmoji.replaceCodes(session.lastMsg),
+                    fontSize = 12.sp,
+                    color = WechatSub,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(session.lastTime, fontSize = 11.sp, color = WechatSub)
@@ -581,6 +739,7 @@ private fun WechatChatPanel(
             wechatToast(context, if (r.isSuccess) "已发送" else "发送失败：${r.exceptionOrNull()?.message}")
             if (r.isSuccess) {
                 messages.add(selfMessage(sessionWxid, "[文件] $name"))
+                listState.animateScrollToItem(messages.lastIndex)
                 WechatController.refreshSessions()
             }
             sending = false
@@ -718,27 +877,38 @@ private fun WechatChatPanel(
             }
         }
 
-        // 表情面板（本地文本 emoji，插入到输入框）
+        // 表情面板（v0.2.23）：表情全集照参考项目 WechatEmoji（148 条），可滚动网格。
+        // 点击插入的是 **emoji 字符**（参考前端 handleEmojiSelect 取 emoji 而非 code）。
         if (emojiPanel) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(150.dp)
-                    .background(Color(0xFFF7F8FA))
-                    .padding(8.dp),
+                    .height(190.dp)
+                    .background(Color(0xFFF7F8FA)),
             ) {
-                WECHAT_EMOJIS.chunked(8).forEach { row ->
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        row.forEach { e ->
-                            Text(
-                                e,
-                                fontSize = 22.sp,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { input += e }
-                                    .padding(vertical = 6.dp),
-                                textAlign = TextAlign.Center,
-                            )
+                Text(
+                    "微信表情 · 共 ${WechatEmoji.list.size} 个",
+                    fontSize = 11.sp,
+                    color = WechatSub,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+                val rows = remember { WechatEmoji.list.chunked(WechatEmoji.COLUMNS) }
+                LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp)) {
+                    items(rows) { row ->
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            row.forEach { (_, e) ->
+                                Text(
+                                    e,
+                                    fontSize = 22.sp,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { input += e }
+                                        .padding(vertical = 6.dp),
+                                )
+                            }
+                            // 末行不满 8 个时补空位，保持网格对齐
+                            repeat(WechatEmoji.COLUMNS - row.size) { Spacer(modifier = Modifier.weight(1f)) }
                         }
                     }
                 }
@@ -761,13 +931,13 @@ private fun WechatChatPanel(
                         DropdownMenuItem(text = { Text("发送文件") }, onClick = { attachMenu = false; picker.launch("*/*") })
                     }
                 }
-                OutlinedTextField(
+                // v0.2.23：换自绘 BasicTextField（M3 OutlinedTextField 的 56dp 压不下来）
+                WechatChatInputField(
                     value = input,
                     onValueChange = { input = it },
-                    placeholder = { Text(if (canSend) "请输入消息..." else "请先选择微信账号", fontSize = 13.sp) },
+                    placeholder = if (canSend) "请输入消息..." else "请先选择微信账号",
                     enabled = canSend,
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).heightIn(min = 36.dp),
+                    modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(6.dp))
                 WechatAccountChip()
@@ -781,6 +951,9 @@ private fun WechatChatPanel(
                             val r = WechatController.sendText(context, sessionWxid, text)
                             if (r.isSuccess) {
                                 messages.add(selfMessage(sessionWxid, text))
+                                // v0.2.23：发完必须滚到底——否则新消息在视口外，
+                                // 用户得手动往下滑才看得到自己刚发的内容
+                                listState.animateScrollToItem(messages.lastIndex)
                                 WechatController.refreshSessions()
                             } else {
                                 wechatToast(context, r.exceptionOrNull()?.message ?: "发送失败")
@@ -873,11 +1046,7 @@ private fun selfMessage(sessionWxid: String, content: String): WechatMessage = W
     senderNickname = "我",
 )
 
-private val WECHAT_EMOJIS = listOf(
-    "\uD83D\uDE00", "\uD83D\uDE02", "\uD83E\uDD23", "\uD83D\uDE0A", "\uD83D\uDE0D", "\uD83D\uDE18", "\uD83D\uDE14", "\uD83D\uDE2D",
-    "\uD83D\uDC4D", "\uD83D\uDE4F", "\uD83D\uDCAA", "\uD83C\uDF89", "❤️", "\uD83D\uDD25", "\uD83D\uDE05", "\uD83E\uDD14",
-    "\uD83D\uDC4F", "\uD83C\uDF39", "\uD83C\uDF7A", "☕", "\uD83D\uDCB0", "\uD83D\uDE80", "⭐", "✅",
-)
+// v0.2.23：表情全集移到 wechat/WechatEmoji.kt（照参考项目 148 条），此处不再自带。
 
 /** 账号选择（原顶部账号行移到这里）：显示当前账号序号，点击弹菜单切换。 */
 @Composable
@@ -986,8 +1155,27 @@ private fun WechatContactsPage(onStartChat: (String) -> Unit) {
         if (list.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无联系人", fontSize = 13.sp, color = WechatSub) }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            val listState = rememberLazyListState()
+            val needMore by remember {
+                derivedStateOf {
+                    if (keyword.value.isNotBlank()) return@derivedStateOf false
+                    if (ui.loadingMoreContacts || ui.contactsEnded) return@derivedStateOf false
+                    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
+                    last.index >= list.size - 2
+                }
+            }
+            LaunchedEffect(needMore) {
+                if (needMore) WechatController.loadMoreContacts()
+            }
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(list, key = { it.wxid }) { c -> WechatContactRow(c, onStartChat) }
+                item {
+                    WechatListFooter(
+                        loading = ui.loadingMoreContacts,
+                        ended = ui.contactsEnded,
+                        count = list.size,
+                    )
+                }
             }
         }
     }
@@ -1309,9 +1497,9 @@ private fun WechatSettingsPage() {
             }
         }
         item {
-            SettingsCard("WebSocket 参数（默认照抄参考项目）") {
-                ParamRow("心跳间隔", "15000 ms")
-                ParamRow("Pong 超时", "60000 ms")
+            SettingsCard("WebSocket 参数（v0.2.21 起已放宽，照心跳台账 §8）") {
+                ParamRow("心跳间隔", "60000 ms")
+                ParamRow("Pong 超时", "30000 ms")
                 ParamRow("重连间隔", "固定 2000 ms")
             }
         }

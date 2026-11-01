@@ -17,13 +17,16 @@ import my.bridge.com.core.common.DiagLog
  * `keepalive.KeepAliveService.NOTIFICATION_ID` 都是 2001，微信消息若复用会顶掉保活
  * 常驻通知（且 autoCancel 会让用户把前台服务通知划掉）。这里从 [BASE_ID] 开始按会话分配。
  *
- * 渠道声音属性创建后不可变，故按「是否需要提示音」建两个渠道（照 NotificationPoster 的做法）。
+ * v0.2.23：**渠道一律静音**，`sound` 参数只作标记不再驱动渠道发声——
+ * 提示音统一由 [WechatSound] 播放自带 wav（系统默认通知铃声在多数 ROM 上是「无」，
+ * 这就是为什么真机上「收到新消息没声音」）。若渠道自己也发声就会和自播声**双响**。
+ * 渠道 id 后缀 `_v2`：渠道创建后属性不可变，换 id 才能让老安装也生效。
  */
 object WechatNotifier {
 
     private const val TAG = "微信通知"
-    private const val CHANNEL_SOUND = "wechat_message_sound"
-    private const val CHANNEL_SILENT = "wechat_message_silent"
+    private const val CHANNEL_SOUND = "wechat_message_sound_v2"
+    private const val CHANNEL_SILENT = "wechat_message_silent_v2"
     private const val CHANNEL_NAME = "微信消息"
 
     /** 通知 id 起始值（2001 已被保活/远程通知占用）。 */
@@ -40,7 +43,8 @@ object WechatNotifier {
         val channel = NotificationChannel(id, CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "中心服务器微信新消息"
             setShowBadge(true)
-            if (!sound) setSound(null, null)
+            // 声音交给 WechatSound 统一播放（自带音源），渠道自身不发声，避免双响
+            setSound(null, null)
         }
         nm.createNotificationChannel(channel)
         return id
