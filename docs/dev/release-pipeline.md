@@ -168,6 +168,38 @@ git reset --hard origin/main
   否则 `reset --hard` 会丢弃工作区改动。
 - **效果**：本地 HEAD/index 对齐远端权威历史，`git status` 干净，分叉消除。
 
+#### ⚠️ 追平的三个致命坑（2026-11-01 v0.2.21 发布时全部踩中，务必照做）
+
+1. **`fetch` 失败时绝不能 `reset --hard origin/main`**（最危险，会删文件）。
+   沙箱代理间歇 502 / reset，直连也常超时。`fetch` 一旦失败，`origin/main` 仍是**上一次成功时的过期 ref**，
+   此时 `reset --hard origin/main` 会把本地回退到旧版本——实测直接删除了 `wechat/` 全部 13 个文件与新增文档。
+   正确写法：**用 `&&` 串联，并校验 ref 是否真的前进了**：
+   ```bash
+   git fetch origin main && [ "$(git rev-parse --short origin/main)" = "<远端目标 sha>" ] && git reset --hard origin/main
+   ```
+   抢救：文件被删后 `git reflog` 找回事故前的 HEAD（如 `0ef91c8`），`git reset --hard 0ef91c8` 即可完整恢复。
+
+2. **git 协议不通时的救星：把 gh-proxy 当 git 传输代理**（文档此前未记录，实测可用）：
+   ```bash
+   git fetch https://v4.gh-proxy.org/https://github.com/{owner}/{repo}.git main:refs/remotes/origin/main
+   ```
+   这次 ①清代理直连 ②默认代理 全部失败，靠它一次成功（顺带把 tag 也拉下来了）。
+
+3. **API 通道提交会让两端「文件树 hash 不同」，但内容其实一致**（行尾符差异）。
+   本地 git 存 LF、工作区是 CRLF（`core.autocrlf`），API 上传的是工作区原文（CRLF），
+   所以 `git diff` 会显示整文件重写（几千行增删，看着吓人）。
+   追平前先用下面命令确认**只有行尾差异**，再放心 reset：
+   ```bash
+   git diff --ignore-cr-at-eol --stat <本地sha> <远端sha>   # 输出为空 = 仅行尾差异，可安全 reset
+   ```
+
+#### ⚠️ `release.py` 被中断/拦截后重跑会重复 bump 版本号
+
+脚本一旦走到 `bump_version()` 就会改 `versionName` 并 `git commit`，即便后面 `git push` 失败、或命令被审批拦截，
+**这一步也已经生效**。重跑脚本会在新版本号上再 +1（实测 0.2.20 → 0.2.21 → 0.2.22）。
+重跑前**必须**先检查：`git log --oneline -3` + `grep versionName app/build.gradle.kts`；
+若发现多出 `chore: release vX` 提交，先 `git reset --hard <正确的那个 sha>` 回退再继续。
+
 **方案 B（脚本自动化）**：`push_v0xxx.py` 脚本内置了 `sync_local_git()`，发布成功推完 tag 后会自动
 执行上述 fetch + reset（工作区不干净时自动跳过）。因此**新建 push 脚本必须保留 sync_local_git() 调用**
 （从上一版 push 脚本复制即可），双保险才持续生效。
