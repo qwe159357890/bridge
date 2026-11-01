@@ -68,9 +68,9 @@
 
 | 参数 | 值（硬编码，两端一致） | 说明 |
 |---|---|---|
-| `heartbeat.interval` | 20s | 客户端心跳发送周期 |
+| `heartbeat.interval` | 60s | 客户端心跳发送周期（v0.2.20+ 由 20s 放宽） |
 | `heartbeat.client_pong_timeout` | 10s | 客户端发出 ping 后等待 pong 的超时 |
-| `heartbeat.server_read_timeout` | 45s | 服务端读超时：超过此时间未收到任何消息判死（> 2 倍心跳周期） |
+| `heartbeat.server_read_timeout` | 150s | 服务端读超时：超过此时间未收到任何消息判死（> 2 倍心跳周期，60s×2.5） |
 | `reconnect.base_delay` | 1s | 重连基础退避时间 |
 | `reconnect.max_delay` | 60s | 重连最大退避时间（封顶） |
 | `reconnect.jitter` | 0.2（±20%） | 重连随机抖动，避免风暴 |
@@ -106,7 +106,7 @@
    |        (pong 超时未回)        |
    |  [判定服务端不可达 → 重连]     |
    |                              |
-   |  (服务端侧：45s 未收任何消息)   |
+   |  (服务端侧：150s 未收任何消息)  |
    |  [判定连接死亡 → 主动关闭回收]  |
 ```
 
@@ -345,9 +345,9 @@ server:
   max_message_size: 65536
 
 heartbeat:
-  interval: 20               # 客户端心跳发送周期（秒）
+  interval: 60               # 客户端心跳发送周期（秒）
   client_pong_timeout: 10    # 客户端 ping 后等 pong 超时（秒）
-  server_read_timeout: 45    # 服务端读超时（秒），须 > 2 倍 interval
+  server_read_timeout: 150   # 服务端读超时（秒），须 > 2 倍 interval
 
 reconnect:
   base_delay: 1              # 重连基础退避（秒）

@@ -40,9 +40,9 @@ class ServerConfig(BaseModel):
 class HeartbeatConfig(BaseModel):
     """心跳相关参数。"""
 
-    interval: float = Field(default=20, gt=0, description="客户端心跳发送周期（秒）")
+    interval: float = Field(default=60, gt=0, description="客户端心跳发送周期（秒）")
     client_pong_timeout: float = Field(default=10, gt=0, description="客户端 ping 后等 pong 超时（秒）")
-    server_read_timeout: float = Field(default=45, gt=0, description="服务端读超时（秒）")
+    server_read_timeout: float = Field(default=150, gt=0, description="服务端读超时（秒）")
 
     @field_validator("server_read_timeout")
     @classmethod

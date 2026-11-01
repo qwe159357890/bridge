@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Store
@@ -53,6 +56,8 @@ import androidx.compose.ui.unit.sp
 // 品牌色 / 未选中色（与界面原型 ui-mockup.html 对齐）
 private val BrandBlue = Color(0xFF1A6EE8)
 private val InactiveColor = Color(0xFF8A919F)
+/** 微信 Tab 选中色（用户拍板：微信绿 #07C160）。 */
+private val WechatTabGreen = Color(0xFF07C160)
 
 /**
  * 应用主界面：底部导航（主页 / 销售 / 设置）+ 各页二级 Tab。
@@ -70,7 +75,9 @@ private val InactiveColor = Color(0xFF8A919F)
 @Composable
 fun MainScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    // 底部导航当前选中项：0=主页 1=销售 2=设置
+    // 通知点击「微信消息」进来时直接落在微信页并打开对应会话（deep link）
+    var openWechatSession by rememberSaveable { mutableStateOf<String?>(null) }
+    // 底部导航当前选中项：0=主页 1=微信 2=销售 3=设置
     var selectedBottom by rememberSaveable { mutableIntStateOf(0) }
     // 各页二级 Tab 当前选中项
     var homeTab by rememberSaveable { mutableIntStateOf(0) }
@@ -78,6 +85,19 @@ fun MainScreen(modifier: Modifier = Modifier) {
     // 销售页沉浸模式：进入销售页即隐藏底部导航；页内「返回导航」置 true 重新显示，
     // 再次点击「销售」则重新沉浸（不退出销售页、不丢表格状态）。
     var salesNavVisible by rememberSaveable { mutableStateOf(false) }
+    // 微信页沉浸（v0.2.10）：与销售页同构——进入即隐藏底部导航，页内「⇤」/返回键恢复。
+    var wechatNavVisible by rememberSaveable { mutableStateOf(false) }
+    // 通知点击（含 App 已在前台的 onNewIntent 场景）：切到微信 Tab 并打开指定会话
+    val pendingWechat = my.bridge.com.wechat.WechatState.state.pendingOpenSession
+    LaunchedEffect(pendingWechat) {
+        if (pendingWechat.isNotBlank()) {
+            selectedBottom = 1
+            wechatNavVisible = false
+            openWechatSession = pendingWechat
+            my.bridge.com.wechat.WechatState.clearPendingOpenSession()
+        }
+    }
+
     // 主页页面显示顺序（v0.2.08，设置→通用可调）：homeTabOrder[位置]=页面 id。
     // 持有在顶层使设置页改动即时反映到主页 Tab（HomePage 与设置页共享此状态）。
     var homeTabOrder by remember { mutableStateOf(TabOrderPrefs.load(context)) }
@@ -95,6 +115,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
         // 销售页（沉浸，无二级 tab）：按返回键 = 点击左上角「返回导航」箭头。
         // 第 1 次按 → 显示底部导航栏；再次按 → 隐藏导航栏（重新沉浸），如此循环。
         if (selectedBottom == 1) {
+            wechatNavVisible = !wechatNavVisible
+            return@BackHandler
+        }
+        if (selectedBottom == 2) {
             salesNavVisible = !salesNavVisible
             return@BackHandler
         }
@@ -138,10 +162,14 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     tabOrder = homeTabOrder,
                     onTabChange = { homeTab = it },
                 )
-                1 -> SalesPage(
+                1 -> WechatPage(
+                    onShowBottomBar = { wechatNavVisible = true },
+                    initialSessionWxid = openWechatSession,
+                )
+                2 -> SalesPage(
                     onShowBottomBar = { salesNavVisible = true },
                 )
-                2 -> SettingsPage(
+                3 -> SettingsPage(
                     currentTab = settingsTab,
                     homeTabOrder = homeTabOrder,
                     homeTabNames = homeTabNames,
@@ -207,13 +235,15 @@ fun MainScreen(modifier: Modifier = Modifier) {
         }
         // 底部导航：销售页沉浸时隐藏（selectedBottom==1 且未点「返回导航」）。
         // 点击任意 Tab 时重置 salesNavVisible，保证再次进入销售页回到沉浸态。
-        if (selectedBottom != 1 || salesNavVisible) {
+        if (!((selectedBottom == 1 && !wechatNavVisible) || (selectedBottom == 2 && !salesNavVisible))) {
             BridgeBottomBar(
                 selected = selectedBottom,
+                unreadWechat = my.bridge.com.wechat.WechatState.state.unreadTotal,
                 onSelect = { idx ->
+                    // 点击「微信」/「销售」→ 重新沉浸；点其它 Tab → 复位，下次进入仍是沉浸
                     selectedBottom = idx
-                    // 点击「销售」→ 重新沉浸；点其它 Tab → 复位，下次进销售仍是沉浸
-                    salesNavVisible = idx != 1
+                    wechatNavVisible = idx != 1
+                    salesNavVisible = idx != 2
                 },
             )
         }
@@ -225,6 +255,7 @@ private data class BottomTab(val label: String, val icon: ImageVector)
 
 private val bottomTabs = listOf(
     BottomTab("主页", Icons.Filled.Home),
+    BottomTab("微信", Icons.AutoMirrored.Filled.Chat),
     BottomTab("销售", Icons.Filled.Store),
     BottomTab("设置", Icons.Filled.Settings),
 )
@@ -232,6 +263,7 @@ private val bottomTabs = listOf(
 @Composable
 private fun BridgeBottomBar(
     selected: Int,
+    unreadWechat: Int = 0,
     onSelect: (Int) -> Unit,
 ) {
     Row(
@@ -243,7 +275,12 @@ private fun BridgeBottomBar(
     ) {
         bottomTabs.forEachIndexed { index, tab ->
             val isSelected = selected == index
-            val color = if (isSelected) BrandBlue else InactiveColor
+            // 微信 Tab 选中用微信绿（用户拍板），其余沿用品牌蓝
+            val color = when {
+                isSelected && index == 1 -> WechatTabGreen
+                isSelected -> BrandBlue
+                else -> InactiveColor
+            }
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -252,12 +289,23 @@ private fun BridgeBottomBar(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Icon(
-                    imageVector = tab.icon,
-                    contentDescription = tab.label,
-                    tint = color,
-                    modifier = Modifier.size(22.dp),
-                )
+                if (index == 1 && unreadWechat > 0) {
+                    BadgedBox(badge = { Badge { Text(if (unreadWechat > 99) "99+" else unreadWechat.toString()) } }) {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.label,
+                            tint = color,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = tab.label,
+                        tint = color,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
                 Text(
                     text = tab.label,
                     color = color,

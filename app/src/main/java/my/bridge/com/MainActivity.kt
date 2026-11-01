@@ -1,6 +1,7 @@
 package my.bridge.com
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -53,8 +54,29 @@ class MainActivity : ComponentActivity() {
             Timber.i("后台传感器权限申请结果：$granted")
         }
 
+    /**
+     * 处理微信消息通知的 deep link。
+     *
+     * ⚠️ App 已在前台时，通知 PendingIntent 走 [onNewIntent]，`intent` 属性不会自动更新，
+     * 必须 `setIntent()`；且 Compose 不会因此重组，故写入 [WechatState.pendingOpenSession]
+     * 由 UI 侧消费（见 `MainScreen` 的 LaunchedEffect）。
+     */
+    private fun handleWechatDeepLink(intent: Intent?) {
+        val wxid = intent?.getStringExtra(my.bridge.com.wechat.WECHAT_EXTRA_OPEN_SESSION)
+        if (!wxid.isNullOrBlank()) {
+            setIntent(intent)
+            my.bridge.com.wechat.WechatState.setPendingOpenSession(wxid)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleWechatDeepLink(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleWechatDeepLink(intent)
         enableEdgeToEdge()
 
         // 全量申请尚未授予的危险权限（任何一条被拒都只记日志，绝不阻断主流程）

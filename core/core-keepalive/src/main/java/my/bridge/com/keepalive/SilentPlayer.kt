@@ -156,9 +156,18 @@ object SilentPlayer {
         tickRunnable = null
     }
 
-    /** 生成近静音帧：最低位 ±1 抖动，避免全 0 帧被判空流回收 */
+    /**
+     * 生成近静音帧：最低位 ±1 抖动，避免全 0 帧被判空流回收。
+     *
+     * 复用同一块缓冲区，不再每 tick 新建：20ms tick 时旧实现是
+     * 50 次/秒 × 1920B ≈ 96 KB/s ≈ 8.3 GB/天 的短命对象分配，会持续制造 GC 压力。
+     * `AudioTrack.write()` 是同步拷贝，写完即拷走，复用安全；
+     * 且本方法只在 BridgeSilent 工作线程上被调用，无并发问题。
+     */
+    private val frameBuffer = ByteArray(FRAME_BYTES)
+
     private fun nextFrame(): ByteArray {
-        val buffer = ByteArray(FRAME_BYTES)
+        val buffer = frameBuffer
         var index = 0
         while (index < FRAME_BYTES) {
             val low = if ((counter++ and 1L) == 0L) 1 else 0xFF

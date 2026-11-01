@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge · 微信页（center-server 前端集成）功能原型</title>
+<style>
+:root {
+  --brand: #1A6EE8;
+  --brand-soft: #EAF2FE;
+  --wx: #07C160;
+  --wx-soft: #E7F7EE;
+  --wx-bubble: #95EC69;   /* 微信绿：我方气泡 */
+  --inactive: #8A919F;
+  --bg: #F5F6F8;
+  --card: #FFFFFF;
+  --text: #1F2329;
+  --text-sub: #6B7280;
+  --border: #E5E7EB;
+  --red: #E5484D;
+  --orange: #E6A23C;
+  --orange-soft: #FDF3E7;
+  --phone-w: 375px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6; padding: 28px 20px 60px;
+}
+h1 { font-size: 23px; text-align: center; margin-bottom: 4px; }
+.subtitle { text-align: center; color: var(--text-sub); font-size: 13px; margin-bottom: 14px; }
+.meta {
+  max-width: 940px; margin: 0 auto 16px; padding: 13px 18px; background: #fff;
+  border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-sub);
+}
+.meta b { color: var(--text); }
+.meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+.meta .tag.wx { background: var(--wx-soft); color: #0a8a4a; }
+.meta ol { margin: 6px 0 0 18px; }
+.demo-panel {
+  max-width: 940px; margin: 0 auto 20px; padding: 13px 18px; background: #F0F7FF;
+  border: 1px solid #BBD8F7; border-radius: 12px; font-size: 13px;
+}
+.demo-panel b { color: var(--brand); }
+.demo-panel button {
+  font-size: 12px; padding: 4px 10px; margin: 2px 6px 2px 0; cursor: pointer; background: #fff;
+  border: 1px solid var(--brand); color: var(--brand); border-radius: 6px;
+}
+.demo-panel button:hover { background: var(--brand); color: #fff; }
+
+/* ============ 手机壳 ============ */
+.phone-wrap { display: flex; justify-content: center; }
+.phone {
+  width: var(--phone-w); height: 780px; background: #fff; border-radius: 30px; overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.12); border: 1px solid var(--border);
+  display: flex; flex-direction: column; position: relative;
+}
+.statusbar {
+  height: 28px; display: flex; justify-content: space-between; align-items: center; padding: 0 16px;
+  font-size: 12px; font-weight: 600; flex-shrink: 0; background: #fff;
+}
+.content { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+.page { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+.page.show { display: flex; }
+.placeholder {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--text-sub); font-size: 13px; gap: 6px; text-align: center; padding: 24px;
+}
+.placeholder .big { font-size: 16px; color: var(--text); font-weight: 600; }
+
+.bottombar { height: 56px; background: #fff; border-top: 1px solid var(--border); display: flex; flex-shrink: 0; }
+.nav-item {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; cursor: pointer; font-size: 10px; color: var(--inactive); position: relative;
+}
+.nav-item svg { width: 22px; height: 22px; }
+.nav-item.active { color: var(--brand); font-weight: 600; }
+.nav-item.active.wechat { color: var(--wx); }
+.nav-badge {
+  position: absolute; top: 3px; left: 50%; margin-left: 4px; min-width: 16px; height: 16px; padding: 0 4px;
+  background: var(--red); color: #fff; border-radius: 8px; font-size: 10px; line-height: 16px; text-align: center;
+}
+
+/* ============ 微信页（沉浸：无 Bridge 底栏，页内底部二级 Tab） ============ */
+.wsbar {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 12px; flex-shrink: 0;
+  background: var(--orange-soft); color: var(--orange);
+}
+.wsbar button { margin-left: auto; font-size: 11px; border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 10px; padding: 0 8px; cursor: pointer; }
+.wx-body { flex: 1; overflow-y: auto; background: var(--bg); }
+
+/* 页内底部二级 Tab（沉浸时替代 Bridge 底栏） */
+.subbar {
+  height: 54px; background: #fff; border-top: 1px solid var(--border); display: flex; flex-shrink: 0; align-items: stretch;
+}
+.subbar .backnav {
+  width: 38px; display: flex; align-items: center; justify-content: center; font-size: 16px;
+  color: var(--text-sub); cursor: pointer; border-right: 1px solid #F2F3F5; flex-shrink: 0;
+}
+.subtab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font-size: 11px; color: var(--inactive); cursor: pointer; position: relative;
+}
+.subtab svg { width: 20px; height: 20px; }
+.subtab.active { color: var(--wx); font-weight: 600; }
+.subtab .dot {
+  position: absolute; top: 4px; left: 50%; margin-left: 6px; min-width: 15px; height: 15px; padding: 0 4px;
+  background: var(--red); color: #fff; border-radius: 8px; font-size: 9px; line-height: 15px; text-align: center;
+}
+
+/* 会话列表 */
+.sess-tools { padding: 8px 10px; display: flex; gap: 8px; align-items: center; background: #fff; border-bottom: 1px solid var(--border); }
+.sess-tools input {
+  flex: 1; height: 30px; border: 1px solid var(--border); border-radius: 15px; padding: 0 10px; font-size: 12px; outline: none;
+}
+.modechip {
+  font-size: 11px; padding: 3px 10px; border-radius: 12px; background: var(--bg); color: var(--text-sub);
+  cursor: pointer; border: 1px solid var(--border);
+}
+.modechip.on { background: var(--wx-soft); color: #0a8a4a; border-color: #b7e6cb; }
+.sess {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff;
+  border-bottom: 1px solid #F2F3F5; cursor: pointer;
+}
+.sess:active { background: #FAFAFA; }
+.sess .av {
+  width: 38px; height: 38px; border-radius: 5px; background: #C9CDD4; color: #fff; font-size: 14px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative;
+}
+.sess .av.g { background: #6C8CFF; }
+.sess .av.p { background: #E6A23C; }
+.sess .mid { flex: 1; min-width: 0; }
+.sess .nm { font-size: 14px; display: flex; align-items: center; gap: 4px; }
+.sess .nm .pin { font-size: 10px; color: var(--orange); }
+.sess .nm .mute { font-size: 10px; color: var(--inactive); }
+.sess .last { font-size: 12px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess .rt { text-align: right; font-size: 11px; color: var(--inactive); flex-shrink: 0; }
+.sess .ub {
+  display: inline-block; min-width: 17px; height: 17px; line-height: 17px; padding: 0 5px; background: var(--red);
+  color: #fff; border-radius: 9px; font-size: 10px; text-align: center; margin-top: 3px;
+}
+.sess .ub.muted { background: #C0C4CC; }
+.empty { padding: 40px 0; text-align: center; color: var(--text-sub); font-size: 13px; }
+
+/* 聊天面板 */
+.chat-panel {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #F5F6F8; z-index: 20;
+  display: none; flex-direction: column;
+}
+.chat-panel.show { display: flex; }
+.chat-head {
+  height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #fff;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.chat-head .back { font-size: 18px; cursor: pointer; color: var(--text); }
+.chat-head .nm { font-size: 15px; font-weight: 600; flex: 1; }
+.chat-head .st { font-size: 11px; color: var(--text-sub); }
+.msgs { flex: 1; overflow-y: auto; padding: 12px 10px; display: flex; flex-direction: column; gap: 10px; }
+.sysmsg { align-self: center; font-size: 11px; color: var(--text-sub); background: rgba(0,0,0,0.05); padding: 2px 8px; border-radius: 8px; }
+.row { display: flex; gap: 8px; align-items: flex-end; }
+.row.me { flex-direction: row-reverse; }
+.row .av { width: 32px; height: 32px; border-radius: 4px; background: #C9CDD4; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.row.me .av { background: var(--wx); }
+.bubble {
+  max-width: 230px; padding: 8px 10px; font-size: 13px; background: #fff; border-radius: 8px; position: relative;
+  word-break: break-word;
+}
+.row.me .bubble { background: var(--wx-bubble); }
+.bubble .img { width: 150px; height: 100px; background: linear-gradient(135deg,#dfe7f2,#c9d6ea); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #7b8794; font-size: 12px; cursor: pointer; }
+.bubble .loadmore { text-align:center; font-size:11px; color:var(--text-sub); padding:6px 12px; margin-bottom:8px; }
+.loadmore:hover { color:var(--wx); }
+.loc { font-size:13px; }
+.loc .d { font-size:11px; color:var(--text-sub); margin-top:3px; }
+.voice { display: flex; align-items: center; gap: 6px; min-width: 70px; }
+.bubble .voice i { font-style: normal; color: #7b8794; }
+.paycard { width: 210px; border-radius: 8px; overflow: hidden; background: #fff; font-size: 12px; }
+.paycard .ph { background: #2BA245; color: #fff; padding: 6px 10px; font-size: 12px; }
+.paycard .ph.out { background: #F5A623; }
+.paycard .pb { padding: 8px 10px; }
+.paycard .pb .kv { display: flex; justify-content: space-between; color: var(--text-sub); }
+.paycard .pf { border-top: 1px solid var(--border); padding: 4px 10px; color: var(--text-sub); font-size: 11px; }
+.inputbar {
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: #fff;
+  border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.inputbar input {
+  flex: 1; height: 34px; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px; font-size: 13px; outline: none; min-width: 0;
+}
+.inputbar input:disabled { background: #F5F6F8; color: var(--inactive); }
+/* 账号选择（原顶部账号行 → 移入输入栏，位于输入框后、发送按钮前） */
+.acct-mini {
+  height: 34px; min-width: 34px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center; gap: 3px; cursor: pointer; flex-shrink: 0;
+  font-size: 12px; background: #fff;
+}
+.acct-mini .sq {
+  width: 20px; height: 20px; border-radius: 4px; background: var(--wx); color: #fff; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+}
+.acct-mini.empty { border-style: dashed; border-color: var(--red); }
+.acct-mini.empty .sq { background: var(--red); }
+.sendbtn {
+  height: 34px; padding: 0 14px; background: var(--wx); color: #fff; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; flex-shrink: 0;
+}
+.sendbtn:disabled { background: #C0C4CC; cursor: not-allowed; }
+.emojibar { display: none; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 8px 10px; background: #fff; border-top: 1px solid var(--border); }
+.emojibar.show { display: grid; }
+.emojibar span { text-align: center; font-size: 18px; cursor: pointer; }
+.acct-menu {
+  display: none; position: absolute; bottom: 60px; right: 10px; background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.12); z-index: 40; min-width: 150px; overflow: hidden;
+}
+.acct-menu .it { padding: 9px 14px; font-size: 13px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.acct-menu .hd { padding: 7px 14px; font-size: 11px; color: var(--text-sub); background: #FAFAFA; }
+
+/* 通讯录 */
+.filters { display: flex; gap: 6px; padding: 8px 10px; background: #fff; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: var(--bg); color: var(--text-sub); cursor: pointer; border: 1px solid var(--border); }
+.chip.on { background: var(--wx-soft); color: #0a8a4a; border-color: #b7e6cb; }
+.ct { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: #fff; border-bottom: 1px solid #F2F3F5; cursor: pointer; }
+.ct .av { width: 34px; height: 34px; border-radius: 4px; background: #C9CDD4; color: #fff; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.ct .av.gh { background: #6C8CFF; }
+.ct .t { font-size: 14px; }
+.ct .s { font-size: 11px; color: var(--text-sub); }
+
+/* 实例 */
+.agent { background: #fff; margin: 10px; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
+.agent .ah { padding: 12px 14px; border-bottom: 1px solid #F2F3F5; }
+.agent .ah .l1 { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
+.tag { font-size: 10px; padding: 1px 7px; border-radius: 8px; }
+.tag.on { background: var(--wx-soft); color: #0a8a4a; }
+.tag.off { background: #F2F3F5; color: var(--inactive); }
+.agent .ah .l2 { font-size: 11px; color: var(--text-sub); margin-top: 4px; display: flex; gap: 12px; }
+.inst { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #F7F8FA; }
+.inst.sel { background: var(--wx-soft); }
+.inst .av { width: 34px; height: 34px; border-radius: 4px; background: var(--wx); color: #fff; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.inst .nm { font-size: 14px; }
+.inst .dt { font-size: 11px; color: var(--text-sub); }
+.inst .ck { margin-left: auto; color: var(--wx); font-size: 15px; }
+
+/* 工具箱占位 */
+.tb-card { background: #fff; margin: 10px; border-radius: 8px; padding: 14px; }
+.tb-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.tb-item { border: 1px dashed var(--border); border-radius: 8px; padding: 10px 4px; text-align: center; font-size: 11px; color: #B0B6C0; background: #FAFBFC; cursor: not-allowed; }
+.tb-item b { display: block; font-size: 12px; color: #9AA1AC; font-weight: 600; margin-bottom: 2px; }
+
+/* 设置页（页内） */
+.pad { padding: 12px; }
+.card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.card h3 { font-size: 14px; margin-bottom: 10px; }
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 12px; color: var(--text-sub); margin-bottom: 4px; }
+.field input {
+  width: 100%; height: 36px; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px; font-size: 13px; outline: none;
+}
+.rowline { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #F2F3F5; font-size: 13px; }
+.rowline:last-child { border-bottom: none; }
+.rowline .d { font-size: 11px; color: var(--text-sub); }
+.sw { width: 40px; height: 22px; border-radius: 11px; background: #C0C4CC; position: relative; cursor: pointer; flex-shrink: 0; }
+.sw.on { background: var(--wx); }
+.sw i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: .18s; }
+.sw.on i { left: 20px; }
+.btn {
+  width: 100%; height: 38px; border: none; border-radius: 6px; background: var(--wx); color: #fff; font-size: 14px; cursor: pointer;
+}
+.btn.ghost { background: #fff; color: var(--wx); border: 1px solid var(--wx); }
+.note { font-size: 11px; color: var(--text-sub); margin-top: 8px; }
+.note .x { color: var(--red); }
+.path { font-family: Consolas, Menlo, monospace; font-size: 11px; background: #F5F6F8; padding: 4px 8px; border-radius: 4px; color: #374151; }
+.connect-page { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 20px; background: linear-gradient(135deg,#2b3a55,#1f6f4a); }
+.connect-card { background: #fff; border-radius: 12px; padding: 18px; }
+
+/* 新消息通知横幅（后台收到消息） */
+.notify {
+  position: absolute; top: 6px; left: 10px; right: 10px; z-index: 60; background: #fff; border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); padding: 10px 12px; display: flex; gap: 10px; align-items: center;
+  transform: translateY(-140%); transition: transform .28s ease; cursor: pointer;
+}
+.notify.show { transform: translateY(0); }
+.notify .ic { width: 30px; height: 30px; border-radius: 6px; background: var(--wx); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+.notify .tt { font-size: 13px; font-weight: 600; }
+.notify .cc { font-size: 12px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1>Bridge · 微信页（center-server 前端集成）功能原型</h1>
+<p class="subtitle">底部导航「主页 · 微信 · 销售 · 设置」——微信位于主页与销售之间 · 沉浸页 + 页内底部二级 Tab · 模拟数据可交互</p>
+
+<div class="meta">
+  <b>已拍板的形态（本版原型已按此重做）：</b>
+  <ol>
+    <li>聊天气泡用<b>微信绿</b>（我方 <code>#95EC69</code>，对方白色，强调色 <code>#07C160</code>）。</li>
+    <li>微信页<b>沉浸</b>（参考销售页）：不显示 Bridge 底部导航；<b>页内二级导航 = 微信页自己的底部 Tab</b>（⇤ · 聊天 · 通讯录 · 实例 · 工具箱 · 设置）。</li>
+    <li>顶部状态条<b>仅在断线时</b>显示，正常时把高度全部让给内容。</li>
+    <li>顶部<span class="x" style="color:var(--red)">账号行 + 「微信」标题 + ⚙ 已删除</span>；账号选择移到聊天输入栏（<b>输入框后、发送按钮前</b>）。</li>
+    <li>工具箱<b>保留占位</b>（灰显不可点）。</li>
+    <li>附件默认保存到 <code>/sdcard/bridge/wechat/{images,videos,voice,files}</code>。</li>
+    <li>新消息<b>播放提示音 + 显示通知</b>（离开微信页/切到别的页也能收到）。</li>
+  </ol>
+  <span class="tag">进程级常驻连接（不是页面级）</span><span class="tag wx">保活沿用 Bridge，不移植 H5+ 保活</span>
+  <br>详细调研：<code>docs/research/center-server-wechat-integration.md</code>
+</div>
+
+<div class="demo-panel">
+  <b>模拟控制：</b>
+  <button onclick="simIncoming(false)">模拟收到新消息（当前页）</button>
+  <button onclick="simIncoming(true)">模拟后台收到新消息（强制弹通知）</button>
+  <button onclick="toggleWs()">切换 WS 断线/恢复</button>
+  <button onclick="state.configured = !state.configured; render()">切换「未配置服务器 / 已配置」</button>
+  <button onclick="resetMock()">重置模拟数据</button>
+  <span id="tip" style="color:#6B7280"></span>
+</div>
+
+<div class="phone-wrap">
+  <div class="phone">
+    <div class="statusbar"><span>22:20</span><span>Bridge · 信号 100%</span></div>
+    <div class="content">
+
+      <!-- 主页占位 -->
+      <div class="page show" id="page-home">
+        <div class="placeholder">
+          <div class="big">主页</div>
+          <div>短信 · 音频中继 · 智能控制 · 扫码（现有功能，本原型不改动）</div>
+        </div>
+      </div>
+
+      <!-- 微信页（沉浸） -->
+      <div class="page" id="page-wechat">
+        <div class="wsbar" id="wsbar" style="display:none"></div>
+        <div class="wx-body" id="wxBody"></div>
+        <div class="subbar" id="subbar"></div>
+      </div>
+
+      <!-- 销售占位 -->
+      <div class="page" id="page-sales">
+        <div class="placeholder">
+          <div class="big">销售</div>
+          <div>售后管理（已实现，沉浸页，本原型不改动）</div>
+        </div>
+      </div>
+
+      <!-- 设置占位 -->
+      <div class="page" id="page-settings">
+        <div class="placeholder">
+          <div class="big">设置</div>
+          <div>Bridge 设置页（连接页可放「微信中心服务器」入口）</div>
+        </div>
+      </div>
+
+      <!-- 聊天面板（覆盖层，含输入栏与账号选择） -->
+      <div class="chat-panel" id="chatPanel">
+        <div class="chat-head">
+          <span class="back" onclick="closeChat()">‹</span>
+          <span class="nm" id="chatNm">会话</span>
+          <span class="st" id="chatSt"></span>
+        </div>
+        <div class="msgs" id="msgs"></div>
+        <div class="emojibar" id="emojibar"></div>
+        <div class="inputbar">
+          <span class="iconbtn" onclick="toggleEmoji()" style="width:28px;height:28px;border-radius:50%;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--text-sub);cursor:pointer">☺</span>
+          <span class="iconbtn" onclick="attachMenu(event)" style="width:28px;height:28px;border-radius:50%;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--text-sub);cursor:pointer">＋</span>
+          <input id="msgInput" placeholder="请输入消息..." onkeydown="if(event.key==='Enter')sendMsg()" />
+          <span class="acct-mini" id="acctMini" onclick="toggleAcctMenu()"></span>
+          <button class="sendbtn" id="sendBtn" onclick="sendMsg()">发送</button>
+        </div>
+        <div class="acct-menu" id="acctMenu"></div>
+      </div>
+
+      <!-- 未配置连接页（覆盖） -->
+      <div class="chat-panel" id="connectPage">
+        <div class="connect-page">
+          <div class="connect-card">
+            <h3 style="margin-bottom:12px;font-size:15px;">连接中心服务器</h3>
+            <div class="field">
+              <label>服务器地址（如 http://192.168.1.100:15151）</label>
+              <input id="cfgHost" value="http://192.168.1.100:15151" />
+            </div>
+            <div class="field">
+              <label>API Key</label>
+              <input id="cfgKey" value="qwe951753" />
+            </div>
+            <button class="btn" onclick="saveConn()">测试连接并保存</button>
+            <div class="note">手机端首次使用必须填写地址与 API Key（参考设置页「连接」Tab 语义）。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 新消息通知横幅 -->
+      <div class="notify" id="notifyBar" onclick="openFromNotify()">
+        <div class="ic" id="ntIc">微</div>
+        <div style="flex:1;min-width:0">
+          <div class="tt" id="ntT">微信消息</div>
+          <div class="cc" id="ntC"></div>
+        </div>
+        <div style="font-size:11px;color:var(--inactive)" id="ntN"></div>
+      </div>
+
+    </div>
+    <div class="bottombar" id="bottombar"></div>
+  </div>
+</div>
+
+<script>
+// ============ 模拟数据（字段对齐 types/index.ts） ============
+function mockData() {
+  return {
+    configured: true,
+    connected: true,
+    tab: 'wechat',            // home | wechat | sales | settings
+    sub: 'chat',              // chat | contacts | instances | toolbox | settings
+    navVisible: false,        // 微信页沉浸：false=显示页内底部二级 Tab；true=显示 Bridge 底部导航
+    account: 'wxid_a1',       // 当前微信账号（发送/拉取的上下文）
+    mode: 'friend',           // friend | subscription
+    contactsFilter: 'all',
+    keyword: '',
+    contactKeyword: '',
+    currentSession: null,
+    settings: { bgReceive: true, notify: true, sound: true, mute: false },
+    agents: [
+      { agentId: 'PC-Office-01', isConnected: true, connectedAt: '2026-10-31 09:12:00', instances: [
+        { wxid: 'wxid_a1', accountNumber: 1, nickname: '张三', pid: 8321, port: 19001 },
+        { wxid: 'wxid_a2', accountNumber: 2, nickname: '客服小蜜', pid: 8402, port: 19002 },
+      ]},
+      { agentId: 'HOME-PC-02', isConnected: false, connectedAt: '2026-10-30 20:03:00', instances: [
+        { wxid: 'wxid_b1', accountNumber: 3, nickname: '备用号', pid: 5510, port: 19003 },
+      ]},
+    ],
+    sessions: [
+      { userWxid: 'wxid_u1', accountWxid: 'wxid_a1', userNickname: '张伟', lastMsg: '好的，明天发货', lastTime: '09:41', updateTimestamp: 4, unreadCount: 2, isPinned: 1, isMuted: 0, gh: false },
+      { userWxid: 'wxid_u2', accountWxid: 'wxid_a1', userNickname: '海绵客户群', lastMsg: '[图片]', lastTime: '09:20', updateTimestamp: 3, unreadCount: 5, isPinned: 0, isMuted: 0, gh: false },
+      { userWxid: 'wxid_u3', accountWxid: 'wxid_a1', userNickname: '李娜', lastMsg: '语音 8″', lastTime: '昨天', updateTimestamp: 2, unreadCount: 0, isPinned: 0, isMuted: 1, gh: false },
+      { userWxid: 'gh_pay', accountWxid: 'wxid_a1', userNickname: '微信支付', lastMsg: '收款到账通知', lastTime: '昨天', updateTimestamp: 1, unreadCount: 1, isPinned: 0, isMuted: 0, gh: true },
+      { userWxid: 'wxid_u4', accountWxid: 'wxid_a2', userNickname: '桃树枝发货群', lastMsg: '已签收', lastTime: '周一', updateTimestamp: 5, unreadCount: 3, isPinned: 0, isMuted: 1, gh: false },
+      { userWxid: 'wxid_u5', accountWxid: 'wxid_a2', userNickname: '王强', lastMsg: '在吗？', lastTime: '周一', updateTimestamp: 6, unreadCount: 1, isPinned: 0, isMuted: 0, gh: false },
+    ],
+    messages: {
+      'wxid_u1': [
+        { isSelf: 0, msgType: 1, content: '在吗？海绵还有货吗' },
+        { isSelf: 1, msgType: 1, content: '有的，今天就能发' },
+        { isSelf: 0, msgType: 1, content: '好的，明天发货' },
+        { isSelf: 0, msgType: 1, content: '地址还是上次那个' },
+      ],
+      'wxid_u2': [
+        { isSelf: 0, msgType: 10000, content: '你邀请「李娜」加入了群聊' },
+        { isSelf: 0, msgType: 3, content: '[图片]' },
+        { isSelf: 1, msgType: 1, content: '收到，安排打包' },
+      ],
+      'wxid_u3': [
+        { isSelf: 0, msgType: 34, content: '语音 8″' },
+        { isSelf: 1, msgType: 1, content: '嗯嗯，知道了' },
+      ],
+      'gh_pay': [
+        { isSelf: 0, msgType: 49, content: '', pay: { direction: '收款', title: '微信支付收款', amount: '¥168.00', from: '张伟' } },
+      ],
+      'wxid_u4': [
+        { isSelf: 0, msgType: 1, content: '已签收，谢谢' },
+      ],
+      'wxid_u5': [
+        { isSelf: 0, msgType: 1, content: '在吗？' },
+      ],
+    },
+    contacts: [
+      { wxid: 'wxid_u1', accountWxid: 'wxid_a1', nickname: '张伟', type: 0 },
+      { wxid: 'wxid_u3', accountWxid: 'wxid_a1', nickname: '李娜', type: 0 },
+      { wxid: 'wxid_u2', accountWxid: 'wxid_a1', nickname: '海绵客户群', type: 1 },
+      { wxid: 'gh_pay', accountWxid: 'wxid_a1', nickname: '微信支付', type: 2 },
+      { wxid: 'gh_news', accountWxid: 'wxid_a1', nickname: '每日速报', type: 2 },
+      { wxid: 'wxid_u5', accountWxid: 'wxid_a2', nickname: '王强', type: 0 },
+      { wxid: 'wxid_u6', accountWxid: 'wxid_a2', nickname: '未聊天联系人', type: 0 },
+    ],
+    notifyQueue: [],
+  };
+}
+
+let state = mockData();
+
+// ============ 工具 ============
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function instances() {
+  const list = [];
+  state.agents.forEach(a => a.instances.forEach(i => list.push(i)));
+  return list;
+}
+function currentInst() {
+  return instances().find(i => i.wxid === state.account) || null;
+}
+/** 未读总数：只统计非免打扰会话（stores/session.ts 第 70~98 行语义）。
+ *  注意：会话是全局的——服务端 messages/sessions 与前端 SessionItem 均无 account 字段，
+ *  因此**不按当前账号过滤**（早期版本按账号过滤属臆造，已修正）。 */
+function unreadTotal() {
+  return state.sessions
+    .filter(s => !s.isMuted && s.unreadCount > 0)
+    .reduce((n, s) => n + s.unreadCount, 0);
+}
+function visibleSessions() {
+  const kw = state.keyword.trim().toLowerCase();
+  return state.sessions
+    .filter(s => (state.mode === 'subscription' ? s.gh : !s.gh))
+    .filter(s => !kw || (s.userNickname || '').toLowerCase().includes(kw) || (s.lastMsg || '').toLowerCase().includes(kw))
+    .sort((a, b) => (a.isPinned !== b.isPinned ? b.isPinned - a.isPinned : b.updateTimestamp - a.updateTimestamp));
+}
+
+// ============ 渲染 ============
+const TABS = [
+  { key: 'home', label: '主页', icon: 'M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+  { key: 'wechat', label: '微信', icon: 'M4 4h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V5a1 1 0 0 1 1-1z' },
+  { key: 'sales', label: '销售', icon: 'M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zm0 0 2-4h12l2 4' },
+  { key: 'settings', label: '设置', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8-3a8 8 0 0 0-.2-1.7l2-1.5-2-3.4-2.3 1a8 8 0 0 0-2.9-1.7L14 2h-4l-.6 2.7a8 8 0 0 0-2.9 1.7l-2.3-1-2 3.4 2 1.5A8 8 0 0 0 4 12c0 .6.1 1.2.2 1.7l-2 1.5 2 3.4 2.3-1a8 8 0 0 0 2.9 1.7L10 22h4l.6-2.7a8 8 0 0 0 2.9-1.7l2.3 1 2-3.4-2-1.5c.1-.5.2-1.1.2-1.7z' },
+];
+// 页内二级导航（微信页自己的底部 Tab）
+const SUBS = [
+  { key: 'chat', label: '聊天', icon: 'M4 4h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V5a1 1 0 0 1 1-1z' },
+  { key: 'contacts', label: '通讯录', icon: 'M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 19v-1a4 4 0 0 0-3-3.9M15.5 4.2a3 3 0 0 1 0 5.6' },
+  { key: 'instances', label: '实例', icon: 'M4 6h16v10H4zM8 20h8M12 16v4' },
+  { key: 'toolbox', label: '工具箱', icon: 'M4 7h16v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM4 7l2-3h12l2 3M9 12h6' },
+  { key: 'settings', label: '设置', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8-3a8 8 0 0 0-.2-1.7l2-1.5-2-3.4-2.3 1a8 8 0 0 0-2.9-1.7L14 2h-4l-.6 2.7a8 8 0 0 0-2.9 1.7l-2.3-1-2 3.4 2 1.5A8 8 0 0 0 4 12c0 .6.1 1.2.2 1.7l-2 1.5 2 3.4 2.3-1a8 8 0 0 0 2.9 1.7L10 22h4l.6-2.7a8 8 0 0 0 2.9-1.7l2.3 1 2-3.4-2-1.5c.1-.5.2-1.1.2-1.7z' },
+];
+
+function render() {
+  const immersive = state.tab === 'wechat' && !state.navVisible;
+
+  // Bridge 底部导航：微信页沉浸时隐藏（照销售页）
+  document.getElementById('bottombar').style.display = immersive ? 'none' : 'flex';
+  if (!immersive) {
+    document.getElementById('bottombar').innerHTML = TABS.map(t => {
+      const badge = (t.key === 'wechat' && unreadTotal() > 0)
+        ? '<span class="nav-badge">' + (unreadTotal() > 99 ? '99+' : unreadTotal()) + '</span>' : '';
+      return '<div class="nav-item ' + (state.tab === t.key ? 'active ' + (t.key === 'wechat' ? 'wechat' : '') : '') + '" onclick="setTab(\'' + t.key + '\')">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="' + t.icon + '"/></svg>' +
+        '<span>' + t.label + '</span>' + badge + '</div>';
+    }).join('');
+  }
+
+  ['home', 'wechat', 'sales', 'settings'].forEach(k => {
+    document.getElementById('page-' + k).classList.toggle('show', state.tab === k);
+  });
+
+  // 连接页覆盖（未配置服务器）
+  document.getElementById('connectPage').classList.toggle('show', state.tab === 'wechat' && !state.configured);
+
+  if (state.tab === 'wechat') renderWechat(immersive);
+  renderChatPanel();
+}
+
+function renderWechat(immersive) {
+  // ① 顶部状态条：仅断线时显示，正常时把高度让给内容
+  const ws = document.getElementById('wsbar');
+  if (state.connected) {
+    ws.style.display = 'none';
+  } else {
+    ws.style.display = 'flex';
+    ws.className = 'wsbar';
+    ws.innerHTML = '<span>实时连接已断开，正在尝试重连...</span><button onclick="setSub(\'settings\')">去设置</button>';
+  }
+
+  // ② 页内底部二级 Tab（沉浸时显示；navVisible 时隐藏，让 Bridge 底栏接管）
+  const subbar = document.getElementById('subbar');
+  subbar.style.display = immersive ? 'flex' : 'none';
+  if (immersive) {
+    const badge = unreadTotal() > 0 ? '<span class="dot">' + (unreadTotal() > 99 ? '99+' : unreadTotal()) + '</span>' : '';
+    subbar.innerHTML = '<div class="backnav" title="显示 Bridge 主导航（照销售页「返回导航」语义）" onclick="toggleNav()">⇤</div>' +
+      SUBS.map(s => '<div class="subtab ' + (state.sub === s.key ? 'active' : '') + '" onclick="setSub(\'' + s.key + '\')">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="' + s.icon + '"/></svg>' +
+        '<span>' + s.label + '</span>' + (s.key === 'chat' ? badge : '') + '</div>').join('');
+  }
+
+  // ③ 内容区
+  const body = document.getElementById('wxBody');
+  if (state.sub === 'chat') body.innerHTML = renderSessions();
+  else if (state.sub === 'contacts') body.innerHTML = renderContacts();
+  else if (state.sub === 'instances') body.innerHTML = renderInstances();
+  else if (state.sub === 'toolbox') body.innerHTML = renderToolbox();
+  else body.innerHTML = renderSettings();
+}
+
+function renderSessions() {
+  const ghLabel = state.mode === 'subscription' ? '公众号' : '好友';
+  let html = '<div class="sess-tools">' +
+    '<input value="' + esc(state.keyword) + '" placeholder="搜索" oninput="state.keyword=this.value;renderWechat(' + (state.tab === 'wechat' && !state.navVisible) + ')" />' +
+    '<span class="modechip on" onclick="toggleMode()" title="点击切换好友/公众号（源码为长按切换）">' + ghLabel + '</span>' +
+    '</div>';
+  const list = visibleSessions();
+  if (!list.length) return html + '<div class="empty">暂无会话（当前账号：' + esc((currentInst() || {}).nickname || '未选择') + '）</div>';
+  html += list.map(s => {
+    const badge = s.unreadCount > 0
+      ? '<div class="ub ' + (s.isMuted ? 'muted' : '') + '">' + (s.unreadCount > 99 ? '99+' : s.unreadCount) + '</div>' : '';
+    return '<div class="sess" onclick="openChat(\'' + s.userWxid + '\')" oncontextmenu="sessMenu(event, \'' + s.userWxid + '\'); return false" title="点击打开 · 右键/长按：置顶·免打扰·清空">' +
+      '<div class="av ' + (s.gh ? 'g' : 'p') + '">' + esc((s.userNickname || '?').charAt(0)) + '</div>' +
+      '<div class="mid"><div class="nm">' + esc(s.userNickname) +
+        (s.isPinned ? '<span class="pin">置顶</span>' : '') + (s.isMuted ? '<span class="mute">免打扰</span>' : '') + '</div>' +
+        '<div class="last">' + esc(s.lastMsg) + '</div></div>' +
+      '<div class="rt">' + esc(s.lastTime) + badge + '</div></div>';
+  }).join('');
+  html += '<div class="empty" style="padding:14px 0">长按会话 = 右键菜单（置顶/标记已读/免打扰/清空/删除）</div>';
+  return html;
+}
+
+function renderContacts() {
+  const filters = [
+    { k: 'all', t: '全部' }, { k: 'has_session', t: '会话' }, { k: 'person', t: '个人' },
+    { k: 'group', t: '群聊' }, { k: 'subscription', t: '公众号' },
+  ];
+  let html = '<div class="sess-tools"><input value="' + esc(state.contactKeyword) + '" placeholder="搜索联系人" oninput="state.contactKeyword=this.value;renderWechat(' + (state.tab === 'wechat' && !state.navVisible) + ')" /></div>';
+  html += '<div class="filters">' + filters.map(f =>
+    '<span class="chip ' + (state.contactsFilter === f.k ? 'on' : '') + '" onclick="setFilter(\'' + f.k + '\')">' + f.t + '</span>').join('') + '</div>';
+
+  const kw = state.contactKeyword.trim().toLowerCase();
+  const list = state.contacts.filter(c => c.accountWxid === state.account).filter(c => {
+    if (state.contactsFilter === 'person') return c.type === 0;
+    if (state.contactsFilter === 'group') return c.type === 1;
+    if (state.contactsFilter === 'subscription') return c.type === 2;
+    if (state.contactsFilter === 'has_session') return state.sessions.some(s => s.userWxid === c.wxid);
+    return true;
+  }).filter(c => !kw || (c.nickname || '').toLowerCase().includes(kw));
+
+  if (!list.length) return html + '<div class="empty">暂无联系人</div>';
+  html += list.map(c => '<div class="ct" onclick="startChatFromContact(\'' + c.wxid + '\')">' +
+    '<div class="av ' + (c.type === 2 ? 'gh' : '') + '">' + esc((c.nickname || '?').charAt(0)) + '</div>' +
+    '<div><div class="t">' + esc(c.nickname) + '</div>' +
+    '<div class="s">' + (c.type === 0 ? '个人' : c.type === 1 ? '群聊' : '公众号') + ' · ' + esc(c.wxid) + '</div></div></div>').join('');
+  return html;
+}
+
+function renderInstances() {
+  return state.agents.map(a =>
+    '<div class="agent"><div class="ah">' +
+      '<div class="l1">' + esc(a.agentId) +
+        '<span class="tag ' + (a.isConnected ? 'on' : 'off') + '">' + (a.isConnected ? '在线' : '离线') + '</span></div>' +
+      '<div class="l2"><span>实例数: ' + a.instances.length + '</span><span>连接时间: ' + esc(a.connectedAt) + '</span></div>' +
+    '</div>' +
+    a.instances.map(i =>
+      '<div class="inst ' + (i.wxid === state.account ? 'sel' : '') + '" onclick="selectAccount(\'' + i.wxid + '\')">' +
+        '<div class="av">' + esc(i.accountNumber) + '</div>' +
+        '<div><div class="nm">' + esc('[' + i.accountNumber + '] ' + (i.nickname || '')) + '</div>' +
+        '<div class="dt">PID: ' + i.pid + ' | 端口: ' + i.port + '</div></div>' +
+        (i.wxid === state.account ? '<span class="ck">✓</span>' : '') + '</div>').join('') +
+    '</div>').join('') +
+    '<div class="empty" style="padding:10px 0">当前账号 = 发送/拉取消息的上下文（源码 currentWxid）</div>';
+}
+
+/** 工具箱：本期只做占位（灰显不可点）。 */
+function renderToolbox() {
+  const planned = [
+    { g: '文件工具', items: ['远程打印', '二维码', 'Emoji', '剪切板同步'] },
+    { g: '交互工具', items: ['抖一抖', '重启客户端', '重启代理'] },
+    { g: '查询工具', items: ['拍照', '流式录音', '流式录像', '流式录屏', 'GPS 位置', '短信查询'] },
+    { g: '编程工具', items: ['JSON', 'Base64', 'URL', '时间戳', '正则', 'JWT', 'cURL', '加密解密'] },
+  ];
+  return '<div class="pad">' +
+    '<div class="tb-card"><h3>工具箱（本期仅占位）</h3>' +
+      '<div class="note">参考项目 <code>ToolboxDialog.vue</code> 共 30+ 工具；其中拍照/流式录音录像/短信/GPS 与 Bridge 现有命令重复，编程/生活类与定位无关 —— <b>本期不实现，保留入口</b>，后续按需要再开。</div>' +
+      planned.map(g => '<div style="margin-top:12px"><div style="font-size:12px;color:var(--text-sub)">' + g.g + '</div>' +
+        '<div class="tb-grid">' + g.items.map(it => '<div class="tb-item" onclick="tip(\'规划中：' + it + '\')"><b>' + it + '</b>规划中</div>').join('') + '</div></div>').join('') +
+    '</div></div>';
+}
+
+function renderSettings() {
+  const s = state.settings;
+  return '<div class="pad">' +
+    '<div class="card"><h3>服务器连接</h3>' +
+      '<div class="field"><label>服务器地址</label><input value="http://192.168.1.100:15151" /></div>' +
+      '<div class="field"><label>API Key</label><input value="qwe951753" /></div>' +
+      '<div style="display:flex;gap:8px"><button class="btn" onclick="testConn()">测试连接并保存</button>' +
+      '<button class="btn ghost" onclick="reconnect()">重新连接</button></div>' +
+      '<div class="note">连接状态：<b id="connTxt">' + (state.connected ? '已连接' : '未连接') + '</b> · 连接由<b>进程级 Runtime</b> 维护，离开本页不中断</div>' +
+    '</div>' +
+    '<div class="card"><h3>后台接收与提醒</h3>' +
+      '<div class="rowline"><div><div>后台实时接收</div><div class="d">硬需求：进程级常驻连接，不提供关闭入口</div></div>' +
+        '<span style="font-size:12px;color:#0a8a4a;font-weight:600">常开</span></div>' +
+      '<div class="rowline"><div><div>断线自动重连</div><div class="d">固定 2s · 网络恢复即刻重连（不等心跳超时）</div></div>' +
+        '<span style="font-size:12px;color:#0a8a4a;font-weight:600">常开</span></div>' +
+      '<div class="rowline"><div><div>新消息通知</div><div class="d">独立渠道与 id（不得复用 2001）</div></div>' +
+        '<span class="sw ' + (s.notify ? 'on' : '') + '" onclick="toggleSw(\'notify\')"><i></i></span></div>' +
+      '<div class="rowline"><div><div>消息提示音</div><div class="d">免打扰会话不响；跟随系统音量</div></div>' +
+        '<span class="sw ' + (s.sound ? 'on' : '') + '" onclick="toggleSw(\'sound\')"><i></i></span></div>' +
+      '<div class="rowline"><div><div>全局静音</div><div class="d">只关声音，不影响通知</div></div>' +
+        '<span class="sw ' + (s.mute ? 'on' : '') + '" onclick="toggleSw(\'mute\')"><i></i></span></div>' +
+    '</div>' +
+    '<div class="card"><h3>通知权限</h3>' +
+      '<div class="rowline"><div><div>系统通知</div><div class="d">未开启时后台收到消息不弹通知（连接与未读照常）</div></div>' +
+        '<span class="sw on" onclick="toggleSw(\'sysNotify\')"><i></i></span></div>' +
+      '<div class="note">Android 13+ 需运行时申请 <code>POST_NOTIFICATIONS</code>；微信消息通知用<b>独立渠道与 id（2101+）</b>，绝不复用 2001（会顶掉保活前台通知）。</div>' +
+    '</div>' +
+    '<div class="card"><h3>附件保存位置</h3>' +
+      '<div class="path">/sdcard/bridge/wechat/images</div>' +
+      '<div class="path" style="margin-top:4px">/sdcard/bridge/wechat/videos</div>' +
+      '<div class="path" style="margin-top:4px">/sdcard/bridge/wechat/voice</div>' +
+      '<div class="path" style="margin-top:4px">/sdcard/bridge/wechat/files</div>' +
+      '<div class="note">Android 10+ 分区存储下用 MediaStore / 公共 Download 实现同一逻辑路径；用户主动下载的附件默认<b>不</b>纳入自动清理。</div>' +
+    '</div>' +
+    '<div class="card"><h3>WebSocket 参数（默认照抄参考项目，不给用户改）</h3>' +
+      '<div class="rowline"><span>心跳间隔</span><span class="d">15000 ms</span></div>' +
+      '<div class="rowline"><span>Pong 超时</span><span class="d">60000 ms</span></div>' +
+      '<div class="rowline"><span>重连间隔</span><span class="d">固定 2000 ms</span></div>' +
+    '</div>' +
+    '<div class="card"><h3>保活说明（取舍点）</h3>' +
+      '<div class="note">参考项目 <code>utils/keepAlive.ts</code> 的 H5+ 通知栏 / CPU·WiFi 锁 / 蜂鸣音频 / 隐藏最近任务 <span class="x">全部不移植</span>；Bridge 已有 <code>core-keepalive</code>（常驻 FGS + 电池白名单 + 开机自启 + 双兜底）。</div>' +
+      '<div class="note">后台收消息<b>不新增前台服务</b>：复用既有保活进程，避免触碰 <code>docs/dev/crash-ledger.md</code> §5 的崩溃高危面。</div>' +
+      '<div class="note">实时性保障：进程级常驻连接 + 心跳 15s/Pong 60s + OkHttp ping 20s + <b>网络回调即刻重连</b> + 固定 2s 重连 + 开机自启/保活兜底；提醒可关，<b>连接不可关</b>。</div>' +
+    '</div>' +
+    '<div class="card"><h3>其他</h3>' +
+      '<button class="btn ghost" onclick="resetMock()">清除缓存并重置模拟数据</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderChatPanel() {
+  const panel = document.getElementById('chatPanel');
+  const s = state.sessions.find(x => x.userWxid === state.currentSession);
+  if (!s) { panel.classList.remove('show'); return; }
+  panel.classList.add('show');
+  document.getElementById('chatNm').textContent = s.userNickname;
+  document.getElementById('chatSt').textContent = s.isMuted ? '免打扰' : '';
+  const msgs = state.messages[s.userWxid] || [];
+  document.getElementById('msgs').innerHTML =
+    '<div class="loadmore" onclick="loadMore()">加载更早的消息</div>' +
+    msgs.map((m, idx) => {
+    if (m.msgType === 10000 || m.msgType === 10002) return '<div class="sysmsg">' + esc(m.content) + '</div>';
+    if (m.msgType === 49 && m.pay) {
+      return '<div class="row ' + (m.isSelf ? 'me' : '') + '"><div class="av">' + esc((s.userNickname || '?').charAt(0)) + '</div>' +
+        '<div class="paycard"><div class="ph ' + (m.pay.direction === '收款' ? '' : 'out') + '">' + esc(m.pay.title) + '</div>' +
+        '<div class="pb"><div style="font-size:16px;font-weight:600">' + esc(m.pay.amount) + '</div>' +
+        '<div class="kv"><span>来自</span><span>' + esc(m.pay.from) + '</span></div></div>' +
+        '<div class="pf">微信支付</div></div></div>';
+    }
+    let inner = esc(m.content);
+    if (m.msgType === 3) inner = '<div class="img" onclick="openImageViewer()">\uD83D\uDDBC 图片（thumb 渲染，点开看原图/保存）</div>';
+    else if (m.msgType === 34) inner = '<div class="voice" onclick="playVoice()"><span>▶</span><i>' + esc(m.content) + ' 点击试听</i></div>';
+    else if (m.msgType === 43) inner = '<div class="img" onclick="openVideo()">▶ 视频（点开保存到 videos 并播放）</div>';
+    else if (m.msgType === 47) inner = '<div class="img" style="background:#fff;color:#1F2329">\uD83D\uDE00 表情（emoji_object）</div>';
+    else if (m.msgType === 48) inner = '<div class="loc">\uD83D\uDCCD ' + esc(m.content) + '<div class="d">map_object 静态图 + poiname + 经纬度</div></div>';
+    else if (m.msgType === 49) inner = '<div class="img" style="background:#fff;color:#1F2329">应用消息（XML）· 摘要取自 content</div>';
+    return '<div class="row ' + (m.isSelf ? 'me' : '') + '" oncontextmenu="msgMenu(event, \'' + s.userWxid + '\', ' + idx + '); return false" title="右键/长按：复制·删除">' +
+      '<div class="av">' + esc((s.userNickname || '?').charAt(0)) + '</div>' +
+      '<div class="bubble">' + inner + '</div></div>';
+  }).join('');
+  document.getElementById('msgs').scrollTop = 99999;
+
+  const disabled = !currentInst();
+  const input = document.getElementById('msgInput');
+  input.disabled = disabled;
+  input.placeholder = disabled ? '请先选择微信账号' : '请输入消息...';
+  document.getElementById('sendBtn').disabled = disabled;
+
+  // 账号选择：原顶部账号行 → 输入栏内（输入框后、发送按钮前）
+  const inst = currentInst();
+  const mini = document.getElementById('acctMini');
+  mini.className = 'acct-mini' + (inst ? '' : ' empty');
+  mini.innerHTML = inst
+    ? '<span class="sq">' + esc(inst.accountNumber || '?') + '</span>'
+    : '<span class="sq">?</span><span style="color:var(--red);font-size:11px">选账号</span>';
+  mini.title = inst ? ('当前账号 [' + inst.accountNumber + '] ' + inst.nickname + '（点击切换）') : '点击选择账号';
+}
+
+// ============ 交互 ============
+function setTab(k) {
+  state.tab = k;
+  if (k === 'wechat') state.navVisible = false;   // 进入微信页即沉浸（照销售页）
+  render();
+}
+function setSub(k) { state.sub = k; document.getElementById('acctMenu').style.display = 'none'; render(); }
+function setFilter(k) { state.contactsFilter = k; render(); }
+function toggleMode() { state.mode = state.mode === 'friend' ? 'subscription' : 'friend'; render(); }
+function toggleSw(k) { state.settings[k] = !state.settings[k]; render(); tip(k + ' → ' + (state.settings[k] ? '开' : '关')); }
+function toggleWs() { state.connected = !state.connected; render(); }
+function toggleNav() { state.navVisible = !state.navVisible; render(); tip(state.navVisible ? '已显示 Bridge 主导航' : '已沉浸（页内底部 Tab）'); }
+function resetMock() { state = mockData(); render(); tip('已重置模拟数据'); }
+function tip(t) { const el = document.getElementById('tip'); el.textContent = ' · ' + t; setTimeout(() => { el.textContent = ''; }, 2400); }
+
+function toggleAcctMenu() {
+  const menu = document.getElementById('acctMenu');
+  if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
+  menu.innerHTML = '<div class="hd">选择微信账号（发送上下文）</div>' + instances().map(i =>
+    '<div class="it" style="' + (i.wxid === state.account ? 'background:var(--wx-soft);' : '') + '" onclick="selectAccount(\'' + i.wxid + '\')">' +
+    '<span style="width:22px;height:22px;border-radius:4px;background:var(--wx);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px">' + esc(i.accountNumber) + '</span>' +
+    esc('[' + i.accountNumber + '] ' + (i.nickname || '')) + (i.wxid === state.account ? ' ✓' : '') + '</div>').join('');
+  menu.style.display = 'block';
+}
+function selectAccount(wxid) {
+  state.account = wxid;
+  state.currentSession = null;
+  document.getElementById('acctMenu').style.display = 'none';
+  render();
+  tip('已切换账号（发送上下文）');
+}
+
+function openChat(wxid) {
+  state.currentSession = wxid;
+  const s = state.sessions.find(x => x.userWxid === wxid);
+  if (s) s.unreadCount = 0;
+  render();
+}
+function closeChat() { state.currentSession = null; render(); }
+
+function sendMsg() {
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  if (!text || !state.currentSession) return;
+  pushMessage(state.currentSession, { isSelf: 1, msgType: 1, content: text });
+  input.value = '';
+  render();
+  const wxid = state.currentSession;
+  setTimeout(() => {
+    pushMessage(wxid, { isSelf: 0, msgType: 1, content: '（模拟回复）收到：' + text });
+    render();
+  }, 1200);
+}
+function sendImage() {
+  if (!state.currentSession) return;
+  pushMessage(state.currentSession, { isSelf: 1, msgType: 3, content: '[图片]' });
+  render();
+  tip('手机端走 multipart upload_and_send（不是服务器路径 send_image）');
+}
+function pushMessage(wxid, m) {
+  (state.messages[wxid] = state.messages[wxid] || []).push(m);
+  const s = state.sessions.find(x => x.userWxid === wxid);
+  if (s) {
+    s.lastMsg = m.msgType === 3 ? '[图片]' : m.content;
+    s.lastTime = '刚刚';
+    s.updateTimestamp = 99;
+  }
+}
+
+// ---- 通用右键/长按菜单 ----
+function showMenu(x, y, items) {
+  let m = document.getElementById('ctxMenu');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'ctxMenu';
+    m.style.cssText = 'position:fixed;z-index:1000;background:#fff;border:1px solid #e3e5e9;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);min-width:158px;padding:6px 0';
+    document.body.appendChild(m);
+  }
+  m.innerHTML = items.map(it => '<div style="padding:9px 14px;font-size:13px;cursor:pointer;color:' + (it.danger ? '#E5484D' : '#1F2329') + '" onclick="hideMenu();' + it.fn + '">' + it.label + '</div>').join('');
+  m.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+  m.style.top = Math.min(y, window.innerHeight - 150) + 'px';
+  m.style.display = 'block';
+}
+function hideMenu() { const m = document.getElementById('ctxMenu'); if (m) m.style.display = 'none'; }
+document.addEventListener('click', hideMenu);
+
+function sessMenu(e, wxid) {
+  const s = state.sessions.find(x => x.userWxid === wxid);
+  if (!s) return;
+  showMenu(e.clientX, e.clientY, [
+    { label: s.isPinned ? '取消置顶' : '置顶该会话', fn: "togglePin('" + wxid + "')" },
+    { label: s.isMuted ? '取消免打扰' : '设为免打扰', fn: "toggleMute('" + wxid + "')" },
+    { label: '清空聊天记录', fn: "clearSessionMsgs('" + wxid + "')", danger: true },
+  ]);
+}
+function msgMenu(e, wxid, idx) {
+  showMenu(e.clientX, e.clientY, [
+    { label: '复制文本', fn: "copyMsg('" + wxid + "', " + idx + ")" },
+    { label: '删除消息', fn: "delMsg('" + wxid + "', " + idx + ")", danger: true },
+  ]);
+}
+function attachMenu(e) {
+  showMenu(e.clientX - 130, e.clientY - 140, [
+    { label: '发送图片', fn: 'sendMedia("image")' },
+    { label: '发送视频', fn: 'sendMedia("video")' },
+    { label: '发送文件', fn: 'sendMedia("file")' },
+  ]);
+}
+function togglePin(wxid) { const s = state.sessions.find(x => x.userWxid === wxid); if (!s) return; s.isPinned = !s.isPinned; render(); tip(s.isPinned ? '已置顶' : '已取消置顶'); }
+function toggleMute(wxid) { const s = state.sessions.find(x => x.userWxid === wxid); if (!s) return; s.isMuted = !s.isMuted; render(); tip(s.isMuted ? '已免打扰（仍计未读）' : '已取消免打扰'); }
+function clearSessionMsgs(wxid) {
+  state.messages[wxid] = [];
+  const s = state.sessions.find(x => x.userWxid === wxid);
+  if (s) { s.lastMsg = ''; s.unreadCount = 0; }
+  render();
+  tip('已清空：本地 + WS 广播 + REST DELETE messages/sessions/{id}/messages');
+}
+function copyMsg(wxid, idx) { const m = (state.messages[wxid] || [])[idx]; if (m && navigator.clipboard) navigator.clipboard.writeText(m.content || ''); tip('已复制文本'); }
+function delMsg(wxid, idx) { (state.messages[wxid] || []).splice(idx, 1); render(); tip('已删除该消息（DELETE messages/{session_id}/{msg_id}）'); }
+function loadMore() { tip('加载更早：GET messages?offset=当前条数&limit=30（模拟）'); }
+function playVoice() { tip('语音：先下载 voice_path 到缓存，再 MediaPlayer 本地播放（比直接播网络流稳）'); }
+function openVideo() { saveMedia('videos'); tip('已保存到 videos 后用系统应用打开（ACTION_VIEW）'); }
+function reconnect() { tip('已触发重连：保留配置，固定 2s 重连；网络恢复即刻重连'); }
+function openImageViewer() {
+  let v = document.getElementById('imgViewer');
+  if (!v) {
+    v = document.createElement('div');
+    v.id = 'imgViewer';
+    v.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center';
+    v.innerHTML = '<div style="color:#fff;font-size:13px;margin-bottom:14px">大图查看：列表用 thumb_path，点开用 image_path</div>' +
+      '<div style="display:flex;gap:14px"><button onclick="saveMedia(\'images\')" style="padding:8px 20px;border-radius:16px;border:none;background:#07C160;color:#fff;cursor:pointer">保存</button>' +
+      '<button onclick="closeViewer()" style="padding:8px 20px;border-radius:16px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer">关闭</button></div>';
+    document.body.appendChild(v);
+  }
+  v.style.display = 'flex';
+}
+function closeViewer() { const v = document.getElementById('imgViewer'); if (v) v.style.display = 'none'; }
+function sendMedia(kind) {
+  if (!state.currentSession) return;
+  const t = kind === 'image' ? 3 : kind === 'video' ? 43 : 49;
+  const txt = kind === 'image' ? '[图片]' : kind === 'video' ? '[视频]' : '[文件]';
+  pushMessage(state.currentSession, { isSelf: 1, msgType: t, content: txt });
+  render();
+  tip('手机端只能走 multipart wechat/upload_and_send（send_image 的参数是服务器路径）');
+}
+
+/** 模拟保存到 /sdcard/bridge/wechat/{dir} */
+function saveMedia(dir) {
+  tip('已保存 → /sdcard/bridge/wechat/' + dir + '/（模拟）');
+}
+
+function toggleEmoji() {
+  const bar = document.getElementById('emojibar');
+  if (bar.classList.contains('show')) { bar.classList.remove('show'); return; }
+  const list = ['😀','😂','😊','👍','🙏','🎉','❤️','🔥','😅','🤝','✅','🌹','🍵','💰','📦','🚚'];
+  bar.innerHTML = list.map(e => '<span onclick="pickEmoji(\'' + e + '\')">' + e + '</span>').join('');
+  bar.classList.add('show');
+}
+function pickEmoji(e) {
+  document.getElementById('msgInput').value += e;
+  document.getElementById('emojibar').classList.remove('show');
+}
+function startChatFromContact(wxid) {
+  let s = state.sessions.find(x => x.userWxid === wxid);
+  if (!s) {
+    const c = state.contacts.find(x => x.wxid === wxid);
+    s = { userWxid: wxid, accountWxid: state.account, userNickname: (c || {}).nickname || wxid, lastMsg: '', lastTime: '', updateTimestamp: 50, unreadCount: 0, isPinned: 0, isMuted: 0, gh: (c || {}).type === 2 };
+    state.sessions.push(s);
+  }
+  openChat(wxid);
+}
+
+// ============ 新消息：后台也能收到 → 提示音 + 通知 ============
+function simIncoming(forceBackground) {
+  // 会话全局：不按账号过滤；账号上下文只影响发送与通讯录/消息过滤
+  const candidates = state.sessions;
+  if (!candidates.length) { tip('暂无会话'); return; }
+  const s = candidates[Math.floor(Math.random() * candidates.length)];
+  const texts = ['在吗？再补两单', '[图片]', '语音 6″', '快递已发出', '收款到账通知'];
+  pushMessage(s.userWxid, { isSelf: 0, msgType: 1, content: texts[Math.floor(Math.random() * texts.length)] });
+
+  // 免打扰：仍入本地未读，但不计未读总数、不提示
+  const isMuted = !!s.isMuted;
+  if (!isMuted) s.unreadCount += 1;
+
+  const viewingThis = state.tab === 'wechat' && state.sub === 'chat' && state.currentSession === s.userWxid;
+  const needNotify = forceBackground || !viewingThis;
+  render();
+
+  if (needNotify) {
+    if (state.settings.notify) showNotify(s);
+    if (state.settings.sound && !state.settings.mute && !isMuted) beep();
+    tip('新消息 → ' + s.userNickname + (isMuted ? '（免打扰：不提示，不计未读总数）' : '（已提示音+通知）'));
+  } else {
+    tip('新消息已直接入当前会话（前台可见，不打扰）');
+  }
+}
+
+let notifyTimer = null;
+function showNotify(s) {
+  const bar = document.getElementById('notifyBar');
+  document.getElementById('ntIc').textContent = (s.userNickname || '?').charAt(0);
+  document.getElementById('ntT').textContent = s.userNickname + (unreadTotal() > 1 ? '（共 ' + unreadTotal() + ' 条未读）' : '');
+  document.getElementById('ntC').textContent = s.lastMsg;
+  document.getElementById('ntN').textContent = '刚刚';
+  bar.classList.add('show');
+  bar.dataset.wxid = s.userWxid;
+  clearTimeout(notifyTimer);
+  notifyTimer = setTimeout(() => bar.classList.remove('show'), 4200);
+}
+function openFromNotify() {
+  const bar = document.getElementById('notifyBar');
+  const wxid = bar.dataset.wxid;
+  bar.classList.remove('show');
+  if (!wxid) return;
+  state.tab = 'wechat';
+  state.navVisible = false;
+  state.sub = 'chat';
+  openChat(wxid);
+  tip('通知点击 → 打开会话并 mark_read');
+}
+
+/** 模拟提示音（Web Audio 短蜂鸣，仅原型演示） */
+let audioCtx = null;
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.12, audioCtx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + 0.24);
+  } catch (e) { /* 原型环境不支持音频时静默 */ }
+}
+
+function testConn() {
+  state.connected = true;
+  render();
+  tip('连接成功（模拟）：/api/agents 200');
+}
+function saveConn() {
+  state.configured = true;
+  state.connected = true;
+  render();
+  tip('已保存并连接（模拟）');
+}
+
+render();
+</script>
+</body>
+</html>

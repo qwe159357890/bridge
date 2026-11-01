@@ -22,6 +22,83 @@
 
 ---
 
+## 2026-11-01 · ⚡ 心跳放宽与去冗余（Bridge 主 WS 20s→60s、微信 15s→60s、双端相位对齐）
+
+**节点意义**：v0.2.21 微信集成后进程级长连接增至 2 条、且各自开了「应用层 + 传输层」双层心跳，
+无线唤醒错相叠加约 600 次/小时。本里程碑把 heartbeat 全项目盘了一遍并把进程级唤醒压到约 60 次/小时。
+
+- **全项目心跳台账化（新 SSOT）**：新增 `docs/dev/heartbeat-inventory.md`，把 5 条长连接的心跳/传输 ping/
+  判死/重连、生命周期证据、周期硬约束、耗电量级模型、实测方法、保活三锁语义全部落到一处，并在 `docs/INDEX.md` 登记。
+- **纠正一条错误结论**：此前记的「微信心跳放宽需服务端同步调 Pong 超时」是错的——center-server 的 WS 主循环
+  `while True: await websocket.receive_text()` **没有读超时**，唯一约束是 `CLIENT_HEARTBEAT_TIMEOUT=300`，
+  故 15s/30s/60s/120s 全部合法且服务端零改动。真正卡上限的是运营商 NAT 空闲超时。
+- **去双层冗余（根治）**：微信 WS 移除 OkHttp `pingInterval(20s)`。关键证据是 WS 协议 ping 帧由 uvicorn
+  在协议层自动回 pong、**传不到 ASGI 应用层**，不刷新 center-server 的 `last_ping`（`api/routes/client.py:635`）——
+  所以该保留的是应用层 ping，而非传输层那个。
+- **修掉一个会静默停跳的缺陷**：`WechatWsClient.sendPing()` 原写法 `if (!send(...)) return`，
+  发送失败时 `heartbeat` 已被 `removeCallbacks` 且不再重排 → 心跳永久停止。改前有传输层 ping 掩盖，
+  去冗余后必须修（改为无论成败都重排下一栅格）。
+- **相位对齐（新增能力）**：新增 `WsConfig.delayToNextGrid()`，Bridge 主 WS 与微信 WS 的 ping 统一落在
+  Unix 毫秒时间的 60s 整数倍，共用一次无线唤醒；每次按当前时间重算，可自我纠正漂移。
+- **服务端同步放宽**：`server/config.yaml` 与 `config.py` 的 `heartbeat.interval` 20→60、
+  `server_read_timeout` 45→150（保留 2.5 倍余量）；`tests/test_config.py` 断言同步更新（5 passed）。
+  用户已确认**不需考虑版本兼容**（大版本强制升级 + 服务端同步）。
+- **顺带零风险优化**：`SilentPlayer.nextFrame()` 由每 tick `new ByteArray(1920)` 改为复用缓冲区，
+  消除约 96 KB/s（≈8.3 GB/天）的短命对象分配。**tick 间隔未动**（仍 20ms）——见下条经验。
+
+**关键经验沉淀**：
+- **耗电结论完全取决于网络类型**：单次孤立无线唤醒 LTE ≈ 2.5 J、WiFi ≈ 0.05–0.3 J。
+  **WiFi 常驻下把 15s 放宽到 60s 只省约 10–100 mAh/天（0.2%–2%），基本无意义**；只有移动数据下间隔才是关键变量。
+- **合并/对齐心跳的收益大于放宽间隔**：3 个计时器错相 600 次/小时 → 对齐后 60 次/小时（−90%），且零可靠性损失。
+- **WifiLock 在 Android 14+ 已经失效**：`WIFI_MODE_FULL_HIGH_PERF` 于 API 34 废弃并被平台自动替换为
+  `WIFI_MODE_FULL_LOW_LATENCY`，后者仅在「已连 AP + 屏幕亮 + App 前台」生效 ⇒ 后台灭屏场景下这把锁是 no-op。
+- **WakeLock 只管"CPU 睡不睡"，不管"能不能联网"**：入站包由射频固件唤醒 AP，下行推送仍可达；
+  但取消后 CPU suspend 会让主动心跳发不出 → NAT 过期 → **连接静默半死（自认在线、收不到、且不知道）**；
+  能否收包取决于 Doze 与电池白名单，而非 WakeLock（持锁反而顺带挡住了 Doze）。
+- **SilentPlayer 调 tick 收益有限**：AudioFlinger mixer 按 HAL 周期自己跑、与写入 cadence 无关，
+  音频通路常开（15–50 mA）占其成本 75–90% 且调 tick 省不掉；调 tick 最多省 10–25%。
+  且**单独改 TICK_MS 会 underrun**（缓冲区 80ms、每 tick 仅写 20ms 音频），必须联动放大 FRAME_SAMPLES 与 bufferBytes。
+- **改前状态必须逐字留档**：本次按新约定在 `heartbeat-inventory.md` §8 先固化改前原文（含 git 兜不住的
+  未跟踪文件 `WechatWsClient.kt`），再动手，改后回填，附回滚配方与回滚触发信号。
+
+---
+
+## 2026-11-01 · 💬 v0.2.21 微信页集成里程碑（center-server 前端吞并 + 进程级常驻连接）
+
+**节点意义**：把参考项目 `references/center-server/web-frontend`（Vue3 远程控制面板）的能力搬进 Bridge，
+在**主页与销售之间**新增底部导航「微信」页（沉浸 + 页内底部二级 Tab）；客户端直连中心服务器（参考服务端零改动）。
+辅线是**实时性架构**：与销售页/智能控制的「页面级连接」不同，微信要求离开页面也能收到消息并通知，
+因此连接抬到进程级常驻。
+
+### 脉络1 · 实时收消息（本功能与其它集成最大的不同）
+
+- **v0.2.21**：`WechatRuntime` 进程级单例持连接（App 启动即连、**常开不设关闭开关**）；页面只订阅/退订，
+  退出不断连。进程存活复用既有 `KeepAliveService` 常驻 FGS + 电池白名单 + 开机自启 + 双兜底，
+  **不新增前台服务**（避免触碰 `docs/dev/crash-ledger.md` §5 崩溃高危面）→ 根治「离开页面就收不到」的根因。
+- 断线感知三重：心跳 15s / Pong 60s / OkHttp ping 20s + **网络恢复即刻重连**（不等超时）；重连固定 2s（照参考项目，不做指数退避）；
+  重连成功后拉 `unread_total` 校准，防断线期间漏计。
+
+### 脉络2 · 契约实锤（避免凭空想象）
+
+- 会话列表**没有账号维度**（服务端 SQL 与前端 `SessionItem` 均无 `account_wxid`）→ 全局不过滤；账号上下文只用于发送。
+- 手机端发送只能走 multipart `wechat/upload_and_send`：`send_image/send_file/send_video` 的参数是**服务器文件路径**。
+- 附件字段：图片 `thumb_path`/`image_path`、视频 `movie_cover`/`movie_path`、语音 `voice_path`+`duration`、文件 `path`、
+  表情 `emoji_object`、位置 `map_object`/`poiname`/`coordinate`。
+- **语音发送不做**：`wechat/upload_and_send_voice` 服务端是空实现（注释「微信DLL不支持发送语音…直接返回成功」），
+  加了就是假功能。
+
+### 脉络3 · 取舍（照 Bridge 现状）
+
+- 参考 `utils/keepAlive.ts`（H5+ 通知栏/CPU·WiFi 锁/蜂鸣/隐藏最近任务）**整段不移植**，Bridge 已有 `core-keepalive`。
+- 工具箱**只占位**（与 Bridge 现有命令重复的拍照/流式录音录像/短信/GPS 不做）。
+- 不引 Coil/Glide：自实现 `WechatImageLoader`（OkHttp + LruCache + 采样解码），附件需带 token/Bearer。
+- 通知 id **2101+**（`NotificationPoster` 与 `KeepAliveService` 都占用 2001，复用会顶掉保活前台通知）。
+
+### 待办（遗留）
+
+- **真机验证**：需可用的中心服务器地址与 API Key；无微信/Agent 实体环境，测试由用户手动。
+- 心跳 15s 的耗电需实测评估（若要放宽到 30s，服务端 Pong 超时必须同步调整）。
+
 ## 2026-10-31 · 🛒 v0.2.09 销售页集成里程碑（售后管理系统吞并 + 沉浸导航）
 
 **节点意义**：把参考项目 `references/SalesRecordRemote`（售后管理系统）的**客户端功能**完整移植进 Bridge，

@@ -1,0 +1,1177 @@
+package my.bridge.com.ui
+
+import android.content.Intent
+import android.provider.OpenableColumns
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import my.bridge.com.wechat.WechatAttachment
+import my.bridge.com.wechat.WechatDownloader
+import my.bridge.com.wechat.WechatPrefs
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import my.bridge.com.wechat.WechatConnState
+import my.bridge.com.wechat.WechatContact
+import my.bridge.com.wechat.WechatController
+import my.bridge.com.wechat.WechatMessage
+import my.bridge.com.wechat.WechatMsgType
+import my.bridge.com.wechat.WechatSession
+import my.bridge.com.wechat.WechatState
+
+// ============ 主题色（微信绿，不套 Bridge 蓝） ============
+private val WechatGreen = Color(0xFF07C160)
+private val WechatBubble = Color(0xFF95EC69)
+private val WechatSub = Color(0xFF6B7280)
+private val WechatRed = Color(0xFFE5484D)
+private val WechatOrange = Color(0xFFE6A23C)
+private val WechatPageBg = Color(0xFFF5F6F8)
+
+private const val WECHAT_DOWNLOAD_ROOT = "/sdcard/bridge/wechat/"
+
+/**
+ * 微信页（center-server 集成）——**沉浸页**，照销售页：
+ * 进入即隐藏 Bridge 底部导航，页内用**自己的底部 Tab** 做二级导航。
+ *
+ * 生命周期：进入只**订阅** Runtime（[WechatController.onEnter]），离开只**退订**
+ * （[WechatController.onLeave]）——**连接由进程级 WechatRuntime 常驻维护，页面退出不断连**，
+ * 这样离开本页仍能实时收消息并通知（实时性是硬需求）。
+ *
+ * @param onShowBottomBar 显示 Bridge 主导航（页内「⇤」，语义同销售页「返回导航」）
+ * @param initialSessionWxid 通知点击带入的会话 wxid（打开后自动进入该会话）
+ */
+@Composable
+fun WechatPage(
+    onShowBottomBar: () -> Unit,
+    initialSessionWxid: String? = null,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val ui = WechatState.state
+
+    var subTab by rememberSaveable { mutableIntStateOf(0) }
+    var openSession by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // 依赖 initialSessionWxid：通知点击带来新会话时（MainScreen 更新该值）能再次打开
+    LaunchedEffect(initialSessionWxid) {
+        WechatController.onEnter(context)
+        if (initialSessionWxid != null) {
+            openSession = initialSessionWxid
+            WechatController.openSession(context, initialSessionWxid)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { WechatController.onLeave() }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ① 状态条：只在断线时出现，正常时零占位（高度全部让给内容）
+        if (ui.connState == WechatConnState.DISCONNECTED && ui.configured) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .background(WechatOrange.copy(alpha = 0.14f))
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("实时连接已断开，正在尝试重连...", fontSize = 12.sp, color = WechatOrange, modifier = Modifier.weight(1f))
+                Text("去设置", fontSize = 12.sp, color = WechatOrange, modifier = Modifier.clickable { subTab = 4 })
+            }
+        }
+
+        // ② 内容区
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            if (!ui.configured) {
+                WechatConnectCard()
+            } else {
+                when (subTab) {
+                    0 -> WechatSessionList(onOpen = { wxid ->
+                        openSession = wxid
+                        WechatController.openSession(context, wxid)
+                    })
+                    1 -> WechatContactsPage(onStartChat = { wxid ->
+                        subTab = 0
+                        openSession = wxid
+                        WechatController.openSession(context, wxid)
+                    })
+                    2 -> WechatInstancesPage()
+                    3 -> WechatToolboxPlaceholder()
+                    4 -> WechatSettingsPage()
+                }
+                // 聊天面板：全屏覆盖（含页内底部 Tab，与微信原生一致）
+                if (openSession != null) {
+                    WechatChatPanel(
+                        sessionWxid = openSession!!,
+                        onBack = {
+                            openSession = null
+                            WechatController.closeSession()
+                        },
+                    )
+                }
+            }
+        }
+
+        // ③ 页内底部二级 Tab（沉浸时替代 Bridge 底栏）
+        if (ui.configured) {
+            WechatSubBar(
+                current = subTab,
+                unread = ui.unreadTotal,
+                onSelect = { subTab = it },
+                onShowBottomBar = onShowBottomBar,
+            )
+        }
+    }
+}
+
+// ============ 页内底部二级 Tab ============
+private data class WechatSubTab(val label: String, val icon: ImageVector)
+
+private val wechatSubTabs = listOf(
+    WechatSubTab("聊天", Icons.AutoMirrored.Filled.Chat),
+    WechatSubTab("通讯录", Icons.Filled.Contacts),
+    WechatSubTab("实例", Icons.Filled.Devices),
+    WechatSubTab("工具箱", Icons.Filled.Build),
+    WechatSubTab("设置", Icons.Filled.Settings),
+)
+
+@Composable
+private fun WechatSubBar(
+    current: Int,
+    unread: Int,
+    onSelect: (Int) -> Unit,
+    onShowBottomBar: () -> Unit,
+) {
+    Surface(tonalElevation = 1.dp, color = MaterialTheme.colorScheme.surface) {
+        Row(modifier = Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onShowBottomBar, modifier = Modifier.width(38.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "显示主导航", tint = WechatSub, modifier = Modifier.size(18.dp))
+            }
+            wechatSubTabs.forEachIndexed { index, tab ->
+                val selected = current == index
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clickable { onSelect(index) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    if (index == 0 && unread > 0) {
+                        BadgedBox(badge = { Badge { Text(if (unread > 99) "99+" else unread.toString()) } }) {
+                            Icon(tab.icon, contentDescription = tab.label, tint = if (selected) WechatGreen else WechatSub, modifier = Modifier.size(20.dp))
+                        }
+                    } else {
+                        Icon(tab.icon, contentDescription = tab.label, tint = if (selected) WechatGreen else WechatSub, modifier = Modifier.size(20.dp))
+                    }
+                    Text(tab.label, fontSize = 10.sp, color = if (selected) WechatGreen else WechatSub)
+                }
+            }
+        }
+    }
+}
+
+// ============ 连接设置（未配置时） ============
+@Composable
+private fun WechatConnectCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf(my.bridge.com.wechat.WechatPrefs.serverUrl(context).ifBlank { "http://192.168.1.100:15151" }) }
+    var key by remember { mutableStateOf(my.bridge.com.wechat.WechatPrefs.apiKey(context)) }
+    var testing by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 2.dp) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                Text("连接中心服务器", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("服务器地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(value = key, onValueChange = { key = it }, label = { Text("API Key") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        testing = true
+                        error = ""
+                        scope.launch {
+                            val ok = WechatController.saveConfig(context, url.trim(), key.trim())
+                            testing = false
+                            error = if (ok) "" else "连接失败，请检查地址与 API Key"
+                        }
+                    },
+                    enabled = !testing,
+                    colors = ButtonDefaults.buttonColors(containerColor = WechatGreen),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (testing) "测试中..." else "测试连接并保存")
+                }
+                if (error.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, color = WechatRed, fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("首次使用需填写中心服务器地址与 API Key（参考设置页「连接」语义）。", fontSize = 11.sp, color = WechatSub)
+            }
+        }
+    }
+}
+
+// ============ 会话列表 ============
+@Composable
+private fun WechatSessionList(onOpen: (String) -> Unit) {
+    val ui = WechatState.state
+    val keyword = remember { mutableStateOf("") }
+    Column(modifier = Modifier.fillMaxSize().background(WechatPageBg)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = keyword.value,
+                onValueChange = { keyword.value = it },
+                placeholder = { Text("搜索", fontSize = 12.sp) },
+                singleLine = true,
+                modifier = Modifier.weight(1f).heightIn(min = 34.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            val mode = ui.sessionMode
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(WechatGreen.copy(alpha = 0.12f))
+                    .clickable { WechatState.setSessionMode(if (mode == "subscription") "friend" else "subscription") }
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(if (mode == "subscription") "公众号" else "好友", fontSize = 11.sp, color = WechatGreen)
+            }
+        }
+        val list = ui.visibleSessions.filter {
+            keyword.value.isBlank() || it.userNickname.contains(keyword.value, true) || it.lastMsg.contains(keyword.value, true)
+        }
+        if (list.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("暂无会话", fontSize = 13.sp, color = WechatSub)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(list, key = { it.userWxid }) { s ->
+                    WechatSessionRow(s, onOpen)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun WechatSessionRow(session: WechatSession, onOpen: (String) -> Unit) {
+    val context = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
+                .combinedClickable(
+                    onClick = { onOpen(session.userWxid) },
+                    onLongClick = { menu = true },
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            WechatAvatar(wxid = session.userWxid, name = session.userNickname, size = 40.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(session.userNickname, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (session.isPinned) Text(" 置顶", fontSize = 10.sp, color = WechatOrange)
+                    if (session.isMuted) Text(" 免打扰", fontSize = 10.sp, color = WechatSub)
+                }
+                Text(session.lastMsg, fontSize = 12.sp, color = WechatSub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(session.lastTime, fontSize = 11.sp, color = WechatSub)
+                if (session.unreadCount > 0) {
+                    Spacer(Modifier.height(3.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(if (session.isMuted) Color(0xFFC0C4CC) else WechatRed)
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    ) {
+                        Text(if (session.unreadCount > 99) "99+" else session.unreadCount.toString(), color = Color.White, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+        // 长按菜单：置顶 / 免打扰 / 清空聊天记录
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text(if (session.isPinned) "取消置顶" else "置顶该会话") },
+                onClick = { menu = false; WechatController.togglePin(context, session.userWxid, !session.isPinned) },
+            )
+            DropdownMenuItem(
+                text = { Text(if (session.isMuted) "取消免打扰" else "设为免打扰") },
+                onClick = { menu = false; WechatController.toggleMute(context, session.userWxid, !session.isMuted) },
+            )
+            DropdownMenuItem(
+                text = { Text("清空聊天记录", color = WechatRed) },
+                onClick = { menu = false; WechatController.clearSession(context, session.userWxid) },
+            )
+        }
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFF2F3F5)))
+}
+
+// ============ 聊天面板 ============
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun WechatChatPanel(sessionWxid: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val session = WechatState.state.sessions.firstOrNull { it.userWxid == sessionWxid }
+    val messages = remember(sessionWxid) { mutableStateListOf<WechatMessage>() }
+    var input by remember { mutableStateOf("") }
+    var emojiPanel by remember { mutableStateOf(false) }
+    var attachMenu by remember { mutableStateOf(false) }
+    var topMenu by remember { mutableStateOf(false) }
+    var sending by remember { mutableStateOf(false) }
+    var viewer by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var msgMenu by remember { mutableStateOf<WechatMessage?>(null) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val listState = rememberLazyListState()
+    val canSend = WechatState.state.currentWxid.isNotBlank()
+
+    LaunchedEffect(sessionWxid) {
+        messages.clear()
+        messages.addAll(WechatController.loadMessages(context, sessionWxid))
+        if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+    }
+    DisposableEffect(sessionWxid) {
+        // 页面级资源：离开会话停掉语音播放（连接不动，那是进程级的事）
+        onDispose { WechatController.stopVoice() }
+    }
+
+    /** 系统选择器选中的附件 → multipart 上传发送（手机端唯一可用路径）。 */
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        sending = true
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) { readUriBytes(context, uri) }
+            val name = uriDisplayName(context, uri) ?: "file_${System.currentTimeMillis()}"
+            if (bytes == null) {
+                wechatToast(context, "读取文件失败")
+                sending = false
+                return@launch
+            }
+            val r = WechatController.sendFile(context, sessionWxid, name, mimeOfName(name), bytes)
+            wechatToast(context, if (r.isSuccess) "已发送" else "发送失败：${r.exceptionOrNull()?.message}")
+            if (r.isSuccess) {
+                messages.add(selfMessage(sessionWxid, "[文件] $name"))
+                WechatController.refreshSessions()
+            }
+            sending = false
+        }
+    }
+
+    /** 视频/文件：先保存到 `/sdcard/bridge/wechat/...`，再用系统应用打开。 */
+    val openAttachment: (WechatMessage, WechatAttachment) -> Unit = { m, att ->
+        scope.launch {
+            val isVideo = m.msgType == WechatMsgType.VIDEO
+            val obj = if (isVideo) att.moviePath.ifBlank { att.movieCover } else att.filePath.ifBlank { att.imagePath }
+            if (obj.isBlank()) {
+                wechatToast(context, "附件不可用")
+                return@launch
+            }
+            val kind = if (isVideo) WechatDownloader.Kind.VIDEO else WechatDownloader.Kind.FILE
+            val name = att.fileName.ifBlank {
+                "wechat_${m.msgId.ifBlank { System.currentTimeMillis().toString() }}" + if (isVideo) ".mp4" else ""
+            }
+            val r = WechatController.saveAttachment(context, obj, name, kind)
+            if (r.isFailure) {
+                wechatToast(context, "下载失败：${r.exceptionOrNull()?.message}")
+                return@launch
+            }
+            val uri = r.getOrNull() ?: return@launch
+            wechatToast(context, "已保存到 ${WechatDownloader.logicalPath(kind, name)}")
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, if (isVideo) "video/mp4" else "*/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            runCatching { context.startActivity(intent) }
+                .onFailure { wechatToast(context, "没有可打开该文件的应用") }
+        }
+    }
+
+    val playVoice: (WechatMessage, WechatAttachment) -> Unit = { m, att ->
+        if (att.voicePath.isBlank()) {
+            wechatToast(context, "语音不可用")
+        } else {
+            scope.launch {
+                WechatController.toggleVoice(context, m.msgId.ifBlank { System.currentTimeMillis().toString() }, att.voicePath)
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(WechatPageBg)) {
+        // 标题栏
+        Surface(tonalElevation = 1.dp, color = MaterialTheme.colorScheme.surface) {
+            Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Row(modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    Text(session?.userNickname ?: sessionWxid, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
+                    if (session?.isMuted == true) Text("免打扰", fontSize = 11.sp, color = WechatSub)
+                    IconButton(onClick = { topMenu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
+                }
+                DropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(if (session?.isPinned == true) "取消置顶" else "置顶该会话") },
+                        onClick = { topMenu = false; session?.let { WechatController.togglePin(context, it.userWxid, !it.isPinned) } },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (session?.isMuted == true) "取消免打扰" else "设为免打扰") },
+                        onClick = { topMenu = false; session?.let { WechatController.toggleMute(context, it.userWxid, !it.isMuted) } },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("清空聊天记录", color = WechatRed) },
+                        onClick = { topMenu = false; WechatController.clearSession(context, sessionWxid); messages.clear() },
+                    )
+                }
+            }
+        }
+
+        // 消息区
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 10.dp, vertical = 12.dp),
+        ) {
+            item {
+                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        "加载更早的消息",
+                        fontSize = 11.sp,
+                        color = WechatSub,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFE9EBEF))
+                            .clickable {
+                                scope.launch {
+                                    val more = WechatController.loadMoreMessages(context, sessionWxid, messages.size)
+                                    if (more.isEmpty()) wechatToast(context, "没有更多了") else messages.addAll(0, more)
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
+            }
+            items(messages) { m ->
+                if (m.msgType == WechatMsgType.SYSTEM || m.msgType == WechatMsgType.SYSTEM_NOTICE) {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(m.content, fontSize = 11.sp, color = WechatSub, modifier = Modifier.padding(vertical = 4.dp))
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = if (m.isSelf) Arrangement.End else Arrangement.Start,
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        if (!m.isSelf) {
+                            WechatAvatar(wxid = m.senderWxid.ifBlank { m.accountWxid }, name = m.senderNickname.ifBlank { sessionWxid }, size = 34.dp)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Column(
+                            horizontalAlignment = if (m.isSelf) Alignment.End else Alignment.Start,
+                            modifier = Modifier.widthIn(max = 250.dp),
+                        ) {
+                            if (!m.isSelf && m.senderNickname.isNotBlank()) {
+                                Text(m.senderNickname, fontSize = 10.sp, color = WechatSub, modifier = Modifier.padding(bottom = 2.dp))
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (m.isSelf) WechatBubble else Color.White)
+                                    .combinedClickable(onClick = {}, onLongClick = { msgMenu = m })
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                            ) {
+                                WechatMessageContent(
+                                    msg = m,
+                                    onOpenImage = { obj, name -> viewer = obj to name },
+                                    onPlayVoice = playVoice,
+                                    onOpenFile = openAttachment,
+                                )
+                            }
+                        }
+                        if (m.isSelf) {
+                            Spacer(Modifier.width(6.dp))
+                            WechatAvatar(wxid = m.accountWxid, name = "我", size = 34.dp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 表情面板（本地文本 emoji，插入到输入框）
+        if (emojiPanel) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(150.dp)
+                    .background(Color(0xFFF7F8FA))
+                    .padding(8.dp),
+            ) {
+                WECHAT_EMOJIS.chunked(8).forEach { row ->
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        row.forEach { e ->
+                            Text(
+                                e,
+                                fontSize = 22.sp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { input += e }
+                                    .padding(vertical = 6.dp),
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 输入栏：☺ ＋ [输入框] [账号] [发送]
+        Surface(tonalElevation = 1.dp, color = MaterialTheme.colorScheme.surface) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { emojiPanel = !emojiPanel }) {
+                    Text("☺", fontSize = 20.sp, color = WechatSub)
+                }
+                Box {
+                    IconButton(onClick = { attachMenu = true }, enabled = canSend && !sending) {
+                        Icon(Icons.Filled.Add, contentDescription = "附件", tint = if (canSend) WechatSub else Color(0xFFC0C4CC))
+                    }
+                    DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                        DropdownMenuItem(text = { Text("发送图片") }, onClick = { attachMenu = false; picker.launch("image/*") })
+                        DropdownMenuItem(text = { Text("发送视频") }, onClick = { attachMenu = false; picker.launch("video/*") })
+                        DropdownMenuItem(text = { Text("发送文件") }, onClick = { attachMenu = false; picker.launch("*/*") })
+                    }
+                }
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    placeholder = { Text(if (canSend) "请输入消息..." else "请先选择微信账号", fontSize = 13.sp) },
+                    enabled = canSend,
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).heightIn(min = 36.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                WechatAccountChip()
+                Spacer(Modifier.width(6.dp))
+                IconButton(
+                    onClick = {
+                        val text = input.trim()
+                        if (text.isBlank()) return@IconButton
+                        input = ""
+                        scope.launch {
+                            val r = WechatController.sendText(context, sessionWxid, text)
+                            if (r.isSuccess) {
+                                messages.add(selfMessage(sessionWxid, text))
+                                WechatController.refreshSessions()
+                            } else {
+                                wechatToast(context, r.exceptionOrNull()?.message ?: "发送失败")
+                            }
+                        }
+                    },
+                    enabled = input.isNotBlank() && canSend,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送", tint = if (input.isNotBlank() && canSend) WechatGreen else Color(0xFFC0C4CC))
+                }
+            }
+            if (sending) {
+                Text("正在发送...", fontSize = 11.sp, color = WechatSub, modifier = Modifier.padding(start = 16.dp, bottom = 6.dp))
+            }
+        }
+    }
+
+    // 消息长按操作：复制文本 / 删除消息
+    msgMenu?.let { mm ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { msgMenu = null },
+            title = { Text("消息操作") },
+            text = {
+                Column {
+                    if (mm.content.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(mm.content))
+                                    msgMenu = null
+                                    wechatToast(context, "已复制")
+                                }
+                                .padding(vertical = 12.dp),
+                        ) { Text("复制文本", fontSize = 14.sp) }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                msgMenu = null
+                                if (mm.msgId.isBlank()) {
+                                    messages.remove(mm)
+                                    return@clickable
+                                }
+                                scope.launch {
+                                    val r = WechatController.deleteMessage(context, sessionWxid, mm.msgId)
+                                    if (r.isSuccess) {
+                                        messages.remove(mm)
+                                        WechatController.refreshSessions()
+                                    } else {
+                                        wechatToast(context, "删除失败：${r.exceptionOrNull()?.message}")
+                                    }
+                                }
+                            }
+                            .padding(vertical = 12.dp),
+                    ) { Text("删除消息", fontSize = 14.sp, color = WechatRed) }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { msgMenu = null }) { Text("关闭") }
+            },
+        )
+    }
+
+    // 大图查看器（保存用）
+    viewer?.let { (obj, name) ->
+        WechatImageViewer(
+            objectName = obj,
+            fileName = name,
+            onDismiss = { viewer = null },
+            onSave = { o, n -> WechatController.saveAttachment(context, o, n, WechatDownloader.Kind.IMAGE) },
+        )
+    }
+}
+
+/** 本地回显一条「我发出的」消息（服务端回执前先上屏，避免用户以为没发出去）。 */
+private fun selfMessage(sessionWxid: String, content: String): WechatMessage = WechatMessage(
+    id = System.currentTimeMillis(),
+    sessionId = sessionWxid,
+    accountWxid = WechatState.state.currentWxid,
+    msgId = "",
+    msgType = WechatMsgType.TEXT,
+    content = content,
+    attachmentJson = "",
+    createTime = "",
+    timestamp = System.currentTimeMillis() / 1000,
+    isSelf = true,
+    senderWxid = WechatState.state.currentWxid,
+    senderNickname = "我",
+)
+
+private val WECHAT_EMOJIS = listOf(
+    "\uD83D\uDE00", "\uD83D\uDE02", "\uD83E\uDD23", "\uD83D\uDE0A", "\uD83D\uDE0D", "\uD83D\uDE18", "\uD83D\uDE14", "\uD83D\uDE2D",
+    "\uD83D\uDC4D", "\uD83D\uDE4F", "\uD83D\uDCAA", "\uD83C\uDF89", "❤️", "\uD83D\uDD25", "\uD83D\uDE05", "\uD83E\uDD14",
+    "\uD83D\uDC4F", "\uD83C\uDF39", "\uD83C\uDF7A", "☕", "\uD83D\uDCB0", "\uD83D\uDE80", "⭐", "✅",
+)
+
+/** 账号选择（原顶部账号行移到这里）：显示当前账号序号，点击弹菜单切换。 */
+@Composable
+private fun WechatAccountChip() {
+    val context = LocalContext.current
+    val ui = WechatState.state
+    val inst = ui.currentInstance
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (inst != null) WechatGreen else WechatRed.copy(alpha = 0.08f))
+                .clickable { expanded = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (inst != null) inst.accountNumber.toString() else "?",
+                color = if (inst != null) Color.White else WechatRed,
+                fontSize = 12.sp,
+            )
+        }
+        if (expanded) {
+            // 账号菜单：照参考「未选择账号时禁用输入」的语义（no-instance 红虚线）
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { expanded = false },
+                title = { Text("选择微信账号") },
+                text = {
+                    Column {
+                        if (ui.agents.isEmpty()) {
+                            Text("暂无可用实例（agent 离线？）", fontSize = 12.sp, color = WechatSub)
+                        }
+                        ui.agents.forEach { a ->
+                            a.instances.forEach { i ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            expanded = false
+                                            WechatController.selectAccount(context, i.wxid)
+                                        }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("[${i.accountNumber}] ${i.nickname}", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                                    if (i.wxid == ui.currentWxid) Text("✓", color = WechatGreen)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { expanded = false }) { Text("关闭") }
+                },
+            )
+        }
+    }
+}
+
+private fun summaryOf(m: WechatMessage): String = when (m.msgType) {
+    WechatMsgType.IMAGE -> "[图片]"
+    WechatMsgType.VIDEO -> "[视频]"
+    WechatMsgType.VOICE -> "[语音]"
+    WechatMsgType.EMOJI -> "[表情]"
+    WechatMsgType.LOCATION -> "[位置]"
+    WechatMsgType.XML -> "[应用消息]"
+    else -> m.content.ifBlank { "[消息]" }
+}
+
+// ============ 通讯录 ============
+@Composable
+private fun WechatContactsPage(onStartChat: (String) -> Unit) {
+    val context = LocalContext.current
+    val ui = WechatState.state
+    val filters = listOf("all" to "全部", "has_session" to "会话", "person" to "个人", "group" to "群聊", "subscription" to "公众号")
+    LaunchedEffect(ui.contactsFilter) { WechatController.refreshContacts() }
+    Column(modifier = Modifier.fillMaxSize().background(WechatPageBg)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            filters.forEach { (k, label) ->
+                val on = ui.contactsFilter == k
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (on) WechatGreen.copy(alpha = 0.12f) else WechatPageBg)
+                        .clickable { WechatController.setContactsFilter(context, k) }
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(label, fontSize = 12.sp, color = if (on) WechatGreen else WechatSub)
+                }
+            }
+        }
+        val keyword = remember { mutableStateOf("") }
+        OutlinedTextField(
+            value = keyword.value,
+            onValueChange = { keyword.value = it },
+            placeholder = { Text("搜索联系人", fontSize = 12.sp) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).heightIn(min = 34.dp),
+        )
+        val list = ui.contacts.filter {
+            keyword.value.isBlank() || it.nickname.contains(keyword.value, true) || it.wxid.contains(keyword.value, true)
+        }
+        if (list.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无联系人", fontSize = 13.sp, color = WechatSub) }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(list, key = { it.wxid }) { c -> WechatContactRow(c, onStartChat) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WechatContactRow(contact: WechatContact, onStartChat: (String) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+            .clickable { onStartChat(contact.wxid) }.padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        WechatAvatar(wxid = contact.wxid, name = contact.nickname, size = 34.dp, radius = 4.dp)
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(contact.nickname, fontSize = 14.sp)
+            Text("${contact.typeLabel} · ${contact.wxid}", fontSize = 11.sp, color = WechatSub)
+        }
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFF2F3F5)))
+}
+
+// ============ 实例（账号上下文） ============
+@Composable
+private fun WechatInstancesPage() {
+    val context = LocalContext.current
+    val ui = WechatState.state
+    LazyColumn(modifier = Modifier.fillMaxSize().background(WechatPageBg), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(ui.agents, key = { it.agentId }) { a ->
+            Surface(shape = RoundedCornerShape(8.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp)) {
+                Column {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(a.agentId, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(if (a.isConnected) "在线" else "离线", fontSize = 10.sp, color = if (a.isConnected) WechatGreen else WechatSub)
+                    }
+                    a.instances.forEach { i ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (i.wxid == ui.currentWxid) WechatGreen.copy(alpha = 0.10f) else Color.Transparent)
+                                .clickable { WechatController.selectAccount(context, i.wxid) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(modifier = Modifier.size(34.dp).clip(RoundedCornerShape(4.dp)).background(WechatGreen), contentAlignment = Alignment.Center) {
+                                Text(i.accountNumber.toString(), color = Color.White, fontSize = 13.sp)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("[${i.accountNumber}] ${i.nickname}", fontSize = 14.sp)
+                                Text("PID: ${i.pid} | 端口: ${i.port}", fontSize = 11.sp, color = WechatSub)
+                            }
+                            if (i.wxid == ui.currentWxid) Text("✓", color = WechatGreen, fontSize = 15.sp)
+                        }
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+// ============ 工具箱（本期占位） ============
+@Composable
+private fun WechatToolboxPlaceholder() {
+    val planned = listOf(
+        "远程打印" to "文件工具", "二维码" to "文件工具", "剪切板同步" to "文件工具",
+        "抖一抖" to "交互工具", "重启代理" to "交互工具",
+        "拍照" to "查询工具", "流式录音" to "查询工具", "流式录屏" to "查询工具", "GPS 位置" to "查询工具", "短信查询" to "查询工具",
+        "JSON" to "编程工具", "Base64" to "编程工具", "时间戳" to "编程工具", "JWT" to "编程工具",
+    )
+    LazyColumn(modifier = Modifier.fillMaxSize().background(WechatPageBg).padding(12.dp)) {
+        item {
+            Surface(shape = RoundedCornerShape(8.dp), tonalElevation = 1.dp) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("工具箱（本期仅占位）", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "参考项目共 30+ 工具；其中拍照/流式录音录像/短信/GPS 与 Bridge 现有命令重复，" +
+                            "编程/生活类与定位无关——本期不实现，仅保留入口，后续按需再开。",
+                        fontSize = 11.sp, color = WechatSub,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    planned.chunked(3).forEach { row ->
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { (name, _) ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xFFFAFBFC))
+                                        .padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(name, fontSize = 11.sp, color = Color(0xFFB0B6C0))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============ 页内设置 ============
+@Composable
+private fun WechatSettingsPage() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val ui = WechatState.state
+    // Android 13+ 通知权限运行时申请
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        wechatToast(context, if (granted) "通知权限已授予" else "通知权限被拒绝")
+    }
+    LazyColumn(modifier = Modifier.fillMaxSize().background(WechatPageBg).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            SettingsCard("服务器连接") {
+                var editing by remember { mutableStateOf(false) }
+                var urlEdit by remember { mutableStateOf(ui.serverUrl) }
+                var keyEdit by remember { mutableStateOf(WechatPrefs.apiKey(context)) }
+                var testing by remember { mutableStateOf(false) }
+                var err by remember { mutableStateOf("") }
+                if (!editing) {
+                    Text("地址：" + ui.serverUrl, fontSize = 12.sp)
+                    Text("状态：" + if (ui.connState == WechatConnState.CONNECTED) "已连接" else "未连接", fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { editing = true; urlEdit = ui.serverUrl; keyEdit = WechatPrefs.apiKey(context) },
+                            colors = ButtonDefaults.buttonColors(containerColor = WechatGreen),
+                        ) { Text("修改服务器", fontSize = 12.sp) }
+                        Button(
+                            onClick = {
+                                WechatController.reconnectNow(context)
+                                wechatToast(context, "正在重新连接...")
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = WechatGreen.copy(alpha = 0.75f)),
+                        ) { Text("重新连接", fontSize = 12.sp) }
+                    }
+                } else {
+                    OutlinedTextField(value = urlEdit, onValueChange = { urlEdit = it }, label = { Text("服务器地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = keyEdit, onValueChange = { keyEdit = it }, label = { Text("API Key") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                testing = true
+                                err = ""
+                                scope.launch {
+                                    val ok = WechatController.testConfig(context, urlEdit.trim(), keyEdit.trim())
+                                    testing = false
+                                    if (ok) {
+                                        editing = false
+                                        wechatToast(context, "已保存并重新连接")
+                                    } else {
+                                        err = "连接失败，请检查地址与 API Key"
+                                    }
+                                }
+                            },
+                            enabled = !testing,
+                            colors = ButtonDefaults.buttonColors(containerColor = WechatGreen),
+                        ) { Text(if (testing) "测试中..." else "测试并保存", fontSize = 12.sp) }
+                        Button(
+                            onClick = { editing = false; err = "" },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC0C4CC)),
+                        ) { Text("取消", fontSize = 12.sp) }
+                    }
+                    if (err.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(err, fontSize = 11.sp, color = WechatRed)
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("连接由进程级 Runtime 常驻维护，离开本页不中断（实时性是硬需求）。", fontSize = 11.sp, color = WechatSub)
+            }
+        }
+        item {
+            SettingsCard("通知权限") {
+                val granted = androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+                Text(
+                    if (granted) "系统通知已开启" else "系统通知未开启：后台收到消息时不会弹通知（连接与未读照常）",
+                    fontSize = 12.sp,
+                    color = if (granted) WechatGreen else WechatRed,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = {
+                            val i = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                .setData(android.net.Uri.parse("package:" + context.packageName))
+                            runCatching { context.startActivity(i) }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = WechatGreen),
+                    ) { Text("去系统设置", fontSize = 12.sp) }
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU && !granted) {
+                        Button(
+                            onClick = { permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) },
+                            colors = ButtonDefaults.buttonColors(containerColor = WechatGreen.copy(alpha = 0.75f)),
+                        ) { Text("申请权限", fontSize = 12.sp) }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsCard("本地缓存") {
+                Text("图片/语音缓存在内存与 App 缓存目录，不占用户可见空间。", fontSize = 11.sp, color = WechatSub)
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { WechatController.clearCache(); wechatToast(context, "已清空缓存") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC0C4CC)),
+                ) { Text("清空缓存", fontSize = 12.sp) }
+            }
+        }
+        item {
+            SettingsCard("后台接收与提醒") {
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("后台实时接收", fontSize = 13.sp)
+                        Text("硬需求：常开，不提供关闭入口", fontSize = 11.sp, color = WechatSub)
+                    }
+                    Text("常开", fontSize = 12.sp, color = WechatGreen, fontWeight = FontWeight.SemiBold)
+                }
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("断线自动重连", fontSize = 13.sp)
+                        Text("固定 2s · 网络恢复即刻重连", fontSize = 11.sp, color = WechatSub)
+                    }
+                    Text("常开", fontSize = 12.sp, color = WechatGreen, fontWeight = FontWeight.SemiBold)
+                }
+                SwitchRow("新消息通知", ui.notifyEnabled) { WechatController.setNotifyEnabled(context, it) }
+                SwitchRow("消息提示音", ui.soundEnabled) { WechatController.setSoundEnabled(context, it) }
+                SwitchRow("全局静音（只关声音）", ui.muteAll) { WechatController.setMuteAll(context, it) }
+            }
+        }
+        item {
+            SettingsCard("附件保存位置") {
+                listOf("images", "videos", "voice", "files").forEach {
+                    Text(WECHAT_DOWNLOAD_ROOT + it, fontSize = 11.sp, color = Color(0xFF374151))
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("Android 10+ 分区存储下用 MediaStore / 公共 Download 实现同一逻辑路径；用户主动下载的附件默认不自动清理。", fontSize = 11.sp, color = WechatSub)
+            }
+        }
+        item {
+            SettingsCard("WebSocket 参数（默认照抄参考项目）") {
+                ParamRow("心跳间隔", "15000 ms")
+                ParamRow("Pong 超时", "60000 ms")
+                ParamRow("重连间隔", "固定 2000 ms")
+            }
+        }
+        item {
+            SettingsCard("说明") {
+                Text("参考项目的 H5+ 保活（通知栏/CPU·WiFi 锁/蜂鸣/隐藏最近任务）全部不移植，Bridge 已有 core-keepalive。", fontSize = 11.sp, color = WechatSub)
+                Spacer(Modifier.height(4.dp))
+                Text("后台收消息不新增前台服务：复用既有保活进程，避免触碰崩溃台账 §5 的高危面。", fontSize = 11.sp, color = WechatSub)
+            }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@Composable
+private fun SettingsCard(title: String, content: @Composable () -> Unit) {
+    Surface(shape = RoundedCornerShape(10.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SwitchRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun ParamRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 11.sp, color = WechatSub, textAlign = TextAlign.End)
+    }
+}
+
+// ============ 工具 ============
+
+private fun wechatToast(context: android.content.Context, msg: String) {
+    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+}
+
+/** 读取选择器返回的 Uri 字节（图片/视频/文件发送用）。 */
+private suspend fun readUriBytes(context: android.content.Context, uri: android.net.Uri): ByteArray? =
+    withContext(Dispatchers.IO) {
+        runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+    }
+
+/** 取 Uri 的显示名（文件名）。 */
+private fun uriDisplayName(context: android.content.Context, uri: android.net.Uri): String? =
+    runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+        }
+    }.getOrNull()
+
+/** 按扩展名猜 MIME（上传 multipart 的 part type）。 */
+private fun mimeOfName(name: String): String = when {
+    name.endsWith(".png", true) -> "image/png"
+    name.endsWith(".jpg", true) || name.endsWith(".jpeg", true) -> "image/jpeg"
+    name.endsWith(".gif", true) -> "image/gif"
+    name.endsWith(".webp", true) -> "image/webp"
+    name.endsWith(".mp4", true) -> "video/mp4"
+    name.endsWith(".amr", true) -> "audio/amr"
+    name.endsWith(".mp3", true) -> "audio/mpeg"
+    else -> "application/octet-stream"
+}

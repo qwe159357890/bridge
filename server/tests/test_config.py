@@ -23,8 +23,8 @@ def clean_env(monkeypatch):
 
 def test_default_settings(clean_env):
     s = get_settings()
-    assert s.heartbeat.interval == 20
-    assert s.heartbeat.server_read_timeout == 45
+    assert s.heartbeat.interval == 60
+    assert s.heartbeat.server_read_timeout == 150
     assert s.reconnect.max_delay == 60
     assert s.connection.unique_per_device is True
 

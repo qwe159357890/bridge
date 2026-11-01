@@ -69,6 +69,11 @@ class BridgeApplication : Application() {
         my.bridge.com.media.BridgeApplicationContextHolder.init(this)
         bluetoothMediaButtonListener.start(this)
 
+        // 微信（center-server）**进程级**运行时：连接常开，不随页面销毁而断。
+        // 离开微信页仍要实时收消息并通知，因此这里就启动；未配置服务器时内部自行跳过。
+        // 不新增前台服务——进程存活复用上面的 KeepAliveService 保活体系。
+        my.bridge.com.wechat.WechatRuntime.start(this)
+
         // 主动上报总管：周期位置上报（服务定时+WorkManager 兜底）+ 新短信即推 +
         // 接收服务端 config_update 推送（后台远程开关，默认双开）
         reportManager.start()

@@ -8,7 +8,9 @@ package my.bridge.com.core.network.ws
  * 若两端都可自由改，极易配置不一致导致误判。参数由协议文档约定，双方写死。
  *
  * 与后端 config.yaml 硬编码值一致（docs/server/design.md）：
- *   heartbeat.interval=20s、client_pong_timeout=10s、reconnect.base=1s/max=60s/jitter=0.2。
+ *   heartbeat.interval=60s、client_pong_timeout=10s、reconnect.base=1s/max=60s/jitter=0.2。
+ *   （v0.2.21 心跳由 20s 放宽到 60s，服务端 server_read_timeout 同步 45s → 150s；
+ *    详见 docs/dev/heartbeat-inventory.md §8）
  *
  * **服务地址可配置**：默认值见下方常量（模拟器 10.0.2.2），运行时地址由
  * [ServerAddress] 持有（启动时从 DataStore 加载，用户可在设置页修改并触发重连）。
@@ -27,8 +29,8 @@ object WsConfig {
     /** 默认端口。 */
     const val PORT_DEFAULT = "15160"
 
-    /** 心跳发送周期（毫秒）。与服务端 heartbeat.interval=20s 硬编码一致。 */
-    const val HEARTBEAT_INTERVAL_MS = 20_000L
+    /** 心跳发送周期（毫秒）。与服务端 heartbeat.interval=60s 硬编码一致。 */
+    const val HEARTBEAT_INTERVAL_MS = 60_000L
 
     /** 发送 ping 后等待 pong 的超时（毫秒）。与服务端 client_pong_timeout=10s 一致。 */
     const val PONG_TIMEOUT_MS = 10_000L
@@ -41,4 +43,16 @@ object WsConfig {
 
     /** 重连随机抖动比例（±20%）。 */
     const val RECONNECT_JITTER = 0.2
+
+    /**
+     * 距下一个心跳栅格的毫秒数（取值区间 (0, HEARTBEAT_INTERVAL_MS]）。
+     *
+     * 把心跳对齐到 Unix 毫秒时间的整数倍，使 Bridge 主 WS 与微信 WS 的 ping 落在**同一时刻**，
+     * 共用一次无线唤醒（radio tail），而不是各自错相触发。
+     * 每次都按当前时间重算，因此能自我纠正累积漂移。
+     *
+     * 详见 docs/dev/heartbeat-inventory.md §3.3 结论 3。
+     */
+    fun delayToNextGrid(nowMs: Long = System.currentTimeMillis()): Long =
+        HEARTBEAT_INTERVAL_MS - (nowMs % HEARTBEAT_INTERVAL_MS)
 }

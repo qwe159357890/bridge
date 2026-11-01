@@ -1,0 +1,528 @@
+package my.bridge.com.wechat
+
+import android.content.Context
+import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import my.bridge.com.core.common.DiagLog
+import org.json.JSONObject
+
+/**
+ * 微信（中心服务器）**进程级运行时** —— 本功能与其它集成最大的不同。
+ *
+ * 销售页/智能控制的连接是**页面级**（进入页面才连、离开释放）；微信的实时性是硬需求，
+ * 因此连接抬到进程级：
+ * - [start] 在 Application 启动时调用，连接**常开**，不随页面销毁而断；
+ * - 页面只做订阅/退订（[onPageEnter] / [onPageLeave]），**绝不断连**；
+ * - 断线固定 2s 重连（照参考项目，不做指数退避），网络恢复**即刻**重连；
+ * - 进程存活复用既有保活（KeepAliveService 常驻 FGS + 电池白名单 + 开机自启 + 双兜底），
+ *   **不新增前台服务**，避免触碰崩溃台账 §5 的高危面。
+ */
+object WechatRuntime : WechatWsClient.Listener {
+
+    private const val TAG = "微信"
+    private const val RECONNECT_MS = 2_000L
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var app: Context? = null
+
+    @Volatile
+    private var api: WechatApiClient? = null
+
+    private val ws = WechatWsClient()
+
+    @Volatile
+    private var started = false
+
+    @Volatile
+    private var pageActive = false
+
+    private var reconnectJob: Job? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    // ------------------------------------------------------------------
+    // 生命周期（进程级）
+    // ------------------------------------------------------------------
+
+    /** Application 启动时调用：读配置 → 若已配置则连接。 */
+    @Synchronized
+    fun start(context: Context) {
+        val appCtx = context.applicationContext
+        app = appCtx
+        if (api == null) api = WechatApiClient(appCtx)
+        WechatState.initFromPrefs(
+            configured = WechatPrefs.configured(appCtx),
+            serverUrl = WechatPrefs.serverUrl(appCtx),
+            currentWxid = WechatPrefs.currentWxid(appCtx),
+            sessionMode = WechatPrefs.sessionMode(appCtx),
+            contactsFilter = WechatPrefs.contactsFilter(appCtx),
+            notifyEnabled = WechatPrefs.notifyEnabled(appCtx),
+            soundEnabled = WechatPrefs.soundEnabled(appCtx),
+            muteAll = WechatPrefs.muteAll(appCtx),
+        )
+        ws.setListener(this)
+        registerNetworkCallback(appCtx)
+        started = true
+        DiagLog.i(TAG, "Runtime 启动：configured=${WechatPrefs.configured(appCtx)} url=${WechatPrefs.serverUrl(appCtx)}")
+        connect()
+        refreshAll()
+    }
+
+    /** 配置变更（地址/Key 保存后）：重连并重新拉数据。 */
+    fun onConfigChanged(context: Context) {
+        val appCtx = context.applicationContext
+        app = appCtx
+        WechatState.setConfigured(WechatPrefs.configured(appCtx), WechatPrefs.serverUrl(appCtx))
+        reconnectNow("配置变更")
+        refreshAll()
+    }
+
+    /**
+     * 页面进入：**只订阅**（拉一次最新数据），不建立连接——连接一直在。
+     */
+    fun onPageEnter(context: Context) {
+        val appCtx = context.applicationContext
+        app = appCtx
+        if (!started) start(appCtx)
+        pageActive = true
+        refreshAll()
+    }
+
+    /**
+     * 页面离开：**只退订**（停止为 UI 刷新数据），连接保持在线。
+     * 这里不做任何 disconnect —— 断开连接就等于放弃后台实时收消息。
+     */
+    fun onPageLeave() {
+        pageActive = false
+    }
+
+    // ------------------------------------------------------------------
+    // 连接与重连
+    // ------------------------------------------------------------------
+
+    private fun connect() {
+        val ctx = app ?: return
+        if (!WechatPrefs.configured(ctx)) {
+            DiagLog.i(TAG, "未配置服务器，跳过连接")
+            WechatState.setConnState(WechatConnState.DISCONNECTED)
+            return
+        }
+        if (ws.isConnected()) return
+        WechatState.setConnState(WechatConnState.CONNECTING)
+        ws.connect(
+            serverUrl = WechatPrefs.serverUrl(ctx),
+            apiKey = WechatPrefs.apiKey(ctx),
+            deviceId = WechatPrefs.deviceId(ctx),
+            deviceName = android.os.Build.MODEL,
+        )
+    }
+
+    private fun reconnectNow(reason: String) {
+        DiagLog.i(TAG, "重连（$reason）")
+        ws.disconnect()
+        scope.launch { connect() }
+    }
+
+    /** 固定 2s 重连（照参考项目，不做指数退避，优先保证恢复速度）。 */
+    private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch {
+            while (isActive && !ws.isConnected()) {
+                delay(RECONNECT_MS)
+                if (!ws.isConnected()) connect()
+            }
+        }
+    }
+
+    /** 网络恢复即刻重连——不等心跳/Pong 超时（否则最长 60s 才感知断线）。 */
+    private fun registerNetworkCallback(ctx: Context) {
+        if (networkCallback != null) return
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                DiagLog.i(TAG, "网络可用，检查连接")
+                if (WechatPrefs.configured(ctx) && !ws.isConnected()) reconnectNow("网络恢复")
+            }
+        }
+        networkCallback = cb
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(cb)
+            } else {
+                cm.registerNetworkCallback(
+                    NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build(), cb
+                )
+            }
+        }.onFailure { DiagLog.w(TAG, "注册网络回调失败：${it.message}") }
+    }
+
+    // ------------------------------------------------------------------
+    // WS 事件
+    // ------------------------------------------------------------------
+
+    override fun onConnected(clientId: String) {
+        val ctx = app ?: return
+        WechatState.setConnState(WechatConnState.CONNECTED)
+        reconnectJob?.cancel()
+        if (clientId.isNotBlank()) WechatPrefs.setLocalClientId(ctx, clientId)
+        DiagLog.i(TAG, "WS 已连接 clientId=$clientId")
+        // 重连成功后校准一次未读，防止断线期间漏计
+        refreshAll()
+    }
+
+    override fun onDisconnected(reason: String) {
+        WechatState.setConnState(WechatConnState.DISCONNECTED)
+        DiagLog.w(TAG, "WS 断开：$reason")
+        scheduleReconnect()
+    }
+
+    override fun onIncomingMessage(raw: JSONObject) {
+        val ctx = app ?: return
+        // 广播去自扰：本端发出的动作回弹回来时忽略
+        val fromClient = raw.optString("from_client")
+        val localId = WechatPrefs.localClientId(ctx)
+        if (fromClient.isNotBlank() && localId.isNotBlank() && fromClient == localId) return
+
+        val msg = raw.opt("data") as? JSONObject ?: raw
+        val isSelf = msg.optInt("is_self", 0) == 1 || msg.optBoolean("is_self", false)
+        val sessionWxid = msg.optString("from_group").ifBlank { msg.optString("from_wxid") }
+            .ifBlank { msg.optString("session_id") }
+        if (sessionWxid.isBlank()) return
+        val content = msg.optString("content")
+        val msgType = msg.optInt("msg_type", WechatMsgType.TEXT)
+
+        val session = WechatState.state.sessions.firstOrNull { it.userWxid == sessionWxid }
+        val muted = session?.isMuted ?: false
+        val summary = summaryOf(msgType, content)
+
+        val updated = (session ?: WechatSession(
+            userWxid = sessionWxid,
+            userNickname = msg.optString("sender_nickname").ifBlank { sessionWxid },
+            lastMsg = "", lastTime = "", updateTimestamp = 0L,
+            unreadCount = 0, isPinned = false, isMuted = false,
+        )).copy(
+            lastMsg = summary,
+            lastTime = msg.optString("create_time"),
+            updateTimestamp = (System.currentTimeMillis() / 1000),
+            unreadCount = if (isSelf) 0 else (session?.unreadCount ?: 0) + 1,
+        )
+        WechatState.upsertSession(updated)
+        recalcUnread()
+
+        // 自己发的不提醒；免打扰不提醒但仍计未读（与参考前端一致）
+        if (isSelf || muted) return
+        if (pageActive && WechatController.isViewing(sessionWxid)) {
+            // 用户正看着这个会话：不打扰
+            return
+        }
+        remind(ctx, updated, summary)
+    }
+
+    /** 提示：通知 + 提示音（提醒方式可关，连接不可关）。 */
+    private fun remind(ctx: Context, session: WechatSession, summary: String) {
+        if (WechatPrefs.notifyEnabled(ctx)) {
+            val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(WECHAT_EXTRA_OPEN_SESSION, session.userWxid)
+            } ?: Intent()
+            WechatNotifier.post(
+                context = ctx,
+                sessionWxid = session.userWxid,
+                title = session.userNickname,
+                content = summary,
+                sound = WechatPrefs.soundEnabled(ctx) && !WechatPrefs.muteAll(ctx),
+                unreadCount = WechatState.state.unreadTotal,
+                openIntent = intent,
+            )
+        }
+        if (WechatPrefs.soundEnabled(ctx) && !WechatPrefs.muteAll(ctx)) {
+            WechatSound.play(ctx)
+        }
+    }
+
+    override fun onUnreadCleared(sessionId: String, fromClient: String?) {
+        if (isSelf(fromClient)) return
+        WechatState.updateSession(sessionId) { it.copy(unreadCount = 0) }
+        recalcUnread()
+        app?.let { WechatNotifier.cancel(it, sessionId) }
+    }
+
+    override fun onPinChanged(sessionId: String, pinned: Boolean, fromClient: String?) {
+        if (isSelf(fromClient)) return
+        WechatState.updateSession(sessionId) { it.copy(isPinned = pinned) }
+    }
+
+    override fun onMuteChanged(sessionId: String, muted: Boolean, fromClient: String?) {
+        if (isSelf(fromClient)) return
+        WechatState.updateSession(sessionId) { it.copy(isMuted = muted) }
+        recalcUnread()
+    }
+
+    override fun onSessionUpdate(sessionId: String, fromClient: String?) {
+        if (isSelf(fromClient)) return
+        refreshSessions()
+    }
+
+    override fun onSessionCleared(sessionId: String) {
+        WechatState.updateSession(sessionId) { it.copy(lastMsg = "", unreadCount = 0) }
+        recalcUnread()
+    }
+
+    override fun onSessionDeleted(sessionId: String) {
+        WechatState.removeSession(sessionId)
+        recalcUnread()
+        app?.let { WechatNotifier.cancel(it, sessionId) }
+    }
+
+    override fun onInstanceChange() {
+        refreshAgents()
+    }
+
+    override fun onPlaySound() {
+        app?.let { if (WechatPrefs.soundEnabled(it) && !WechatPrefs.muteAll(it)) WechatSound.play(it) }
+    }
+
+    private fun isSelf(fromClient: String?): Boolean {
+        val ctx = app ?: return false
+        val local = WechatPrefs.localClientId(ctx)
+        return !fromClient.isNullOrBlank() && local.isNotBlank() && fromClient == local
+    }
+
+    private fun recalcUnread() {
+        // 与服务端口径一致：只累计非免打扰会话
+        val total = WechatState.state.sessions.filter { !it.isMuted }.sumOf { it.unreadCount }
+        WechatState.setUnreadTotal(total)
+    }
+
+    private fun summaryOf(msgType: Int, content: String): String = when (msgType) {
+        WechatMsgType.IMAGE -> "[图片]"
+        WechatMsgType.VIDEO -> "[视频]"
+        WechatMsgType.VOICE -> "[语音]"
+        WechatMsgType.EMOJI -> "[表情]"
+        WechatMsgType.LOCATION -> "[位置]"
+        WechatMsgType.XML -> "[应用消息]"
+        else -> content.ifBlank { "[消息]" }
+    }
+
+    // ------------------------------------------------------------------
+    // 数据刷新
+    // ------------------------------------------------------------------
+
+    fun refreshAll() {
+        val ctx = app ?: return
+        if (!WechatPrefs.configured(ctx)) return
+        refreshAgents()
+        refreshSessions()
+    }
+
+    fun refreshAgents() {
+        val ctx = app ?: return
+        scope.launch {
+            runCatching {
+                val list = api!!.agents()
+                withContext(Dispatchers.Main.immediate) { WechatState.setAgents(list) }
+                // 账号失效（实例下线）时清空当前选择，避免用不存在的 wxid 发送
+                val current = WechatPrefs.currentWxid(ctx)
+                if (current.isNotBlank() && list.none { a -> a.instances.any { it.wxid == current } }) {
+                    WechatPrefs.setCurrentWxid(ctx, "")
+                    withContext(Dispatchers.Main.immediate) { WechatState.setCurrentWxid("") }
+                }
+            }.onFailure { DiagLog.w(TAG, "拉取代理/实例失败：${it.message}") }
+        }
+    }
+
+    fun refreshSessions() {
+        val ctx = app ?: return
+        if (WechatState.state.loadingSessions) return
+        WechatState.setLoadingSessions(true)
+        scope.launch {
+            runCatching {
+                val list = api!!.sessions(limit = 200)
+                withContext(Dispatchers.Main.immediate) {
+                    WechatState.setSessions(list, list.filter { !it.isMuted }.sumOf { it.unreadCount })
+                }
+            }.onFailure {
+                DiagLog.w(TAG, "拉取会话失败：${it.message}")
+                WechatState.setLoadingSessions(false)
+            }
+        }
+    }
+
+    fun refreshContacts() {
+        val ctx = app ?: return
+        scope.launch {
+            runCatching {
+                val list = api!!.contacts(
+                    accountWxid = WechatPrefs.currentWxid(ctx),
+                    filter = WechatPrefs.contactsFilter(ctx),
+                )
+                withContext(Dispatchers.Main.immediate) { WechatState.setContacts(list) }
+            }.onFailure { DiagLog.w(TAG, "拉取联系人失败：${it.message}") }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 业务动作（供页面调用）
+    // ------------------------------------------------------------------
+
+    /** 测试连接：不传参用已保存配置；传参则测输入值（保存前先测，避免存下连不上的地址）。 */
+    suspend fun testConnection(context: Context, url: String = "", apiKey: String = ""): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching { WechatApiClient(context, url, apiKey).testConnection() }.getOrDefault(false)
+        }
+
+    fun saveConfig(context: Context, url: String, apiKey: String) {
+        WechatPrefs.setServerUrl(context, url)
+        WechatPrefs.setApiKey(context, apiKey)
+        onConfigChanged(context)
+    }
+
+    fun selectAccount(context: Context, wxid: String) {
+        WechatPrefs.setCurrentWxid(context, wxid)
+        WechatState.setCurrentWxid(wxid)
+        refreshContacts()
+    }
+
+    fun setSessionMode(context: Context, mode: String) {
+        WechatPrefs.setSessionMode(context, mode)
+        WechatState.setSessionMode(mode)
+    }
+
+    fun setContactsFilter(context: Context, filter: String) {
+        WechatPrefs.setContactsFilter(context, filter)
+        WechatState.setContactsFilter(filter)
+        refreshContacts()
+    }
+
+    fun setNotifyEnabled(context: Context, enabled: Boolean) {
+        WechatPrefs.setNotifyEnabled(context, enabled)
+        WechatState.setNotifyEnabled(enabled)
+    }
+
+    fun setSoundEnabled(context: Context, enabled: Boolean) {
+        WechatPrefs.setSoundEnabled(context, enabled)
+        WechatState.setSoundEnabled(enabled)
+    }
+
+    fun setMuteAll(context: Context, muted: Boolean) {
+        WechatPrefs.setMuteAll(context, muted)
+        WechatState.setMuteAll(muted)
+    }
+
+    /** 进入会话：本地清零 + 通知撤回 + 服务端已读 + WS 广播。 */
+    fun openSession(context: Context, sessionWxid: String) {
+        WechatState.updateSession(sessionWxid) { it.copy(unreadCount = 0) }
+        recalcUnread()
+        WechatNotifier.cancel(context, sessionWxid)
+        ws.markRead(sessionWxid)
+        scope.launch {
+            runCatching { WechatApiClient(context).markRead(sessionWxid) }
+                .onFailure { DiagLog.w(TAG, "标记已读失败：${it.message}") }
+        }
+    }
+
+    fun togglePin(context: Context, sessionWxid: String, pinned: Boolean) {
+        WechatState.updateSession(sessionWxid) { it.copy(isPinned = pinned) }
+        ws.togglePin(sessionWxid, pinned)
+    }
+
+    fun toggleMute(context: Context, sessionWxid: String, muted: Boolean) {
+        WechatState.updateSession(sessionWxid) { it.copy(isMuted = muted) }
+        recalcUnread()
+        ws.toggleMute(sessionWxid, muted)
+    }
+
+    /** 清空聊天记录：本地清空 + WS 广播 + REST 删除服务端消息（DELETE messages/sessions/{id}/messages）。 */
+    fun clearSession(context: Context, sessionWxid: String) {
+        WechatState.updateSession(sessionWxid) { it.copy(lastMsg = "", unreadCount = 0) }
+        recalcUnread()
+        WechatNotifier.cancel(context, sessionWxid)
+        ws.clearSession(sessionWxid)
+        scope.launch {
+            runCatching { WechatApiClient(context).clearSessionMessages(sessionWxid) }
+                .onFailure { DiagLog.w(TAG, "清空聊天记录失败：${it.message}") }
+        }
+    }
+
+    /** 删除单条消息（本地移除 + REST；服务端会广播，其它端自行同步）。 */
+    suspend fun deleteMessage(context: Context, sessionWxid: String, msgId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching { WechatApiClient(context).deleteMessage(sessionWxid, msgId) }
+        }
+
+    suspend fun sendText(context: Context, targetWxid: String, text: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val wxid = WechatPrefs.currentWxid(context)
+            if (wxid.isBlank()) return@withContext Result.failure(IllegalStateException("请先选择微信账号"))
+            runCatching { WechatApiClient(context).sendText(wxid, targetWxid, text) }
+        }
+
+    suspend fun sendImage(context: Context, targetWxid: String, fileName: String, mime: String, bytes: ByteArray): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val wxid = WechatPrefs.currentWxid(context)
+            if (wxid.isBlank()) return@withContext Result.failure(IllegalStateException("请先选择微信账号"))
+            runCatching {
+                // 手机端只能走 multipart 上传：send_image 的参数是服务器文件路径
+                WechatApiClient(context).uploadAndSend(wxid, targetWxid, fileName, mime, bytes)
+            }
+        }
+
+    /** 发送图片/视频/文件：手机端统一走 multipart `wechat/upload_and_send`。 */
+    suspend fun sendFile(context: Context, targetWxid: String, fileName: String, mime: String, bytes: ByteArray): Result<Unit> =
+        sendImage(context, targetWxid, fileName, mime, bytes)
+
+    suspend fun loadMessages(context: Context, sessionWxid: String, limit: Int = 50, offset: Int = 0): List<WechatMessage> =
+        withContext(Dispatchers.IO) {
+            runCatching { WechatApiClient(context).messages(sessionWxid, limit = limit, offset = offset) }
+                .getOrDefault(emptyList())
+        }
+
+    fun attachmentUrl(context: Context, objectName: String): String =
+        WechatApiClient(context).attachmentUrl(objectName)
+
+    /** 头像 URL（Bearer 鉴权，由 [WechatImageLoader] 带 key 请求）。 */
+    fun avatarUrl(context: Context, wxid: String): String =
+        WechatApiClient(context).avatarUrl(wxid)
+
+    fun apiKey(context: Context): String = WechatApiClient(context).apiKeyValue()
+
+    /** 保存附件到 `/sdcard/bridge/wechat/{images,videos,voice,files}`。 */
+    suspend fun saveAttachment(
+        context: Context,
+        objectName: String,
+        fileName: String,
+        kind: WechatDownloader.Kind,
+    ): Result<android.net.Uri> {
+        val url = attachmentUrl(context, objectName)
+        if (url.isBlank()) return Result.failure(IllegalStateException("附件地址无效"))
+        return WechatDownloader.save(context, url, fileName, kind)
+    }
+
+    /** 语音播放/停止（先下载到缓存再本地播放，见 [WechatVoicePlayer]）。 */
+    suspend fun toggleVoice(context: Context, msgId: String, objectName: String) {
+        val url = attachmentUrl(context, objectName)
+        if (url.isBlank()) return
+        WechatVoicePlayer.toggle(context, msgId, url)
+    }
+
+    fun stopVoice() = WechatVoicePlayer.stop()
+
+}
+
+/** 通知点击时携带的会话 wxid（MainActivity 读取后跳转微信页并打开该会话）。 */
+const val WECHAT_EXTRA_OPEN_SESSION = "wechat_open_session"

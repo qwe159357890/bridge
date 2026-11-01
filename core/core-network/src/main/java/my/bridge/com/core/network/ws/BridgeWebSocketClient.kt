@@ -289,7 +289,8 @@ class BridgeWebSocketClient(
     private fun launchHeartbeat(webSocket: WebSocket) {
         scope.launch {
             while (isActive && !shouldStop && webSocket == this@BridgeWebSocketClient.webSocket) {
-                delay(WsConfig.HEARTBEAT_INTERVAL_MS)
+                // 对齐到心跳栅格：与微信 WS 共用一次无线唤醒（见 WsConfig.delayToNextGrid）
+                delay(WsConfig.delayToNextGrid())
                 if (webSocket != this@BridgeWebSocketClient.webSocket) break
 
                 val deferred = CompletableDeferred<Unit>()

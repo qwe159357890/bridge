@@ -10,9 +10,9 @@ server:
   max_message_size: 65536        # 单条消息最大字节数
 
 heartbeat:
-  interval: 20                   # 客户端心跳发送周期（秒）
+  interval: 60                   # 客户端心跳发送周期（秒）；v0.2.20+ 由 20 放宽到 60
   client_pong_timeout: 10        # 客户端 ping 后等 pong 超时（秒）
-  server_read_timeout: 45        # 服务端读超时（秒），须 > interval（建议 > 2 倍）
+  server_read_timeout: 150       # 服务端读超时（秒），须 > interval（建议 > 2 倍）
 
 reconnect:
   base_delay: 1                  # 重连基础退避（秒）
