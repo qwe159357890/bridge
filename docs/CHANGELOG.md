@@ -22,6 +22,13 @@
 
 ---
 
+## 2026-11-01 · 🔧 v0.2.28 进程退出补强（取消 WorkManager 兜底 + 说明更正）
+
+- **补强**：`AppExit.kill` 增加 `cancelUniqueWork(ReportManager.WORK_NAME)`。该周期任务登记在系统里，
+  不取消的话会在 ≥15 分钟后新建进程执行 Worker，APP 会自己「复活」；下次冷启动 `applyConfig` 自动重排，功能不丢。
+- **更正说明**：双兜底无需手动关（`stopService` → `onDestroy` → `releaseAll` 已取消 Alarm/Job）。
+- **边界澄清**：退出只清**运行时登记**，不写任何持久化开关 ⇒ 手动重新启动后保活照旧全部重新布防。
+
 ## 2026-11-01 · ✨ v0.2.27 进程退出能力（切后台即结束 / 关于页「退出」）
 
 **节点意义**：用户要求「能主动把 APP 整个杀掉」。核心坑是**自杀会被系统复活**——三个服务是
@@ -35,8 +42,11 @@ START_STICKY、且**有可见 Activity 时 killProcess，AMS 会为恢复可见�
   `ActivityLifecycleCallbacks` 计数判定后台（不引 `lifecycle-process`，且它 ON_STOP 有 700ms 延迟）。
   **熄屏/锁屏也会触发**（Android 会 stop 前台 Activity），已在设置项说明写明。
 - **③ 关于 →「退出」**：检查更新下方红色按钮 + 二次确认，走同一个 `AppExit.kill`。
-- **边界**：双兜底/开机自启由 JobScheduler/WorkManager/静态广播驱动，杀进程后仍会按周期把 APP 拉回来，
-  需一并关闭（设置项说明已注明）。
+- **边界（改后更正）**：原以为杀进程后双兜底会把 APP 拉回来，**核对代码后不成立**——
+  `stopService` → 服务 `onDestroy` → `ResourceHolder.releaseAll()` 会 `cancelAlarm` + `cancelJob`，
+  两个 15 分钟兜底随服务一起取消。真正还会复活进程的只有三条：开机静态广播（关「开机自启」）、
+  WorkManager 位置上报兜底（v0.2.27 起 kill 时 `cancelUniqueWork` 取消，下次冷启动自动重排）、
+  已开启的无障碍服务被系统绑定（只能去系统设置关）。
 
 ## 2026-11-01 · 🐞 v0.2.26 微信页第五批真机问题修复（6 项）
 
