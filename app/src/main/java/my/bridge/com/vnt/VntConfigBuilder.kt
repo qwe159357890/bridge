@@ -22,6 +22,12 @@ object VntConfigBuilder {
             deviceId = cfg.deviceId.ifBlank { VntMeshPrefs.stableDeviceId(context) },
         )
 
+        // v0.2.31 防线：非法前缀（尤其 1.2.x 旧协议的 udp://）不能进 native。
+        // 否则 VntManager.createNetwork() 会抛晦涩的
+        // 「Unknown protocol in server address」，且用户反复点开始会一直刷错误日志。
+        // 这里抛可读异常，由 VntVpnService.runConnect 的 catch 转成页面 ERROR 文案。
+        VntServerAddress.error(config.server)?.let { throw IllegalArgumentException(it) }
+
         val builder = VntConfig.Builder()
             .addServer(config.server)
             .setNetworkCode(config.networkCode)

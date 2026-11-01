@@ -6,7 +6,13 @@ import java.util.UUID
 
 /** 单套 VNT 组网配置（已拍板：不做多配置切换）。 */
 data class VntMeshConfig(
-    /** 服务端地址，可带 tcp:// / wss:// / quic:// 前缀；裸 host:port 默认 UDP。 */
+    /**
+     * 服务端地址（**v2.0.11 最新 so 规则**，见 `docs/research/vnt-mesh-integration.md` §12）：
+     * - 裸 `host:port` 默认 **tcp://（TLS TCP）**；
+     * - 可显式写 `tcp://` / `wss://` / `quic://` / `dynamic://`；
+     * - **不支持 `udp://`**——那是 1.2.x 旧版协议（官方 1.2.13 的「协议 UDP」单选），
+     *   v2.0.x 核心已移除。自建 VNTS 需升级到 2.x 并开启 TLS TCP / WSS / QUIC 监听。
+     */
     val server: String = DEFAULT_SERVER,
     /** 网络编号（三要素之一，必填）。 */
     val networkCode: String = "",
@@ -70,6 +76,8 @@ object VntMeshPrefs {
     private const val K_RTX = "rtx"
     private const val K_NO_PUNCH = "no_punch"
     private const val K_CERT_MODE = "cert_mode"
+    /** v0.2.31：自动组网记忆（点「开始组网」置 true，点「停止组网」清 false）。 */
+    private const val K_AUTO_START = "auto_start"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -121,5 +129,48 @@ object VntMeshPrefs {
             .putBoolean(K_NO_PUNCH, config.noPunch)
             .putString(K_CERT_MODE, config.certMode.trim())
             .apply()
+    }
+
+    // ------------------------------------------------------------------
+    // v0.2.31：自动组网记忆
+    //
+    // 语义（用户拍板）：**只有「开始组网」/「停止组网」两个按钮改变记忆**。
+    // - 点开始 → true → 下次冷启动 App 自动开始组网；
+    // - 点停止 → false → 下次冷启动需用户手动点开启。
+    // 退出应用 / 切后台结束进程**不动记忆**（用户未要求清除）；进程重启后按记忆恢复。
+    // 远程命令 vnt_start / vnt_stop 同步写记忆，保证「最后一次显式意图」一致。
+    // restart()（配置保存重连）刻意不写记忆，避免「未连接时保存配置」误清标记。
+    // ------------------------------------------------------------------
+
+    fun autoStart(context: Context): Boolean = sp(context).getBoolean(K_AUTO_START, false)
+
+    fun setAutoStart(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(K_AUTO_START, enabled).apply()
+    }
+}
+
+/**
+ * v2.0.11 服务端地址规则校验（见 `vnt-core/.../transport/config.rs::parse_server`）。
+ *
+ * 合法：裸 `host:port`（默认 TlsTcp）、`tcp://`、`wss://`、`quic://`、`dynamic://`。
+ * 非法：任何其它 `://` 前缀——尤其 `udp://`（1.2.x 旧协议），会让 native
+ * `createNetwork()` 抛 `Unknown protocol in server address`，错误晦涩且会被反复重试刷屏。
+ *
+ * 返回可直接展示给用户的错误说明；`null` 表示合法。
+ */
+object VntServerAddress {
+    private val ALLOWED_PREFIXES = listOf("tcp://", "wss://", "quic://", "dynamic://")
+
+    fun error(raw: String): String? {
+        val s = raw.trim()
+        if (s.isBlank()) return null                 // 空串由 VntConfigBuilder 兜底成默认公共服
+        if (!s.contains("://")) return null          // 裸 host:port 合法
+        val lower = s.lowercase()
+        if (ALLOWED_PREFIXES.any { lower.startsWith(it) }) return null
+        val proto = s.substringBefore("://") + "://"
+        return "不支持的协议前缀「$proto」。VNT v2.0.11 只支持 " +
+            "tcp:// / wss:// / quic:// / dynamic://，或裸 host:port（默认 tcp:// TLS）。" +
+            "udp:// 是 1.2.x 旧版协议，请升级自建 VNTS 到 2.x 并开启 TLS TCP/WSS/QUIC，" +
+            "或先用公共服 vnt2.rustvnt.com:29872 验证。"
     }
 }

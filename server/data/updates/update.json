@@ -1,4 +1,4 @@
 {
-  "version": "0.2.29",
-  "notes": "修复「点微信消息通知有时不进会话详情、而是进入程序主页」。三处根因：①通知 Intent 原先直接用 getLaunchIntentForPackage()（ACTION_MAIN+LAUNCHER），与 task 的启动 Intent 完全相同（filterEquals 不比较 extras），APP 从后台恢复时 AMS 只把 task 带前台、不回调 onNewIntent，deep link 根本没送达 ⇒ 现改为专用 action + bridge://wechat/session/<wxid> 唯一 data + NEW_TASK/CLEAR_TOP/SINGLE_TOP。②MainScreen 的 exitToHomeToken 缺少「已消费守卫」，Activity 重建时 LaunchedEffect 重放，把刚切到微信页的状态打回主页并清空会话 ⇒ 补守卫（与 jumpUnreadToken 同款）。③同一会话连续两条通知时 openWechatSession 同值写入、LaunchedEffect key 不变 ⇒ 第二次点了没反应 ⇒ 改用自增 openToken 作 key，并强制回到「聊天」子 Tab。另在通知跳转全链路加了日志（通知跳转 → onCreate/onNewIntent/UI 消费/打开会话）便于真机定位。"
+  "version": "0.2.31",
+  "notes": "VNT 真机反馈修订：① 对齐官方 universal，APK 收录 arm64-v8a / armeabi-v7a / x86_64 三套 ABI，任意机型可装；② 设置→关于页补上下滑动，小屏也能点到「退出」；③ 新增自动组网记忆——点「开始组网」后下次启动 App 自动开始，点「停止组网」清除；④ 按 VNT v2.0.11 最新规则修正服务端地址：裸 host:port 默认 tcp://(TLS)，只支持 tcp:// / wss:// / quic:// / dynamic://，不再支持旧版 1.2.x 的 udp://，并修复「点开始组网报错」时看不到失败原因、状态卡误报「已连接」的问题。自建 VNTS 请升级到 2.x 并开启 TLS TCP/WSS/QUIC，或先用公共服 vnt2.rustvnt.com:29872 验证。"
 }

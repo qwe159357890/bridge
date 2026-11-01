@@ -550,3 +550,189 @@ import timber.log.Timber
 
 > **未做（需真机环境）**：首次 VPN 授权 → 虚拟 IP → ping 通、P2P/中继标记、切 Tab/退后台停刷、
 > 退出不被复活、三条命令真机回执、batterystats 开关对照。见报告 §十一 D 组。
+
+---
+
+# 五、v0.2.31 变更台账（改前留档 · 2026-11-01 晚）
+
+> 状态：🔵 **改前已留档，正在实施**。git 基线 = `3226ab61b1887f1b455fc9913c2466e38eb54f36`
+> （v0.2.30 已发布）。以下既有文件全部已入库，逐字原文由 git 兜住；新增文件须按删除配方清理。
+
+## 5.0 触发本次变更的用户诉求与诊断结论
+
+用户提出 4 项：① 对齐官方 universal（补齐 ABI）；② 设置→关于页不能上下滑动；
+③ 点「开始组网」记忆、下次启动 App 自动组网，点「停止组网」清除记忆；
+④ 点开始组网后报错（附运行截图 + 已上传客户端日志 + 允许 adb 取证）。
+
+**诊断证据（MySQL `device_logs`，设备 `f2c38ebee251a196`，v0.2.30，21:27~21:29）**：
+
+- 11 条 `E/组网` 完全一致：
+  `组网失败 | RuntimeException: Failed to create network: invalid server address 'udp://039039.xyz:31007': Unknown protocol in server address: udp://039039.xyz:31007 @ com.vnt.VntManager.nativeCreateNetwork(Native Method)`
+- 21:27:17 / 21:29:37 各一条 `I/组网: VNT 已连接：86.74.128.88/24`（默认公共服成功）。
+- 官方 Rust 源码 `vnt-core/src/tunnel_core/server/transport/config.rs:80-101` `parse_server()`：
+  合法前缀仅 `quic://` / `tcp://`(TlsTcp) / `wss://` / `dynamic://`；**裸 `host:port` 默认也是 TlsTcp**；
+  任何其它 `://`（含 `udp://`）直接 `Err("Unknown protocol in server address: ...")`。
+- `vnts-master/README.md:9`：vnts 支持 `quic` / `tcp(tls)` / `wss`，自动签发自签名证书。
+- 本机实测 `039039.xyz:31007`：DNS→`122.6.190.161`、TCP 可连，但 **TLS 握手 0.01s 即 `UNEXPECTED_EOF`**
+  ⇒ 该端口不是 vnts 的 TLS TCP 监听（端口映射/协议/版本不匹配）。
+- `adb devices` 为空（设备未开无线调试），未拿到 logcat；但 MySQL 日志已给出决定性证据。
+- **用户补充（21:45）**：真机跑的是 **VNT 1.2.13 原生 APK**（截图「组网参数配置」里
+  「协议」单选 UDP/TCP/WS/WSS 选了 **UDP** + 服务器地址 `039039.xyz:31007`）；
+  并明确拍板 **「既然集成最新的 so，就按照最新规则来实现」**
+  ⇒ 不降级 so、不加 `udp://` 兼容层。
+- **逐 tag 核对**：`vnt-dev/vnt` v2.0.2 / v2.0.7 / v2.0.8 / v2.0.9 / v2.0.10 / v2.0.11
+  的 `parse_server()` 协议前缀完全一致（`quic://` / `tcp://` / `wss://` / `dynamic://`），
+  **都不支持 `udp://`**；`ProtocolType` 枚举无 `Udp`。官方 VntApp v2.0.10 / v2.0.9 APK
+  内嵌 so 与本项目 v2.0.11 sha 不同但规则一致。
+
+**根因**：不是打包漏东西、也不是 so 版本错，而是**协议代际不匹配**——
+用户按 v0.2.30 UI 提示（错误地写着「裸 host:port 默认 UDP」）填了 `udp://039039.xyz:31007`；
+1.2.13 旧核心 + 老 UDP VNTS 能连，v2.0.11 核心已改为 TLS TCP/WSS/QUIC，连不上是必然。
+修复 = 纠正文案 + 保存时白名单校验 + native 前防线 + ERROR 状态不被吞 +
+状态卡如实反映「服务端未连接」；**按用户拍板保持 v2.0.11 最新规则**。
+
+## 5.1 改前原文逐字固化（将修改的既有文件）
+
+**① `app/build.gradle.kts:23-27`**
+```kotlin
+        versionName = "0.2.30"
+
+        // VNT 组网（v0.2.30）：官方预编译 libvnt_jni.so 只有 arm64-v8a（已拍板只做这一 ABI）。
+        // 显式限定可在构建期锁死，避免其它 ABI 缺 so 时装不上/跑不起来，顺带减小 APK。
+        ndk { abiFilters += "arm64-v8a" }
+```
+
+**② `app/src/main/java/my/bridge/com/ui/SettingsPages.kt:823-828`（`AboutPage()` 根 Column，无滚动）**
+```kotlin
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+```
+（该文件 import 区**没有** `verticalScroll` / `rememberScrollState`，需补 import）
+
+**③ `app/src/main/java/my/bridge/com/vnt/VntMeshPrefs.kt:9`**
+```kotlin
+    /** 服务端地址，可带 tcp:// / wss:// / quic:// 前缀；裸 host:port 默认 UDP。 */
+```
+（`:60-72` SP 常量区无 autoStart 键；`load()` / `save()` 不涉及记忆）
+
+**④ `app/src/main/java/my/bridge/com/ui/VntPages.kt:488`**
+```kotlin
+                    "默认公共服，可改自建 VNTS；支持 tcp:// wss:// quic:// 前缀，裸 host:port 默认 UDP",
+```
+（`:94-101` `requestStart()`、`:178-194` 主按钮、`:207-222` `onSave` 均未写记忆；
+`:240-251` `VntStatusCard` 的 RUNNING 分支无条件显示绿色「已连接」）
+
+**⑤ `app/src/main/java/my/bridge/com/vnt/VntConfigBuilder.kt:25-26`**
+```kotlin
+        val builder = VntConfig.Builder()
+            .addServer(config.server)
+```
+（无地址合法性校验，非法前缀直接进 native）
+
+**⑥ `app/src/main/java/my/bridge/com/MainActivity.kt`**：无 `onStart()`，无 VNT 自动启动钩子。
+
+**⑦ `app/src/main/java/my/bridge/com/di/CommandModule.kt:329-338`**：`vnt_start` 成功后未写记忆；
+`:346-353` `vnt_stop` 未清记忆。
+
+**⑧ `tools/vnt/verify_so.py`**：硬编码 `ELF64 / AArch64 (e_machine=183)`、`<Q` 64 位
+phdr/shdr/dynsym 解析，无法校验 ELF32/ARM 与 x86_64 产物。
+
+**⑨ `app/src/main/jniLibs/`**：改前**只有** `arm64-v8a/libvnt_jni.so`（官方 v2.0.11，
+sha256 `c33535b17b860ae3f09d64dba286d81d51387732db2e6bf9115ba2aed0038f48`）。
+
+改前 sha256（本机 CRLF 原文，供逐字比对）：
+```
+5efeffebc462bcbc145e889e6299753362a5e8eee96dfaa0043a3021608ee362 app/build.gradle.kts
+871a97a22abb4c297129d639aa910c8f438738820b1db6f198ccac56c44c3e3c SettingsPages.kt
+1fbce7be4a93a6bf374e4482bd9edaba3da1c2c02582d56c1e02a669eeb03de3 VntPages.kt
+d351c42b36a6d29adafb57bc48157c6213ac3bfb3583ad852db77a96807bb899 VntMeshPrefs.kt
+90478f43e4c7f53f78a764189a35a865a95089ea91543ac248fb939b606008e1 VntConfigBuilder.kt
+b7d261bc0f03158f999b980ab8f1e6d78a5bd18c96b4f5e8d7838caea124249a VntMeshState.kt
+0a49a7fb9488aee8bf18b8666a764a9b2029e2d1d0c3ac20efbbda95a98b8a4e VntMeshController.kt
+07bed868be1e261ef3ddcbebd7e29e5b0242819b4c14ba8399068f8e624379f3 MainActivity.kt
+bd81ed8438bd8214c5603874eb965dac05da2e3f401115ad469dea887e127c3a CommandModule.kt
+8734e3441fdba5b942765fc85d9e1aff7185fb0d4c56fabec81bfbe1e2dd64cf tools/vnt/verify_so.py
+```
+
+## 5.2 新增文件清单（回滚 = 删除）
+
+| 路径 | 用途 |
+|---|---|
+| `app/src/main/jniLibs/armeabi-v7a/libvnt_jni.so` | 官方 v2.0.11 armeabi-v7a 产物 |
+| `app/src/main/jniLibs/x86_64/libvnt_jni.so` | 官方 v2.0.11 x86_64 产物 |
+| `tools/vnt/artifacts/vnt-jni-armeabi-v7a-v2.0.11.so{,.sha256}` | 原始产物存档 |
+| `tools/vnt/artifacts/vnt-jni-x86_64-v2.0.11.so{,.sha256}` | 原始产物存档 |
+| `app/src/main/java/my/bridge/com/vnt/VntAutoStart.kt` | 冷启动自动组网入口 |
+| `.workbuddy/vnt_commit_msg_v0231.txt` | 发布用中文详细 commit message（被 .gitignore 忽略） |
+| `releases/app-debug-v0.2.31.apk` | 发布产物 |
+
+## 5.3 回滚配方
+
+```bash
+# ① 既有文件整体回到 v0.2.30 基线
+git checkout 3226ab6 -- \
+  app/build.gradle.kts \
+  app/src/main/java/my/bridge/com/ui/SettingsPages.kt \
+  app/src/main/java/my/bridge/com/ui/VntPages.kt \
+  app/src/main/java/my/bridge/com/vnt/VntMeshPrefs.kt \
+  app/src/main/java/my/bridge/com/vnt/VntConfigBuilder.kt \
+  app/src/main/java/my/bridge/com/vnt/VntMeshState.kt \
+  app/src/main/java/my/bridge/com/vnt/VntMeshController.kt \
+  app/src/main/java/my/bridge/com/MainActivity.kt \
+  app/src/main/java/my/bridge/com/di/CommandModule.kt \
+  tools/vnt/verify_so.py \
+  docs/research/vnt-mesh-integration.md assets/design/ui-mockup-vnt-mesh.html \
+  docs/INDEX.md docs/CHANGELOG.md docs/dev/heartbeat-inventory.md \
+  docs/api/commands/system.md docs/dev/crash-ledger.md
+
+# ② 删除新增文件
+rm -rf app/src/main/jniLibs/armeabi-v7a app/src/main/jniLibs/x86_64
+rm -f  app/src/main/java/my/bridge/com/vnt/VntAutoStart.kt
+rm -f  tools/vnt/artifacts/vnt-jni-armeabi-v7a-v2.0.11.so* \
+       tools/vnt/artifacts/vnt-jni-x86_64-v2.0.11.so*
+rm -f  .workbuddy/vnt_commit_msg_v0231.txt releases/app-debug-v0.2.31.apk
+```
+
+**触发回滚的信号**：`assembleDebug` 失败且无法在 1 轮内修复；三套 so 任一与官方 sha256 不符；
+APK 内出现 `lib/x86/`（32 位）或多于/少于 3 套 ABI；自动组网导致冷启动即崩溃或
+`startForegroundService` 抛异常刷屏；发布后 CI 非 success。
+
+## 5.4 改后回填（已完成）
+
+> 状态：🟢 已逐项回填。所有既有文件的**改前原文/哈希**见 §5.1，可逐字恢复；
+> 新增文件见 §5.2，回滚按 §5.3 删除配方执行。
+
+| # | 文件 | 改后摘要 | 验证 |
+|---|---|---|---|
+| 1 | `app/build.gradle.kts` | `versionName` 0.2.30→**0.2.31**；`abiFilters` 由单 arm64 改为 **arm64-v8a / armeabi-v7a / x86_64** 三套；纠正「官方 so 只有 arm64」的错误注释 | assembleDebug PASS；APK 内 3 套、无 x86 |
+| 2 | `SettingsPages.kt` | `AboutPage()` 根 `Column` 补 `.verticalScroll(rememberScrollState())` + 2 个 import | 编译 PASS |
+| 3 | `VntMeshPrefs.kt` | 字段注释改为 v2.0.11 规则；新增 `K_AUTO_START` + `autoStart()`/`setAutoStart()`；新增 `VntServerAddress.error()` 白名单校验 | 编译 PASS |
+| 4 | `VntConfigBuilder.kt` | `build()` 开头加 `VntServerAddress.error()` 防线，非法前缀抛可读 `IllegalArgumentException` | 编译 PASS |
+| 5 | `VntVpnService.kt` | `runConnect` 加 `failed` 标志，`finally` 仅成功路径 `onStopped()`，失败保留 ERROR 文案 | 编译 PASS |
+| 6 | `VntPages.kt` | 提示文案改 v2.0.11 规则；配置弹窗保存前校验 + Toast；开始/停止按钮写记忆；新增 `VntAmber`；状态卡在 RUNNING 但服务端全未连时改橙色「未连上服务端」 | 编译 PASS |
+| 7 | `MainActivity.kt` | import `VntAutoStart`；加 `vntAutoStartAttempted` + `onStart()` 一次性自动组网 | 编译 PASS |
+| 8 | `CommandModule.kt` | `vnt_start` 成功/已在运行写记忆 `true`；`vnt_stop` 写 `false` 并改回执文案 | 编译 PASS（KSP） |
+| 9 | `tools/vnt/verify_so.py` | 重写为多 ABI（ELF32/ELF64、ARM/AArch64/x86-64、16KB/4KB 对齐）+ `--abi` 参数 | 实跑 3/3 PASS |
+| 10 | `app/src/main/jniLibs/` | 新增 `armeabi-v7a/` / `x86_64/` 两套官方 so，与 artifacts 逐字节一致 | APK 校验 PASS |
+| 11 | **新增** `VntAutoStart.kt` | 冷启动自动组网（三道守卫 + 失败不重试） | 编译 PASS |
+| 12 | 文档 | 报告 §十二、INDEX（2 行）、CHANGELOG v0.2.31 里程碑、`system.md`、`crash-ledger.md` §3.1、原型页脚、本台账、记忆日志 | 文档自检 |
+
+### 5.4.1 本地验证结果（2026-11-01）
+
+| 项 | 结果 |
+|---|---|
+| `compileDebugKotlin` | **BUILD SUCCESSFUL**（3m42s） |
+| `assembleDebug` | **BUILD SUCCESSFUL**（2m30s） |
+| APK | 52,651,950 B（≈50.2 MiB）；**3 套 ABI × 6 个 so**；三份 `libvnt_jni.so` 与官方逐字节一致；**无 `lib/x86/`**；20 dex + Manifest + resources.arsc |
+| Manifest（axml_dump） | `versionName='0.2.31'`、`package='my.bridge.com'`、`compileSdkVersion=36`、specialUse 四件套齐全 |
+| `verify_so.py` | 三套全 PASS（SHA256 / 16KB·4KB 对齐 / 23↔23 声明-符号） |
+| HTML 原型 | `ul/li/div/text/svg/b/code` 标签全部闭合 |
+
+> **未做（需真机环境）**：三套 ABI 真机安装与 VNT 加载、关于页滚动手感、自动组网冷启动、
+> 自建 VNTS 升级到 2.x 后的 TLS TCP 连通、`batterystats` 省电实测。
+> 见报告 §十一 D 组 + §12.6。
+

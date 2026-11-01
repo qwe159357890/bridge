@@ -64,7 +64,7 @@ v0.2.01 改「正常补获」：其它媒体播放即让位、停播自动补获
 | `AudioRelayService.stop/setVolume` | AudioRelayService | 走普通 `startService`，无义务 | 有运行守卫，不误拉起 | ✅ |
 | 通知「停止接收」按钮（PendingIntent.getService） | AudioRelayService | 普通 startService | — | ✅ |
 | `CommandModule`×4（screenshot/photo/video/audio 命令） | MediaCaptureService | 全部 try/catch | onStartCommand 主路径挂前台；**并发拒绝路径补挂（v0.2.01 补）**；挂前台异常 catch+stopSelf（v0.2.01 补） | ✅ |
-| `VntMeshController.start`（组网页「开始组网」+ `vnt_start` 命令，v0.2.30） | VntVpnService（specialUse） | try/catch（start 内） | **onCreate 挂前台 + onStartCommand 每次幂等补挂**；`startForeground` try/catch + 失败 `stopSelf`；返回 `START_NOT_STICKY`（进程被杀不自动复活）；manifest 四件套齐全 | ✅ 按 §5 清单逐条落实 |
+| `VntMeshController.start`（组网页「开始组网」+ `vnt_start` 命令 + **`VntAutoStart.tryStart` 冷启动自动组网 v0.2.31**，v0.2.30 起） | VntVpnService（specialUse） | try/catch（start 内，三个入口共用） | **onCreate 挂前台 + onStartCommand 每次幂等补挂**；`startForeground` try/catch + 失败 `stopSelf`；返回 `START_NOT_STICKY`（进程被杀不自动复活）；manifest 四件套齐全 | ✅ 按 §5 清单逐条落实；**v0.2.31 新入口**放在 `MainActivity.onStart`（Activity 已可见，避开 Android 12+ 后台 FGS 限制），每实例仅一次、失败不重试，**不新增义务点**（仍走同一个 `start()`） |
 
 ### 3.2 其它已消除/已验证的崩溃向量
 

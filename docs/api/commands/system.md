@@ -67,7 +67,7 @@
 
 ---
 
-## VNT 组网命令（v0.2.30）
+## VNT 组网命令（v0.2.30，v0.2.31 修订）
 
 > 三条命令走「三步法」：`server/app/core/command_catalog.py` 的 `_cmd()` →
 > `core/core-network/.../ws/Command.kt` 常量 + `CommandModule.kt` 执行器 → 本文档 + README 索引。
@@ -82,7 +82,7 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `server` | text | 否 | 可选覆盖 APP 内保存的服务端地址（默认 `vnt2.rustvnt.com:29872`，可填自建 VNTS；支持 `tcp://` `wss://` `quic://`，裸 `host:port` 默认 UDP） |
+| `server` | text | 否 | 可选覆盖 APP 内保存的服务端地址（默认 `vnt2.rustvnt.com:29872`，可填自建 VNTS）。**v2.0.11 规则**：裸 `host:port` 默认 **`tcp://`（TLS TCP）**，可显式写 `tcp://` / `wss://` / `quic://` / `dynamic://`；**不支持 `udp://`**（1.2.x 旧协议）。非法前缀会在配置弹窗 / `VntConfigBuilder` 两处被拦下，不再让 native 抛 `Unknown protocol in server address` |
 | `network_code` | text | 否 | 可选覆盖网络编号；为空且 APP 内也未保存 → 回执失败 |
 | `password` | text | 否 | 可选覆盖组网密码；非空启用 ChaCha20-Poly1305 端到端加密 |
 
@@ -101,6 +101,12 @@
 无参数。走普通 `startService(ACTION_STOP)`（不产生前台义务），服务内部
 `network.stop()` → 释放 VPN 通道 → `stopSelf()`。回执含停止前状态。
 **无平台限制，三条里最可靠**，适合运维远程收口。
+
+**v0.2.31 自动组网记忆**：`vnt_start` 成功下发（或回「已在运行」）会把
+`VntMeshPrefs.autoStart` 置 `true`，`vnt_stop` 置 `false`。记忆为 `true` 时，
+App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自动开始组网；
+三道守卫（记忆未开 / 已 RUNNING·STARTING / VPN 授权失效）会跳过，且**失败不重试**。
+与页面「开始组网」/「停止组网」按钮共用同一份记忆；退出应用 / 切后台结束进程**不动记忆**。
 
 ### vnt_status 组网状态
 

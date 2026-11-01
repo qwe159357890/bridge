@@ -321,12 +321,15 @@ object CommandModule {
             }
             val st = VntMeshController.state.value.status
             if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
+                // v0.2.31：远程 start 同样是「用户希望组网开着」的显式意图，同步写记忆
+                VntMeshPrefs.setAutoStart(context, true)
                 return CommandResult(
                     command.commandId, command.command, true,
                     "组网已在运行：" + VntMeshController.statusText(),
                 )
             }
             val launched = VntMeshController.start(context)
+            if (launched) VntMeshPrefs.setAutoStart(context, true)
             CommandResult(
                 command.commandId, command.command, launched,
                 if (launched) {
@@ -346,10 +349,12 @@ object CommandModule {
     private fun executeVntStop(context: Context, command: Command): CommandResult {
         return try {
             val before = VntMeshController.statusText()
+            // v0.2.31：远程 stop 与页面「停止组网」一致，清自动组网记忆
+            VntMeshPrefs.setAutoStart(context, false)
             VntMeshController.stop(context)
             CommandResult(
                 command.commandId, command.command, true,
-                "已下发停止组网（停止前：$before）",
+                "已下发停止组网（停止前：$before）；已清除开机自动组网记忆",
             )
         } catch (e: Exception) {
             Timber.e(e, "命令 vnt_stop 执行失败")

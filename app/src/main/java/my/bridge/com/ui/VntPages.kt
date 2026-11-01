@@ -51,11 +51,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import my.bridge.com.vnt.VntMeshConfig
 import my.bridge.com.vnt.VntMeshController
 import my.bridge.com.vnt.VntMeshPrefs
+import my.bridge.com.vnt.VntServerAddress
 import my.bridge.com.vnt.VntStatus
 
 // 与交互原型 ui-mockup-vnt-mesh.html 对齐的配色
 private val VntBlue = Color(0xFF1A6EE8)
 private val VntGreen = Color(0xFF2E9E5B)
+private val VntAmber = Color(0xFFC77700)   // v0.2.31：本地 TUN 已建但服务端未连上的警示色
 private val VntRed = Color(0xFFE5484D)
 private val VntInk = Color(0xFF1F2329)
 private val VntGray = Color(0xFF6B7280)
@@ -85,6 +87,9 @@ fun VntPage() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
+            // v0.2.31：用户主动点「开始组网」→ 记忆，下次冷启动自动开始。
+            // 授权被拒时不写记忆（用户并未真正开启）。
+            VntMeshPrefs.setAutoStart(context, true)
             VntMeshController.start(context)
         } else {
             Toast.makeText(context, "需要系统 VPN 授权才能组网", Toast.LENGTH_SHORT).show()
@@ -96,6 +101,7 @@ fun VntPage() {
         if (prepareIntent != null) {
             consentLauncher.launch(prepareIntent)
         } else {
+            VntMeshPrefs.setAutoStart(context, true)
             VntMeshController.start(context)
         }
     }
@@ -177,7 +183,11 @@ fun VntPage() {
             }
             if (state.status == VntStatus.RUNNING || state.status == VntStatus.STARTING) {
                 Button(
-                    onClick = { VntMeshController.stop(context) },
+                    onClick = {
+                        // v0.2.31：用户主动点「停止组网」→ 清记忆，下次启动需手动开启。
+                        VntMeshPrefs.setAutoStart(context, false)
+                        VntMeshController.stop(context)
+                    },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = VntRed),
                 ) {
@@ -238,16 +248,28 @@ private fun VntCard(content: @Composable () -> Unit) {
 
 @Composable
 private fun VntStatusCard(state: my.bridge.com.vnt.VntMeshState) {
-    val (bg, title, subtitle) = when (state.status) {
-        VntStatus.RUNNING -> Triple(
+    // v0.2.31：RUNNING 只代表本地 TUN 已建立并拿到虚拟 IP；若刷新后服务端列表
+    // 里没有任何 connected=true，说明尚未注册上服务端，不能再显示绿色「已连接」误导
+    // （v0.2.30 真机截图正是这个矛盾状态：绿卡「已连接」+「服务端 未连接」+ RTT —）。
+    val serverNotConnected = state.isRunning &&
+        state.servers.isNotEmpty() && state.servers.none { it.connected }
+    val (bg, title, subtitle) = when {
+        serverNotConnected -> Triple(
+            VntAmber,
+            "未连上服务端",
+            "虚拟网卡已建立（${state.virtualIp ?: "—"}），但尚未连上 " +
+                "${state.servers.firstOrNull()?.address ?: "服务端"}；" +
+                "请检查地址协议（v2.0.11 不支持 udp://）、端口与 VNTS 版本",
+        )
+        state.status == VntStatus.RUNNING -> Triple(
             VntGreen,
             "已连接 · ${state.virtualIp ?: "—"}",
             "虚拟局域网已建立，可与同网络编号下的设备互访",
         )
-        VntStatus.STARTING -> Triple(VntBlue, "正在建立虚拟网络…", state.message)
-        VntStatus.STOPPING -> Triple(VntGray, "正在停止…", state.message)
-        VntStatus.ERROR -> Triple(VntRed, "组网异常", state.message)
-        VntStatus.STOPPED -> Triple(VntBlue, "组网未连接", "点击下方「开始组网」建立虚拟局域网")
+        state.status == VntStatus.STARTING -> Triple(VntBlue, "正在建立虚拟网络…", state.message)
+        state.status == VntStatus.STOPPING -> Triple(VntGray, "正在停止…", state.message)
+        state.status == VntStatus.ERROR -> Triple(VntRed, "组网异常", state.message)
+        else -> Triple(VntBlue, "组网未连接", "点击下方「开始组网」建立虚拟局域网")
     }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -463,6 +485,7 @@ private fun VntConfigDialog(
     onDismiss: () -> Unit,
     onSave: (VntMeshConfig) -> Unit,
 ) {
+    val context = LocalContext.current
     var server by remember { mutableStateOf(initial.server) }
     var networkCode by remember { mutableStateOf(initial.networkCode) }
     var password by remember { mutableStateOf(initial.password) }
@@ -485,7 +508,9 @@ private fun VntConfigDialog(
             ) {
                 VntField("服务端地址", server, { server = it }, "vnt2.rustvnt.com:29872")
                 Text(
-                    "默认公共服，可改自建 VNTS；支持 tcp:// wss:// quic:// 前缀，裸 host:port 默认 UDP",
+                    "VNT v2.0.11 规则：裸 host:port 默认 tcp://（TLS）；可显式写 " +
+                        "tcp:// / wss:// / quic:// / dynamic://。不支持 udp://（1.2.x 旧版协议）。" +
+                        "自建 VNTS 需升级到 2.x 并开启 TLS TCP/WSS/QUIC，或先用公共服验证。",
                     color = VntGray,
                     fontSize = 10.sp,
                 )
@@ -508,6 +533,12 @@ private fun VntConfigDialog(
         },
         confirmButton = {
             TextButton(onClick = {
+                // v0.2.31：保存前先按 v2.0.11 规则校验地址，非法前缀（尤其 udp://）
+                // 直接拦下并给出可操作提示，避免存进去后 native 抛晦涩异常 + 反复重试刷屏。
+                VntServerAddress.error(server)?.let {
+                    Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                    return@TextButton
+                }
                 val mtu = mtuText.trim().toIntOrNull()
                     ?.coerceIn(VntMeshConfig.MIN_MTU, VntMeshConfig.MAX_MTU)
                     ?: VntMeshConfig.DEFAULT_MTU

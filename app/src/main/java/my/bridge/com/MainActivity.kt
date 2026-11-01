@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import my.bridge.com.core.ui.theme.BridgeTheme
 import my.bridge.com.keepalive.KeepAlivePrefs
+import my.bridge.com.vnt.VntAutoStart
 import my.bridge.com.keepalive.KeepAliveUtils
 import my.bridge.com.ui.MainScreen
 import timber.log.Timber
@@ -34,6 +35,9 @@ class MainActivity : ComponentActivity() {
          */
         val RUNTIME_PERMISSIONS: List<String> = KeepAliveUtils.runtimePermissions()
     }
+
+    /** v0.2.31：自动组网每个 Activity 实例只尝试一次，避免旋转/回前台重复触发。 */
+    private var vntAutoStartAttempted = false
 
     /** 批量申请危险权限（返回 Map<权限, 是否授予>）。 */
     private val permissionLauncher =
@@ -107,6 +111,21 @@ class MainActivity : ComponentActivity() {
             BridgeTheme {
                 MainScreen()
             }
+        }
+    }
+
+    /**
+     * v0.2.31：冷启动自动组网。
+     *
+     * 放在 `onStart`（而非 `Application.onCreate`）：此时 Activity 已可见，
+     * `startForegroundService` 不会撞 Android 12+ 后台启动限制；同时每个实例只试一次。
+     * 具体守卫（记忆 / VPN 授权 / 失败不重试）见 [VntAutoStart.tryStart]。
+     */
+    override fun onStart() {
+        super.onStart()
+        if (!vntAutoStartAttempted) {
+            vntAutoStartAttempted = true
+            VntAutoStart.tryStart(this)
         }
     }
 

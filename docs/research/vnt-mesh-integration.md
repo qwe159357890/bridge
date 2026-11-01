@@ -5,6 +5,7 @@
 > 状态：**已实现 v0.2.30（P0 + P1 + P2 全部落地）**：官方 `libvnt_jni.so` 已入库校验 PASS；`com/vnt/*.java` + `my/bridge/com/vnt/`（VntVpnService / VntMeshController / VntMeshState / VntMeshPrefs / VntConfigBuilder）+ `ui/VntPages.kt` + 主页第 5 Tab（含 4→5 迁移）+ 退出流程接入 + 三条命令 + 全量文档登记均已完成，`:app:compileDebugKotlin` 通过。**唯一剩余：真机组网联调与省电实测**（无 VNTS 实体/多设备环境）。原型见 `assets/design/ui-mockup-vnt-mesh.html`；改前留档与回滚配方见 `docs/dev/vnt-integration-change-ledger.md`。
 > **决策已定**：9 项拍板见 **§九**（只 arm64 / 单配置 / 服务端可输入默认公共服 / 常驻至手动停止 / 退出流程最高优先级 / 不做子网转发 / 三条命令全做）。
 > **工程约定**：本地不安装任何程序；`libvnt_jni.so` 走官方预编译产物（§2.4），任何需安装的动作必须先经用户同意。
+> **★ v0.2.31 修订（2026-11-01 晚）**：真机反馈驱动的 4 项修订（对齐官方 universal 三套 ABI / 关于页滚动 / 自动组网记忆 / v2.0.11 地址规则与报错修复）见 **§十二**。§2.4、§5.1、§九 中关于「只 arm64」「裸地址默认 UDP」的旧表述**以 §十二 为准**（原文保留不删，避免破坏改前留档）。
 
 ---
 
@@ -611,3 +612,88 @@ nextEvent() 阻塞返回
 | Manifest 合并 | 合并后 `AndroidManifest.xml` | `VntVpnService` / `specialUse` 四件套 / `BIND_VPN_SERVICE` 全部在位 |
 | 服务端目录 | `py_compile` + 导入 `COMMANDS` | 38 条命令、白名单 38、VNT 三条参数正确 |
 | so 复验 | `tools/vnt/verify_so.py` | SHA256 / 对齐 / 23↔23 声明-符号，全 PASS |
+
+---
+
+## 十二、v0.2.31 修订（2026-11-01 晚 · 真机反馈驱动）
+
+> 用户真机跑 v0.2.30 后提出 4 项，并补了一张 **VNT 1.2.13 原生 APK** 的配置截图
+> （「协议 UDP」单选 + 服务器地址 `039039.xyz:31007`），明确拍板：
+> **「既然集成最新的 so，就按照最新规则来实现」**。
+> 本节是 v0.2.31 的权威记录；更早的 §2.4 / §5.1 / §九 中「只 arm64」「裸地址默认 UDP」
+> 的表述**以本节为准**（原文保留不删，避免破坏改前留档台账）。
+
+### 12.1 诊断：「开始组网报错」的完整证据链
+
+| 证据 | 结论 |
+|---|---|
+| MySQL `device_logs` 21:29:25~29 共 **11 条** `E/组网`：`invalid server address 'udp://039039.xyz:31007': Unknown protocol in server address` | 用户按 v0.2.30 UI 提示（错误地写着「裸 host:port 默认 UDP」）填了 `udp://` 前缀 |
+| `vnt-core/.../transport/config.rs:80-101` `parse_server()`（**v2.0.2 ~ v2.0.11 全量核对过**） | 合法前缀仅 `quic://` / `tcp://`(TlsTcp) / `wss://` / `dynamic://`；**裸 `host:port` 默认 TlsTcp**；任何其它 `://` 直接 `Err(Unknown protocol...)`。`ProtocolType` 枚举无 `Udp` |
+| `vnt-jni/src/lib.rs:1400-1407` | JNI 层 `server` 数组直接 `s.parse::<ProtocolAddress>()`，用的正是上面那个 `parse_server` |
+| `vnts-master/README.md:9` | 2.x 服务端支持 `quic` / `tcp(tls)` / `wss`，自动签发自签证书；**没有纯 UDP 注册通道** |
+| 本机实测 `039039.xyz:31007` | DNS→`122.6.190.161`，TCP 可连，但 **TLS 握手 0.01s 即 `UNEXPECTED_EOF`** ⇒ 该端口不是 vnts 2.x 的 TLS TCP 监听 |
+| 官方 VntApp v2.0.10 / v2.0.9 APK 内嵌 so | 与本项目 v2.0.11 so sha 不同，但各 tag 的 `parse_server` 一致（都不认 `udp://`）；用户能连的 **1.2.13 是旧版核心**，`udp://` 属于 1.2.x 协议 |
+
+**结论**：不是打包漏东西，也不是 so 版本错，而是**协议代际不匹配**——
+1.2.13 客户端 + 老 VNTS（UDP 31007）能连；v2.0.11 核心已改为 TLS TCP/WSS/QUIC，
+同一个 `039039.xyz:31007`（UDP/非 TLS）连不上是必然。用户已拍板按最新规则实现，
+**不降级 so、不加 `udp://` 兼容层**。
+
+### 12.2 用户 4 项诉求的落地
+
+| # | 诉求 | 落地 |
+|---|---|---|
+| 1 | 对齐官方 universal | `abiFilters` 改为 `arm64-v8a / armeabi-v7a / x86_64` 三套；下载官方 v2.0.11 另两套 so 并入库；**显式排除 x86（32 位）**（官方无 so，避免「装上了但 VNT 加载不到」的假成功）。见 §12.3 |
+| 2 | 设置→关于页不能上下滑动 | `AboutPage()` 根 `Column` 补 `.verticalScroll(rememberScrollState())` + 两个 import |
+| 3 | 开始组网记忆 / 停止清除 / 冷启动自动开始 | `VntMeshPrefs.autoStart` 布尔持久化；`MainActivity.onStart` 一次性调 `VntAutoStart.tryStart()`；`vnt_start`/`vnt_stop` 命令同步写记忆。见 §12.4 |
+| 4 | 开始组网后报错 | 见 §12.1 诊断 + §12.5 的 5 项修复 |
+
+### 12.3 三套 ABI（对齐官方 universal）
+
+| ABI | 官方产物 | 大小 | SHA256 | ELF |
+|---|---|---|---|---|
+| arm64-v8a | `vnt-jni-arm64-v8a-v2.0.11.so` | 5,042,792 | `c33535b1…` | ELF64 / AArch64(183) |
+| armeabi-v7a | `vnt-jni-armeabi-v7a-v2.0.11.so` | 3,500,728 | `454908df…` | ELF32 / ARM(40) |
+| x86_64 | `vnt-jni-x86_64-v2.0.11.so` | 5,756,440 | `0ee3865b…` | ELF64 / x86-64(62) |
+
+三套均经 `tools/vnt/verify_so.py`（已升级支持 ELF32/ELF64 多 ABI）校验：
+SHA256 与官方 `.sha256` 一致、PT_LOAD 页对齐（64 位 16KB / 32 位 4KB）、
+**23 个 `Java_com_vnt_*` 导出符号 ↔ 23 个 Java native 声明零缺失**。
+官方 `VntApp` 每个 Release 出 4 个 APK（3 个分包 + `universal.apk`）；
+我们等价于 universal，但**只收官方有 so 的 3 套**。
+
+### 12.4 自动组网记忆语义（用户拍板）
+
+- 「开始组网」→ 记忆 `true`；「停止组网」→ 记忆 `false`；下次冷启动按记忆自动开始 / 需手动点。
+- 只有这两个按钮（以及 `vnt_start`/`vnt_stop` 命令）改变记忆；**退出应用 / 切后台结束进程不动记忆**，
+  进程重启按记忆恢复（用户未要求退出时清除，按字面实现，如需改可调整）。
+- `restart()`（配置保存重连）**刻意不写记忆**，避免「未连接时保存配置」误清标记。
+- 三道守卫：记忆未开 / 已 RUNNING·STARTING / `VpnService.prepare()` 非 null（授权失效）→ 跳过。
+- 放在 `MainActivity.onStart`（Activity 已可见，避开 Android 12+ 后台 FGS 限制），
+  每实例只试一次，**失败不重试**（配置错误落到 ERROR 状态显示原因，不刷屏、不耗电）。
+
+### 12.5 v2.0.11 地址规则与错误可见性（5 项修复）
+
+1. **文案纠错**：`VntPages.kt` 配置弹窗提示与 `VntMeshPrefs.kt` 字段注释，
+   从「裸 host:port 默认 UDP」改为「裸 host:port 默认 **tcp://（TLS TCP）**；
+   可显式 `tcp:// / wss:// / quic:// / dynamic://`；**不支持 `udp://`（1.2.x 旧协议）**」。
+2. **保存前校验**：`VntServerAddress.error()` 白名单校验，非法前缀在配置弹窗就 Toast 拦下，
+   不写进 Prefs，从源头杜绝「反复点开始 → 11 条 native 异常」。
+3. **native 前防线**：`VntConfigBuilder.build()` 再校验一次并抛可读 `IllegalArgumentException`，
+   由 `VntVpnService.runConnect` 的 catch 转成页面文案。
+4. **ERROR 状态不再被吞**：`runConnect` 的 `finally` 原先无条件 `onStopped()` 覆盖 `onError()`，
+   用户永远看不到失败原因；改为仅成功路径才 `onStopped()`，失败保留 ERROR 红卡 + 原因。
+5. **状态卡如实显示**：RUNNING 只代表本地 TUN 已建立并拿到虚拟 IP；
+   若刷新后 `serverList` 无任何 `connected=true`，改显橙色「未连上服务端」警示卡，
+   不再显示绿色「已连接 · 虚拟IP」误导（v0.2.30 真机截图正是这个矛盾状态）。
+
+### 12.6 给用户自助排查结论
+
+用 v2.0.11 连自建服，二选一：
+
+- **升级 VNTS 到 2.x** 并开启 `tcp(tls)` / `wss` / `quic` 监听，把配置改成
+  `039039.xyz:<新端口>`（裸地址默认 `tcp://`，或显式 `tcp://...`）；
+- 或先用公共服 `vnt2.rustvnt.com:29872` 验证功能，确认链路通再迁自建。
+
+> ⚠️ 旧版 1.2.13 的「协议 UDP」单选在 2.0.x 核心里**没有对应项**；
+> 不要再把 `udp://` 前缀填进服务端地址。

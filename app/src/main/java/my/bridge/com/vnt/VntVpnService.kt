@@ -189,6 +189,7 @@ class VntVpnService : VpnService() {
 
     private fun runConnect(gen: Long) {
         var net: VntNetwork? = null
+        var failed = false
         try {
             if (!VntManager.init()) throw VntException("Rust 核心初始化失败")
 
@@ -219,12 +220,16 @@ class VntVpnService : VpnService() {
             // 5) 变更循环（阻塞 nextEvent，直到实例停止或异常）
             runChangeLoop(net, gen)
         } catch (e: Throwable) {
+            failed = true
             DiagLog.e(TAG, "组网失败", e)
             VntMeshController.onError("组网失败：${e.message}")
         } finally {
             runCatching { net?.stop() }
             network = null
-            VntMeshController.onStopped()
+            // v0.2.31：失败时**保留 ERROR 状态**，别被 onStopped() 覆盖成「未连接」——
+            // 否则用户只看到按钮变回「开始组网」，永远看不到失败原因（v0.2.30 的坑）。
+            // 停止 / 重连 / 再次点开始会分别经 onStopping / onStopped / start 正常清理。
+            if (!failed) VntMeshController.onStopped()
             running = false
             stopSelf()
         }

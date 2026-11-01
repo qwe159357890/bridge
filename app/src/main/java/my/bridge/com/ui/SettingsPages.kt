@@ -4,6 +4,8 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -820,9 +822,12 @@ fun AboutPage() {
         }
     }
 
+    // v0.2.31：关于页内容超出一屏（版本 / 运行时长 / 检查更新 / 退出 / 缓存弹窗），
+    // 根 Column 原先只有 fillMaxSize()，没有滚动能力，小屏上底部「退出」够不到。
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

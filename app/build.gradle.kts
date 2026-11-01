@@ -20,11 +20,17 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.2.30"
+        versionName = "0.2.31"
 
-        // VNT 组网（v0.2.30）：官方预编译 libvnt_jni.so 只有 arm64-v8a（已拍板只做这一 ABI）。
-        // 显式限定可在构建期锁死，避免其它 ABI 缺 so 时装不上/跑不起来，顺带减小 APK。
-        ndk { abiFilters += "arm64-v8a" }
+        // VNT 组网（v0.2.31）：对齐官方 universal，收录官方现成的 3 套 ABI JNI so
+        // （arm64-v8a / armeabi-v7a / x86_64，均来自 vnt-dev/vnt v2.0.11 Release）。
+        // 官方未提供 x86（32 位）so：若不限定，其它依赖的 x86 so 仍会被打进 APK，
+        // 但该 ABI 上 VNT 加载不到 native 库，造成「装上了但组网不可用」的假成功，故显式排除。
+        ndk {
+            abiFilters += "arm64-v8a"
+            abiFilters += "armeabi-v7a"
+            abiFilters += "x86_64"
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
