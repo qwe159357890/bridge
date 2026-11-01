@@ -114,6 +114,14 @@ object AppExit {
         runCatching { my.bridge.com.wechat.WechatRuntime.stopAll(reason) }
             .onFailure { Timber.w(it, "释放微信资源失败") }
 
+        // 2.5) 取消 WorkManager 周期任务（周期位置上报兜底）：
+        //    它是**登记在系统里**的，进程死了照样到点触发并新建进程执行 Worker，
+        //    APP 会在十几分钟后自己「复活」。取消后下次冷启动会由 ReportManager 重新排队。
+        runCatching {
+            androidx.work.WorkManager.getInstance(app)
+                .cancelUniqueWork(my.bridge.com.report.ReportManager.WORK_NAME)
+        }.onFailure { Timber.w(it, "取消 WorkManager 周期任务失败") }
+
         // 3) 关掉所有页面回到桌面（finishAffinity 只结束本任务，不影响其它 APP）
         runCatching { current?.get()?.finishAffinity() }
             .onFailure { Timber.w(it, "关闭页面失败") }

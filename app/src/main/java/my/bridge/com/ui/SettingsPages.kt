@@ -223,8 +223,10 @@ fun GeneralSettings(
                     )
                 }
                 Text(
-                    "注意：①开启后后台将收不到任何消息，与「保活」目标相反；" +
-                        "②若「双兜底唤醒」「开机自启」同时开启，进程仍会被它们按周期重新拉起，需一并关闭。",
+                    "说明：结束进程时会同时停掉保活服务，两个兜底定时器（15 分钟一次的 " +
+                        "AlarmManager 与 JobScheduler）会一并取消，因此不会自己回来；" +
+                        "但「开机自启」在重启手机/重装后仍会拉起服务，另需关掉。" +
+                        "周期位置上报的 WorkManager 兜底任务也会在这里取消，下次打开 APP 自动恢复。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 6.dp),

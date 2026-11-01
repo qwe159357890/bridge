@@ -177,8 +177,20 @@
 3. **开关默认关**：与「保活」的既定定位相反，误开的代价（后台再也收不到任何消息）远大于收益。
 4. **熄屏也会触发**：Android 在熄屏时会 stop 前台 Activity，因此开关打开后**锁屏/熄屏同样会结束进程**。
    这是该开关的固有语义，已在设置项说明里写清楚。
-5. **双兜底/开机自启不受影响**：它们由 JobScheduler/WorkManager/静态广播驱动，杀进程后仍可能按周期把
-   APP 拉回来；若要彻底不回来，需同时关闭「双兜底唤醒」「开机自启」（设置项说明里已注明）。
+5. **（改后更正）双兜底其实会随服务停止一并取消**：原本以为「双兜底唤醒 / 开机自启」在杀进程后
+   仍会把 APP 拉回来，核对代码后这句话**不准确**——`AppExit.kill` 先 `stopService(KeepAliveService)`，
+   服务 `onDestroy()` → `ResourceHolder.releaseAll()` → `cancelAlarm()` + `cancelJob()`，
+   两个 15 分钟兜底（AlarmManager + JobScheduler）随服务停止一起取消，不会自己把进程拉回来。
+   真正还会拉回进程的只有三条：
+
+   | 通道 | 触发时机 | 如何彻底关掉 |
+   |---|---|---|
+   | `BootReceiver`（静态广播 `BOOT_COMPLETED` / `LOCKED_BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`） | 重启手机、重装/覆盖安装 | 设置 → 保活 → **开机自启** 关（Receiver 里先判 `KEY_KEEP_ALIVE_BOOT`） |
+   | `LocationReportWorker`（WorkManager 周期任务 `bridge_location_report`，≥15 分钟） | 到点由系统新建进程执行 Worker | v0.2.27 起 `AppExit.kill` 里 `cancelUniqueWork` 取消；下次冷启动由 `ReportManager.applyConfig` 重新排队 |
+   | 无障碍服务被系统绑定 | 若用户开启过 Bridge 无障碍服务 | 只能去系统「无障碍」里关，代码侧不便代关 |
+
+   对应改动：`ReportManager.WORK_NAME` 由 private 改 public；`AppExit.kill` 增加取消该周期任务；
+   通用页说明文案改为准确版本。
 
 ---
 
@@ -228,7 +240,8 @@ object AppExit {
 ### 4.4 `ui/SettingsPages.kt`
 
 - `GeneralSettings()`：返回键小节之后新增 `SectionTitle("后台行为")` + 开关「切到后台立即结束」，
-  说明含两条注意（后台收不到消息 / 双兜底与开机自启仍会拉回）。
+  说明：结束进程会停掉保活服务，两个 15 分钟兜底随之取消；重启手机仍会拉起需关「开机自启」；
+  WorkManager 位置上报兜底已在 kill 里取消、下次打开自动恢复。
 - `AboutPage()`：检查更新卡片（含「管理更新缓存」）之后新增「退出应用」卡片，
   红色 Button → `AlertDialog` 二次确认 → `my.bridge.com.AppExit.kill(context, "用户点击退出（关于页）")`。
 

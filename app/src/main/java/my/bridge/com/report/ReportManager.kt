@@ -51,7 +51,11 @@ class ReportManager @Inject constructor(
     companion object {
         /** WorkManager 周期任务下限（系统硬约束 15 分钟）。 */
         private const val WORK_MIN_INTERVAL_MIN = 15
-        private const val WORK_NAME = "bridge_location_report"
+        /**
+         * WorkManager 周期任务名（v0.2.27 起对外可见：`AppExit.kill` 要在结束进程前
+         * 取消它，否则这个系统级任务会在 ≥15 分钟后把进程重新拉起来）。
+         */
+        const val WORK_NAME = "bridge_location_report"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
