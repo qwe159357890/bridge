@@ -190,6 +190,47 @@ fun GeneralSettings(
                 )
             }
         }
+
+        // v0.2.27：切到后台立即结束整个进程（默认关——与保活定位相反，误开代价大）
+        item { SectionTitle("后台行为") }
+        item {
+            SettingCard {
+                var killOnBackground by remember {
+                    mutableStateOf(AppExitPrefs.killOnBackground(context))
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("切到后台立即结束", fontSize = 14.sp)
+                        Text(
+                            "APP 一旦切到后台（含熄屏/锁屏）就立刻结束整个进程，" +
+                                "停掉保活服务并回到桌面；再次打开是全新进程。",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = killOnBackground,
+                        onCheckedChange = {
+                            killOnBackground = it
+                            AppExitPrefs.setKillOnBackground(context, it)
+                            Timber.d("切换：切到后台立即结束 -> ${if (it) "开" else "关"}")
+                        },
+                    )
+                }
+                Text(
+                    "注意：①开启后后台将收不到任何消息，与「保活」目标相反；" +
+                        "②若「双兜底唤醒」「开机自启」同时开启，进程仍会被它们按周期重新拉起，需一并关闭。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
+        }
     }
 
     // 改名弹窗：输入新名称（≤8 字），清空 = 恢复默认名
@@ -869,6 +910,8 @@ fun AboutPage() {
         var updatePct by remember { mutableStateOf(-2) } // -2=不显示进度条 -1=不确定式 0..100=确定式
         // 缓存管理弹窗状态
         var cacheVisible by remember { mutableStateOf(false) }
+        // v0.2.27：退出二次确认（结束进程是破坏性操作，防误触）
+        var exitConfirm by remember { mutableStateOf(false) }
         var cacheList by remember {
             mutableStateOf(emptyList<my.bridge.com.update.UpdateManager.CacheEntry>())
         }
@@ -970,6 +1013,61 @@ fun AboutPage() {
                     Text("管理更新缓存", style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+
+        // v0.2.27：退出入口（关于页 · 检查更新下方）——结束整个进程并回到桌面。
+        // 与「切到后台立即结束」共用 my.bridge.com.AppExit.kill：先停 sticky 服务再杀进程，
+        // 否则系统会按 START_STICKY 把进程重新拉起（看起来像「退不掉」）。
+        Spacer(Modifier.padding(top = 12.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp, horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("退出应用", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "立即结束 Bridge 整个进程：停止保活与全部后台服务、释放所有资源并回到桌面。" +
+                        "再次打开是一个全新进程（保活运行时长会归零）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                    textAlign = TextAlign.Center,
+                )
+                androidx.compose.material3.Button(
+                    onClick = { exitConfirm = true },
+                    modifier = Modifier.padding(top = 10.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Text("退出", color = androidx.compose.ui.graphics.Color.White)
+                }
+            }
+        }
+
+        if (exitConfirm) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { exitConfirm = false },
+                title = { Text("退出 Bridge？") },
+                text = { Text("将结束整个进程并回到桌面，后台将不再接收任何消息。确定继续？") },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            exitConfirm = false
+                            my.bridge.com.AppExit.kill(context, "用户点击退出（关于页）")
+                        },
+                    ) { Text("退出") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { exitConfirm = false }) { Text("取消") }
+                },
+            )
         }
 
         // 更新缓存管理弹窗：列表展示（文件名/大小/日期/APK 实际版本号），

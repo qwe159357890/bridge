@@ -55,6 +55,10 @@ class BridgeApplication : Application() {
         // 安装崩溃自动上报（在连接/保活之前，尽早覆盖）
         CrashReporter(this, deviceStore, apiClient).install(enabled = true)
 
+        // v0.2.27：前台/后台计数监听。开关「设置 → 通用 → 切到后台立即结束」打开时，
+        // 一旦所有 Activity 都 stop 就结束整个进程（AppExit）。默认关闭，这里只装监听不杀进程。
+        AppExit.install(this)
+
         // 无条件拉起常驻保活服务
         KeepAliveService.start(this)
 

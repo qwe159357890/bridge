@@ -22,6 +22,22 @@
 
 ---
 
+## 2026-11-01 · ✨ v0.2.27 进程退出能力（切后台即结束 / 关于页「退出」）
+
+**节点意义**：用户要求「能主动把 APP 整个杀掉」。核心坑是**自杀会被系统复活**——三个服务是
+START_STICKY、且**有可见 Activity 时 killProcess，AMS 会为恢复可见任务而重启进程**，
+故固定顺序 `stopService ×3 → finishAffinity → 延迟 300ms → killProcess + exitProcess`。
+台账（改前/改后/回滚配方）：`docs/dev/app-exit-ledger-v0.2.27.md`。
+
+- **① 确认「微信离开后立即结束」**：开关打开后离开微信页即销毁 WS 连接、60s 心跳、重连 Job、
+  OkHttp 连接池/线程池、语音、内存数据（唯一未注销的是 NetworkCallback，有 `stopped` 守卫兜住，本次不动）。
+- **② 通用 →「切到后台立即结束」**（默认关）：`AppExit` + `AppExitPrefs`，用
+  `ActivityLifecycleCallbacks` 计数判定后台（不引 `lifecycle-process`，且它 ON_STOP 有 700ms 延迟）。
+  **熄屏/锁屏也会触发**（Android 会 stop 前台 Activity），已在设置项说明写明。
+- **③ 关于 →「退出」**：检查更新下方红色按钮 + 二次确认，走同一个 `AppExit.kill`。
+- **边界**：双兜底/开机自启由 JobScheduler/WorkManager/静态广播驱动，杀进程后仍会按周期把 APP 拉回来，
+  需一并关闭（设置项说明已注明）。
+
 ## 2026-11-01 · 🐞 v0.2.26 微信页第五批真机问题修复（6 项）
 
 **节点意义**：v0.2.25 装上真机后用户再反馈 6 项。两条最值得记：**①「发图两条」的真凶定位到了 Agent 端**
