@@ -25,6 +25,8 @@ data class WechatUiState(
     val notifyEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val muteAll: Boolean = false,
+    /** 公众号消息是否提醒（v0.2.25，默认 false = 静默，照参考项目 web/PC/外部端口径）。 */
+    val officialNotify: Boolean = false,
     val toast: String = "",
     /** 通知点击带来的「待打开会话」（Compose 侧消费后清空）。 */
     val pendingOpenSession: String = "",
@@ -81,6 +83,19 @@ data class WechatUiState(
             .filter { it.isOfficial == official && !it.isMuted }
             .sumOf { it.unreadCount }
     }
+
+    /**
+     * 双击「聊天」按钮的跳转候选队列（v0.2.25 用户拍板的优先级）：
+     * **先全部非免打扰未读（按列表顺序），再全部免打扰未读（按列表顺序）**。
+     *
+     * 例：列表第 2 条（非免打扰·未读）、第 3 条（免打扰·未读）、第 4 条（非免打扰·未读）
+     * ⇒ 队列 = [2, 4, 3] ⇒ 第 1 次双击定位第 2 条、第 2 次第 4 条、第 3 次第 3 条。
+     */
+    val unreadJumpTargets: List<WechatSession>
+        get() {
+            val withUnread = visibleSessions.filter { it.unreadCount > 0 }
+            return withUnread.filter { !it.isMuted } + withUnread.filter { it.isMuted }
+        }
 }
 
 object WechatState {
@@ -102,6 +117,7 @@ object WechatState {
         notifyEnabled: Boolean,
         soundEnabled: Boolean,
         muteAll: Boolean,
+        officialNotify: Boolean = false,
     ) = mutate {
         it.copy(
             configured = configured,
@@ -112,6 +128,7 @@ object WechatState {
             notifyEnabled = notifyEnabled,
             soundEnabled = soundEnabled,
             muteAll = muteAll,
+            officialNotify = officialNotify,
         )
     }
 
@@ -207,6 +224,8 @@ object WechatState {
     fun setSoundEnabled(v: Boolean) = mutate { it.copy(soundEnabled = v) }
 
     fun setMuteAll(v: Boolean) = mutate { it.copy(muteAll = v) }
+
+    fun setOfficialNotify(v: Boolean) = mutate { it.copy(officialNotify = v) }
 
     fun toast(msg: String) = mutate { it.copy(toast = msg) }
 

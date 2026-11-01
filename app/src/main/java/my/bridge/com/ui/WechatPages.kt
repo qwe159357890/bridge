@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -106,6 +107,7 @@ import my.bridge.com.wechat.WechatMsgType
 import my.bridge.com.wechat.WechatSession
 import my.bridge.com.wechat.WechatSound
 import my.bridge.com.wechat.WechatState
+import my.bridge.com.wechat.wechatDedupe
 
 // ============ 主题色（微信绿，不套 Bridge 蓝） ============
 private val WechatGreen = Color(0xFF07C160)
@@ -256,6 +258,15 @@ internal fun Modifier.tabClickable(
 private const val WECHAT_DOWNLOAD_ROOT = "/sdcard/bridge/wechat/"
 
 /**
+ * 主界面按返回键回主页的**二次确认窗口**（与全局「再按一次退出」同款 2 秒）。
+ * 第 1 次按 → 冒泡提示；窗口内第 2 次按 → 回 APP 主页（v0.2.25）。
+ */
+private const val BACK_CONFIRM_WINDOW_MS = 2000L
+
+/** 双击「聊天」后等会话列表重组的时间（LazyListState 未挂载时滚动是空操作）。 */
+private const val JUMP_SCROLL_DELAY_MS = 120L
+
+/**
  * 微信页（center-server 集成）——**沉浸页**，照销售页：
  * 进入即隐藏 Bridge 底部导航，页内用**自己的底部 Tab** 做二级导航。
  *
@@ -268,7 +279,6 @@ private const val WECHAT_DOWNLOAD_ROOT = "/sdcard/bridge/wechat/"
  */
 @Composable
 fun WechatPage(
-    onShowBottomBar: () -> Unit,
     initialSessionWxid: String? = null,
 ) {
     val context = LocalContext.current
@@ -279,13 +289,35 @@ fun WechatPage(
     var openSession by rememberSaveable { mutableStateOf<String?>(null) }
     // 表情面板状态提升到页面级：返回键要能先收起表情面板（优先级高于「关闭会话」）
     var emojiPanel by remember { mutableStateOf(false) }
+    // 会话列表状态提升到页面级（v0.2.25）：双击「聊天」要把目标会话**滚到顶部**，
+    // 就必须持有列表自己的 LazyListState（页面级才不会因子 Tab 切换而丢失）。
+    val sessionListState = rememberLazyListState()
+    var sessionKeyword by remember { mutableStateOf("") }
+    val sessionList = ui.visibleSessions.filter {
+        sessionKeyword.isBlank() ||
+            it.userNickname.contains(sessionKeyword, true) ||
+            it.lastMsg.contains(sessionKeyword, true)
+    }
 
-    // 返回键优先级链（用户 v0.2.22 拍板，越靠上越优先）：
-    //   ① 表情面板打开      → 收起面板
-    //   ② 聊天详情打开      → 返回会话列表（不必非得点左上角箭头）
-    //   ③ 页内 Tab 非「聊天」→ 切回聊天 Tab（通讯录/实例/工具箱/设置）
-    //   ④ 以上都不成立      → 不接管，交给外层 MainScreen 切换底部主导航栏显隐
-    // ④ 是最低优先级——「显示/隐藏 APP 底部工具栏」永远最后才触发。
+    // 返回键链（Compose BackHandler 是**后进先出**：注册越靠后优先级越高）：
+    // ① 主界面（会话列表）→ 第 1 次冒泡提示「再按一次返回主页」，2 秒内第 2 次 → 回主页；
+    // ② 表情面板 → 收起面板；
+    // ③ 聊天详情 → 返回会话列表（不必非得点左上角箭头）；
+    // ④ 页内 Tab 非「聊天」→ 切回聊天 Tab（通讯录/实例/工具箱/设置）。
+    // ① 优先级最低所以注册在最前；②③④ 注册在后，命中时优先接管。
+    var lastBackAt by remember { mutableLongStateOf(0L) }
+    BackHandler(enabled = openSession == null && subTab == 0) {
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < BACK_CONFIRM_WINDOW_MS) {
+            // v0.2.25：不再「显示/隐藏底部导航栏」，直接回 APP 主页（MainScreen 观察该令牌）
+            WechatState.requestExitToHome()
+        } else {
+            lastBackAt = now
+            wechatToast(context, "再按一次返回主页")
+        }
+    }
+
+    // ②③④（注册在 ① 之后 = 优先级更高）：表情面板 / 聊天详情 / 子 Tab
     BackHandler(enabled = ui.configured && (openSession != null || subTab != 0)) {
         when {
             emojiPanel -> emojiPanel = false
@@ -306,19 +338,36 @@ fun WechatPage(
             WechatController.openSession(context, initialSessionWxid)
         }
     }
-    // 双击「聊天」按钮 → 跳到最新一条未读会话（v0.2.23）。令牌为 0 时是首次组合，跳过。
+
+    /**
+     * 双击「聊天」/底部「微信」→ **把目标未读会话滚到列表顶部**（v0.2.25 改为不进详情）。
+     *
+     * ⚠️ 令牌守卫（修真机问题 #1/#5）：`LaunchedEffect(token)` 在**首次进入组合时也会执行**，
+     * 而从销售页切回微信页 = 重新进入组合，令牌还是上次双击留下的非 0 值 ⇒
+     * 会莫名其妙弹「没有未读会话」（没未读时）或直接跳进会话详情（有未读时）。
+     * 所以必须记一个「已消费令牌」：**只有令牌真的变了**才动作。
+     */
     val jumpToken = ui.jumpUnreadToken
+    var consumedJumpToken by remember { mutableIntStateOf(ui.jumpUnreadToken) }
+    var jumpCursor by remember { mutableIntStateOf(0) }
     LaunchedEffect(jumpToken) {
-        if (jumpToken == 0) return@LaunchedEffect
-        val target = WechatController.latestUnreadSession()
-        if (target == null) {
+        if (jumpToken == consumedJumpToken) return@LaunchedEffect
+        consumedJumpToken = jumpToken
+        val targets = WechatState.state.unreadJumpTargets
+        if (targets.isEmpty()) {
             wechatToast(context, "没有未读会话")
-        } else {
-            subTab = 0
-            openSession = target.userWxid
-            WechatController.openSession(context, target.userWxid)
-            WechatSound.playJump(context)
+            return@LaunchedEffect
         }
+        // 每次双击递进到下一条（先非免打扰、后免打扰，见 unreadJumpTargets），到尾回绕
+        val pick = targets[jumpCursor % targets.size]
+        jumpCursor = (jumpCursor + 1) % targets.size
+        sessionKeyword = ""
+        subTab = 0
+        // 等会话列表重组完成再滚（LazyListState 还没挂到 LazyColumn 时滚动是空操作）
+        delay(JUMP_SCROLL_DELAY_MS)
+        val pos = WechatState.state.visibleSessions.indexOfFirst { it.userWxid == pick.userWxid }
+        if (pos >= 0) sessionListState.animateScrollToItem(pos)
+        WechatSound.playJump(context)
     }
     DisposableEffect(Unit) {
         onDispose { WechatController.onLeave() }
@@ -346,10 +395,16 @@ fun WechatPage(
                 WechatConnectCard()
             } else {
                 when (subTab) {
-                    0 -> WechatSessionList(onOpen = { wxid ->
-                        openSession = wxid
-                        WechatController.openSession(context, wxid)
-                    })
+                    0 -> WechatSessionList(
+                        list = sessionList,
+                        keyword = sessionKeyword,
+                        onKeywordChange = { sessionKeyword = it },
+                        listState = sessionListState,
+                        onOpen = { wxid ->
+                            openSession = wxid
+                            WechatController.openSession(context, wxid)
+                        },
+                    )
                     1 -> WechatContactsPage(onStartChat = { wxid ->
                         subTab = 0
                         openSession = wxid
@@ -381,7 +436,6 @@ fun WechatPage(
                 current = subTab,
                 unread = ui.unreadTotal,
                 onSelect = { subTab = it },
-                onShowBottomBar = onShowBottomBar,
             )
         }
     }
@@ -403,13 +457,11 @@ private fun WechatSubBar(
     current: Int,
     unread: Int,
     onSelect: (Int) -> Unit,
-    onShowBottomBar: () -> Unit,
 ) {
     Surface(tonalElevation = 1.dp, color = MaterialTheme.colorScheme.surface) {
         Row(modifier = Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onShowBottomBar, modifier = Modifier.width(38.dp)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "显示主导航", tint = WechatSub, modifier = Modifier.size(18.dp))
-            }
+            // v0.2.25：去掉最左下角的「⇤ 显示主导航」箭头（用户要求）。
+            // 回主页改为：主界面按返回键 → 第 1 次冒泡提示、2 秒内第 2 次回主页。
             wechatSubTabs.forEachIndexed { index, tab ->
                 val selected = current == index
                 Column(
@@ -490,17 +542,22 @@ private fun WechatConnectCard() {
 
 // ============ 会话列表 ============
 @Composable
-private fun WechatSessionList(onOpen: (String) -> Unit) {
+private fun WechatSessionList(
+    list: List<WechatSession>,
+    keyword: String,
+    onKeywordChange: (String) -> Unit,
+    listState: LazyListState,
+    onOpen: (String) -> Unit,
+) {
     val ui = WechatState.state
-    val keyword = remember { mutableStateOf("") }
     Column(modifier = Modifier.fillMaxSize().background(WechatPageBg)) {
         Row(
             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             WechatSearchField(
-                value = keyword.value,
-                onValueChange = { keyword.value = it },
+                value = keyword,
+                onValueChange = onKeywordChange,
                 placeholder = "搜索",
                 modifier = Modifier.weight(1f),
             )
@@ -518,22 +575,18 @@ private fun WechatSessionList(onOpen: (String) -> Unit) {
                 Text(if (mode == "subscription") "公众号" else "好友", fontSize = 11.sp, color = WechatGreen)
             }
         }
-        val list = ui.visibleSessions.filter {
-            keyword.value.isBlank() || it.userNickname.contains(keyword.value, true) ||
-                it.lastMsg.contains(keyword.value, true)
-        }
         if (list.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("暂无会话", fontSize = 13.sp, color = WechatSub)
             }
         } else {
-            val listState = rememberLazyListState()
+            // listState 由 WechatPage 持有（双击「聊天」要把未读会话滚到顶部）
             // v0.2.24：触底检测改用 snapshotFlow 订阅 layoutInfo，不再用
             // 「derivedStateOf 布尔量 + LaunchedEffect(布尔量)」——后者只在 false→true
             // 的**边沿**触发一次，一旦加载完成后用户仍处于底部（或本页全是重复项、
             // 列表长度没变），布尔量不会再产生新的跳变，就永远不再加载。
             // snapshotFlow 每次布局/滚动都会发射，天然可重复触发。
-            val keywordNow by rememberUpdatedState(keyword.value)
+            val keywordNow by rememberUpdatedState(keyword)
             LaunchedEffect(listState) {
                 snapshotFlow { listState.layoutInfo }
                     .distinctUntilChanged()
@@ -689,9 +742,14 @@ private fun WechatChatPanel(
             noMore = true
             wechatToast(context, "没有更多了")
         } else {
-            messages.addAll(0, more.asReversed())
+            // v0.2.25：翻页也要折叠双写记录（与首次加载同口径）
+            val before = messages.toList()
+            val merged = (more.asReversed() + before).wechatDedupe()
+            val inserted = merged.size - before.size
+            messages.clear()
+            messages.addAll(merged)
             // 顶部插入 N 条后，原锚点下移 N，回滚过去避免内容跳走
-            listState.scrollToItem(anchorIndex + more.size, anchorOffset)
+            listState.scrollToItem(anchorIndex + inserted, anchorOffset)
         }
         loadingMore = false
     }
@@ -711,11 +769,14 @@ private fun WechatChatPanel(
         repeat(8) {
             delay(500)
             val latest = WechatController.loadMessages(context, sessionWxid).asReversed()
-            val known = messages.map { it.msgId.ifBlank { it.id.toString() } }.toSet()
-            val add = latest.filter { (it.msgId.ifBlank { it.id.toString() }) !in known }
-            if (add.any { it.isSelf }) {
-                messages.addAll(add)
-                listState.animateScrollToItem(messages.lastIndex)
+            val before = messages.toList()
+            // v0.2.25：整体去重（含「同一次发送的双写记录」折叠，见 wechatDedupe）
+            val merged = (before + latest).wechatDedupe()
+            // 只认「服务端新落库的自己发的消息」（占位气泡 msgId 为空，不算）
+            if (merged.any { it.isSelf && it.msgId.isNotBlank() && it !in before }) {
+                messages.clear()
+                messages.addAll(merged)
+                if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
                 return
             }
         }
@@ -733,10 +794,11 @@ private fun WechatChatPanel(
         if (curVersion == lastVersion) return@LaunchedEffect
         lastVersion = curVersion
         val latest = WechatController.loadMessages(context, sessionWxid).asReversed()
-        val known = messages.map { it.msgId.ifBlank { it.id.toString() } }.toSet()
-        val add = latest.filter { (it.msgId.ifBlank { it.id.toString() }) !in known }
-        if (add.isNotEmpty()) {
-            messages.addAll(add)
+        val before = messages.toList()
+        val merged = (before + latest).wechatDedupe()
+        if (merged.any { it !in before }) {
+            messages.clear()
+            messages.addAll(merged)
             listState.scrollToItem(messages.lastIndex)
         }
     }
@@ -745,7 +807,7 @@ private fun WechatChatPanel(
     LaunchedEffect(sessionWxid) {
         noMore = false
         messages.clear()
-        messages.addAll(WechatController.loadMessages(context, sessionWxid).asReversed())
+        messages.addAll(WechatController.loadMessages(context, sessionWxid).asReversed().wechatDedupe())
         if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
     }
 
@@ -1527,6 +1589,14 @@ private fun WechatSettingsPage() {
                 }
                 SwitchRow("新消息通知", ui.notifyEnabled) { WechatController.setNotifyEnabled(context, it) }
                 SwitchRow("消息提示音", ui.soundEnabled) { WechatController.setSoundEnabled(context, it) }
+                // v0.2.25：公众号默认**静默**（照参考项目 web/PC/外部端）——入库、更新列表与未读
+                // 照常，只是不弹通知、不响提示音；打开后就是「与好友消息一致」的提醒行为。
+                SwitchRow("公众号消息提醒", ui.officialNotify) { WechatController.setOfficialNotify(context, it) }
+                Text(
+                    "关闭时：公众号新消息照常进列表、照常计未读，但不弹通知、不响提示音（参考项目默认口径）。",
+                    fontSize = 11.sp,
+                    color = WechatSub,
+                )
                 // v0.2.24：照快递扫码 ScanFeedback 的「提示音音量」滑杆——
                 // 音源已是 0 dBFS 满幅、SoundPool 播放系数默认 1.0（App 侧上限），
                 // 这里是与系统媒体音量相乘的唯一可调项（默认 100% = 拉满）。

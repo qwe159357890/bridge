@@ -124,8 +124,9 @@ fun MainScreen(modifier: Modifier = Modifier) {
     // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），
     // 这样页内 BackHandler（短信详情）在其启用时优先接管
     BackHandler {
-        // 销售页（沉浸，无二级 tab）：按返回键 = 点击左上角「返回导航」箭头。
-        // 第 1 次按 → 显示底部导航栏；再次按 → 隐藏导航栏（重新沉浸），如此循环。
+        // 微信页（v0.2.25）：返回键由微信页自己接管——主界面第 1 次按冒泡提示、
+        // 2 秒内第 2 次按回主页（经 WechatState.requestExitToHome()，下面 exitToHome 分支处理）。
+        // 这里保留只是兜底（微信页未组合时才会落到这），正常情况下不会触发。
         if (selectedBottom == 1) {
             wechatNavVisible = !wechatNavVisible
             return@BackHandler
@@ -175,7 +176,6 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     onTabChange = { homeTab = it },
                 )
                 1 -> WechatPage(
-                    onShowBottomBar = { wechatNavVisible = true },
                     initialSessionWxid = openWechatSession,
                 )
                 2 -> SalesPage(

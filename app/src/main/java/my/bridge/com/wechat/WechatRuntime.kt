@@ -86,6 +86,8 @@ object WechatRuntime : WechatWsClient.Listener {
             notifyEnabled = WechatPrefs.notifyEnabled(appCtx),
             soundEnabled = WechatPrefs.soundEnabled(appCtx),
             muteAll = WechatPrefs.muteAll(appCtx),
+            // v0.2.25：公众号默认静默（照参考项目 web/PC/外部端），可在设置页打开
+            officialNotify = WechatPrefs.officialNotify(appCtx),
         )
         ws.setListener(this)
         registerNetworkCallback(appCtx)
@@ -301,6 +303,12 @@ object WechatRuntime : WechatWsClient.Listener {
         // 用户停留在该会话时不弹通知，但消息本身必须出现在聊天详情里（v0.2.22 修复）。
         WechatState.bumpMessageVersion()
 
+        // v0.2.25：公众号静默（默认）——照参考项目 web/PC/外部端，公众号消息照常入库、
+        // 照常更新列表与未读，但**不通知、不响铃**；用户在设置页打开开关后才提醒。
+        if (updated.isOfficial && !WechatPrefs.officialNotify(ctx)) {
+            DiagLog.i(TAG, "公众号消息静默：$sessionWxid")
+            return
+        }
         // 自己发的不提醒；免打扰不提醒但仍计未读（与参考前端一致）
         if (isSelf || muted) return
         if (pageActive && WechatController.isViewing(sessionWxid)) {
@@ -336,7 +344,11 @@ object WechatRuntime : WechatWsClient.Listener {
         if (isSelf(fromClient)) return
         WechatState.updateSession(sessionId) { it.copy(unreadCount = 0) }
         recalcUnread()
-        app?.let { WechatNotifier.cancel(it, sessionId) }
+        // v0.2.25：通知是**全局唯一一条**（见 WechatNotifier.NOTIFICATION_ID），
+        // 只有当所有会话都没未读了才撤掉，否则会把别人会话的通知一并干掉。
+        if (WechatState.state.sessions.none { it.unreadCount > 0 }) {
+            app?.let { WechatNotifier.cancel(it) }
+        }
     }
 
     override fun onPinChanged(sessionId: String, pinned: Boolean, fromClient: String?) {
@@ -363,7 +375,10 @@ object WechatRuntime : WechatWsClient.Listener {
     override fun onSessionDeleted(sessionId: String) {
         WechatState.removeSession(sessionId)
         recalcUnread()
-        app?.let { WechatNotifier.cancel(it, sessionId) }
+        // 同 [onUnreadCleared]：通知全局唯一，没有未读了才撤
+        if (WechatState.state.sessions.none { it.unreadCount > 0 }) {
+            app?.let { WechatNotifier.cancel(it) }
+        }
     }
 
     override fun onInstanceChange() {
@@ -425,18 +440,6 @@ object WechatRuntime : WechatWsClient.Listener {
             }.onFailure { DiagLog.w(TAG, "拉取代理/实例失败：${it.message}") }
         }
     }
-
-    /**
-     * 首页会话（v0.2.23 起分页）：拉第 1 页并把「是否已到底」写进状态。
-     * 之后由 [loadMoreSessions] 追加；列表滑到底才会继续请求。
-     */
-    /**
-     * 最新一条有未读的会话（双击「聊天」按钮跳转用，v0.2.23）。
-     * 参考 PC 客户端同一交互（快捷键跳未读会话，并播「叮一声」）。
-     * [WechatUiState.visibleSessions] 已按「置顶 + 更新时间倒序」排好，取第一个未读即可。
-     */
-    fun latestUnreadSession(): WechatSession? =
-        WechatState.state.visibleSessions.firstOrNull { it.unreadCount > 0 }
 
     /**
      * 首页会话（v0.2.23 起分页，v0.2.24 修正「刷新打回第 1 页」）。
@@ -587,11 +590,20 @@ object WechatRuntime : WechatWsClient.Listener {
         WechatState.setMuteAll(muted)
     }
 
+    /** 公众号消息提醒开关（v0.2.25，默认关 = 静默）。 */
+    fun setOfficialNotify(context: Context, on: Boolean) {
+        WechatPrefs.setOfficialNotify(context, on)
+        WechatState.setOfficialNotify(on)
+    }
+
     /** 进入会话：本地清零 + 通知撤回 + 服务端已读 + WS 广播。 */
     fun openSession(context: Context, sessionWxid: String) {
         WechatState.updateSession(sessionWxid) { it.copy(unreadCount = 0) }
         recalcUnread()
-        WechatNotifier.cancel(context, sessionWxid)
+        // v0.2.25：通知全局唯一，只有全都没未读了才撤（否则会连其它会话的通知一起撤掉）
+        if (WechatState.state.sessions.none { it.unreadCount > 0 }) {
+            WechatNotifier.cancel(context)
+        }
         ws.markRead(sessionWxid)
         scope.launch {
             runCatching { WechatApiClient(context).markRead(sessionWxid) }
@@ -614,7 +626,9 @@ object WechatRuntime : WechatWsClient.Listener {
     fun clearSession(context: Context, sessionWxid: String) {
         WechatState.updateSession(sessionWxid) { it.copy(lastMsg = "", unreadCount = 0) }
         recalcUnread()
-        WechatNotifier.cancel(context, sessionWxid)
+        if (WechatState.state.sessions.none { it.unreadCount > 0 }) {
+            WechatNotifier.cancel(context)
+        }
         ws.clearSession(sessionWxid)
         scope.launch {
             runCatching { WechatApiClient(context).clearSessionMessages(sessionWxid) }

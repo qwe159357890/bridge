@@ -52,6 +52,9 @@ object WechatController {
 
     fun setMuteAll(context: Context, muted: Boolean) = WechatRuntime.setMuteAll(context, muted)
 
+    /** 公众号消息提醒（v0.2.25）：关 = 公众号消息只入库不提醒（默认，照参考项目）。 */
+    fun setOfficialNotify(context: Context, on: Boolean) = WechatRuntime.setOfficialNotify(context, on)
+
     fun togglePin(context: Context, wxid: String, pinned: Boolean) = WechatRuntime.togglePin(context, wxid, pinned)
 
     fun toggleMute(context: Context, wxid: String, muted: Boolean) = WechatRuntime.toggleMute(context, wxid, muted)
@@ -69,9 +72,6 @@ object WechatController {
 
     /** 加载下一页联系人（列表滑到底调用，v0.2.23）。 */
     fun loadMoreContacts() = WechatRuntime.loadMoreContacts()
-
-    /** 最新一条未读会话（双击「聊天」按钮跳过去），没有未读返回 null。 */
-    fun latestUnreadSession(): WechatSession? = WechatRuntime.latestUnreadSession()
 
     /** 设置页展示用：实际 WS 端点。 */
     fun wsEndpoint(context: Context): String = WechatRuntime.wsEndpoint(context)

@@ -39,6 +39,14 @@ object WechatPrefs {
      */
     private const val KEY_SOUND_VOLUME = "sound_volume"
 
+    /**
+     * 公众号消息是否提醒（v0.2.25）：**默认 false（静默）**。
+     *
+     * 参考项目的 web 端 / PC 端 / 外部端都是「公众号静默」——收到公众号新消息照常入库、
+     * 照常更新列表与未读，但**不弹通知、不响提示音**。用户打开本开关后才提醒。
+     */
+    private const val KEY_OFFICIAL_NOTIFY = "official_notify"
+
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
 
@@ -102,6 +110,13 @@ object WechatPrefs {
 
     fun setSoundVolume(context: Context, volume: Float) {
         sp(context).edit().putFloat(KEY_SOUND_VOLUME, volume.coerceIn(0f, 1f)).apply()
+    }
+
+    /** 见 [KEY_OFFICIAL_NOTIFY]：默认 false = 公众号静默（不通知、不响铃，其余照常）。 */
+    fun officialNotify(context: Context): Boolean = sp(context).getBoolean(KEY_OFFICIAL_NOTIFY, false)
+
+    fun setOfficialNotify(context: Context, on: Boolean) {
+        sp(context).edit().putBoolean(KEY_OFFICIAL_NOTIFY, on).apply()
     }
 
     /** 全局静音：只关提示音，不关通知、更不关连接。 */

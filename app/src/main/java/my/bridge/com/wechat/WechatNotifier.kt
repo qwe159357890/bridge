@@ -32,8 +32,14 @@ object WechatNotifier {
     /** 通知 id 起始值（2001 已被保活/远程通知占用）。 */
     private const val BASE_ID = 2101
 
-    /** 同一会话复用同一 id：连续消息只更新不刷屏。 */
-    fun idOf(sessionWxid: String): Int = BASE_ID + (sessionWxid.hashCode() and 0x0FFF) % 500
+    /**
+     * v0.2.25：**全局只用这一条通知 id**——后到的消息直接顶替前一条（同 id `notify()` = 更新）。
+     *
+     * 改前是按会话分散 id（`BASE_ID + hash % 500`），10 个会话来消息就刷 10 条通知
+     * （用户反馈 #4：「每条消息都单独一条通知」）。现在改成单条：`setNumber` 显示累计未读，
+     * 点进去打开**最新**那条会话。
+     */
+    const val NOTIFICATION_ID = BASE_ID
 
     private fun channelId(context: Context, sound: Boolean): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return ""
@@ -71,7 +77,7 @@ object WechatNotifier {
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or
             (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-        val pi = PendingIntent.getActivity(app, idOf(sessionWxid), openIntent, flags)
+        val pi = PendingIntent.getActivity(app, NOTIFICATION_ID, openIntent, flags)
 
         val builder = NotificationCompat.Builder(app, channelId(app, sound))
             .setSmallIcon(app.applicationInfo.icon)
@@ -79,21 +85,22 @@ object WechatNotifier {
             .setContentText(content)
             .setWhen(System.currentTimeMillis())
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)   // 同 id 连续更新时不再重复提醒（避免连环响动）
             .setContentIntent(pi)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
         if (unreadCount > 1) builder.setNumber(unreadCount.coerceIn(1, 99))
 
         runCatching {
-            NotificationManagerCompat.from(app).notify(idOf(sessionWxid), builder.build())
+            NotificationManagerCompat.from(app).notify(NOTIFICATION_ID, builder.build())
         }.onFailure {
             DiagLog.e(TAG, "通知发送失败", it)
         }
     }
 
-    /** 会话已读后撤掉该会话通知（角标随之归零）。 */
-    fun cancel(context: Context, sessionWxid: String) {
+    /** 撤掉那唯一一条消息通知（未读全部清零时调用）。 */
+    fun cancel(context: Context) {
         runCatching {
-            NotificationManagerCompat.from(context.applicationContext).cancel(idOf(sessionWxid))
+            NotificationManagerCompat.from(context.applicationContext).cancel(NOTIFICATION_ID)
         }.onFailure { DiagLog.w(TAG, "撤销通知失败：${it.message}") }
     }
 }
