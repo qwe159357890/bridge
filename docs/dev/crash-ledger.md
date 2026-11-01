@@ -64,6 +64,7 @@ v0.2.01 改「正常补获」：其它媒体播放即让位、停播自动补获
 | `AudioRelayService.stop/setVolume` | AudioRelayService | 走普通 `startService`，无义务 | 有运行守卫，不误拉起 | ✅ |
 | 通知「停止接收」按钮（PendingIntent.getService） | AudioRelayService | 普通 startService | — | ✅ |
 | `CommandModule`×4（screenshot/photo/video/audio 命令） | MediaCaptureService | 全部 try/catch | onStartCommand 主路径挂前台；**并发拒绝路径补挂（v0.2.01 补）**；挂前台异常 catch+stopSelf（v0.2.01 补） | ✅ |
+| `VntMeshController.start`（组网页「开始组网」+ `vnt_start` 命令，v0.2.30） | VntVpnService（specialUse） | try/catch（start 内） | **onCreate 挂前台 + onStartCommand 每次幂等补挂**；`startForeground` try/catch + 失败 `stopSelf`；返回 `START_NOT_STICKY`（进程被杀不自动复活）；manifest 四件套齐全 | ✅ 按 §5 清单逐条落实 |
 
 ### 3.2 其它已消除/已验证的崩溃向量
 
@@ -114,6 +115,15 @@ v0.2.01 改「正常补获」：其它媒体播放即让位、停播自动补获
 
 **v0.2.01 一揽子内容**：三服务义务悬空修复（KeepAlive/AudioRelay/MediaCapture）+
 蓝牙按键正常补获 + CrashReporter 链路确认可用（服务端 MySQL 已见 Crash 记录）。
+
+**v0.2.30 预防性接入（非崩溃修复）**：新增 `VntVpnService`（`specialUse` 前台服务，VNT 组网）。
+接入前按 §5 清单逐条核对：① manifest 声明 `FOREGROUND_SERVICE_SPECIAL_USE` 权限 +
+`foregroundServiceType="specialUse"` + `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` + `BIND_VPN_SERVICE` 四件套；
+② 唯一调用点 `VntMeshController.start()` try/catch；③ `onCreate` 挂前台且
+`startForeground` try/catch + 失败 `stopSelf()`；④ `onStartCommand` **每次拉起都幂等补挂**
+（不依赖 onCreate）；⑤ STOP / intent 为空的早退分支返回前义务已履行；
+⑥ 返回 `START_NOT_STICKY`（进程被杀不自动复活，满足「退出即整体结束」最高优先级）；
+⑦ 调用点已登记 §3.1。⚠️ native 侧（Rust）崩溃不受 CrashReporter 捕获，真机排障需看 logcat/tombstone。
 
 ## 7. 关联运维事件备忘（非崩溃，但排查时易混淆）
 

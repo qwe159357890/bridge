@@ -22,6 +22,41 @@
 
 ---
 
+## 2026-11-01 · 🕸️ v0.2.30 VNT 组网集成里程碑（主页第 5 Tab · JNI 内嵌 · 官方预编译产物 · 三条命令）
+
+**节点意义**：把开源 VNT（虚拟局域网 / SD-WAN）集成进 Bridge，在「快递扫码」之后新增「组网」Tab。
+四条脉络：**调研与决策收敛**（三仓库源码实读 + 9 项拍板 + 两轮追问）、**产物路线纠偏**
+（原判「必须自编 Rust+NDK」→ 查官方 Release 改为下载预编译 so，本地零安装）、**P1 落地**
+（JNI 绑定 + 前台服务 + Compose 页面 + Tab 迁移 + 退出流程）、**P2 命令与全量文档登记**。
+
+**逐版记录**：
+
+- **v0.2.30（本次）**：**根治**「组网能力缺失」——新增 `com/vnt/*.java` 官方绑定（11 个类，包名不可改）、
+  `my/bridge/com/vnt/` 五件套（`VntVpnService` / `VntMeshController` / `VntMeshState` /
+  `VntMeshPrefs` / `VntConfigBuilder`）、`ui/VntPages.kt`、主页第 5 Tab（含 `TabOrderPrefs` 4→5
+  **旧值迁移**）、`AppExit.kill` 显式停服务、`vnt_start/vnt_stop/vnt_status` 三条命令；
+  `app/src/main/jniLibs/arm64-v8a/libvnt_jni.so` 直接取官方 v2.0.11 预编译产物并校验 PASS。
+
+**关键经验沉淀**：
+
+1. **「有源码」≠「有产物」**：Java 层 23 个 `native` 声明全是空壳，必须配 `.so`；但**编译不必在本地做**——
+   先查上游 Release（官方按 ABI 分发 + sha256），能省掉整套 Rust/NDK 工具链。**本地安装任何程序前必须先经用户同意**，
+   下载/复制文件不算安装。
+2. **Tab 数量变化必须做迁移**：`isValid()` 硬编码长度时，老用户存的值会被静默回退默认，
+   丢掉自定义排序与改名；识别旧值 → 保留原顺序 → 末尾追加新页 id → 回写，是最低成本的兼容。
+3. **基础设施不能照抄页面级生命周期**：ESP32/销售/扫码用 `DisposableEffect{start; onDispose{stop}}`，
+   组网是常驻连接，必须「前台服务 + 显式开关」，页面只订阅（照 `AudioRelayPage`）。
+4. **`getClientList()` 是主动 RPC 且最多阻塞 3 秒**：绝不上主线程；设备上下线底层实时推但
+   `RuntimeEvent` 没有对应变体，UI 只能轮询；速率底层只有累计字节数，需自行差分并在
+   页面隐藏→显示时**重置采样基准**，否则出现虚假尖峰。
+5. **路由红线**：Android `VpnService.Builder.addAddress()` 不自动生成路由，必须显式加虚拟网段，
+   且**绝不加 `0.0.0.0/0`**（会劫持整机流量，把 Bridge 自己的长连接卷进隧道）。
+
+> 真机组网联调与省电实测**仍待做**（需 VNTS 实体与多设备环境）。改前留档与回滚配方见
+> `docs/dev/vnt-integration-change-ledger.md`；完整调研见 `docs/research/vnt-mesh-integration.md`。
+
+---
+
 ## 2026-11-01 · 🧭 v0.2.22→v0.2.29 微信页真机收敛里程碑（五批真机问题 · 进程退出 · 通知跳转根治）
 
 **节点意义**：v0.2.21 微信页上线后，用户在真机上连续五轮反馈（每批 6~9 项），把「能跑」收敛成「能用」。

@@ -60,8 +60,9 @@ import timber.log.Timber
 // ============ 通用设置 ============
 @Composable
 fun GeneralSettings(
-    homeTabOrder: List<Int> = listOf(0, 1, 2, 3),
-    homeTabNames: List<String> = listOf("", "", "", ""),
+    // v0.2.30：主页扩到 5 页，默认值跟随 PAGE_TITLES，避免再出现硬编码 4
+    homeTabOrder: List<Int> = TabOrderPrefs.PAGE_TITLES.indices.toList(),
+    homeTabNames: List<String> = TabOrderPrefs.PAGE_TITLES.map { "" },
     onHomeTabOrderChange: (List<Int>) -> Unit = {},
     onHomeTabNameChange: (List<String>) -> Unit = {},
 ) {
@@ -150,10 +151,10 @@ fun GeneralSettings(
         }
         item {
             Row {
-                TextButton(onClick = { onHomeTabOrderChange(listOf(0, 1, 2, 3)) }) {
+                TextButton(onClick = { onHomeTabOrderChange(TabOrderPrefs.PAGE_TITLES.indices.toList()) }) {
                     Text("恢复默认排序", fontSize = 13.sp)
                 }
-                TextButton(onClick = { onHomeTabNameChange(List(4) { "" }) }) {
+                TextButton(onClick = { onHomeTabNameChange(TabOrderPrefs.PAGE_TITLES.map { "" }) }) {
                     Text("恢复默认名称", fontSize = 13.sp)
                 }
             }
@@ -258,7 +259,7 @@ fun GeneralSettings(
                 androidx.compose.material3.TextButton(
                     onClick = {
                         val next = homeTabNames.toMutableList()
-                        while (next.size < 4) next.add("")
+                        while (next.size < TabOrderPrefs.PAGE_TITLES.size) next.add("")
                         next[pageId] = renameText.trim()
                         onHomeTabNameChange(next)
                         renameTarget = null

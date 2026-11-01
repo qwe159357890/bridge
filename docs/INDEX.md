@@ -24,7 +24,9 @@
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | **变更记录（版本里程碑与关键修复脉络）** |
 | release-pipeline.md | 构建与发布链路（git 推送 + GitHub Actions 打包 + 签名密钥管理） |
-| [heartbeat-inventory.md](dev/heartbeat-inventory.md) | **心跳与周期任务台账**（5 条长连接的心跳/传输 ping/判死/重连全景 + 各连接周期硬约束 + 耗电量级模型 + 优化点与实测方法；调任何周期前先查这里） |
+| [heartbeat-inventory.md](dev/heartbeat-inventory.md) | **心跳与周期任务台账**（6 条长连接的心跳/传输 ping/判死/重连全景，含 v0.2.30 VNT 黑盒保活 + 各连接周期硬约束 + 耗电量级模型 + 优化点与实测方法；调任何周期前先查这里） |
+| [crash-ledger.md](dev/crash-ledger.md) | **崩溃台账**（三次根因时间线 + `startForegroundService` 义务按次计铁律 + 全量审计表 + 排障工具链 + **新前台服务接入检查清单 §5**；新服务接入前对照） |
+| [vnt-integration-change-ledger.md](dev/vnt-integration-change-ledger.md) | **VNT 集成改前留档台账**（v0.2.30 P1+P2 全部既有文件改前原文逐字固化 + 回滚配方 + 触发回滚信号 + 新增文件删除清单 + 改后回填） |
 | coding-style.md | 代码规范（待补充） |
 | git-workflow.md | Git 协作规范（待补充） |
 | commit-convention.md | 提交信息规范（待补充） |
@@ -47,6 +49,7 @@
 | [esp32-relay-integration.md](research/esp32-relay-integration.md) | **ESP32 继电器项目集成调研**（参考项目结构/功能清单、与 Bridge 现状对照、集成方案 A/B/C 对比、推荐「客户端直连参考中继服务器」落地设计；**已落地实现**：`switch/` 包 + `ui/RelaySwitchPages.kt` + `ui/RelaySwitchIcons.kt`，含连接生命周期/按钮配色/图标还原/窗格网格等细化决策） |
 | [barcode-scanner-integration.md](research/barcode-scanner-integration.md) | **快递扫码功能集成调研**（Barcode to PC 参考项目：协议层完整还原 helo/ping-pong/putScanSessions-ACK/离线对账、扫描准确率手段、集成方案对比→推荐自研三端（CameraX+ML Kit 多帧投票）、需要实现的清单与坑；**未实现**，原型见 `assets/design/ui-mockup-barcode-scanner.html`） |
 | [salesrecord-remote-integration.md](research/salesrecord-remote-integration.md) | **SalesRecordRemote 售后管理系统集成调研**（参考项目三端结构/服务端 REST+WS 契约实锤/客户端功能清单/与 Bridge 现状对照/集成方案：客户端直连参考服务器+底部导航插「销售」Tab+桌面交互→触屏映射表/语言差异防 bug 清单；**已实现 v0.2.09**，`app/.../sales/`+`ui/SalesPages.kt`，交互原型见 `assets/design/ui-mockup-sales-page.html`） |
+| [vnt-mesh-integration.md](research/vnt-mesh-integration.md) | **VNT 组网（虚拟局域网 / SD-WAN）集成调研**（三仓库全景 + `com.vnt` JNI 绑定 API 面与调用时序 + Android VPN 硬约束 + **官方预编译 so 产物方案与校验** + 运行期刷新机制源码实锤 + Bridge 现状对照 + 方案对比（推荐 JNI 内嵌）+ 落地设计/坑清单/9 项决策/开工核对清单；**已实现 v0.2.30**：`com/vnt/*.java` + `my/bridge/com/vnt/` + `ui/VntPages.kt` + 主页第 5 Tab + `vnt_start/vnt_stop/vnt_status` 三条命令 + 官方 arm64 `libvnt_jni.so`；**真机组网验证待做**，原型见 `assets/design/ui-mockup-vnt-mesh.html`，改前留档见 `docs/dev/vnt-integration-change-ledger.md`） |
 | [center-server-wechat-integration.md](research/center-server-wechat-integration.md) | **微信中心服务器（center-server）前端集成调研**（参考项目结构/前端真实功能与实例账号上下文/REST+WS 契约实锤/与 Bridge 现状对照与保活·工具箱取舍/推荐 `wechat/` 包与「主页·微信·销售·设置」导航方案/风险与分期；**已拍板形态：微信页沉浸 + 页内底部二级 Tab + 状态条仅断线显示 + 账号选择移入输入栏 + 后台常驻收消息（进程级连接、不新增前台服务）+ 工具箱占位 + 附件存 `/sdcard/bridge/wechat/` + 提示音与通知**；**已实现 v0.2.20**：`app/.../wechat/` 全套（进程级常驻连接/通知与提示音/富媒体与下载器）+ `ui/WechatPages.kt` + `ui/WechatMedia.kt` + 底部导航「主页·微信·销售·设置」；仅**真机验证待做**，交互原型见 `assets/design/ui-mockup-wechat-page.html`） |
 
 ### 管理后台（admin/）

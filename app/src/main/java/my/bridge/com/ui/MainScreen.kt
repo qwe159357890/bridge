@@ -384,12 +384,13 @@ fun HomePage(
             onTabChange = onTabChange,
         )
         // currentTab 语义=「位置」，经顺序表翻译成页面 id 再分发。
-        // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..3，此处防御性钳制。
+        // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..4，此处防御性钳制。
         when (tabOrder.getOrElse(currentTab) { 0 }) {
             0 -> SmsConversationsPage() // 真实短信页（v0.1.34，原假数据骨架）
             1 -> AudioRelayPage() // 音频中继页（手机放音，原通讯录占位已移除）
             2 -> RelaySwitchPage() // 智能控制页（ESP32 继电器，原「发现」假数据占位已替换）
             3 -> ScanPage() // 快递扫码页（v0.1.94 新增，CameraX + ML Kit 纯本地闭环）
+            4 -> VntPage() // 组网页（v0.2.30 新增，VNT 虚拟局域网；服务常驻，页面只订阅）
         }
     }
 }

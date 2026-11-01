@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- 前台服务通知（Android 13+ 需运行时申请，否则通知被静默拦截） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- VNT 组网前台服务（v0.2.30）：Android 14+ specialUse 类型必须配套声明此权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 桌面角标能力声明（各厂商桌面据此把应用收进「桌面角标」管理列表；
          均为普通权限无需运行时申请。真机对比结论：HBuilderX 应用能出现在
          一加 9 Pro「桌面角标」列表里，正是因为 uni-app 运行时默认声明了
@@ -201,6 +203,26 @@
             android:name="my.bridge.com.relay.AudioRelayService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- VNT 组网前台服务（v0.2.30）：Android 14+ specialUse 四件套
+             ① FOREGROUND_SERVICE_SPECIAL_USE 权限（见上）
+             ② foregroundServiceType="specialUse"
+             ③ PROPERTY_SPECIAL_USE_FGS_SUBTYPE 说明用途
+             ④ BIND_VPN_SERVICE 权限 + android.net.VpnService intent-filter
+             VpnService.prepare() 授权由组网页经 Activity 弹系统框；返回 START_NOT_STICKY，
+             进程被杀不自动复活（退出应用 / 切后台立即结束 为最高优先级）。 -->
+        <service
+            android:name="my.bridge.com.vnt.VntVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="VNT virtual private network tunnel" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
 
         <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏（GLOBAL_ACTION_LOCK_SCREEN）
              + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。

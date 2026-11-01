@@ -50,6 +50,10 @@ data class Command(
         const val SHOW_DIALOG = "show_dialog"
         const val SEND_NOTIFICATION = "send_notification"
         const val CHECK_UPDATE = "check_update"
+        // ---- VNT 组网（v0.2.30）----
+        const val VNT_START = "vnt_start"
+        const val VNT_STOP = "vnt_stop"
+        const val VNT_STATUS = "vnt_status"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

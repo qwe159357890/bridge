@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge · 组网（集成 VNT）UI 原型 v1</title>
+<style>
+  :root {
+    --brand: #1A6EE8;
+    --brand-soft: #EAF2FE;
+    --inactive: #8A919F;
+    --bg: #F5F6F8;
+    --card: #FFFFFF;
+    --text: #1F2329;
+    --text-sub: #6B7280;
+    --green: #2E9E5B;
+    --red: #E5484D;
+    --border: #E5E7EB;
+    --phone-w: 375px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    padding: 32px 20px 60px;
+  }
+  h1 { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+  .subtitle { text-align: center; color: var(--text-sub); font-size: 14px; margin-bottom: 8px; }
+  .meta {
+    max-width: 860px; margin: 0 auto 28px; padding: 14px 18px;
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--text-sub);
+  }
+  .meta b { color: var(--text); }
+  .meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 14px; padding-left: 10px; border-left: 4px solid var(--brand); }
+  .grid { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start; }
+  .scene { flex: 1 1 360px; max-width: 460px; min-width: 320px; }
+  .scene-title { text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .scene-desc { text-align: center; font-size: 12px; color: var(--text-sub); margin-bottom: 12px; }
+  .phone { width: var(--phone-w); margin: 0 auto; background: #fff; border-radius: 30px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.10); border: 1px solid var(--border); }
+  .phone svg { display: block; width: 100%; height: auto; }
+  .note { max-width: 860px; margin: 36px auto 0; padding: 16px 20px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 12px; font-size: 13px; color: #92400E; }
+  .note b { color: #78350F; }
+  ul.clean { margin: 8px 0 0 18px; }
+  ul.clean li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>Bridge · 组网 UI 原型 <span style="font-size:14px;color:var(--text-sub)">v1</span></h1>
+<div class="subtitle">集成 VNT（方案 A：JNI 内嵌）— 主页新增第 5 个 Tab「组网」</div>
+
+<div class="meta">
+  <div style="margin-bottom:6px">
+    <span class="tag">方案 A</span><span class="tag">libvnt_jni.so 内嵌</span>
+    <span class="tag">服务端零改动</span><span class="tag">前台服务 specialUse</span>
+  </div>
+  <div><b>本版要点：</b></div>
+  <div>① <b>主页 Tab 增加「组网」</b> —— 排在「快递扫码」之后（页面 id = 4），与既有 4 个 Tab 同一套顺序/改名机制。</div>
+  <div>② <b>生命周期是「显式开关 + 前台服务常驻」</b>，不是 ESP32/销售那种「进页面才连、离开即断」；切 Tab、退后台都不断连。</div>
+  <div>③ <b>首次连接要过系统 VPN 授权框</b>（Android 同时只允许一个 VPN，会挤掉其它 VPN App，需明确提示）。</div>
+  <div style="margin-top:6px"><b>后端对接硬约束</b>：VNT 侧<b>服务端零改动</b>；Bridge 服务端不动。客户端严格复用官方 <code>com.vnt.*</code> 绑定（<b>包名不可改</b>，JNI 符号硬绑定），仅自建 <code>VntVpnService</code> 与 Compose 页面。路由<b>只加虚拟网段 + 出口网段，绝不加 0.0.0.0/0</b>。</div>
+</div>
+
+<h2>改动点 ①：主页 Tab 增加「组网」（未连接态 / 已连接态）</h2>
+<div class="grid">
+  <div class="scene">
+    <div class="scene-title">未连接态</div>
+    <div class="scene-desc">短信 · 音频中继 · 智能控制 · 快递扫码 · 组网 —— 停在组网，未开始</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+
+        <!-- 5 个 Tab（选中=组网） -->
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="40" y="71" font-size="12" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="105" y="71" font-size="12" fill="#8A919F" text-anchor="middle">音频中继</text>
+        <text x="180" y="71" font-size="12" fill="#8A919F" text-anchor="middle">智能控制</text>
+        <text x="255" y="71" font-size="12" fill="#8A919F" text-anchor="middle">快递扫码</text>
+        <text x="330" y="71" font-size="12" fill="#1A6EE8" font-weight="600" text-anchor="middle">组网</text>
+        <rect x="302" y="84" width="56" height="3" fill="#1A6EE8"/>
+
+        <!-- 状态卡（蓝） -->
+        <rect x="16" y="98" width="343" height="110" rx="14" fill="#1A6EE8"/>
+        <circle cx="187" cy="140" r="24" fill="#fff"/>
+        <text x="187" y="147" font-size="17" fill="#1A6EE8" text-anchor="middle">⇄</text>
+        <text x="187" y="181" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">组网未连接</text>
+        <text x="187" y="199" font-size="12" fill="rgba(255,255,255,0.8)" text-anchor="middle">点下方按钮加入虚拟网络</text>
+
+        <!-- 连接信息 -->
+        <rect x="16" y="220" width="343" height="140" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="244" font-size="13" fill="#1F2329" font-weight="600">连接信息</text>
+        <text x="32" y="270" font-size="12" fill="#6B7280">服务端</text>
+        <text x="343" y="270" font-size="12" fill="#1F2329" text-anchor="end" font-family="monospace">vnt2.rustvnt.com:29872</text>
+        <line x1="32" y1="282" x2="343" y2="282" stroke="#F0F1F3"/>
+        <text x="32" y="304" font-size="12" fill="#6B7280">网络编号</text>
+        <text x="343" y="304" font-size="12" fill="#1F2329" text-anchor="end" font-family="monospace">team-a</text>
+        <line x1="32" y1="316" x2="343" y2="316" stroke="#F0F1F3"/>
+        <text x="32" y="338" font-size="12" fill="#6B7280">设备名 / ID</text>
+        <text x="343" y="338" font-size="12" fill="#1F2329" text-anchor="end">办公手机 / a3f8…9c</text>
+
+        <!-- 开始按钮 -->
+        <rect x="52" y="376" width="271" height="52" rx="26" fill="#1A6EE8"/>
+        <text x="187" y="407" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">开始组网</text>
+
+        <!-- 说明 -->
+        <rect x="16" y="442" width="343" height="112" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="466" font-size="13" fill="#1F2329" font-weight="600">如何使用</text>
+        <text x="32" y="488" font-size="12" fill="#6B7280">1. 电脑/服务器安装 VNT，填同一编号与密码</text>
+        <text x="32" y="508" font-size="12" fill="#6B7280">2. 手机点「开始组网」，首次需同意 VPN 授权</text>
+        <text x="32" y="528" font-size="12" fill="#6B7280">3. 连接后用虚拟 IP 互访（Android 只有一个 VPN 通道）</text>
+        <text x="32" y="546" font-size="11" fill="#B0B6C0">右上角齿轮可改服务端 / 编号 / 密码 / MTU</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="scene">
+    <div class="scene-title">已连接态</div>
+    <div class="scene-desc">虚拟 IP 已分配 · 设备列表 / 服务端 / 路由实时展示</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+        <circle cx="340" cy="24" r="3" fill="#1F2329"/><circle cx="352" cy="24" r="3" fill="#1F2329"/><rect x="322" y="21" width="16" height="8" rx="2" fill="#1F2329"/>
+
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="40" y="71" font-size="12" fill="#8A919F" text-anchor="middle">短信</text>
+        <text x="105" y="71" font-size="12" fill="#8A919F" text-anchor="middle">音频中继</text>
+        <text x="180" y="71" font-size="12" fill="#8A919F" text-anchor="middle">智能控制</text>
+        <text x="255" y="71" font-size="12" fill="#8A919F" text-anchor="middle">快递扫码</text>
+        <text x="330" y="71" font-size="12" fill="#1A6EE8" font-weight="600" text-anchor="middle">组网</text>
+        <rect x="302" y="84" width="56" height="3" fill="#1A6EE8"/>
+
+        <!-- 状态卡（绿） -->
+        <rect x="16" y="98" width="343" height="96" rx="14" fill="#2E9E5B"/>
+        <text x="187" y="130" font-size="18" fill="#fff" font-weight="600" text-anchor="middle">已连接 · 10.26.0.5</text>
+        <text x="187" y="152" font-size="12" fill="rgba(255,255,255,0.85)" text-anchor="middle">NAT：Cone（全锥） · 服务端 RTT 24 ms</text>
+        <text x="187" y="172" font-size="12" fill="rgba(255,255,255,0.85)" text-anchor="middle">IPv6：fd76:6e74::a1a:5 · MTU 1380</text>
+        <text x="343" y="112" font-size="11" fill="rgba(255,255,255,0.9)" text-anchor="end">⚙</text>
+
+        <!-- 设备列表 -->
+        <text x="20" y="216" font-size="13" fill="#6B7280" font-weight="600">设备（3）· 在线 2</text>
+        <rect x="12" y="226" width="351" height="132" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="250" font-size="13" fill="#1F2329" font-weight="600">家里 NAS</text>
+        <text x="32" y="268" font-size="11" fill="#6B7280" font-family="monospace">10.26.0.2</text>
+        <rect x="238" y="238" width="46" height="18" rx="9" fill="#E8F6EE"/>
+        <text x="261" y="250" font-size="10" fill="#2E9E5B" text-anchor="middle">P2P</text>
+        <text x="343" y="250" font-size="11" fill="#6B7280" text-anchor="end">↑12K ↓84K</text>
+        <text x="343" y="268" font-size="11" fill="#6B7280" text-anchor="end">18 ms</text>
+        <line x1="32" y1="280" x2="343" y2="280" stroke="#F0F1F3"/>
+        <text x="32" y="302" font-size="13" fill="#1F2329" font-weight="600">公司电脑</text>
+        <text x="32" y="320" font-size="11" fill="#6B7280" font-family="monospace">10.26.0.7</text>
+        <rect x="238" y="290" width="46" height="18" rx="9" fill="#EAF2FE"/>
+        <text x="261" y="302" font-size="10" fill="#1A6EE8" text-anchor="middle">中继</text>
+        <text x="343" y="302" font-size="11" fill="#6B7280" text-anchor="end">↑3K ↓9K</text>
+        <text x="343" y="320" font-size="11" fill="#6B7280" text-anchor="end">≈46 ms</text>
+        <line x1="32" y1="332" x2="343" y2="332" stroke="#F0F1F3"/>
+        <text x="32" y="352" font-size="13" fill="#8A919F">门店收银机</text>
+        <text x="343" y="352" font-size="11" fill="#8A919F" text-anchor="end">离线</text>
+
+        <!-- 服务端 / 路由 -->
+        <rect x="12" y="366" width="351" height="96" rx="12" fill="#fff" stroke="#E5E7EB"/>
+        <text x="32" y="390" font-size="13" fill="#1F2329" font-weight="600">服务端</text>
+        <text x="343" y="390" font-size="11" fill="#2E9E5B" text-anchor="end">已连接</text>
+        <text x="32" y="410" font-size="11" fill="#6B7280" font-family="monospace">quic://vnt.example.com:29872</text>
+        <text x="343" y="410" font-size="11" fill="#6B7280" text-anchor="end">RTT 24 ms</text>
+        <line x1="32" y1="422" x2="343" y2="422" stroke="#F0F1F3"/>
+        <text x="32" y="444" font-size="13" fill="#1F2329" font-weight="600">路由</text>
+        <text x="343" y="444" font-size="11" fill="#6B7280" text-anchor="end">10.26.0.0/24 → 直连</text>
+        <text x="32" y="460" font-size="11" fill="#6B7280" font-family="monospace">10.26.0.7 → 服务端中继 · UDP · metric 2</text>
+
+        <!-- 停止按钮 -->
+        <rect x="52" y="478" width="271" height="52" rx="26" fill="#E5484D"/>
+        <text x="187" y="509" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">停止组网</text>
+
+        <text x="20" y="552" font-size="11" fill="#6B7280">状态来自 VntApi：设备列表 / NAT / 服务端 / 路由表，3 秒刷新（页面可见时）。</text>
+        <text x="20" y="570" font-size="11" fill="#6B7280">退后台由前台服务常驻保持，切 Tab 不断连。</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#1A6EE8" text-anchor="middle">主页</text>
+        <text x="282" y="645" font-size="10" fill="#8A919F" text-anchor="middle">设置</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<h2>改动点 ②：系统 VPN 授权 + 页面内「组网配置」弹窗</h2>
+<div class="grid">
+  <div class="scene">
+    <div class="scene-title">首次连接 → 系统 VPN 授权框</div>
+    <div class="scene-desc">Android 系统弹窗，用户同意后才会建立 TUN 接口</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="330" y="71" font-size="12" fill="#1A6EE8" font-weight="600" text-anchor="middle">组网</text>
+        <rect x="302" y="84" width="56" height="3" fill="#1A6EE8"/>
+
+        <rect x="16" y="98" width="343" height="110" rx="14" fill="#1A6EE8"/>
+        <text x="187" y="168" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">组网未连接</text>
+
+        <rect x="52" y="376" width="271" height="52" rx="26" fill="#1A6EE8"/>
+        <text x="187" y="407" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">开始组网</text>
+
+        <!-- 遮罩 -->
+        <rect x="0" y="88" width="375" height="579" fill="#000" opacity="0.4"/>
+        <!-- 系统弹窗 -->
+        <rect x="40" y="240" width="295" height="190" rx="16" fill="#fff"/>
+        <text x="187" y="278" font-size="16" fill="#1F2329" font-weight="600" text-anchor="middle">要允许 Bridge 建立 VPN 连接吗？</text>
+        <text x="187" y="308" font-size="12" fill="#6B7280" text-anchor="middle">Bridge 将创建虚拟网络接口，用于加入</text>
+        <text x="187" y="328" font-size="12" fill="#6B7280" text-anchor="middle">你配置的 VNT 虚拟局域网。</text>
+        <text x="187" y="352" font-size="12" fill="#E5484D" text-anchor="middle">若你正在使用其它 VPN，它会被断开。</text>
+        <line x1="40" y1="374" x2="335" y2="374" stroke="#F0F1F3"/>
+        <text x="120" y="404" font-size="15" fill="#6B7280" text-anchor="middle">取消</text>
+        <text x="255" y="404" font-size="15" fill="#1A6EE8" text-anchor="middle" font-weight="600">确定</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#8A919F" text-anchor="middle">主页</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="scene">
+    <div class="scene-title">点右上角齿轮 → 组网配置</div>
+    <div class="scene-desc">复用项目已有的编辑弹窗样式；保存即持久化，运行中保存则重连</div>
+    <div class="phone">
+      <svg viewBox="0 0 375 667" xmlns="http://www.w3.org/2000/svg">
+        <rect width="375" height="667" fill="#fff"/>
+        <rect width="375" height="44" fill="#fff"/>
+        <text x="24" y="28" font-size="14" fill="#1F2329" font-weight="600">9:41</text>
+
+        <rect y="44" width="375" height="44" fill="#fff"/>
+        <text x="330" y="71" font-size="12" fill="#1A6EE8" font-weight="600" text-anchor="middle">组网</text>
+        <rect x="302" y="84" width="56" height="3" fill="#1A6EE8"/>
+
+        <rect x="16" y="98" width="343" height="96" rx="14" fill="#2E9E5B"/>
+        <text x="187" y="150" font-size="16" fill="#fff" font-weight="600" text-anchor="middle">已连接 · 10.26.0.5</text>
+
+        <!-- 遮罩 -->
+        <rect x="0" y="88" width="375" height="579" fill="#000" opacity="0.4"/>
+        <!-- 配置弹窗 -->
+        <rect x="24" y="130" width="327" height="470" rx="16" fill="#fff"/>
+        <text x="187" y="162" font-size="17" fill="#1F2329" font-weight="600" text-anchor="middle">组网配置</text>
+
+        <text x="44" y="192" font-size="12" fill="#6B7280">服务端地址</text>
+        <text x="331" y="192" font-size="10" fill="#B7791F" text-anchor="end">默认公共服，可改自建</text>
+        <rect x="44" y="200" width="287" height="38" rx="8" fill="#F5F6F8" stroke="#1A6EE8"/>
+        <text x="56" y="223" font-size="13" fill="#1F2329" font-family="monospace">vnt2.rustvnt.com:29872</text>
+
+        <text x="44" y="256" font-size="12" fill="#6B7280">网络编号</text>
+        <rect x="44" y="264" width="287" height="38" rx="8" fill="#F5F6F8"/>
+        <text x="56" y="287" font-size="13" fill="#1F2329" font-family="monospace">team-a</text>
+
+        <text x="44" y="320" font-size="12" fill="#6B7280">组网密码（端到端加密）</text>
+        <rect x="44" y="328" width="287" height="38" rx="8" fill="#F5F6F8"/>
+        <text x="56" y="351" font-size="13" fill="#1F2329">••••••••</text>
+
+        <text x="44" y="384" font-size="12" fill="#6B7280">设备名</text>
+        <rect x="44" y="392" width="287" height="38" rx="8" fill="#F5F6F8"/>
+        <text x="56" y="415" font-size="13" fill="#1F2329">办公手机</text>
+
+        <text x="44" y="448" font-size="12" fill="#6B7280">固定虚拟 IP（可留空）</text>
+        <rect x="44" y="456" width="287" height="38" rx="8" fill="#F5F6F8"/>
+        <text x="56" y="479" font-size="13" fill="#6B7280">留空由服务端分配</text>
+
+        <text x="44" y="512" font-size="12" fill="#6B7280">MTU</text>
+        <text x="331" y="512" font-size="12" fill="#1F2329" text-anchor="end">1380</text>
+
+        <text x="44" y="540" font-size="13" fill="#1F2329">压缩 / FEC / 禁用打洞</text>
+        <rect x="248" y="528" width="38" height="21" rx="10" fill="#D5DCE6"/><circle cx="259" cy="538" r="8" fill="#fff"/>
+        <rect x="292" y="528" width="38" height="21" rx="10" fill="#D5DCE6"/><circle cx="303" cy="538" r="8" fill="#fff"/>
+        <text x="331" y="562" font-size="12" fill="#8A919F" text-anchor="end">高级（子网 / 端口映射）› 后续版本</text>
+
+        <line x1="24" y1="566" x2="351" y2="566" stroke="#F0F1F3"/>
+        <text x="110" y="590" font-size="15" fill="#6B7280" text-anchor="middle">取消</text>
+        <text x="265" y="590" font-size="15" fill="#1A6EE8" text-anchor="middle" font-weight="600">保存并重连</text>
+
+        <rect y="611" width="375" height="56" fill="#fff" stroke="#E5E7EB"/>
+        <text x="93" y="645" font-size="10" fill="#8A919F" text-anchor="middle">主页</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>设计要点与待确认项：</b>
+  <ul class="clean">
+    <li><b>页面 id = 4「组网」</b>：<code>TabOrderPrefs</code> 的 <code>PAGE_TITLES</code>/<code>PAGE_ICONS</code> 各加一项，并把硬编码的 <code>isValid()</code>（size==4、集合 0..3）改为 5 项；<b>必须做旧值迁移</b>，否则老用户已存的 <code>0,1,2,3</code> 会判非法静默回退默认顺序、自定义排序与改名丢失。</li>
+    <li><b>生命周期刻意不同于 ESP32/销售</b>：那两条是「进页面才连、离开即断」（省电优先，页面少用）；组网是基础设施，走 <code>VntVpnService</code> 常驻 + 显式「开始/停止」按钮，切 Tab 与退后台都不断开，页面只订阅状态。</li>
+    <li><b>前台服务 Android 14+ 四件套</b>：<code>FOREGROUND_SERVICE</code> + <code>FOREGROUND_SERVICE_SPECIAL_USE</code> + <code>foregroundServiceType="specialUse"</code> + <code>PROPERTY_SPECIAL_USE_FGS_SUBTYPE</code>，另需 <code>BIND_VPN_SERVICE</code> 权限与 <code>android.net.VpnService</code> 的 intent-filter；接入前逐条对照 <code>docs/dev/crash-ledger.md</code> §5。</li>
+    <li><b>路由红线</b>：只加虚拟网段与服务端下发的出口网段，<b>绝不加 0.0.0.0/0</b>——否则 Bridge 自身的主 WS、微信、销售长连接全被卷进隧道，表现为「一开组网什么都连不上」。</li>
+    <li><b>包名不可改</b>：<code>com.vnt.*</code> 官方绑定原样拷入，JNI 符号（<code>Java_com_vnt_VntManager_nativeInit</code> 等）与类名一一对应；改包名需同步改 Rust 侧 <code>#[no_mangle]</code> 符号名。</li>
+    <li><b>产物来源（P0 已完成，本地零安装）</b>：<code>libvnt_jni.so</code> <b>直接用官方 <code>vnt-dev/vnt</code> tag v2.0.11 发布的预编译产物</b>（5,042,792 B，SHA256 <code>c33535b1…8f48</code>），版本与本地 <code>references/vnt</code> 源码 2.0.11 一致。已入库 <code>app/src/main/jniLibs/arm64-v8a/</code>；<code>tools/vnt/verify_so.py</code> 纯 Python 校验 SHA256 / ELF64-AArch64 / 4 段 16KB 对齐 / <b>23 个 native 声明与 23 个导出符号零缺失</b>，全 PASS。<b>不需要安装 Rust 或 NDK</b>。</li>
+    <li><b>nextEvent 是阻塞调用</b>：必须在独立 daemon 线程跑变更循环，停止时用「取消标志 + generation 校验」双保险，否则线程卡死导致服务退不出。</li>
+    <li><b>设备 ID</b>：默认用 Bridge 已有的 ANDROID_ID 显式写入 <code>setDeviceId</code>（VNT 在 Android 上不取机器码，避免同网内撞 ID）。</li>
+    <li><b>状态刷新节奏（已拍板）</b>：<b>只有「App 在前台 + 停在组网页」才刷</b>——<b>进入页面立即刷一次</b>（不等第一个周期），之后<b>每 5 秒</b>一次；<b>离开页面 / 退后台 / 锁屏立即取消定时任务</b>，一次都不再拉。用 Compose <code>DisposableEffect</code> 判定（切到别的 Tab 就移出组合），比 VntApp 的 Activity 生命周期置位更精确。<b>关键：<code>getClientList()</code> 不是读内存，它会向服务端发一次 RPC（<code>send_to_gateway_expired</code> + 等响应最多 3 秒阻塞）</b>，必须在后台单线程调并加 generation 校验；每轮只有它发网络包，<code>getServerList/getRouteTable/getNatInfo/getNetwork</code> 都是本地读取。</li>
+    <li><b>三项数值的真实出处</b>：<code>P2P</code> = 路由 <code>metric==1</code>；<code>↑12K ↓84K</code> = <b>本机两次采样差分算出来的</b>（底层只有累计字节数，没有速率字段，页面隐藏再回来必须重置采样基准否则出现虚假尖峰）；<code>18 ms</code> = 有 P2P 路由时的真实往返，<b>中继行的 ≈46 ms 是 <code>服务端RTT×2</code> 的估算值</b>，UI 用 ≈ 区分。</li>
+    <li><b>设备上下线没有事件</b>：服务端确实会主动推 <code>PushClientIps</code>，但 JNI 层 <code>RuntimeEvent</code> 只有 <code>InstanceStopped</code> / <code>Changed(config)</code> 两种，推不到 Java ⇒ UI 只能靠轮询看到变化（滞后 ≤1 个周期，后台不刷新）。要做掉线通知需自己在状态层做前后快照差分 + 连续 N 周期防抖（P2）。</li>
+    <li><b>心跳台账</b>：VNT 自身保活在 Rust 内部、周期不可从 Java 侧调，须作为「黑盒常驻连接」补登记进 <code>docs/dev/heartbeat-inventory.md</code> §1。</li>
+    <li><b>已拍板（2026-11-01）</b>：① 只出 <b>arm64-v8a</b>；② <b>单套配置</b>；③ 服务端地址<b>可输入</b>、默认公共服 <code>vnt2.rustvnt.com:29872</code>；④ <b>不点停止就一直保持</b>（切 Tab / 退后台不断）；⑤ <b>「退出应用」与「切后台即结束」是最高优先级</b>，触发即整体结束，组网随之终止（<code>AppExit.kill</code> 里必须先显式 <code>stopService</code>，服务取 START_NOT_STICKY（进程被杀不自动复活），但仍须显式停以释放 VPN 通道与 native 句柄）；⑥ <b>子网转发 / 端口映射本期不做但保留扩展位</b>（配置弹窗保留入口置灰标「后续版本」；<code>VntConfig.Builder</code> 的 <code>addInputRoute/addOutputRoute/addSubnetMapping/setAutoSyncSubnet/addPortMapping</code> 接口已调研完毕，将来启用<b>不需重编 .so</b>）；⑦ <b>命令三条都做</b> <code>vnt_start/vnt_stop/vnt_status</code>，其中 <code>vnt_status</code> <b>不触发 RPC</b> 只回本地缓存快照，<code>vnt_start</code> 回执须注明「需 App 在前台或已授权」。</li>
+    <li><b>实现状态（v0.2.30，已落地）</b>：P0 官方 so 入库校验 PASS + P1（<code>com/vnt/*.java</code>、<code>my/bridge/com/vnt/</code> 五件套、<code>VntPages.kt</code>、主页第 5 Tab 含 4→5 迁移、<code>AppExit.kill</code> 显式停服务）+ P2（三条命令 + <code>docs/api/commands/system.md</code>/README 索引 + 崩溃台账 §5/§3.1 + 心跳台账 §1.2 + CHANGELOG/INDEX 登记）全部完成；<code>:app:compileDebugKotlin</code> 与 <code>:app:assembleDebug</code> 均 <b>BUILD SUCCESSFUL</b>（APK 内仅 <code>arm64-v8a/libvnt_jni.so</code>，Manifest 四件套合并通过）。<b>唯一剩余：真机组网联调与省电实测。</b>改前留档与回滚配方见 <code>docs/dev/vnt-integration-change-ledger.md</code>。</li>
+  </ul>
+</div>
+
+</body>
+</html>

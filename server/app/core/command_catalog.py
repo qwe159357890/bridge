@@ -412,6 +412,25 @@ COMMANDS: list[dict[str, Any]] = [
                  description="仅检查模式适合巡检场景：只看设备版本是否落后，不触发下载"),
           _param("force_download", "强制重新下载", PARAM_TYPE_SWITCH, default=False,
                  description="忽略本地缓存强制重下（md5 校验删除污染缓存的自救手段，仅自动安装模式有效）")]),
+
+    # ---- VNT 组网（v0.2.30）----
+    _cmd("vnt_start", "开始组网", "system", "🕸️",
+         "启动 VNT 虚拟局域网（前台服务常驻，切 Tab / 退后台不断连）；"
+         "★ 需 App 在前台或已授予系统 VPN 授权：后台下发大概率失败，回执会如实说明而不假装成功",
+         [_param("server", "服务端地址", PARAM_TYPE_TEXT,
+                 placeholder="vnt2.rustvnt.com:29872",
+                 description="可选覆盖 APP 内已保存的配置；支持 tcp:// wss:// quic:// 前缀，裸 host:port 默认 UDP"),
+          _param("network_code", "网络编号", PARAM_TYPE_TEXT,
+                 placeholder="留空用 APP 内保存的配置",
+                 description="可选覆盖；同编号设备互通"),
+          _param("password", "组网密码", PARAM_TYPE_TEXT,
+                 placeholder="留空用 APP 内保存的配置",
+                 description="可选覆盖；非空启用 ChaCha20-Poly1305 端到端加密")]),
+    _cmd("vnt_stop", "停止组网", "system", "🛑",
+         "停止 VNT 虚拟局域网并释放系统 VPN 通道；无平台限制，最可靠"),
+    _cmd("vnt_status", "组网状态", "system", "📶",
+         "查询 VNT 组网状态（状态 / 虚拟 IP / NAT / 服务端 RTT / 在线设备数）；"
+         "只读本地缓存快照，**不触发 getClientList RPC**（避免运维连点把命令通道打爆）"),
 ]
 
 

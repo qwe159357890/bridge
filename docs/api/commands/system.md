@@ -1,4 +1,4 @@
-# 系统类命令（check_update）
+# 系统类命令（check_update / vnt_start / vnt_stop / vnt_status）
 
 > 命令定义单一事实来源：`server/app/core/command_catalog.py` 的 `system` 分类。
 > `upload_log` 见 [../ws-client.md](../ws-client.md) §五/§七。
@@ -64,3 +64,61 @@
   开启后再触发一次即可直接进安装页（Manifest 已声明 REQUEST_INSTALL_PACKAGES，
   APK 经 FileProvider 共享给系统安装器）。
 - 会话保持提示：更新成功安装后 App 会被系统重启，WebSocket 自动重连。
+
+---
+
+## VNT 组网命令（v0.2.30）
+
+> 三条命令走「三步法」：`server/app/core/command_catalog.py` 的 `_cmd()` →
+> `core/core-network/.../ws/Command.kt` 常量 + `CommandModule.kt` 执行器 → 本文档 + README 索引。
+> 页面与生命周期设计见 [../../research/vnt-mesh-integration.md](../../research/vnt-mesh-integration.md)，
+> 交互原型见 `assets/design/ui-mockup-vnt-mesh.html`。
+
+**架构**：连接由 `VntVpnService`（`specialUse` 前台服务）常驻，页面只订阅状态。
+点「开始组网」/ 下发 `vnt_start` 后，**切 Tab、退后台、锁屏都不断连**；只有
+`vnt_stop`、页面「停止组网」、或 `AppExit.kill`（退出应用 / 切后台立即结束）才终止。
+
+### vnt_start 开始组网
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `server` | text | 否 | 可选覆盖 APP 内保存的服务端地址（默认 `vnt2.rustvnt.com:29872`，可填自建 VNTS；支持 `tcp://` `wss://` `quic://`，裸 `host:port` 默认 UDP） |
+| `network_code` | text | 否 | 可选覆盖网络编号；为空且 APP 内也未保存 → 回执失败 |
+| `password` | text | 否 | 可选覆盖组网密码；非空启用 ChaCha20-Poly1305 端到端加密 |
+
+**回执与限制**（重要）：
+
+- **需 App 在前台或已授权过 VPN**。`VpnService.prepare()` 授权框必须由 Activity 弹出；
+  Android 12+ 后台 `startForegroundService` 还会抛 `ForegroundServiceStartNotAllowedException`。
+  执行器先查 `VntMeshController.isPrepared()`，未授权直接回执失败，**不假装成功**。
+- 已处于 `RUNNING`/`STARTING` 时回执「已在运行」+ 当前状态快照，不重复建网。
+- 参数覆盖会写回单套配置 Prefs（与页面「组网配置」共用一份）。
+- 按崩溃台账 §5：`startForegroundService` 每调一次欠一次前台义务，
+  `VntVpnService.onStartCommand` 每次幂等补挂、`startForeground` try/catch + 失败 `stopSelf`。
+
+### vnt_stop 停止组网
+
+无参数。走普通 `startService(ACTION_STOP)`（不产生前台义务），服务内部
+`network.stop()` → 释放 VPN 通道 → `stopSelf()`。回执含停止前状态。
+**无平台限制，三条里最可靠**，适合运维远程收口。
+
+### vnt_status 组网状态
+
+无参数。回执格式：
+
+```
+运行中 · 虚拟IP 10.26.0.5 · NAT Cone · 服务端RTT 24ms · 在线设备 3
+（详细列表需打开组网页，命令不主动拉 RPC）
+```
+
+未连接 / 连接中 / 停止中 / 异常 各有对应文案。
+
+**性能红线**：只读 `VntMeshController` 的本地状态快照，
+**刻意不调 `VntApi.getClientList()`** —— 那是主动 RPC（`send_to_gateway_expired` +
+最多阻塞 3 秒等待响应），运维在后台连点几下就会把命令通道打爆。需要完整设备列表
+将来另开 `vnt_clients` 并在文档标注「有网络开销」。
+
+**为什么没有「设备上下线推送」**：底层服务端会实时推 `PushClientIps`，
+但 `RuntimeEvent` 枚举只有 `InstanceStopped` / `Changed` 两个变体，Java 层收不到
+`PeerOnline`/`PeerOffline`。UI 最长滞后一个刷新周期；刷新仅在「App 在前台 +
+处于组网页」时进行（进页面立即刷一次，之后 5 秒一次），退后台零请求。

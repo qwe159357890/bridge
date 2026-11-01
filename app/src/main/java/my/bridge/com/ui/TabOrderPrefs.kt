@@ -3,31 +3,43 @@ package my.bridge.com.ui
 import android.content.Context
 
 /**
- * 主页顶部页面排序持久化（v0.2.08）。
+ * 主页顶部页面排序持久化（v0.2.08；v0.2.30 扩至 5 页，新增「组网」）。
  *
- * 设计：页面 id 恒定（0=短信 1=音频中继 2=智能控制 3=快递扫码，与 MainScreen 的
+ * 设计：页面 id 恒定（0=短信 1=音频中继 2=智能控制 3=快递扫码 4=组网，与 MainScreen 的
  * when 分支一一对应，永不增删改语义）；可配置的只有「显示顺序」tabOrder——
- * tabOrder[位置] = 页面 id。默认 [0,1,2,3] 与历史行为完全一致。
+ * tabOrder[位置] = 页面 id。默认 [0,1,2,3,4]，新页固定排在末尾。
  *
  * 安全边界（保证不破坏现有功能）：
- * - 读取时严格校验（长度=4、元素∈0..3、无重复），任何异常回退默认顺序；
+ * - 读取时严格校验（长度=5、元素∈0..4、无重复），任何异常回退默认顺序；
+ * - ★ v0.2.30 迁移：旧版本只存了 4 个页面（0..3 的任意排列），若直接按新 isValid 校验会
+ *   **静默回退默认**，丢掉老用户的自定义排序与改名 → load() 先识别旧值，保留原顺序、
+ *   末尾追加新页 id=4 并回写；
  * - 只存顺序，不碰任何页面组件/业务逻辑。
  */
 object TabOrderPrefs {
 
     /** 页面 id → 标题（单一来源，HomePage 与设置页共用）。 */
-    val PAGE_TITLES = listOf("短信", "音频中继", "智能控制", "快递扫码")
+    val PAGE_TITLES = listOf("短信", "音频中继", "智能控制", "快递扫码", "组网")
 
     /** 页面 id → 图标（设置页排序编辑器用）。 */
-    val PAGE_ICONS = listOf("💬", "🔊", "🔌", "📦")
+    val PAGE_ICONS = listOf("💬", "🔊", "🔌", "📦", "🕸️")
 
     private const val KEY = "home_tab_order"
-    private const val DEFAULT = "0,1,2,3"
+    private const val DEFAULT = "0,1,2,3,4"
 
-    fun load(context: Context): List<Int> = parse(
-        context.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
-            .getString(KEY, DEFAULT) ?: DEFAULT,
-    )
+    fun load(context: Context): List<Int> {
+        val sp = context.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
+        val raw = sp.getString(KEY, null) ?: return PAGE_TITLES.indices.toList()
+        // ★ v0.2.30 迁移：旧值只有 4 项（0..3 的任意排列）。保留用户自定义顺序，
+        // 末尾追加新页 id=4 并回写，避免每次冷启动都重复迁移。
+        val legacy = raw.split(",").mapNotNull { it.trim().toIntOrNull() }
+        if (legacy.size == 4 && legacy.toSet() == setOf(0, 1, 2, 3)) {
+            val migrated = legacy + 4
+            sp.edit().putString(KEY, migrated.joinToString(",")).apply()
+            return migrated
+        }
+        return parse(raw)
+    }
 
     fun save(context: Context, order: List<Int>) {
         if (!isValid(order)) return
@@ -41,7 +53,7 @@ object TabOrderPrefs {
     }
 
     private fun isValid(order: List<Int>): Boolean =
-        order.size == 4 && order.toSet() == setOf(0, 1, 2, 3)
+        order.size == PAGE_TITLES.size && order.toSet() == PAGE_TITLES.indices.toSet()
 
     private fun parse(raw: String): List<Int> = runCatching {
         val order = raw.split(",").map { it.trim().toInt() }

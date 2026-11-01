@@ -51,6 +51,9 @@ import my.bridge.com.media.ProjectionConsentActivity
 import my.bridge.com.access.BridgeAccessibilityService
 import my.bridge.com.media.ScreenCaptureHolder
 import my.bridge.com.media.MusicPlayer
+import my.bridge.com.vnt.VntMeshController
+import my.bridge.com.vnt.VntMeshPrefs
+import my.bridge.com.vnt.VntStatus
 import retrofit2.HttpException
 import timber.log.Timber
 import kotlinx.coroutines.CoroutineScope
@@ -219,6 +222,16 @@ object CommandModule {
         Command.CHECK_UPDATE to CommandExecutor { command ->
             executeCheckUpdate(context, deviceStore, apiClient, command)
         },
+        // ---- VNT 组网（v0.2.30）：三条命令走「catalog → Command.kt → 本执行器」三步法 ----
+        Command.VNT_START to CommandExecutor { command ->
+            executeVntStart(context, command)
+        },
+        Command.VNT_STOP to CommandExecutor { command ->
+            executeVntStop(context, command)
+        },
+        Command.VNT_STATUS to CommandExecutor { command ->
+            executeVntStatus(command)
+        },
         )
     }
 
@@ -262,6 +275,98 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 clear_log 执行失败")
             CommandResult(command.commandId, command.command, false, "清理失败：${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // VNT 组网命令（v0.2.30）
+    //
+    // 平台限制（已在回执里如实说明）：
+    // - VpnService.prepare() 授权框必须有 Activity 才能弹；
+    // - Android 12+ 后台 startForegroundService 会抛 ForegroundServiceStartNotAllowedException；
+    // ⇒ vnt_start 实际只在「App 在前台」或「用户此前已授权过 VPN」时可靠生效。
+    // - vnt_status 刻意只读本地快照，不调 getClientList()（那是主动 RPC + 最多阻塞 3 秒）。
+    // ------------------------------------------------------------------
+
+    /** vnt_start：可选覆盖服务端/网络编号/密码后启动组网。 */
+    private fun executeVntStart(context: Context, command: Command): CommandResult {
+        return try {
+            val server = command.strParam("server", "")
+            val code = command.strParam("network_code", "")
+            val password = command.strParam("password", "")
+            if (server.isNotEmpty() || code.isNotEmpty() || password.isNotEmpty()) {
+                val old = VntMeshPrefs.load(context)
+                // 单套配置：覆盖写回，与 APP 内「组网配置」共用同一份 Prefs
+                VntMeshPrefs.save(
+                    context,
+                    old.copy(
+                        server = server.ifEmpty { old.server },
+                        networkCode = code.ifEmpty { old.networkCode },
+                        password = password.ifEmpty { old.password },
+                    ),
+                )
+            }
+            val cfg = VntMeshPrefs.load(context)
+            if (cfg.networkCode.isBlank()) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "网络编号为空：请先在 APP「组网配置」里填写，或用本命令 network_code 参数指定",
+                )
+            }
+            if (!VntMeshController.isPrepared(context)) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "尚未授予系统 VPN 权限：需 App 在前台由用户点一次「开始组网」完成授权后，远程启动才可用",
+                )
+            }
+            val st = VntMeshController.state.value.status
+            if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
+                return CommandResult(
+                    command.commandId, command.command, true,
+                    "组网已在运行：" + VntMeshController.statusText(),
+                )
+            }
+            val launched = VntMeshController.start(context)
+            CommandResult(
+                command.commandId, command.command, launched,
+                if (launched) {
+                    "已下发开始组网：${cfg.server} / ${cfg.networkCode}" +
+                        "（首次需等待服务器注册，用 vnt_status 查状态；切 Tab/退后台不断连）"
+                } else {
+                    "启动失败：多为 Android 12+ 后台启动前台服务受限，详见设备日志；请让 App 回到前台再试"
+                },
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 vnt_start 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** vnt_stop：停止组网（普通 startService，无前台义务，无平台限制）。 */
+    private fun executeVntStop(context: Context, command: Command): CommandResult {
+        return try {
+            val before = VntMeshController.statusText()
+            VntMeshController.stop(context)
+            CommandResult(
+                command.commandId, command.command, true,
+                "已下发停止组网（停止前：$before）",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 vnt_stop 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** vnt_status：只读本地缓存快照，不触发 getClientList RPC。 */
+    private fun executeVntStatus(command: Command): CommandResult {
+        return try {
+            CommandResult(
+                command.commandId, command.command, true,
+                VntMeshController.statusText(),
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 vnt_status 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
         }
     }
 

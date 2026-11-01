@@ -11,6 +11,7 @@ import my.bridge.com.core.common.DiagLog
 import my.bridge.com.keepalive.KeepAliveService
 import my.bridge.com.media.MediaCaptureService
 import my.bridge.com.relay.AudioRelayService
+import my.bridge.com.vnt.VntVpnService
 import my.bridge.com.ui.AppExitPrefs
 import timber.log.Timber
 import java.lang.ref.WeakReference
@@ -25,6 +26,8 @@ import java.lang.ref.WeakReference
  * ⚠️ 为什么不能直接 `killProcess`：
  * - `KeepAliveService` / `AudioRelayService` / `MediaCaptureService` 都是 START_STICKY 服务，
  *   进程被杀后系统会按 sticky 语义**重新拉起进程**，看起来就像「没退出」；
+ *   `VntVpnService`（v0.2.30）为 START_NOT_STICKY，但持有系统唯一 VPN 通道与 native 句柄，
+ *   同样要显式 stopService 释放；
  * - **有可见 Activity 时杀进程，AMS 会为恢复可见任务而立刻重启进程**（经典自杀又复活现象）。
  *
  * 因此顺序固定为：**显式 stopService → finishAffinity（回桌面）→ 延迟 300ms → killProcess + exitProcess**。
@@ -109,6 +112,11 @@ object AppExit {
             .onFailure { Timber.w(it, "停止音频中继服务失败") }
         runCatching { app.stopService(Intent(app, MediaCaptureService::class.java)) }
             .onFailure { Timber.w(it, "停止媒体采集服务失败") }
+        // v0.2.30：VNT 组网服务虽是 START_NOT_STICKY，仍必须显式停——
+        // 它持有系统唯一 VPN 通道与 native 句柄，不先释放会残留到进程终止才断开；
+        // 「退出应用 / 切后台立即结束」是最高优先级，组网作为 APP 的一部分一并结束。
+        runCatching { app.stopService(Intent(app, VntVpnService::class.java)) }
+            .onFailure { Timber.w(it, "停止组网服务失败") }
 
         // 2) 释放微信进程级资源（WS 连接 / 60s 心跳 / 重连 / HTTP 客户端 / 内存数据）
         runCatching { my.bridge.com.wechat.WechatRuntime.stopAll(reason) }

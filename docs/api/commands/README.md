@@ -65,6 +65,9 @@
 |---|---|---|
 | `upload_log` | 上传日志 | [../ws-client.md](../ws-client.md) §五/§七（命令框架 + 日志上传） |
 | `check_update` | 检查更新 | [system.md#check_update-检查更新服务器目录版不依赖-github](system.md#check_update-检查更新服务器目录版不依赖-github) |
+| `vnt_start` | 开始组网 | [system.md#vnt_start-开始组网](system.md#vnt_start-开始组网) |
+| `vnt_stop` | 停止组网 | [system.md#vnt_stop-停止组网](system.md#vnt_stop-停止组网) |
+| `vnt_status` | 组网状态 | [system.md#vnt_status-组网状态](system.md#vnt_status-组网状态) |
 
 ---
 
