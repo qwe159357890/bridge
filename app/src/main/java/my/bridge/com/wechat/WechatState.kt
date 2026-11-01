@@ -28,6 +28,14 @@ data class WechatUiState(
     val toast: String = "",
     /** 通知点击带来的「待打开会话」（Compose 侧消费后清空）。 */
     val pendingOpenSession: String = "",
+    /**
+     * 新消息版本号：每收到一条（非本端回弹的）消息就 +1。
+     * 聊天面板据此把服务端最新消息合并进本地列表——否则停在会话里时，
+     * 新消息只更新会话列表摘要、聊天详情里却看不到（v0.2.22 修复）。
+     */
+    val messageVersion: Int = 0,
+    /** 是否已释放（用户主动退出微信 / 开启离开即释放后离开页面）。UI 据此显示「已退出」态。 */
+    val released: Boolean = false,
 ) {
     /** 当前账号实例（发送上下文）。 */
     val currentInstance: WechatInstance?
@@ -114,6 +122,26 @@ object WechatState {
 
     /** 通知点击后由 MainActivity 写入，UI 消费后清空（解决 App 已在前台时 intent 不刷新）。 */
     fun setPendingOpenSession(wxid: String) = mutate { it.copy(pendingOpenSession = wxid) }
+
+    /** 新消息到达（供聊天面板增量合并最新消息）。 */
+    fun bumpMessageVersion() = mutate { it.copy(messageVersion = it.messageVersion + 1) }
+
+    /**
+     * 清空内存中的业务数据（会话/联系人/未读/实例），**保留配置**（地址、Key、开关），
+     * 便于重新进入微信页时直接重连。用于「退出微信」与「离开即释放」。
+     */
+    fun clearData() = mutate {
+        it.copy(
+            agents = emptyList(),
+            sessions = emptyList(),
+            contacts = emptyList(),
+            unreadTotal = 0,
+            connState = WechatConnState.DISCONNECTED,
+            pendingOpenSession = "",
+        )
+    }
+
+    fun setReleased(v: Boolean) = mutate { it.copy(released = v) }
 
     fun clearPendingOpenSession() = mutate { it.copy(pendingOpenSession = "") }
 

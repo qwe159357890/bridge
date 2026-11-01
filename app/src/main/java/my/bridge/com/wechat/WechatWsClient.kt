@@ -49,6 +49,23 @@ class WechatWsClient {
         // Pong 超时 30s（原 60s）：随间隔放宽同步收紧，把「连接静默死亡」的最长发现窗口
         // 从 60+60=120s 压回 60+30=90s。30s 对任何合理的 WS 往返仍是极大余量。
         private const val PONG_TIMEOUT_MS = 30_000L
+
+        /**
+         * REST 地址 → WS 地址。服务端 WS 路由是 `/ws/client`（`api/app.py:133`），
+         * 鉴权走 query `token`（`api/auth.py:83`）。
+         * 公开给 [WechatRuntime]：设置页要展示实际端点，便于排查「REST 通但 WS 连不上」。
+         */
+        fun toWsUrl(serverUrl: String): okhttp3.HttpUrl? {
+            if (serverUrl.isBlank()) return null
+            val s = serverUrl.trim().trimEnd('/')
+            val ws = when {
+                s.startsWith("https://") -> "wss://" + s.removePrefix("https://")
+                s.startsWith("http://") -> "ws://" + s.removePrefix("http://")
+                s.startsWith("ws://") || s.startsWith("wss://") -> s
+                else -> "ws://$s"
+            }
+            return (ws + "/ws/client").toHttpUrlOrNull()
+        }
     }
 
     private val client = OkHttpClient.Builder()
@@ -252,15 +269,4 @@ class WechatWsClient {
         socket = null
     }
 
-    private fun toWsUrl(serverUrl: String): okhttp3.HttpUrl? {
-        if (serverUrl.isBlank()) return null
-        val s = serverUrl.trim().trimEnd('/')
-        val ws = when {
-            s.startsWith("https://") -> "wss://" + s.removePrefix("https://")
-            s.startsWith("http://") -> "ws://" + s.removePrefix("http://")
-            s.startsWith("ws://") || s.startsWith("wss://") -> s
-            else -> "ws://$s"
-        }
-        return (ws + "/ws/client").toHttpUrlOrNull()
-    }
 }

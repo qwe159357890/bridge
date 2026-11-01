@@ -3,13 +3,21 @@ package my.bridge.com.ui
 import android.content.Intent
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +65,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -68,9 +77,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,6 +104,54 @@ private val WechatSub = Color(0xFF6B7280)
 private val WechatRed = Color(0xFFE5484D)
 private val WechatOrange = Color(0xFFE6A23C)
 private val WechatPageBg = Color(0xFFF5F6F8)
+private val WechatBorder = Color(0xFFDCDFE6)
+
+/**
+ * 搜索框统一高度（同时也是同行按钮的高度）——微信页所有搜索输入与右侧按钮都用它，保证严格对齐。
+ *
+ * 原实现用 `OutlinedTextField` + `heightIn(min = 34.dp)`：M3 的 OutlinedTextField 自带
+ * **minHeight 56dp** 且 contentPadding 上下各 16dp，`heightIn(min)` 压不下去（最小尺寸约束优先生效），
+ * 于是搜索框比右侧按钮高一大截。销售页 v0.2.19 已踩过同一个坑并验证解法：
+ * **改用 BasicTextField 自绘边框**，高度与内边距完全可控。
+ */
+private val WechatFieldHeight = 32.dp
+
+@Composable
+private fun WechatSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(WechatGreen),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        modifier = modifier
+            .height(WechatFieldHeight)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, WechatBorder, RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp),
+        decorationBox = { inner ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxHeight()) {
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) Text(placeholder, fontSize = 12.sp, color = WechatSub)
+                    inner()
+                }
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = null,
+                    tint = WechatSub,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        },
+    )
+}
 
 private const val WECHAT_DOWNLOAD_ROOT = "/sdcard/bridge/wechat/"
 
@@ -117,6 +177,26 @@ fun WechatPage(
 
     var subTab by rememberSaveable { mutableIntStateOf(0) }
     var openSession by rememberSaveable { mutableStateOf<String?>(null) }
+    // 表情面板状态提升到页面级：返回键要能先收起表情面板（优先级高于「关闭会话」）
+    var emojiPanel by remember { mutableStateOf(false) }
+
+    // 返回键优先级链（用户 v0.2.22 拍板，越靠上越优先）：
+    //   ① 表情面板打开      → 收起面板
+    //   ② 聊天详情打开      → 返回会话列表（不必非得点左上角箭头）
+    //   ③ 页内 Tab 非「聊天」→ 切回聊天 Tab（通讯录/实例/工具箱/设置）
+    //   ④ 以上都不成立      → 不接管，交给外层 MainScreen 切换底部主导航栏显隐
+    // ④ 是最低优先级——「显示/隐藏 APP 底部工具栏」永远最后才触发。
+    BackHandler(enabled = ui.configured && (openSession != null || subTab != 0)) {
+        when {
+            emojiPanel -> emojiPanel = false
+            openSession != null -> {
+                emojiPanel = false
+                openSession = null
+                WechatController.closeSession()
+            }
+            else -> subTab = 0
+        }
+    }
 
     // 依赖 initialSessionWxid：通知点击带来新会话时（MainScreen 更新该值）能再次打开
     LaunchedEffect(initialSessionWxid) {
@@ -169,7 +249,10 @@ fun WechatPage(
                 if (openSession != null) {
                     WechatChatPanel(
                         sessionWxid = openSession!!,
+                        emojiPanel = emojiPanel,
+                        onEmojiPanelChange = { emojiPanel = it },
                         onBack = {
+                            emojiPanel = false
                             openSession = null
                             WechatController.closeSession()
                         },
@@ -296,21 +379,22 @@ private fun WechatSessionList(onOpen: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedTextField(
+            WechatSearchField(
                 value = keyword.value,
                 onValueChange = { keyword.value = it },
-                placeholder = { Text("搜索", fontSize = 12.sp) },
-                singleLine = true,
-                modifier = Modifier.weight(1f).heightIn(min = 34.dp),
+                placeholder = "搜索",
+                modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
             val mode = ui.sessionMode
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
+                    .height(WechatFieldHeight)
+                    .clip(RoundedCornerShape(6.dp))
                     .background(WechatGreen.copy(alpha = 0.12f))
                     .clickable { WechatState.setSessionMode(if (mode == "subscription") "friend" else "subscription") }
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(if (mode == "subscription") "公众号" else "好友", fontSize = 11.sp, color = WechatGreen)
             }
@@ -396,13 +480,17 @@ private fun WechatSessionRow(session: WechatSession, onOpen: (String) -> Unit) {
 // ============ 聊天面板 ============
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun WechatChatPanel(sessionWxid: String, onBack: () -> Unit) {
+private fun WechatChatPanel(
+    sessionWxid: String,
+    emojiPanel: Boolean,
+    onEmojiPanelChange: (Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val session = WechatState.state.sessions.firstOrNull { it.userWxid == sessionWxid }
     val messages = remember(sessionWxid) { mutableStateListOf<WechatMessage>() }
     var input by remember { mutableStateOf("") }
-    var emojiPanel by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
     var topMenu by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
@@ -412,11 +500,66 @@ private fun WechatChatPanel(sessionWxid: String, onBack: () -> Unit) {
     val listState = rememberLazyListState()
     val canSend = WechatState.state.currentWxid.isNotBlank()
 
+    // 分页状态：loadingMore 防重入，noMore 标记已到最早一条
+    var loadingMore by remember { mutableStateOf(false) }
+    var noMore by remember(sessionWxid) { mutableStateOf(false) }
+
+    /**
+     * 拉取更早的消息并**插入到列表顶部**，同时保持视口不跳动。
+     *
+     * 关键：服务端 SQL 是 `ORDER BY timestamp DESC, id DESC`（最新在前），
+     * 所以①首次加载必须 `asReversed()` 转成「最早在前、最新在后」的微信习惯顺序，
+     * ②翻页时 offset 越大越早，取回后同样反转再插到顶部。
+     */
+    suspend fun loadEarlier() {
+        if (loadingMore || noMore) return
+        loadingMore = true
+        val anchorIndex = listState.firstVisibleItemIndex
+        val anchorOffset = listState.firstVisibleItemScrollOffset
+        val more = WechatController.loadMoreMessages(context, sessionWxid, messages.size)
+        if (more.isEmpty()) {
+            noMore = true
+            wechatToast(context, "没有更多了")
+        } else {
+            messages.addAll(0, more.asReversed())
+            // 顶部插入 N 条后，原锚点下移 N，回滚过去避免内容跳走
+            listState.scrollToItem(anchorIndex + more.size, anchorOffset)
+        }
+        loadingMore = false
+    }
+
+    // 会话内收到新消息：把服务端最新一批合并进列表（去重后追加到底部并滚到最新）。
+    // 原先只更新会话列表摘要、详情列表纹丝不动，导致「列表显示了新消息，点进去却看不到」。
+    var lastVersion by remember(sessionWxid) { mutableIntStateOf(WechatState.state.messageVersion) }
+    val curVersion = WechatState.state.messageVersion
+    LaunchedEffect(curVersion) {
+        if (curVersion == lastVersion) return@LaunchedEffect
+        lastVersion = curVersion
+        val latest = WechatController.loadMessages(context, sessionWxid).asReversed()
+        val known = messages.map { it.msgId.ifBlank { it.id.toString() } }.toSet()
+        val add = latest.filter { (it.msgId.ifBlank { it.id.toString() }) !in known }
+        if (add.isNotEmpty()) {
+            messages.addAll(add)
+            listState.scrollToItem(messages.lastIndex)
+        }
+    }
+
+    // 进入（或切换到）会话时重新拉取：服务端最新消息一定在最后一批，反转后位于列表底部
     LaunchedEffect(sessionWxid) {
+        noMore = false
         messages.clear()
-        messages.addAll(WechatController.loadMessages(context, sessionWxid))
+        messages.addAll(WechatController.loadMessages(context, sessionWxid).asReversed())
         if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
     }
+
+    // 滚到顶部自动加载更早的消息（原先只有手动按钮，下滑到底没有更多就是这个原因）
+    val atTop by remember {
+        derivedStateOf { messages.isNotEmpty() && listState.firstVisibleItemIndex <= 1 }
+    }
+    LaunchedEffect(atTop) {
+        if (atTop) loadEarlier()
+    }
+
     DisposableEffect(sessionWxid) {
         // 页面级资源：离开会话停掉语音播放（连接不动，那是进程级的事）
         onDispose { WechatController.stopVoice() }
@@ -518,18 +661,13 @@ private fun WechatChatPanel(sessionWxid: String, onBack: () -> Unit) {
             item {
                 Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
                     Text(
-                        "加载更早的消息",
+                        if (noMore) "没有更早的消息了" else if (loadingMore) "加载中..." else "加载更早的消息",
                         fontSize = 11.sp,
                         color = WechatSub,
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .background(Color(0xFFE9EBEF))
-                            .clickable {
-                                scope.launch {
-                                    val more = WechatController.loadMoreMessages(context, sessionWxid, messages.size)
-                                    if (more.isEmpty()) wechatToast(context, "没有更多了") else messages.addAll(0, more)
-                                }
-                            }
+                            .clickable { scope.launch { loadEarlier() } }
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
@@ -610,7 +748,7 @@ private fun WechatChatPanel(sessionWxid: String, onBack: () -> Unit) {
         // 输入栏：☺ ＋ [输入框] [账号] [发送]
         Surface(tonalElevation = 1.dp, color = MaterialTheme.colorScheme.surface) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { emojiPanel = !emojiPanel }) {
+                IconButton(onClick = { onEmojiPanelChange(!emojiPanel) }) {
                     Text("☺", fontSize = 20.sp, color = WechatSub)
                 }
                 Box {
@@ -836,12 +974,11 @@ private fun WechatContactsPage(onStartChat: (String) -> Unit) {
             }
         }
         val keyword = remember { mutableStateOf("") }
-        OutlinedTextField(
+        WechatSearchField(
             value = keyword.value,
             onValueChange = { keyword.value = it },
-            placeholder = { Text("搜索联系人", fontSize = 12.sp) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).heightIn(min = 34.dp),
+            placeholder = "搜索联系人",
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
         )
         val list = ui.contacts.filter {
             keyword.value.isBlank() || it.nickname.contains(keyword.value, true) || it.wxid.contains(keyword.value, true)
@@ -977,8 +1114,22 @@ private fun WechatSettingsPage() {
                 var testing by remember { mutableStateOf(false) }
                 var err by remember { mutableStateOf("") }
                 if (!editing) {
+                    // 状态细分（v0.2.22）：原先只判 CONNECTED，其余一律显示「未连接」，
+                    // 于是 REST 已能拉到聊天内容、但 WS 还在 CONNECTING/未连上时，
+                    // 用户看到「未连接」会误判为显示错误。现在把三种情况分开讲清楚。
+                    val dataOk = ui.sessions.isNotEmpty() || ui.contacts.isNotEmpty()
+                    val (stateText, stateColor) = when (ui.connState) {
+                        WechatConnState.CONNECTED -> "实时推送已连接" to WechatGreen
+                        WechatConnState.CONNECTING ->
+                            if (dataOk) "数据已连通 · 实时推送连接中" to WechatOrange
+                            else "连接中..." to WechatOrange
+                        else ->
+                            if (dataOk) "数据已连通 · 实时推送未连接" to WechatOrange
+                            else "未连接" to WechatRed
+                    }
                     Text("地址：" + ui.serverUrl, fontSize = 12.sp)
-                    Text("状态：" + if (ui.connState == WechatConnState.CONNECTED) "已连接" else "未连接", fontSize = 12.sp)
+                    Text("实时通道：" + WechatController.wsEndpoint(context), fontSize = 11.sp, color = WechatSub)
+                    Text("状态：" + stateText, fontSize = 12.sp, color = stateColor)
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
@@ -1029,6 +1180,65 @@ private fun WechatSettingsPage() {
                 }
                 Spacer(Modifier.height(6.dp))
                 Text("连接由进程级 Runtime 常驻维护，离开本页不中断（实时性是硬需求）。", fontSize = 11.sp, color = WechatSub)
+            }
+        }
+        item {
+            // 退出微信（v0.2.22）：默认常驻不释放，用户可主动释放全部微信资源。
+            // 与销售/智能控制/快递扫码的 stop() 彻底释放模式一致：断 WS、关连接池与线程池、
+            // 停语音、清内存数据。退出期间收不到消息，再次进入微信页自动重连。
+            SettingsCard("退出微信") {
+                var confirm by remember { mutableStateOf(false) }
+                Text(
+                    "默认常驻后台以保证实时收消息。点「退出微信」将释放微信占用的全部资源" +
+                        "（连接、HTTP 连接池与线程池、语音、缓存数据），退出期间收不到消息；" +
+                        "再次进入微信页会自动重连。",
+                    fontSize = 11.sp,
+                    color = WechatSub,
+                )
+                if (ui.released) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "当前：已退出，后台不再接收消息",
+                            fontSize = 12.sp,
+                            color = WechatOrange,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            onClick = {
+                                WechatController.onEnter(context)
+                                wechatToast(context, "正在重新连接...")
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = WechatGreen),
+                        ) { Text("重新连接", fontSize = 12.sp) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                if (!confirm) {
+                    Button(
+                        onClick = { confirm = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = WechatRed),
+                    ) { Text("退出微信", fontSize = 12.sp) }
+                } else {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("确认退出？", fontSize = 12.sp, color = WechatRed)
+                        Button(
+                            onClick = {
+                                WechatController.logout(context)
+                                confirm = false
+                                wechatToast(context, "已退出微信，再次进入将自动重连")
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = WechatRed),
+                        ) { Text("确认退出", fontSize = 12.sp) }
+                        Button(
+                            onClick = { confirm = false },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC0C4CC)),
+                        ) { Text("取消", fontSize = 12.sp) }
+                    }
+                }
             }
         }
         item {

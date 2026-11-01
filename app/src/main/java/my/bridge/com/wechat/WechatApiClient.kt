@@ -289,6 +289,16 @@ class WechatApiClient(
         }
     }
 
+    /**
+     * 释放 HTTP 资源：清空连接池、关闭调度线程池。
+     * 与销售页 `SalesApiClient.close()` 同一模式——退出微信 / 离开即释放时调用，
+     * 避免 OkHttp 的空闲连接与线程常驻。释放后本实例不可再用，需重建。
+     */
+    fun close() {
+        runCatching { client.connectionPool.evictAll() }
+        runCatching { client.dispatcher.executorService.shutdown() }
+    }
+
     /** 附件 URL：`{server}/api/files/{object}?token={api_key}`。 */
     fun attachmentUrl(objectName: String): String {
         val b = (WechatPrefs.serverUrl(context) + "/api/files/" + objectName.trimStart('/'))

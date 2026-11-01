@@ -53,6 +53,7 @@ import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveService
 import my.bridge.com.keepalive.KeepAliveUtils
 import my.bridge.com.relay.RelayPrefs
+import my.bridge.com.wechat.WechatController
 import timber.log.Timber
 
 // ============ 通用设置 ============
@@ -284,6 +285,20 @@ fun KeepAliveSettings() {
                         Timber.d("切换：后台资源占用 -> ${if (it) "开" else "关"}")
                     },
                     onRefine = { showResourceSheet = true },
+                )
+                // 微信离开后立即结束（v0.2.22）：开启后微信连接从「进程级常驻」降级为「页面级」——
+                // 离开微信页立刻释放全部微信资源，与销售 / 智能控制 / 快递扫码一致；
+                // 代价是离开期间收不到微信消息。关闭（默认）则常驻后台以保证实时收消息。
+                var releaseWechat by remember { mutableStateOf(WechatController.releaseOnLeave(context)) }
+                SettingSwitchRow(
+                    icon = "💬",
+                    title = "微信离开后立即结束",
+                    checked = releaseWechat,
+                    onCheckedChange = {
+                        releaseWechat = it
+                        WechatController.setReleaseOnLeave(context, it)
+                        Timber.d("切换：微信离开后立即结束 -> ${if (it) "开" else "关"}")
+                    },
                 )
                 SettingSwitchRow(
                     icon = "👁️",

@@ -64,6 +64,24 @@ object WechatController {
 
     fun refreshSessions() = WechatRuntime.refreshSessions()
 
+    /** 设置页展示用：实际 WS 端点。 */
+    fun wsEndpoint(context: Context): String = WechatRuntime.wsEndpoint(context)
+
+    /**
+     * 主动退出微信：释放微信相关全部资源（WS、HTTP 连接池与线程池、语音、内存数据）。
+     * 再次进入微信页会自动重连。
+     */
+    fun logout(context: Context) {
+        WechatRuntime.logout(context)
+    }
+
+    /** 「离开微信页立即释放」开关（保活设置里）。 */
+    fun releaseOnLeave(context: Context): Boolean = WechatPrefs.releaseOnLeave(context)
+
+    fun setReleaseOnLeave(context: Context, on: Boolean) {
+        WechatPrefs.setReleaseOnLeave(context, on)
+    }
+
     fun refreshContacts() = WechatRuntime.refreshContacts()
 
     suspend fun sendText(context: Context, targetWxid: String, text: String): Result<Unit> =

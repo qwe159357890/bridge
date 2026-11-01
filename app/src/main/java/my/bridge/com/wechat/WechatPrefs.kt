@@ -25,6 +25,12 @@ object WechatPrefs {
     private const val KEY_CLIENT_ID = "ws_client_id"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_LAST_UNREAD = "last_unread_total"
+    /**
+     * 「离开微信页立即释放」（v0.2.22）：开启后微信连接降级为**页面级**——
+     * 离开微信页立刻释放全部微信资源（等同用户主动退出），与销售/智能控制/快递扫码一致；
+     * 关闭（默认）则保持进程级常驻，App 启动即连、后台也能收消息。
+     */
+    private const val KEY_RELEASE_ON_LEAVE = "release_on_leave"
 
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
@@ -111,5 +117,13 @@ object WechatPrefs {
 
     fun setLastUnreadTotal(context: Context, total: Int) {
         sp(context).edit().putInt(KEY_LAST_UNREAD, total).apply()
+    }
+
+    /** 见 [KEY_RELEASE_ON_LEAVE]：默认 false（进程级常驻，后台也能收消息）。 */
+    fun releaseOnLeave(context: Context): Boolean =
+        sp(context).getBoolean(KEY_RELEASE_ON_LEAVE, false)
+
+    fun setReleaseOnLeave(context: Context, on: Boolean) {
+        sp(context).edit().putBoolean(KEY_RELEASE_ON_LEAVE, on).apply()
     }
 }

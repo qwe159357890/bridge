@@ -47,6 +47,10 @@ object WechatRuntime : WechatWsClient.Listener {
     @Volatile
     private var started = false
 
+    /** 是否已被释放（主动退出 / 离开即释放）——为 true 时不再自动重连，直到重新进入微信页。 */
+    @Volatile
+    private var stopped = false
+
     @Volatile
     private var pageActive = false
 
@@ -91,22 +95,60 @@ object WechatRuntime : WechatWsClient.Listener {
     }
 
     /**
-     * 页面进入：**只订阅**（拉一次最新数据），不建立连接——连接一直在。
+     * 页面进入：**只订阅**（拉一次最新数据）。
+     * 若此前被释放过（主动退出 / 离开即释放），这里重新建连——与销售/智能控制「进入即连」一致。
      */
     fun onPageEnter(context: Context) {
         val appCtx = context.applicationContext
         app = appCtx
         if (!started) start(appCtx)
         pageActive = true
+        if (stopped) {
+            stopped = false
+            WechatState.setReleased(false)
+            DiagLog.i(TAG, "重新进入微信页，恢复连接")
+            if (api == null) api = WechatApiClient(appCtx)
+            connect()
+        }
         refreshAll()
     }
 
     /**
-     * 页面离开：**只退订**（停止为 UI 刷新数据），连接保持在线。
-     * 这里不做任何 disconnect —— 断开连接就等于放弃后台实时收消息。
+     * 页面离开：**只退订**（停止为 UI 刷新数据）。
+     * 默认连接保持在线——断开就等于放弃后台实时收消息。
+     * 但当「离开微信页立即释放」开关打开时，立刻释放全部资源（等同用户主动退出）。
      */
     fun onPageLeave() {
         pageActive = false
+        val ctx = app ?: return
+        if (WechatPrefs.releaseOnLeave(ctx)) stopAll("离开微信页（已开启离开即释放）")
+    }
+
+    /**
+     * 释放微信占用的全部资源：WS 连接、重连任务、HTTP 连接池与线程池、语音播放、内存数据。
+     *
+     * 两种触发：①用户主动「退出微信」；②开启「离开微信页立即释放」后离开页面。
+     * 与销售 / 智能控制 / 快递扫码的 `stop()` 彻底释放模式一致（v0.2.22）。
+     * 释放后再次进入微信页会自动重连（见 [onPageEnter]）。
+     */
+    @Synchronized
+    fun stopAll(reason: String) {
+        DiagLog.i(TAG, "释放微信全部资源：$reason")
+        reconnectJob?.cancel()
+        reconnectJob = null
+        ws.disconnect()
+        stopVoice()
+        api?.close()
+        api = null
+        WechatState.clearData()
+        WechatState.setReleased(true)
+        stopped = true
+    }
+
+    /** 用户主动退出微信（设置页「退出微信」按钮）。 */
+    fun logout(context: Context) {
+        app = context.applicationContext
+        stopAll("用户主动退出微信")
     }
 
     // ------------------------------------------------------------------
@@ -153,6 +195,7 @@ object WechatRuntime : WechatWsClient.Listener {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                if (stopped) return
                 DiagLog.i(TAG, "网络可用，检查连接")
                 if (WechatPrefs.configured(ctx) && !ws.isConnected()) reconnectNow("网络恢复")
             }
@@ -188,6 +231,8 @@ object WechatRuntime : WechatWsClient.Listener {
     override fun onDisconnected(reason: String) {
         WechatState.setConnState(WechatConnState.DISCONNECTED)
         DiagLog.w(TAG, "WS 断开：$reason")
+        // 已主动释放（退出微信 / 离开即释放）：不要自动重连，否则退出会被重连机制立刻撤销
+        if (stopped) return
         scheduleReconnect()
     }
 
@@ -223,6 +268,9 @@ object WechatRuntime : WechatWsClient.Listener {
         )
         WechatState.upsertSession(updated)
         recalcUnread()
+        // 通知聊天面板增量合并最新消息。注意必须放在下面的「正看着该会话就 return」之前——
+        // 用户停留在该会话时不弹通知，但消息本身必须出现在聊天详情里（v0.2.22 修复）。
+        WechatState.bumpMessageVersion()
 
         // 自己发的不提醒；免打扰不提醒但仍计未读（与参考前端一致）
         if (isSelf || muted) return
@@ -326,6 +374,8 @@ object WechatRuntime : WechatWsClient.Listener {
     fun refreshAll() {
         val ctx = app ?: return
         if (!WechatPrefs.configured(ctx)) return
+        // 已释放（退出微信 / 离开即释放）或 api 尚未就绪：不要拉数据（api 已置 null）
+        if (stopped || api == null) return
         refreshAgents()
         refreshSessions()
     }
@@ -367,10 +417,15 @@ object WechatRuntime : WechatWsClient.Listener {
         val ctx = app ?: return
         scope.launch {
             runCatching {
-                val list = api!!.contacts(
-                    accountWxid = WechatPrefs.currentWxid(ctx),
-                    filter = WechatPrefs.contactsFilter(ctx),
-                )
+                val account = WechatPrefs.currentWxid(ctx)
+                val filter = WechatPrefs.contactsFilter(ctx)
+                var list = api!!.contacts(accountWxid = account, filter = filter)
+                // 兜底（v0.2.22 修复「通讯录空空如也」）：contacts 表里的 account_wxid 未必回填完整，
+                // 此时带账号过滤会永远返回空列表。空结果时再不带账号拉一次全局联系人。
+                if (list.isEmpty() && account.isNotBlank()) {
+                    DiagLog.i(TAG, "按账号过滤无联系人，回退拉取全部联系人")
+                    list = api!!.contacts(accountWxid = "", filter = filter)
+                }
                 withContext(Dispatchers.Main.immediate) { WechatState.setContacts(list) }
             }.onFailure { DiagLog.w(TAG, "拉取联系人失败：${it.message}") }
         }
@@ -500,6 +555,11 @@ object WechatRuntime : WechatWsClient.Listener {
         WechatApiClient(context).avatarUrl(wxid)
 
     fun apiKey(context: Context): String = WechatApiClient(context).apiKeyValue()
+
+    /** 设置页展示用：实际 WS 端点（排查「REST 通但 WS 连不上」时第一手信息）。 */
+    fun wsEndpoint(context: Context): String =
+        WechatWsClient.toWsUrl(WechatPrefs.serverUrl(context))?.toString()
+            ?: "（地址无效，无法推导 WS 地址）"
 
     /** 保存附件到 `/sdcard/bridge/wechat/{images,videos,voice,files}`。 */
     suspend fun saveAttachment(
