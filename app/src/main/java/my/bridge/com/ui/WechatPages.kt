@@ -61,6 +61,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -73,8 +74,10 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -89,6 +92,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import my.bridge.com.wechat.WechatConnState
@@ -522,20 +528,24 @@ private fun WechatSessionList(onOpen: (String) -> Unit) {
             }
         } else {
             val listState = rememberLazyListState()
-            // 滑到接近底部就拉下一页（v0.2.23）。搜索状态下不自动翻页——
-            // 过滤后的条数与服务端 offset 对不上，翻页会错位。
-            val needMore by remember {
-                derivedStateOf {
-                    if (keyword.value.isNotBlank()) return@derivedStateOf false
-                    if (ui.loadingMoreSessions || ui.sessionsEnded) return@derivedStateOf false
-                    val info = listState.layoutInfo
-                    val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
-                    // 列表末尾还挂了一个 footer item（index == list.size），故用 -2 提前触发
-                    last.index >= list.size - 2
-                }
-            }
-            LaunchedEffect(needMore) {
-                if (needMore) WechatController.loadMoreSessions()
+            // v0.2.24：触底检测改用 snapshotFlow 订阅 layoutInfo，不再用
+            // 「derivedStateOf 布尔量 + LaunchedEffect(布尔量)」——后者只在 false→true
+            // 的**边沿**触发一次，一旦加载完成后用户仍处于底部（或本页全是重复项、
+            // 列表长度没变），布尔量不会再产生新的跳变，就永远不再加载。
+            // snapshotFlow 每次布局/滚动都会发射，天然可重复触发。
+            val keywordNow by rememberUpdatedState(keyword.value)
+            LaunchedEffect(listState) {
+                snapshotFlow { listState.layoutInfo }
+                    .distinctUntilChanged()
+                    .collectLatest { info ->
+                        if (keywordNow.isNotBlank()) return@collectLatest
+                        if (WechatState.state.loadingMoreSessions || WechatState.state.sessionsEnded) return@collectLatest
+                        val last = info.visibleItemsInfo.lastOrNull() ?: return@collectLatest
+                        // 列表末尾还挂了一个 footer item（index == list.size），故 -3 提前触发
+                        if (last.index >= info.totalItemsCount - 3) {
+                            WechatController.loadMoreSessions()
+                        }
+                    }
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(list, key = { it.userWxid }) { s ->
@@ -686,6 +696,35 @@ private fun WechatChatPanel(
         loadingMore = false
     }
 
+    /**
+     * 发送成功后**等服务端落库再合并真实消息**，不要立刻插本地占位气泡。
+     *
+     * v0.2.24 修真机问题 #5「发一张图，对方/本端会话里出现两条」：
+     * 占位气泡的 key 是 `msgId=""` + `id=0`，服务端真实消息带真实 `msg_id`/`id`，
+     * 于是 [LaunchedEffect(curVersion)] 的合并逻辑把它判成「新消息」又追加一条 ⇒
+     * 一条「[文件] xxx」占位 + 一条真实图片。真机微信只有一条。
+     *
+     * 做法：先轮询拉最新消息（微信 hook 回写有几百毫秒延迟），
+     * 拿到自己发的真实消息就直接展示它；超过 ~4s 仍拿不到才退回占位气泡。
+     */
+    suspend fun afterSend(placeholder: String) {
+        repeat(8) {
+            delay(500)
+            val latest = WechatController.loadMessages(context, sessionWxid).asReversed()
+            val known = messages.map { it.msgId.ifBlank { it.id.toString() } }.toSet()
+            val add = latest.filter { (it.msgId.ifBlank { it.id.toString() }) !in known }
+            if (add.any { it.isSelf }) {
+                messages.addAll(add)
+                listState.animateScrollToItem(messages.lastIndex)
+                return
+            }
+        }
+        // 兜底：服务端迟迟没落库（如 hook 不回写自己发的消息）时才用占位气泡，
+        // 保证用户至少能看到自己发的内容
+        messages.add(selfMessage(sessionWxid, placeholder))
+        listState.animateScrollToItem(messages.lastIndex)
+    }
+
     // 会话内收到新消息：把服务端最新一批合并进列表（去重后追加到底部并滚到最新）。
     // 原先只更新会话列表摘要、详情列表纹丝不动，导致「列表显示了新消息，点进去却看不到」。
     var lastVersion by remember(sessionWxid) { mutableIntStateOf(WechatState.state.messageVersion) }
@@ -738,8 +777,9 @@ private fun WechatChatPanel(
             val r = WechatController.sendFile(context, sessionWxid, name, mimeOfName(name), bytes)
             wechatToast(context, if (r.isSuccess) "已发送" else "发送失败：${r.exceptionOrNull()?.message}")
             if (r.isSuccess) {
-                messages.add(selfMessage(sessionWxid, "[文件] $name"))
-                listState.animateScrollToItem(messages.lastIndex)
+                // v0.2.24：等服务端真实消息回来再展示（见 afterSend 注释）——
+                // 直接插占位气泡会让同一张图显示两条
+                afterSend("[文件] $name")
                 WechatController.refreshSessions()
             }
             sending = false
@@ -950,10 +990,8 @@ private fun WechatChatPanel(
                         scope.launch {
                             val r = WechatController.sendText(context, sessionWxid, text)
                             if (r.isSuccess) {
-                                messages.add(selfMessage(sessionWxid, text))
-                                // v0.2.23：发完必须滚到底——否则新消息在视口外，
-                                // 用户得手动往下滑才看得到自己刚发的内容
-                                listState.animateScrollToItem(messages.lastIndex)
+                                // v0.2.24：等服务端真实消息回来再展示（见 afterSend 注释）
+                                afterSend(text)
                                 WechatController.refreshSessions()
                             } else {
                                 wechatToast(context, r.exceptionOrNull()?.message ?: "发送失败")
@@ -1156,16 +1194,19 @@ private fun WechatContactsPage(onStartChat: (String) -> Unit) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无联系人", fontSize = 13.sp, color = WechatSub) }
         } else {
             val listState = rememberLazyListState()
-            val needMore by remember {
-                derivedStateOf {
-                    if (keyword.value.isNotBlank()) return@derivedStateOf false
-                    if (ui.loadingMoreContacts || ui.contactsEnded) return@derivedStateOf false
-                    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
-                    last.index >= list.size - 2
-                }
-            }
-            LaunchedEffect(needMore) {
-                if (needMore) WechatController.loadMoreContacts()
+            // v0.2.24：同会话列表——触底检测改 snapshotFlow（布尔量边沿触发会漏）
+            val keywordNow by rememberUpdatedState(keyword.value)
+            LaunchedEffect(listState) {
+                snapshotFlow { listState.layoutInfo }
+                    .distinctUntilChanged()
+                    .collectLatest { info ->
+                        if (keywordNow.isNotBlank()) return@collectLatest
+                        if (WechatState.state.loadingMoreContacts || WechatState.state.contactsEnded) return@collectLatest
+                        val last = info.visibleItemsInfo.lastOrNull() ?: return@collectLatest
+                        if (last.index >= info.totalItemsCount - 3) {
+                            WechatController.loadMoreContacts()
+                        }
+                    }
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(list, key = { it.wxid }) { c -> WechatContactRow(c, onStartChat) }
@@ -1293,6 +1334,8 @@ private fun WechatSettingsPage() {
     ) { granted ->
         wechatToast(context, if (granted) "通知权限已授予" else "通知权限被拒绝")
     }
+    // 提示音电平（v0.2.24，照快递扫码 ScanPrefs.volume）：本地状态 + 落盘
+    val volumeState = remember { mutableStateOf(my.bridge.com.wechat.WechatPrefs.soundVolume(context)) }
     LazyColumn(modifier = Modifier.fillMaxSize().background(WechatPageBg).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             SettingsCard("服务器连接") {
@@ -1484,6 +1527,36 @@ private fun WechatSettingsPage() {
                 }
                 SwitchRow("新消息通知", ui.notifyEnabled) { WechatController.setNotifyEnabled(context, it) }
                 SwitchRow("消息提示音", ui.soundEnabled) { WechatController.setSoundEnabled(context, it) }
+                // v0.2.24：照快递扫码 ScanFeedback 的「提示音音量」滑杆——
+                // 音源已是 0 dBFS 满幅、SoundPool 播放系数默认 1.0（App 侧上限），
+                // 这里是与系统媒体音量相乘的唯一可调项（默认 100% = 拉满）。
+                val volume = volumeState.value
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("提示音音量", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text("${(volume * 100).toInt()}%", fontSize = 12.sp, color = WechatSub)
+                }
+                Slider(
+                    value = volume,
+                    onValueChange = {
+                        volumeState.value = it
+                        my.bridge.com.wechat.WechatPrefs.setSoundVolume(context, it)
+                    },
+                    enabled = ui.soundEnabled,
+                    valueRange = 0f..1f,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { WechatSound.play(context) },
+                        enabled = ui.soundEnabled,
+                        colors = ButtonDefaults.buttonColors(containerColor = WechatGreen),
+                    ) { Text("试听", fontSize = 12.sp) }
+                    Text(
+                        "实际音量 = 本系数 × 系统媒体音量（系统音量 App 无法越过）",
+                        fontSize = 11.sp,
+                        color = WechatSub,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 SwitchRow("全局静音（只关声音）", ui.muteAll) { WechatController.setMuteAll(context, it) }
             }
         }

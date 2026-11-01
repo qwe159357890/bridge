@@ -32,6 +32,13 @@ object WechatPrefs {
      */
     private const val KEY_RELEASE_ON_LEAVE = "release_on_leave"
 
+    /**
+     * 提示音**电平**（v0.2.24）：App 侧播放系数 0~1，与系统媒体音量相乘。
+     * 默认 1.0f = 拉满（音源本身已是 0 dBFS 满幅，见台账 §6）。
+     * 与快递扫码 `ScanPrefs.volume` 同款设置——那里是唯一需要日常调的地方。
+     */
+    private const val KEY_SOUND_VOLUME = "sound_volume"
+
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
 
@@ -88,6 +95,13 @@ object WechatPrefs {
 
     fun setSoundEnabled(context: Context, enabled: Boolean) {
         sp(context).edit().putBoolean(KEY_SOUND, enabled).apply()
+    }
+
+    /** 见 [KEY_SOUND_VOLUME]：默认 1.0 = 100%（与系统媒体音量相乘，App 侧上限）。 */
+    fun soundVolume(context: Context): Float = sp(context).getFloat(KEY_SOUND_VOLUME, 1.0f)
+
+    fun setSoundVolume(context: Context, volume: Float) {
+        sp(context).edit().putFloat(KEY_SOUND_VOLUME, volume.coerceIn(0f, 1f)).apply()
     }
 
     /** 全局静音：只关提示音，不关通知、更不关连接。 */

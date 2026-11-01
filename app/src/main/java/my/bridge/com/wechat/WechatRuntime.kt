@@ -38,6 +38,12 @@ object WechatRuntime : WechatWsClient.Listener {
     private const val SESSION_PAGE = 50
     private const val CONTACT_PAGE = 50
 
+    /**
+     * 单次请求条数上限（v0.2.24）：刷新时要按已加载条数取回（见 [refreshSessions]），
+     * 服务端 `query.max_limit` 是 500（`center-server/config`），超了会被 422 拒。
+     */
+    private const val SESSION_MAX = 500
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
@@ -375,9 +381,10 @@ object WechatRuntime : WechatWsClient.Listener {
     }
 
     private fun recalcUnread() {
-        // 与服务端口径一致：只累计非免打扰会话
-        val total = WechatState.state.sessions.filter { !it.isMuted }.sumOf { it.unreadCount }
-        WechatState.setUnreadTotal(total)
+        // v0.2.24：口径照参考前端——当前模式（好友/公众号）下的非免打扰会话。
+        // 旧口径对全量 sessions 求和，未读落在被模式过滤掉的一类时，
+        // 会出现「Tab 有角标、列表里一个角标都没有」。
+        WechatState.setUnreadTotal(WechatState.state.unreadOf(WechatState.state.sessions))
     }
 
     private fun summaryOf(msgType: Int, content: String): String = when (msgType) {
@@ -431,17 +438,31 @@ object WechatRuntime : WechatWsClient.Listener {
     fun latestUnreadSession(): WechatSession? =
         WechatState.state.visibleSessions.firstOrNull { it.unreadCount > 0 }
 
+    /**
+     * 首页会话（v0.2.23 起分页，v0.2.24 修正「刷新打回第 1 页」）。
+     *
+     * 触发者很多（WS `session_update`、`onConnected`、进入页面、发送成功后），
+     * v0.2.23 每次都拉 `limit=50, offset=0` 并整体覆盖 ⇒ 用户翻到第 3 页后，
+     * 来一条新消息列表就缩回 50 条（真机问题 #2）。
+     *
+     * 修正：**按已加载条数取回**（`want = max(50, 当前条数)`，上限 [SESSION_MAX]），
+     * 保证刷新前后列表长度不变；未读总数按当前模式过滤（见 [WechatUiState.unreadOf]）。
+     */
     fun refreshSessions() {
         val ctx = app ?: return
         if (WechatState.state.loadingSessions) return
         WechatState.setLoadingSessions(true)
+        // 已在内存里的条数（可能已翻过几页）：刷新要取回同样多，不能打回第 1 页
+        val want = WechatState.state.sessions.size
+            .coerceAtLeast(SESSION_PAGE)
+            .coerceAtMost(SESSION_MAX)
         scope.launch {
             runCatching {
-                val list = api!!.sessions(limit = SESSION_PAGE, offset = 0)
+                val list = api!!.sessions(limit = want, offset = 0)
                 withContext(Dispatchers.Main.immediate) {
-                    WechatState.setSessions(list, list.filter { !it.isMuted }.sumOf { it.unreadCount })
-                    // 返回条数不足一页 ⇒ 后面没有了（列表据此显示「已经加载全部」）
-                    WechatState.setSessionsEnded(list.size < SESSION_PAGE)
+                    WechatState.setSessions(list, WechatState.state.unreadOf(list))
+                    // 返回条数不足请求量 ⇒ 后面没有了（列表据此显示「已经加载全部」）
+                    WechatState.setSessionsEnded(list.size < want)
                 }
             }.onFailure {
                 DiagLog.w(TAG, "拉取会话失败：${it.message}")

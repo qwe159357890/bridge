@@ -104,6 +104,9 @@ fun MainScreen(modifier: Modifier = Modifier) {
         if (exitToHome > 0) {
             selectedBottom = 0
             wechatNavVisible = true
+            // v0.2.24：必须清掉上次打开的会话，否则「退出微信 → 再点微信」
+            // 会带着旧 wxid 直接落进聊天详情（用户期望停在微信主页/会话列表）。
+            openWechatSession = null
         }
     }
 

@@ -51,22 +51,28 @@ object WechatSound {
         }.onFailure { DiagLog.w(TAG, "提示音初始化失败：${it.message}") }
     }
 
-    /** 新消息提示音（MSN消息.wav）。未预热时先预热再播。 */
+    /**
+     * 新消息提示音（MSN消息.wav）。未预热时先预热再播。
+     *
+     * v0.2.24：音量系数取自 [WechatPrefs.soundVolume]（默认 1.0 = 拉满），
+     * 与快递扫码 `ScanFeedback` 的 `ScanPrefs.volume` 同款。
+     * 音源本身已是 0 dBFS 满幅（实测峰值 32768/32768），App 侧上限=系统媒体音量。
+     */
     fun play(context: Context) {
         if (pool == null) init(context.applicationContext)
-        play(msgId)
+        play(msgId, WechatPrefs.soundVolume(context))
     }
 
     /** 跳转未读会话的「叮一声」（与 PC 端 jump_unread 同款交互）。 */
     fun playJump(context: Context) {
         if (pool == null) init(context.applicationContext)
-        play(jumpId)
+        play(jumpId, WechatPrefs.soundVolume(context))
     }
 
-    private fun play(id: Int) {
-        val p = pool ?: return
+    private fun play(id: Int, volume: Float) {
         if (id == 0) return
-        runCatching { p.play(id, 1f, 1f, 1, 0, 1f) }
+        val p = pool ?: return
+        runCatching { p.play(id, volume, volume, 1, 0, 1f) }
             .onFailure { DiagLog.w(TAG, "播放提示音失败：${it.message}") }
     }
 }

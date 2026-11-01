@@ -67,6 +67,20 @@ data class WechatUiState(
                 .sortedWith(compareByDescending<WechatSession> { it.isPinned }
                     .thenByDescending { it.updateTimestamp })
         }
+
+    /**
+     * 未读总数口径（v0.2.24，照参考前端 `web-frontend/src/stores/session.ts`
+     * 的 `totalUnreadCount`）：**只统计当前模式（好友/公众号）下的非免打扰会话**。
+     *
+     * v0.2.23 是对 `sessions` 全量求和，而列表只渲染当前模式的会话 ⇒
+     * 未读若落在被模式过滤掉的一类，就会出现「Tab 角标 54、列表里一个角标都没有」。
+     */
+    fun unreadOf(list: List<WechatSession>): Int {
+        val official = sessionMode == "subscription"
+        return list
+            .filter { it.isOfficial == official && !it.isMuted }
+            .sumOf { it.unreadCount }
+    }
 }
 
 object WechatState {
@@ -111,8 +125,21 @@ object WechatState {
 
     fun setCurrentWxid(wxid: String) = mutate { it.copy(currentWxid = wxid) }
 
-    fun setSessions(list: List<WechatSession>, unreadTotal: Int) = mutate {
-        it.copy(sessions = list, unreadTotal = unreadTotal, loadingSessions = false)
+    /**
+     * 覆盖写入会话（第 1 页 / 全量刷新）。
+     *
+     * v0.2.24：与旧会话逐条合并 **未读数取较大值**。
+     * 原因：服务端 `sessions.unread_count` 是**客户端写回**的（center-server 收到新消息时
+     * 并不自增，全库只有 `db.update_session_unread()` 被客户端 PUT 调用），
+     * 因此服务端值可能小于本端 WS 累计值；直接覆盖会把刚进页面时看到的角标抹成 0。
+     */
+    fun setSessions(list: List<WechatSession>, unreadTotal: Int) = mutate { st ->
+        val known = st.sessions.associateBy { it.userWxid }
+        val merged = list.map { s ->
+            val old = known[s.userWxid]
+            if (old != null && old.unreadCount > s.unreadCount) s.copy(unreadCount = old.unreadCount) else s
+        }
+        st.copy(sessions = merged, unreadTotal = unreadTotal, loadingSessions = false)
     }
 
     /** 追加一页会话（去重后加在尾部），并更新「是否已到底」。 */
@@ -125,7 +152,10 @@ object WechatState {
             st.copy(
                 sessions = st.sessions + fresh,
                 loadingMoreSessions = false,
-                sessionsEnded = ended,
+                // v0.2.24：整页都是已存在的（added == 0）⇒ 判定已到底。
+                // 否则 offset 不变（= sessions.size），下次请求拿回同一批，
+                // footer 会一直显示「滑动到底部加载更多」却永远加载不出新内容。
+                sessionsEnded = ended || added == 0,
             )
         }
         added
@@ -149,7 +179,8 @@ object WechatState {
             st.copy(
                 contacts = st.contacts + fresh,
                 loadingMoreContacts = false,
-                contactsEnded = ended,
+                // 同 [appendSessions]：整页都是重复项 ⇒ 判定已到底
+                contactsEnded = ended || added == 0,
             )
         }
         added
