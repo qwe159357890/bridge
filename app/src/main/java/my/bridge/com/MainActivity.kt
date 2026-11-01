@@ -61,8 +61,22 @@ class MainActivity : ComponentActivity() {
      * 必须 `setIntent()`；且 Compose 不会因此重组，故写入 [WechatState.pendingOpenSession]
      * 由 UI 侧消费（见 `MainScreen` 的 LaunchedEffect）。
      */
-    private fun handleWechatDeepLink(intent: Intent?) {
+    /**
+     * 处理微信消息通知的 deep link。
+     *
+     * ⚠️ App 已在前台时，通知 PendingIntent 走 [onNewIntent]，`intent` 属性不会自动更新，
+     * 必须 `setIntent()`；且 Compose 不会因此重组，故写入 [WechatState.pendingOpenSession]
+     * 由 UI 侧消费（见 `MainScreen` 的 LaunchedEffect）。
+     *
+     * v0.2.29：除 extra 外**再从 data 兜底取一次**（`bridge://wechat/session/<wxid>`）——
+     * 部分 ROM 的 AMS 会保留 action/data 但裁剪 extras；有日志后能一眼看出
+     * 「intent 到底有没有送达」（见台账 §6 验证方法）。
+     */
+    private fun handleWechatDeepLink(intent: Intent?, from: String) {
         val wxid = intent?.getStringExtra(my.bridge.com.wechat.WECHAT_EXTRA_OPEN_SESSION)
+            ?.takeIf { it.isNotBlank() }
+            ?: intent?.data?.lastPathSegment?.takeIf { it.isNotBlank() }
+        Timber.i("通知跳转 → $from: ${wxid ?: "(无会话)"}")
         if (!wxid.isNullOrBlank()) {
             setIntent(intent)
             my.bridge.com.wechat.WechatState.setPendingOpenSession(wxid)
@@ -71,12 +85,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleWechatDeepLink(intent)
+        handleWechatDeepLink(intent, "onNewIntent")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleWechatDeepLink(intent)
+        handleWechatDeepLink(intent, "onCreate")
         enableEdgeToEdge()
 
         // 全量申请尚未授予的危险权限（任何一条被拒都只记日志，绝不阻断主流程）

@@ -29,6 +29,25 @@
 - **更正说明**：双兜底无需手动关（`stopService` → `onDestroy` → `releaseAll` 已取消 Alarm/Job）。
 - **边界澄清**：退出只清**运行时登记**，不写任何持久化开关 ⇒ 手动重新启动后保活照旧全部重新布防。
 
+## 2026-11-01 · 🐞 v0.2.29 通知点击「有时落到主页」（根治）
+
+**节点意义**：用户复现路径明确（APP 切到主页/销售/设置 → 切到别的 APP → 来通知 → 点通知 → 有时进主页）。
+排查出一个**平台级坑**和两个**Compose effect 坑**。
+台账（改前/改后/回滚配方、真机验证方法）：`docs/dev/wechat-notification-jump-ledger-v0.2.29.md`。
+
+- **① 通知 Intent 不能复用 launcher Intent（根治，平台级）**：`getLaunchIntentForPackage()` 返回的
+  `ACTION_MAIN + CATEGORY_LAUNCHER` 与 task 的 base intent **完全相同**（`Intent.filterEquals()`
+  不比较 extras），APP 从后台恢复时 AMS 只把 task 带前台、**不回调 `onNewIntent`** ⇒ deep link
+  根本没送达、UI 停在原页面；冷启动走 `onCreate` 则必然送达 ⇒ 这正是「有时行有时不行」。
+  改为显式 `Intent(ctx, MainActivity::class)` + 专用 action + `bridge://wechat/session/<wxid>` 唯一 data。
+- **② `exitToHomeToken` 缺「已消费守卫」**：`LaunchedEffect(key)` **重新进入组合时也执行**，
+  Activity 重建时会重放一次，把 pending 分支刚切好的 `selectedBottom=1` 打回 `0` 并清空会话。
+  补守卫（与 v0.2.25 的 `jumpUnreadToken` 同款）。
+- **③ 同一会话连续两条通知 ⇒ 第二次点了没反应**：`openWechatSession` 同值写入（State 不变、
+  不重组），`LaunchedEffect` 的 key 也不变 ⇒ 不重启。改用自增 `openToken` 作 key，并强制 `subTab=0`。
+- **可观测性**：全链路加日志（`通知跳转 → onCreate / onNewIntent / UI 消费 / 打开会话`），
+  缺哪一条就定位到哪一段。
+
 ## 2026-11-01 · ✨ v0.2.27 进程退出能力（切后台即结束 / 关于页「退出」）
 
 **节点意义**：用户要求「能主动把 APP 整个杀掉」。核心坑是**自杀会被系统复活**——三个服务是

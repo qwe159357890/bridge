@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import my.bridge.com.core.common.DiagLog
 
 // 品牌色 / 未选中色（与界面原型 ui-mockup.html 对齐）
 private val BrandBlue = Color(0xFF1A6EE8)
@@ -77,6 +78,16 @@ fun MainScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     // 通知点击「微信消息」进来时直接落在微信页并打开对应会话（deep link）
     var openWechatSession by rememberSaveable { mutableStateOf<String?>(null) }
+    /**
+     * 「打开会话」令牌（v0.2.29，台账 §3 条件 ③）：每次通知点击都自增。
+     *
+     * 改前只把 wxid 当 `WechatPage` 的 `LaunchedEffect` key：同一会话连来两条消息时，
+     * 第二次 `openWechatSession = "A"` 是**同值写入**（State 不变、不重组），
+     * key 也不变 ⇒ `LaunchedEffect` 不重启 ⇒ 点了通知仍停在会话列表。
+     * 用 `remember`（**不是** rememberSaveable）：Activity 重建后归 0，
+     * 避免用恢复出来的旧态误开会话。
+     */
+    var openWechatToken by remember { mutableIntStateOf(0) }
     // 底部导航当前选中项：0=主页 1=微信 2=销售 3=设置
     var selectedBottom by rememberSaveable { mutableIntStateOf(0) }
     // 各页二级 Tab 当前选中项
@@ -91,23 +102,33 @@ fun MainScreen(modifier: Modifier = Modifier) {
     val pendingWechat = my.bridge.com.wechat.WechatState.state.pendingOpenSession
     LaunchedEffect(pendingWechat) {
         if (pendingWechat.isNotBlank()) {
+            DiagLog.i("通知跳转", "UI 消费：$pendingWechat")
             selectedBottom = 1
             wechatNavVisible = false
             openWechatSession = pendingWechat
+            // 令牌自增：保证「同一会话连续两条通知」也能再次打开（见 openWechatToken 注释）
+            openWechatToken++
             my.bridge.com.wechat.WechatState.clearPendingOpenSession()
         }
     }
     // 「退出微信」后回主页（v0.2.23）：微信页设置里点「确认退出」会自增该令牌，
     // 这里观察到变化就切到「主页」Tab（令牌为 0 是首次组合，跳过）。
+    //
+    // ⚠️ v0.2.29 加「已消费令牌」守卫（台账 §3 条件 ②）：`LaunchedEffect(key)` 在
+    // **重新进入组合时也执行**（Activity 后台被回收后重建、配置变更等），
+    // 改前的 `if (exitToHome > 0)` 会在重建时**重放**一次：
+    // 先被 pending 分支切成微信页（selectedBottom=1），紧接着被这里打回主页（0），
+    // 且把 openWechatSession 清空 ⇒ 点通知落到主页。与 jumpUnreadToken 同一套守卫。
     val exitToHome = my.bridge.com.wechat.WechatState.state.exitToHomeToken
+    var consumedExitToHome by remember { mutableIntStateOf(exitToHome) }
     LaunchedEffect(exitToHome) {
-        if (exitToHome > 0) {
-            selectedBottom = 0
-            wechatNavVisible = true
-            // v0.2.24：必须清掉上次打开的会话，否则「退出微信 → 再点微信」
-            // 会带着旧 wxid 直接落进聊天详情（用户期望停在微信主页/会话列表）。
-            openWechatSession = null
-        }
+        if (exitToHome == consumedExitToHome) return@LaunchedEffect
+        consumedExitToHome = exitToHome
+        selectedBottom = 0
+        wechatNavVisible = true
+        // v0.2.24：必须清掉上次打开的会话，否则「退出微信 → 再点微信」
+        // 会带着旧 wxid 直接落进聊天详情（用户期望停在微信主页/会话列表）。
+        openWechatSession = null
     }
 
     // 主页页面显示顺序（v0.2.08，设置→通用可调）：homeTabOrder[位置]=页面 id。
@@ -182,6 +203,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 )
                 1 -> WechatPage(
                     initialSessionWxid = openWechatSession,
+                    // v0.2.29：令牌变化即重新打开（含「同一会话连来两条」的场景）
+                    openToken = openWechatToken,
                 )
                 2 -> SalesPage(
                     onShowBottomBar = { salesNavVisible = true },

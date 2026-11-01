@@ -22,6 +22,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import my.bridge.com.core.common.DiagLog
 import my.bridge.com.wechat.WechatAttachment
 import my.bridge.com.wechat.WechatDownloader
 import my.bridge.com.wechat.WechatPrefs
@@ -274,6 +275,13 @@ private const val JUMP_SCROLL_DELAY_MS = 120L
 @Composable
 fun WechatPage(
     initialSessionWxid: String? = null,
+    /**
+     * 「打开会话」令牌（v0.2.29）：MainScreen 每次消费一次通知 deep link 就自增。
+     *
+     * 用它而不是 `initialSessionWxid` 做 `LaunchedEffect` 的 key —— 同一会话连续两条通知时
+     * wxid 值不变，key 不变 ⇒ effect 不重启 ⇒ 第二条通知点了没反应（台账 §3 条件 ③）。
+     */
+    openToken: Int = 0,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -325,10 +333,21 @@ fun WechatPage(
         }
     }
 
-    // 依赖 initialSessionWxid：通知点击带来新会话时（MainScreen 更新该值）能再次打开
-    LaunchedEffect(initialSessionWxid) {
+    // 订阅 Runtime（进入页面一次即可；与下面的 DisposableEffect/onLeave 配对）。
+    // ⚠️ 不能和「打开会话」合在同一个 LaunchedEffect 里——否则每次通知都会重复订阅/刷新会话。
+    LaunchedEffect(Unit) {
         WechatController.onEnter(context)
-        if (initialSessionWxid != null) {
+    }
+
+    /**
+     * v0.2.29：key 用 **openToken**（自增）而不是 wxid —— 见参数注释。
+     * token == 0 表示「不是通知点进来的」（手动点底部微信 Tab / Activity 重建后恢复），不自动开会话。
+     */
+    LaunchedEffect(openToken) {
+        if (openToken > 0 && initialSessionWxid != null) {
+            DiagLog.i("通知跳转", "打开会话：$initialSessionWxid token=$openToken")
+            // 兜底：若上次停在微信页的其它子 Tab（通讯录/实例/设置），先回到「聊天」
+            subTab = 0
             openSession = initialSessionWxid
             WechatController.openSession(context, initialSessionWxid)
         }

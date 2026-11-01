@@ -6,6 +6,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.MainActivity
 import org.json.JSONObject
 
 /**
@@ -330,10 +332,24 @@ object WechatRuntime : WechatWsClient.Listener {
             return
         }
         if (WechatPrefs.notifyEnabled(ctx)) {
-            val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            // v0.2.29：显式构造 Intent，**不再用 getLaunchIntentForPackage()**。
+            // 原因（台账 §3 条件 ①）：后者返回的就是 ACTION_MAIN + CATEGORY_LAUNCHER + 本 Activity，
+            // 与 task 的 base intent **完全相同**（Intent.filterEquals() 不比较 extras），
+            // 于是 AMS 在「task 已存在、只是从后台恢复」这条路径上判定「还是同一个启动」，
+            // 只把 task 带到前台而**不回调 onNewIntent** ⇒ pendingOpenSession 从未写入 ⇒
+            // 点了通知只是回到原页面（主页）。冷启动时走 onCreate 则一定送达 ⇒
+            // 这正是「大多数时候能进详情、有时不行」的差异来源。
+            // 修法：专用 action + 唯一 data（含 wxid）+ NEW_TASK|CLEAR_TOP|SINGLE_TOP。
+            val intent = Intent(ctx, MainActivity::class.java).apply {
+                action = WECHAT_ACTION_OPEN_SESSION
+                data = Uri.parse("bridge://wechat/session/${Uri.encode(session.userWxid)}")
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
                 putExtra(WECHAT_EXTRA_OPEN_SESSION, session.userWxid)
-            } ?: Intent()
+            }
             WechatNotifier.post(
                 context = ctx,
                 sessionWxid = session.userWxid,
@@ -717,3 +733,10 @@ object WechatRuntime : WechatWsClient.Listener {
 
 /** 通知点击时携带的会话 wxid（MainActivity 读取后跳转微信页并打开该会话）。 */
 const val WECHAT_EXTRA_OPEN_SESSION = "wechat_open_session"
+
+/**
+ * 通知点击的**专用 action**（v0.2.29）：必须区别于 launcher 的 `ACTION_MAIN`，
+ * 否则 AMS 会认为「与 task 的启动 intent 相同」而只把 task 带前台、不回调 onNewIntent。
+ * 详见 `docs/dev/wechat-notification-jump-ledger-v0.2.29.md` §3 条件 ①。
+ */
+const val WECHAT_ACTION_OPEN_SESSION = "my.bridge.com.action.OPEN_WECHAT_SESSION"

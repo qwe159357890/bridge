@@ -1,4 +1,4 @@
 {
-  "version": "0.2.28",
-  "notes": "v0.2.27 进程退出能力的补强与说明更正。①结束进程（关于页「退出」或「切到后台立即结束」）时额外取消 WorkManager 周期任务 bridge_location_report（周期位置上报兜底），否则它是登记在系统里的，会在 15 分钟后新建进程把 APP 复活；下次冷启动由 ReportManager 自动重新排队，功能不丢。②更正说明：双兜底唤醒（15 分钟一次的 AlarmManager 与 JobScheduler）不需要手动关闭——结束进程前会 stopService，服务 onDestroy → ResourceHolder.releaseAll() 已把两者一并取消；真正仍会拉起进程的只有「开机自启」（重启手机/重装后）与已开启的无障碍服务。③强调：退出/切后台只清运行时登记，不写任何持久化开关，手动重新启动后保活措施全部照旧重新布防（保活运行时长归零即为重新布防的证据）。"
+  "version": "0.2.29",
+  "notes": "修复「点微信消息通知有时不进会话详情、而是进入程序主页」。三处根因：①通知 Intent 原先直接用 getLaunchIntentForPackage()（ACTION_MAIN+LAUNCHER），与 task 的启动 Intent 完全相同（filterEquals 不比较 extras），APP 从后台恢复时 AMS 只把 task 带前台、不回调 onNewIntent，deep link 根本没送达 ⇒ 现改为专用 action + bridge://wechat/session/<wxid> 唯一 data + NEW_TASK/CLEAR_TOP/SINGLE_TOP。②MainScreen 的 exitToHomeToken 缺少「已消费守卫」，Activity 重建时 LaunchedEffect 重放，把刚切到微信页的状态打回主页并清空会话 ⇒ 补守卫（与 jumpUnreadToken 同款）。③同一会话连续两条通知时 openWechatSession 同值写入、LaunchedEffect key 不变 ⇒ 第二次点了没反应 ⇒ 改用自增 openToken 作 key，并强制回到「聊天」子 Tab。另在通知跳转全链路加了日志（通知跳转 → onCreate/onNewIntent/UI 消费/打开会话）便于真机定位。"
 }
