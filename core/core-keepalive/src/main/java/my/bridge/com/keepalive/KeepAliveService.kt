@@ -26,7 +26,17 @@ class KeepAliveService : Service() {
 
     companion object {
         const val NOTIFICATION_ID = 2001
-        const val CHANNEL_KEEP_ALIVE = "keep_alive_channel"
+        /**
+         * 常驻通知渠道（v0.2.26 换 `_v2` 并把重要性降为 IMPORTANCE_LOW）。
+         *
+         * 改前是 `keep_alive_channel` + IMPORTANCE_HIGH + PRIORITY_MAX：常驻通知抢占通知栏
+         * 顶部位置，与微信消息通知挤在一起（用户反馈「微信消息通知和『Bridge 后台服务』在一起」）。
+         * 渠道的 importance 创建后不可变，故换 id 才能让老安装也生效。
+         *
+         * ⚠️ 前台服务的**存活与通知重要性无关**（只要 startForeground 过即可），
+         * 降级只影响展示位置（多数 ROM 会把它收进「静默/其他通知」区），不影响保活。
+         */
+        const val CHANNEL_KEEP_ALIVE = "keep_alive_channel_v2"
         const val ACTION_REFRESH = "my.bridge.com.keepalive.action.REFRESH"
 
         @Volatile
@@ -193,7 +203,8 @@ class KeepAliveService : Service() {
             .setContentTitle("Bridge 后台服务")
             .setContentText("服务运行中 · 点此管理")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
+            // v0.2.26：与渠道 importance 对齐，不再 PRIORITY_MAX（原会顶在通知栏最上方）
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -207,7 +218,9 @@ class KeepAliveService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_KEEP_ALIVE,
                 "常驻保活",
-                NotificationManager.IMPORTANCE_HIGH
+                // v0.2.26：见 [CHANNEL_KEEP_ALIVE] 注释——常驻通知不再高优先级，
+                // 让微信消息等**真正需要用户看到**的通知独立显示在上方。
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "应用运行期间保持后台常驻"
                 setSound(null, null)

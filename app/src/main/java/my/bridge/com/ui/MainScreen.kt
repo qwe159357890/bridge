@@ -124,15 +124,17 @@ fun MainScreen(modifier: Modifier = Modifier) {
     // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），
     // 这样页内 BackHandler（短信详情）在其启用时优先接管
     BackHandler {
-        // 微信页（v0.2.25）：返回键由微信页自己接管——主界面第 1 次按冒泡提示、
-        // 2 秒内第 2 次按回主页（经 WechatState.requestExitToHome()，下面 exitToHome 分支处理）。
-        // 这里保留只是兜底（微信页未组合时才会落到这），正常情况下不会触发。
+        // 微信页 / 销售页（v0.2.26）：返回键由**页内**自己的 BackHandler 接管——
+        // 第 1 次冒泡提示「再按一次返回主页」，窗口内第 2 次回 APP 主页。
+        // 这里保留只是兜底（页面未组合时才会落到这），正常情况下不会触发。
         if (selectedBottom == 1) {
-            wechatNavVisible = !wechatNavVisible
+            selectedBottom = 0
+            wechatNavVisible = true
             return@BackHandler
         }
         if (selectedBottom == 2) {
-            salesNavVisible = !salesNavVisible
+            selectedBottom = 0
+            salesNavVisible = true
             return@BackHandler
         }
         val onLanding = if (selectedBottom == 0) homeTab == 0 else settingsTab == 0
@@ -140,8 +142,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
             // 非首 tab：切回当前页的首 tab
             if (selectedBottom == 0) homeTab = 0 else settingsTab = 0
         } else {
+            // v0.2.26：改前是硬编码 2000ms，现为设置 → 通用 → 返回键可调（默认 2 秒）。
+            // 每次按都现读配置，改完设置立即生效（不必重启页面）。
+            val window = BackPressPrefs.exitWindowMs(context)
             val now = System.currentTimeMillis()
-            if (now - lastBackAt < 2000) {
+            if (now - lastBackAt < window) {
                 (context as? android.app.Activity)?.finishAffinity()
             } else {
                 lastBackAt = now
@@ -151,7 +156,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     }
     LaunchedEffect(showExitHint) {
         if (showExitHint) {
-            kotlinx.coroutines.delay(2000)
+            kotlinx.coroutines.delay(BackPressPrefs.exitWindowMs(context))
             showExitHint = false
         }
     }
@@ -180,6 +185,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 )
                 2 -> SalesPage(
                     onShowBottomBar = { salesNavVisible = true },
+                    // v0.2.26：销售页主界面返回键 = 第 1 次提示、窗口内第 2 次回主页
+                    // （改前是「第 1 次显示底部工具栏」，与微信页不一致）
+                    onExitToHome = {
+                        selectedBottom = 0
+                        salesNavVisible = true
+                    },
                 )
                 3 -> SettingsPage(
                     currentTab = settingsTab,

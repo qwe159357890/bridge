@@ -98,15 +98,14 @@ enum class WechatConnState { DISCONNECTED, CONNECTING, CONNECTED }
 /**
  * 「同一次发送的双写记录」判重窗口（秒）。
  *
- * v0.2.25 真机问题 #6：发一张图，本端会话里出现**两条**自己发的图片（缩略图尺寸不同），
- * 而真实微信（接收方）只收到一条。客户端确认只发了一次（唯一的
- * `POST /api/wechat/upload_and_send`，见 `WechatApiClient.uploadAndSend`），
- * 所以是服务端/agent 侧对同一次发送写了两条记录（两条 `msg_id`/`id` 不同，
- * 现有「按 msgId/id 去重」判成两条新消息）。参考仓库不含消息表的 INSERT 代码，无法从服务端根治，
- * 故在客户端兜底折叠。
+ * ⚠️ v0.2.26 **已撤回为默认关闭**（见 `docs/dev/wechat-fix-ledger-v0.2.26.md` §3）。
+ * 保留原因：重复记录来自 **agent 端 `upload_and_send` 路径缺一道去重**——
+ * `send_image`（PC 客户端走的路径）发送前会写 EXIF 标志，数据库监控据此跳过；
+ * 而 `upload_and_send` 不写标志，于是「发送侧记录 + 数据库监控补报」落两条。
+ * 根治应改 Agent（本仓库 `references/` 只读），客户端这只是**兜底**，默认不开。
  *
- * 窗口取 2 秒：人工连发两张不同图必然 > 2s（每次都要过选择器 + multipart 上传），
- * 不会误伤；而 hook 回写的两条记录时间戳几乎相同。
+ * 窗口取 2 秒：人工连发两张不同图通常 > 2s；但数据库监控有轮询延迟，
+ * 第二条可能晚于 2 秒才到 ⇒ 这条规则本就不可靠，故默认关闭。
  */
 private const val SENT_DUP_WINDOW_SEC = 2L
 
@@ -119,11 +118,13 @@ private fun isSentDuplicate(a: WechatMessage, b: WechatMessage): Boolean =
 /**
  * 消息列表去重，用于聊天面板的**首次加载、增量合并、翻页插入**三处：
  *
- * 1. 按 `msgId ?: "id:$id"` 去重（原有逻辑）；
- * 2. 折叠 [isSentDuplicate] 命中的记录——保留**后到的**（id 更大，通常是 hook 回写的
- *    完整记录，缩略图/原图字段更全）。
+ * 1. 按 `msgId ?: "id:$id"` 去重（原有逻辑，**始终生效**）；
+ * 2. [foldSent] 为 true 时才折叠 [isSentDuplicate] 命中的记录（保留后到的、id 更大的）。
+ *
+ * @param foldSent v0.2.26 起**默认 false**（= 撤回 v0.2.25 的自动折叠）。
+ *                 由设置项「自家发送去重（服务端双写兜底）」控制，默认关。
  */
-fun List<WechatMessage>.wechatDedupe(): List<WechatMessage> {
+fun List<WechatMessage>.wechatDedupe(foldSent: Boolean = false): List<WechatMessage> {
     if (size <= 1) return this
     val out = ArrayList<WechatMessage>(size)
     val seen = HashSet<String>()
@@ -132,7 +133,7 @@ fun List<WechatMessage>.wechatDedupe(): List<WechatMessage> {
         if (!seen.add(key)) continue
         // 只与前 3 条比对：双写记录必然相邻（同一秒）。
         // ⚠️ out 为空时必须跳过——`(-1 downTo 0)` 会产出 -1，取 out[-1] 直接越界。
-        val dupIdx = if (out.isEmpty()) null else {
+        val dupIdx = if (!foldSent || out.isEmpty()) null else {
             val from = (out.size - 1).coerceAtLeast(0)
             val to = (out.size - 3).coerceAtLeast(0)
             (from downTo to).firstOrNull { isSentDuplicate(out[it], m) }

@@ -74,6 +74,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -149,7 +150,17 @@ private data class RecordFormState(val record: SalesRecord? = null) {
  * - 阅读模式锁横屏，退出/离开页面恢复原方向。
  */
 @Composable
-fun SalesPage(onShowBottomBar: () -> Unit) {
+fun SalesPage(
+    onShowBottomBar: () -> Unit,
+    /**
+     * 主界面按返回键**回 APP 主页**（v0.2.26）。
+     *
+     * 改前：第 1 次按返回是「显示 Bridge 底部工具栏」（`salesNavVisible` 取反），
+     * 与微信页「第 1 次提示、第 2 次回主页」不一致。现在两者完全一致：
+     * 第 1 次 Toast「再按一次返回主页」，窗口内第 2 次直接回主页。
+     */
+    onExitToHome: () -> Unit = {},
+) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -207,7 +218,21 @@ fun SalesPage(onShowBottomBar: () -> Unit) {
         }
     }
 
-    // 返回键分层：阅读模式/选择模式/筛选面板先退，浮层菜单最后注册优先关闭。
+    // 返回键链（Compose BackHandler **后进先出**：注册越靠后优先级越高）：
+    // ① 主界面（表格页/登录页）→ 第 1 次 Toast「再按一次返回主页」，窗口内第 2 次 → 回 APP 主页；
+    //    注册在最前 = 优先级最低，下面 ② 那些具体状态的 handler 命中时优先接管。
+    // 窗口时长取自 [BackPressPrefs]（设置 → 通用 → 返回键，默认 2 秒）。
+    var lastBackAt by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
+            onExitToHome()
+        } else {
+            lastBackAt = now
+            Toast.makeText(context, "再按一次返回主页", Toast.LENGTH_SHORT).show()
+        }
+    }
+    // ② 阅读模式/选择模式/筛选面板先退，浮层菜单最后注册优先关闭。
     BackHandler(enabled = ui.readingMode) { SalesState.setReadingMode(false) }
     BackHandler(enabled = ui.selectMode && !ui.readingMode) { SalesState.setSelectMode(false) }
     BackHandler(enabled = showFilter && !ui.readingMode) { showFilter = false }

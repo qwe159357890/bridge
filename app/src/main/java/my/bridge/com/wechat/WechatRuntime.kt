@@ -318,8 +318,17 @@ object WechatRuntime : WechatWsClient.Listener {
         remind(ctx, updated, summary)
     }
 
-    /** 提示：通知 + 提示音（提醒方式可关，连接不可关）。 */
+    /**
+     * 提示：通知 + 提示音（提醒方式可关，连接不可关）。
+     *
+     * ⚠️ **免打扰会话到此为止**：`onIncomingMessage` 里已有 `if (isSelf || muted) return`，
+     * 这里再兜一道（防御后续改动绕过上层判断）——免打扰会话只计未读，不弹通知、不响提示音。
+     */
     private fun remind(ctx: Context, session: WechatSession, summary: String) {
+        if (session.isMuted) {
+            DiagLog.i(TAG, "免打扰会话不提醒：${session.userWxid}")
+            return
+        }
         if (WechatPrefs.notifyEnabled(ctx)) {
             val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)

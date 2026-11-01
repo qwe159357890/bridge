@@ -257,12 +257,6 @@ internal fun Modifier.tabClickable(
 
 private const val WECHAT_DOWNLOAD_ROOT = "/sdcard/bridge/wechat/"
 
-/**
- * 主界面按返回键回主页的**二次确认窗口**（与全局「再按一次退出」同款 2 秒）。
- * 第 1 次按 → 冒泡提示；窗口内第 2 次按 → 回 APP 主页（v0.2.25）。
- */
-private const val BACK_CONFIRM_WINDOW_MS = 2000L
-
 /** 双击「聊天」后等会话列表重组的时间（LazyListState 未挂载时滚动是空操作）。 */
 private const val JUMP_SCROLL_DELAY_MS = 120L
 
@@ -308,7 +302,8 @@ fun WechatPage(
     var lastBackAt by remember { mutableLongStateOf(0L) }
     BackHandler(enabled = openSession == null && subTab == 0) {
         val now = System.currentTimeMillis()
-        if (now - lastBackAt < BACK_CONFIRM_WINDOW_MS) {
+        // v0.2.26：窗口改为设置可调（默认 2 秒）
+        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
             // v0.2.25：不再「显示/隐藏底部导航栏」，直接回 APP 主页（MainScreen 观察该令牌）
             WechatState.requestExitToHome()
         } else {
@@ -720,6 +715,8 @@ private fun WechatChatPanel(
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val listState = rememberLazyListState()
     val canSend = WechatState.state.currentWxid.isNotBlank()
+    // v0.2.26：折叠「同一次发送的双写记录」的兜底开关（默认关 = 已撤回，见 wechatDedupe）
+    val foldSentDup = my.bridge.com.wechat.WechatPrefs.dedupeSent(context)
 
     // 分页状态：loadingMore 防重入，noMore 标记已到最早一条
     var loadingMore by remember { mutableStateOf(false) }
@@ -742,9 +739,9 @@ private fun WechatChatPanel(
             noMore = true
             wechatToast(context, "没有更多了")
         } else {
-            // v0.2.25：翻页也要折叠双写记录（与首次加载同口径）
+            // v0.2.26：翻页也走同一去重口径（折叠开关见设置项「自家发送去重」）
             val before = messages.toList()
-            val merged = (more.asReversed() + before).wechatDedupe()
+            val merged = (more.asReversed() + before).wechatDedupe(foldSent = foldSentDup)
             val inserted = merged.size - before.size
             messages.clear()
             messages.addAll(merged)
@@ -770,8 +767,8 @@ private fun WechatChatPanel(
             delay(500)
             val latest = WechatController.loadMessages(context, sessionWxid).asReversed()
             val before = messages.toList()
-            // v0.2.25：整体去重（含「同一次发送的双写记录」折叠，见 wechatDedupe）
-            val merged = (before + latest).wechatDedupe()
+            // v0.2.26：折叠「同一次发送的双写记录」改为**可选**（默认关，见 wechatDedupe 注释）
+            val merged = (before + latest).wechatDedupe(foldSent = foldSentDup)
             // 只认「服务端新落库的自己发的消息」（占位气泡 msgId 为空，不算）
             if (merged.any { it.isSelf && it.msgId.isNotBlank() && it !in before }) {
                 messages.clear()
@@ -795,7 +792,7 @@ private fun WechatChatPanel(
         lastVersion = curVersion
         val latest = WechatController.loadMessages(context, sessionWxid).asReversed()
         val before = messages.toList()
-        val merged = (before + latest).wechatDedupe()
+        val merged = (before + latest).wechatDedupe(foldSent = foldSentDup)
         if (merged.any { it !in before }) {
             messages.clear()
             messages.addAll(merged)
@@ -807,7 +804,7 @@ private fun WechatChatPanel(
     LaunchedEffect(sessionWxid) {
         noMore = false
         messages.clear()
-        messages.addAll(WechatController.loadMessages(context, sessionWxid).asReversed().wechatDedupe())
+        messages.addAll(WechatController.loadMessages(context, sessionWxid).asReversed().wechatDedupe(foldSent = foldSentDup))
         if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
     }
 
@@ -1398,6 +1395,8 @@ private fun WechatSettingsPage() {
     }
     // 提示音电平（v0.2.24，照快递扫码 ScanPrefs.volume）：本地状态 + 落盘
     val volumeState = remember { mutableStateOf(my.bridge.com.wechat.WechatPrefs.soundVolume(context)) }
+    // v0.2.26：「自家发送去重」兜底开关（默认关——v0.2.25 的无条件折叠已撤回）
+    var dedupeSentState by remember { mutableStateOf(my.bridge.com.wechat.WechatPrefs.dedupeSent(context)) }
     LazyColumn(modifier = Modifier.fillMaxSize().background(WechatPageBg).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             SettingsCard("服务器连接") {
@@ -1628,6 +1627,18 @@ private fun WechatSettingsPage() {
                     )
                 }
                 SwitchRow("全局静音（只关声音）", ui.muteAll) { WechatController.setMuteAll(context, it) }
+                // v0.2.26：默认关闭——发图出现两条是 **Agent 端 upload_and_send 缺 EXIF 去重标志**
+                // 造成的双写（PC 客户端走 send_image 会写标志，故只有一条），根治应改 Agent。
+                // 这里留作未修 Agent 的机器上的应急开关。
+                SwitchRow("自家发送去重（服务端双写兜底）", dedupeSentState) {
+                    dedupeSentState = it
+                    my.bridge.com.wechat.WechatPrefs.setDedupeSent(context, it)
+                }
+                Text(
+                    "重复记录来自 Agent 端发送接口的双写（PC 客户端不会）。默认关闭；若发一张图出现两条，可临时打开。",
+                    fontSize = 11.sp,
+                    color = WechatSub,
+                )
             }
         }
         item {

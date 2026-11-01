@@ -93,11 +93,33 @@ fun WechatRemoteImage(
     }
 }
 
-/** 会话/联系人头像：远程头像优先，失败回落首字母色块（与参考前端 avatarManager 一致）。 */
+/**
+ * 会话/联系人头像：远程头像优先，失败回落首字母色块（与参考前端 avatarManager 一致）。
+ *
+ * ⚠️ v0.2.26 修真机问题「头像上叠着昵称首字」：改前用
+ * `if (WechatImageLoader.cached(url) == null)` 决定要不要画首字母，
+ * 但该判断只在**组合时**求值一次，而图片是异步加载的——图片加载完成后
+ * 外层 Box **不会重组**，这个过期的 `null` 判断依然成立 ⇒ 首字母一直画在图片**上面**
+ * （同层 Box 里后绘制的在上层，注释里「图片会盖在上面」是错的）。
+ *
+ * 修法：本函数自己持有 `bmp` 状态（与 [WechatRemoteImage] 同款异步加载），
+ * 以 `bmp == null` 作为「显示首字母」的依据——加载成功触发重组，首字母自动消失。
+ */
 @Composable
 fun WechatAvatar(wxid: String, name: String, size: Dp = 40.dp, radius: Dp = 5.dp) {
     val context = LocalContext.current
     val url = remember(wxid) { WechatController.avatarUrl(context, wxid) }
+    val bearer = remember(wxid) { WechatController.apiKey(context) }
+    var bmp by remember(wxid) { mutableStateOf<Bitmap?>(WechatImageLoader.cached(url)) }
+    if (bmp == null && url.isNotBlank()) {
+        LaunchedEffect(url) {
+            withContext(Dispatchers.IO) {
+                val loaded = WechatImageLoader.load(url, bearer = bearer, maxEdge = 160)
+                // 加载失败保持 null ⇒ 继续显示首字母色块；成功则覆盖，触发重组
+                if (loaded != null) bmp = loaded
+            }
+        }
+    }
     Box(
         modifier = Modifier
             .size(size)
@@ -105,17 +127,16 @@ fun WechatAvatar(wxid: String, name: String, size: Dp = 40.dp, radius: Dp = 5.dp
             .background(wechatAvatarColor(wxid)),
         contentAlignment = Alignment.Center,
     ) {
-        if (url.isNotBlank()) {
-            WechatRemoteImage(
-                url = url,
-                bearer = WechatController.apiKey(context),
-                maxEdge = 160,
+        if (bmp != null) {
+            Image(
+                bitmap = bmp!!.asImageBitmap(),
+                contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
             )
-        }
-        // 头像加载中/失败时显示首字母（图片加载完成后会盖在上面）
-        val initial = name.take(1).ifBlank { "微" }
-        if (WechatImageLoader.cached(url) == null) {
+        } else {
+            // 头像加载中/该联系人没有头像（服务端 404）时才显示首字母
+            val initial = name.take(1).ifBlank { "微" }
             Text(initial, color = Color.White, fontSize = (size.value / 2.6).sp)
         }
     }

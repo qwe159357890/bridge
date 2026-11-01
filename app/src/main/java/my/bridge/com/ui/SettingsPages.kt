@@ -23,6 +23,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,9 +65,17 @@ fun GeneralSettings(
     onHomeTabOrderChange: (List<Int>) -> Unit = {},
     onHomeTabNameChange: (List<String>) -> Unit = {},
 ) {
+    val context = LocalContext.current
     // 改名弹窗：非空 = 正在为该页面 id 改名，输入框预填当前显示名
     var renameTarget by remember { mutableStateOf<Int?>(null) }
     var renameText by remember { mutableStateOf("") }
+    // v0.2.26：返回键二次确认窗口（秒），默认均为 2 秒（与改前硬编码一致）
+    var exitWindowSec by remember {
+        mutableIntStateOf((BackPressPrefs.exitWindowMs(context) / 1000).toInt().coerceIn(1, 5))
+    }
+    var homeWindowSec by remember {
+        mutableIntStateOf((BackPressPrefs.homeWindowMs(context) / 1000).toInt().coerceIn(1, 5))
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -149,6 +158,38 @@ fun GeneralSettings(
                 }
             }
         }
+
+        // v0.2.26：改前两处窗口都是硬编码 2 秒，现在 1~5 秒可调（默认仍 2 秒）
+        item { SectionTitle("返回键") }
+        item {
+            SettingCard {
+                BackWindowRow(
+                    title = "再按一次返回主页",
+                    desc = "微信 / 销售页主界面：第 1 次提示，该时间内第 2 次回主页",
+                    seconds = homeWindowSec,
+                    onChange = {
+                        homeWindowSec = it
+                        BackPressPrefs.setHomeWindowMs(context, it * 1000L)
+                    },
+                )
+                Spacer(Modifier.height(4.dp))
+                BackWindowRow(
+                    title = "再按一次返回退出 Bridge",
+                    desc = "主页 / 设置页首 Tab：第 1 次提示，该时间内第 2 次退出应用",
+                    seconds = exitWindowSec,
+                    onChange = {
+                        exitWindowSec = it
+                        BackPressPrefs.setExitWindowMs(context, it * 1000L)
+                    },
+                )
+                Text(
+                    "两项独立，默认均为 2 秒；改动立即生效，无需重启。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
+        }
     }
 
     // 改名弹窗：输入新名称（≤8 字），清空 = 恢复默认名
@@ -186,6 +227,31 @@ fun GeneralSettings(
                     Text("取消")
                 }
             },
+        )
+    }
+}
+
+// ============ 返回键设置（v0.2.26） ============
+
+/** 二次确认窗口滑杆（1~5 秒，步长 1 秒）。 */
+@Composable
+private fun BackWindowRow(
+    title: String,
+    desc: String,
+    seconds: Int,
+    onChange: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text("$seconds 秒", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+        }
+        Text(desc, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Slider(
+            value = seconds.toFloat(),
+            onValueChange = { onChange(it.toInt().coerceIn(1, 5)) },
+            valueRange = 1f..5f,
+            steps = 3,
         )
     }
 }

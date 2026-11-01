@@ -47,6 +47,17 @@ object WechatPrefs {
      */
     private const val KEY_OFFICIAL_NOTIFY = "official_notify"
 
+    /**
+     * 「自家发送去重（服务端双写兜底）」（v0.2.26）：**默认 false（关闭 = 已撤回）**。
+     *
+     * 见 `wechatDedupe(foldSent)`：v0.2.25 曾无条件折叠「同会话 + 双发自 + 同类型 + Δt≤2s」
+     * 的记录，用来掩盖发图出现两条的现象。查证后确认重复来自 **Agent 端 `upload_and_send`
+     * 路径缺 EXIF 去重标志**（PC 客户端走的 `send_image` 有写标志，故只有一条），
+     * 属 Agent 侧问题，客户端折叠属于「猜」，可能误伤且不可靠 ⇒ 默认关闭。
+     * 未修 Agent 的机器上可由用户自行打开应急。
+     */
+    private const val KEY_DEDUPE_SENT = "dedupe_sent"
+
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
 
@@ -154,5 +165,12 @@ object WechatPrefs {
 
     fun setReleaseOnLeave(context: Context, on: Boolean) {
         sp(context).edit().putBoolean(KEY_RELEASE_ON_LEAVE, on).apply()
+    }
+
+    /** 见 [KEY_DEDUPE_SENT]：默认 false（已撤回客户端折叠；Agent 未修时可手动打开应急）。 */
+    fun dedupeSent(context: Context): Boolean = sp(context).getBoolean(KEY_DEDUPE_SENT, false)
+
+    fun setDedupeSent(context: Context, on: Boolean) {
+        sp(context).edit().putBoolean(KEY_DEDUPE_SENT, on).apply()
     }
 }
