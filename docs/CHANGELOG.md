@@ -22,6 +22,81 @@
 
 ---
 
+## 2026-11-01 · 🧭 v0.2.22→v0.2.29 微信页真机收敛里程碑（五批真机问题 · 进程退出 · 通知跳转根治）
+
+**节点意义**：v0.2.21 微信页上线后，用户在真机上连续五轮反馈（每批 6~9 项），把「能跑」收敛成「能用」。
+四条主脉络：**实时链路真正打通**（WS 从未连上的根因）、**真机体验逐批收敛**（分页/未读/通知/返回键/头像）、
+**新增进程退出能力**、**根治通知跳转**。方法论上最值钱的三条：**客户端不猜服务端**（发图两条真因在 Agent 端）、
+**一次性事件令牌必须配守卫**（两次栽在 `LaunchedEffect`）、**自杀前先停 sticky 服务并回桌面**。
+逐版细节见下方各版条目；改前原文/改后/回滚配方见 `docs/dev/` 下同名台账。
+
+### 脉络1 · 实时链路（先修「从未连上」，再谈体验）
+
+- **v0.2.22**：首批 8 项（搜索框高度、通讯录、返回键四级优先级、连接状态误报、分页、进入会话不刷新、
+  微信资源释放「退出微信 / 离开即释放」）。
+- **v0.2.23**：**WS 从未连上的根因**——OkHttp `HttpUrl` 只支持 http/https，`toHttpUrlOrNull("ws://…")` 恒 null，
+  连接卡在 CONNECTING 且无回调；改返回 String 交 `Request.Builder.url(String)`，并补失败回退 DISCONNECTED。
+  同批修分页/角标/退出/输入框/滚动/表情/提示音共 9 项。
+
+### 脉络2 · 真机体验五批收敛（v0.2.24 → v0.2.26）
+
+- **v0.2.24**：触底只加载一次（`snapshotFlow` 替代布尔量 `derivedStateOf`）、刷新后列表变少（按已加载条数回拉）、
+  未读口径（按模式过滤 + `max(本地累计, 服务端)`）、发送重复、提示音音量滑杆。
+- **v0.2.25**：`LaunchedEffect(token)` **重新进入组合时也执行** → 销售页误弹未读 / 退出后误跳，加「已消费守卫」；
+  双击「聊天」只滚顶部不进详情；未读跳转非免打扰优先；全局单一通知 id；公众号默认静默；
+  去返回箭头 + 返回键双击退出。
+- **v0.2.26**：通知与保活常驻通知分离（**不是 id 撞号**，是保活渠道 `IMPORTANCE_HIGH+PRIORITY_MAX` 抢位 → 降为 LOW，
+  微信侧独立渠道组 + id 2301）；确认免打扰不提醒（早已实现，补入口兜底）；**撤回**客户端 2s 折叠去重；
+  返回键 2 秒改为设置可调（1~5s）；销售页返回键对齐微信；头像首字母压图（`cached(url)` 只在组合时求值一次）。
+- **发图两条（跨仓库根治）**：真因在 **Agent 端** `_handle_upload_and_send` 未写 EXIF 去重标志
+  （PC 端走的 `send_image` 会写 ⇒ 只有它不重复）。已在真实仓库 `F:\pythonWork\wxhelper\center-server` 打补丁
+  并本地提交（`agent/core/agent_client.py`）；客户端应急开关保留但默认关，待 Agent 验证后可删。
+
+### 脉络3 · 进程退出（v0.2.27 → v0.2.28）
+
+- **v0.2.27**：新增 `AppExit.kill` + 通用「切到后台立即结束」（默认关）+ 关于页「退出」。
+  顺序是关键：`stopService ×3`（三个 START_STICKY）→ `WechatRuntime.stopAll()` → `finishAffinity()` →
+  延迟 300ms → `killProcess + exitProcess`（**有可见 Activity 时直接 kill 会被 AMS 为恢复可见任务而重启**）。
+  同时确认「微信离开后立即结束」= 销毁 WS / 60s 心跳 / 重连 Job / OkHttp 池 / 内存数据。
+- 边界更正：杀进程前 `stopService` → 服务 `onDestroy` → `ResourceHolder.releaseAll()` 已取消双兜底 Alarm/Job，
+  **不需要用户手动关双兜底**；真正还会拉起进程的只剩开机静态广播与无障碍服务绑定。
+- **v0.2.28**：补 `cancelUniqueWork("bridge_location_report")`（否则十几分钟后 WorkManager 会新建进程复活）；
+  退出只清**运行时登记**、不写任何持久化开关 ⇒ 手动重启后保活照旧全部重新布防。
+
+### 脉络4 · 通知跳转根治（v0.2.29）
+
+- 复现路径：APP 切到主页/销售/设置 → 切到别的 APP → 来通知 → 点通知 → **有时进主页**。三处根因：
+  ① 通知 Intent 用 `getLaunchIntentForPackage()`，与 task 的 launcher intent **完全相同**
+  （`Intent.filterEquals()` 不比较 extras）⇒ 后台恢复时 AMS 只把 task 带前台、**不回调 `onNewIntent`**，
+  deep link 根本没送达；② `exitToHomeToken` 缺「已消费守卫」，Activity 重建时把微信页打回主页；
+  ③ 同一会话连续两条通知，`openWechatSession` 同值写入、key 不变 ⇒ 第二次点了没反应。
+- 修法：专用 action + `bridge://wechat/session/<wxid>` 唯一 data + `NEW_TASK|CLEAR_TOP|SINGLE_TOP`；
+  `exitToHome` 补守卫；改用自增 `openToken` 作 `LaunchedEffect` key；全链路加日志（关键字 `通知跳转`）。
+
+### 脉络5 · 工程与发布链路（贯穿）
+
+- 每版固定动作：台账（**改前逐字留档**）→ 改 → 回填改后/回滚 → `compileDebugKotlin` → 提交 → 打 tag → CI →
+  APK 同步 `server/data/updates/`（走 check_update）。
+- `chore` 提交（7fc93b2 / e7eef04 / 33ec1dd / 1b6a954）：每版同步 `update.json` 包清单。
+- `de28c8a`：发布链路文档补三个致命坑（含 `release.py` 重跑会重复 bump）。
+- **v0.2.28 踩坑**：`tools/release/api_push.py` 的 `PUSH_BASE=HEAD~1` **只推最后一个提交的 diff** ⇒
+  连续多次本地提交必须用 `HEAD~N`，且推完**必须校验远端文件内容**（不能只看 CI 绿）。
+
+### 关键经验沉淀
+
+1. **通知 PendingIntent 不要复用 launcher intent**：`getLaunchIntentForPackage()` 的
+   `ACTION_MAIN+CATEGORY_LAUNCHER` 与 task base intent 相同（extras 不参与比较），从后台恢复时 AMS 不回调
+   `onNewIntent` ⇒ 用专用 action + 唯一 data，并保留 `SINGLE_TOP`。
+2. **`LaunchedEffect(key)` 重新进入组合时也执行**：凡「一次性事件令牌」都要配「已消费守卫」
+   （本项目两栽：`jumpUnreadToken`、`exitToHomeToken`）；且 key 用**值**会漏掉同值重复事件 ⇒ 用**自增令牌**。
+3. **客户端不猜服务端**：「某端表现正常」只证明**那条路径**正常（PC `send_image` vs 手机 `upload_and_send`），
+   定位必先比端点；在客户端折叠「疑似双写」是补丁不是根治。
+4. **自杀会被复活**：START_STICKY 服务要显式 `stopService`；有可见 Activity 时 `killProcess` 会被 AMS 重启
+   ⇒ 先 `finishAffinity()` 再延迟杀；登记在系统里的 WorkManager 任务要一并取消。
+5. **通知展示位置由渠道 importance 决定，与前台服务存活无关**：改 importance 只影响展示，不影响保活。
+6. **OkHttp 不支持 `ws://`**：`toHttpUrlOrNull("ws://…")` 恒 null 且静默失败，WS 地址必须以 String 交给 `url(String)`。
+7. **推送后必须校验远端文件内容**：CI 绿 ≠ 代码上去了（diff 基线取错会漏提交）。
+
 ## 2026-11-01 · 🔧 v0.2.28 进程退出补强（取消 WorkManager 兜底 + 说明更正）
 
 - **补强**：`AppExit.kill` 增加 `cancelUniqueWork(ReportManager.WORK_NAME)`。该周期任务登记在系统里，
