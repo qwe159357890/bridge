@@ -232,3 +232,47 @@ python scripts/gh_api.py --repo qwe159357890/bridge download ./releases --match 
 ---
 
 *本技能完整用法见 `C:\Users\Administrator\.workbuddy\skills\github-api-automation`（含 `scripts/gh_api.py`、`scripts/axml_dump.py`）。*
+
+## 十一、完全本地打包（不经 GitHub，2026-11-02 v0.2.36 实战定版）
+
+**核心结论：本机 Gradle 打出的 APK 与 GitHub Actions 产物完全等效。**同一份入库的
+`app/bridge-debug.keystore` 签名、同一 `versionName`，`check_update` 升级链只认
+versionName、不区分产物来源。GitHub Actions 只是「发布/挂档」渠道，不是打包的必要条件。
+
+### 11.1 打包（全离线可用）
+
+```bash
+# 编译校验（不出包，最快反馈）
+JAVA_HOME="D:/Tool/Java/jdk-17.0.20.1+1" ./gradlew :app:compileDebugKotlin
+# 打包（debug 签名，可直接覆盖安装）
+JAVA_HOME="D:/Tool/Java/jdk-17.0.20.1+1" ./gradlew :app:assembleDebug
+# 产物：app/build/outputs/apk/debug/app-debug.apk
+```
+
+- SDK 在 `D:/Tool/androidsdk`；JDK 必须显式指定（系统默认 Java 版本不对）。
+- **版本号校验用 aapt，别比对文件大小**（假验证）：
+  `D:/Tool/androidsdk/build-tools/35.0.0/aapt.exe dump badging <apk> | head -2`
+
+### 11.2 装机三通道（按可靠性排序）
+
+| 通道 | 适用 | 要点 |
+|---|---|---|
+| ① USB / WiFi adb（局域网） | 手机在身边同网 | `tools/adb/platform-tools/adb.exe connect <ip>:5555 && adb install -r <apk>`，秒装。**PATH 上的 adb 是旧版，必须用项目自带的** |
+| ② check_update 通道 | 手机只有移动数据 | APK 拷入 `server/data/updates/bridge-vX.Y.Z.apk` + 改同目录 `update.json`（version+notes）→ 手机 App「检查更新」。**central-server 跑在本机（端口 15160），该目录实时生效，无需重启** |
+| ③ adb over VNT 虚拟网 | 仅应急 | adb shell 握手在隧道上极不稳定（push 45MB 能成功但 `adb shell` 恒 `device offline`）；大流量可能压崩 App 进程连带 VNT 失效。**禁止 adb over VNT 传大文件** |
+
+> 通道 ② 的铁律：**APK 与 update.json 必须同步更新**。`updates.py` 对外版本串取
+> update.json 显式声明（缺省才从文件名解析）——只拷 APK 漏改 update.json，手机会判
+> 「已是最新」，升级链全断（v0.2.34 实战踩坑）。
+
+### 11.3 本地打包与正式发布的关系
+
+- 本地打包 ≠ 正式发布：验证迭代用本地通道（快、闭环），**版本入库挂档仍走 §一 的
+  全自动闭环**（commit + tag + CI + Releases），避免未验证代码进仓库。
+- git 不可用时的发布兜底：Git Data API 重建提交（§十），参考脚本
+  `build/_api_push_v0235.py` / `_api_push_v0236.py`。**API 重建的 commit hash 与本地
+  不同（内容一致）**，本地 origin/main 引用滞后——下次发布前先
+  `GET /git/ref/heads/main` 查远端真实 sha，不能信本地引用。
+- 工具坑：MSYS/Git Bash 会把 adb push 目标路径 `/data/local/tmp/...` 转成 Windows
+  路径（报 `remote secure_mkdirs failed`），必须加前缀
+  `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'`。

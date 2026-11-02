@@ -18,6 +18,35 @@ Bridge 一键发布脚本：自动建仓库 → push 代码 → 触发 GitHub Ac
     4. 打 tag 并 push（触发 GitHub Actions）
     5. 轮询等待 workflow 完成
     6. 从 GitHub Release / Artifact 下载 APK 到 releases/
+
+★ 本地打包通道（不经 GitHub，2026-11-02 v0.2.36 实战总结，详见 docs/dev/release-pipeline.md）：
+    GitHub Actions 只是发布渠道之一，**本机 Gradle 打出的 APK 与 CI 产物完全等效**
+    （同一仓库内 debug keystore 签名、同一 versionName；check_update 升级链只认
+    versionName，不区分产物来源）。完全离线打包装机流程：
+
+        1) 改代码 → JAVA_HOME="D:/Tool/Java/jdk-17.0.20.1+1" ./gradlew :app:assembleDebug
+           产物：app/build/outputs/apk/debug/app-debug.apk（debug 签名，可直接 adb install -r）
+        2) 装机三通道任选（按可靠性排序）：
+           a. USB / WiFi adb（局域网 192.168.31.x:5555，秒装）：adb install -r <apk>
+           b. check_update 通道（手机仅移动数据也可）：APK 拷入 server/data/updates/
+              （命名 bridge-vX.Y.Z.apk）+ 改 server/data/updates/update.json（version+notes）
+              ——central-server 实时读该目录，无需重启；手机 App 内点「检查更新」
+           c. adb over VNT 虚拟网：仅应急，adb shell 握手在隧道上极不稳定
+              （push 可能成功但 shell 恒失败 device offline），且大流量可能压崩
+              App 进程连带 VNT 失效——**禁止 adb over VNT 传大文件**
+        3) 本地打包 ≠ 正式发布：正式发布仍走本脚本（commit + tag + CI + Releases 挂档）
+
+    常用命令：
+        编译校验（不出包）：JAVA_HOME="D:/Tool/Java/jdk-17.0.20.1+1" ./gradlew :app:compileDebugKotlin
+        打包：            JAVA_HOME="D:/Tool/Java/jdk-17.0.20.1+1" ./gradlew :app:assembleDebug
+        装机：            tools/adb/platform-tools/adb.exe install -r app/build/outputs/apk/debug/app-debug.apk
+        （PATH 上的 adb 是旧版，务必用项目自带 tools/adb/platform-tools/）
+
+    git 不可用时的发布兜底（v0.2.35/0.2.36 实战）：git 直连被 reset、代理 502 时，
+    用 GitHub Git Data API 重建提交（blob→tree→commit→PATCH main ref→POST tag），
+    参考脚本 build/_api_push_v0235.py / _api_push_v0236.py。注意：**API 重建的
+    commit hash 与本地不同（内容一致）**，本地 origin/main 引用会滞后——下次
+    发布前必须先 GET /git/ref/heads/main 查远端真实 sha，不能信本地引用。
 """
 
 import os
