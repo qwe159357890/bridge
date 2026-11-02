@@ -1047,24 +1047,102 @@ grep 'versionName = ' app/build.gradle.kts   # 应回到 "0.2.31"
 5. 前台服务触发崩溃台账 §5 任一条（前台义务欠账、`startForeground` 抛异常未兜住）。
 6. 用户中途改变决策（例如决定升服务端到 2.x）。
 
-### 6.8 改后回填（**实施完成后填写，先占位**）
+### 6.8 改后回填（2026-11-02 完成，本节已闭环）
 
-> ⏳ 待 §6.9 实施完成回填：改后原文（关键片段）、文件指纹、编译/APK 校验结果、发布链路结果、
-> 真机验证结论。**未回填前本节不算闭环。**
+> **状态：✅ 已闭环**。§6.9 的 11 项实施全部完成、全部本地验证 PASS、v0.2.32 已发布并追平本地 git，
+> §6.7 的 6 条回滚信号**均未触发**（真机项属「待验证」，非失败）。
+> 改前原文见 §6.4、新增文件删除清单见 §6.5、回滚配方见 §6.6；改后完整内容由远端 commit
+> `11c1f1746e4a165713267401b8f224fef95d64c6` 兜底（git 可 100% 检出）。
+
+#### 6.8.1 改后关键片段（与 §6.4 改前逐项对照）
+
+| 位置 | 改后（1.x / VntApp v1.2.9） |
+|---|---|
+| `build.gradle.kts` | `versionName = "0.2.32"`；`abiFilters += "arm64-v8a"` / `"x86_64"`（2 套） |
+| `proguard-rules.pro` | `-keep class top.wherewego.vnt.jni.** { *; }` |
+| `Vnt.java`（新增） | 补 `static { System.loadLibrary("vnt_jni"); }`（官方绑定未带，不补必抛 `UnsatisfiedLinkError`） |
+| `VntVpnService.generateTun` | `override fun generateTun(info: DeviceConfig?): Int { ... val f = Builder().addAddress(ip, prefix).addRoute(route, prefix).establish()!!; pfd = f; return f.fd }` —— **native 反过来向 Java 要 fd**；绝不 `addRoute("0.0.0.0", 0)` |
+| `VntVpnService.runConnect` | `v = Vnt(config, callback)` → `onVntReady(PeerListProvider { vnt?.list() })` → `startupError?.let { throw }` → `while (running && gen == generation) { nativeVnt.awaitTimeout(2000) }`；`finally` 统一 `v?.stop()/close()` + `pfd?.close()`，仅 `!failed` 才 `onStopped()`（沿用 v0.2.31 修复） |
+| `VntMeshPrefs` | `token / server(裸 host:port) / tcp(bool) / password / cipherModel / serverEncrypt / finger / firstLatency / mtu / stunServers / punchModel / useChannel`；`load()` 迁移 `network_code → token` 与 2.x 公共服 → `039039.xyz:31007`；`VntServerAddress.error()` 拒绝任何 `://` |
+| `VntConfigBuilder` | `c.setTcp(config.tcp)` / `setServerEncrypt` / `setFinger` / `setFirstLatency`（显式 setter 规避 `isXxx()` Kotlin 合成属性坑）；`VntServerAddress.error()` + token 非空双防线 |
+| `VntMeshController` | `fun interface PeerListProvider { fun list(): Array<PeerRouteInfo>? }`；`refreshOnce()` 里 `direct = route?.metric?.toInt() == 1`；前台 5 秒刷新守卫 + generation 校验不变 |
+| `CommandModule` / catalog | `token`（兼容 `network_code` 别名）、裸 `host:port`、`tcp` 三态参数；`vnt_start/vnt_stop` 同步写 `autoStart` |
+| `VntPages.kt` | 配置弹窗 Token / 裸地址 / UDP-TCP 开关 / cipherModel / MTU / STUN；移除 2.x 速率·RTT·NAT 卡片 |
+
+#### 6.8.2 改后文件指纹（sha256 前 16 位 / 行数）
+
+| 文件 | sha256(前16) | 行 |
+|---|---|---|
+| `app/build.gradle.kts` | `feb8de9056ba4593` | 127 |
+| `app/proguard-rules.pro` | `6a1930b719c17581` | 7 |
+| `app/.../vnt/VntMeshState.kt` | `93c211e8328285ef` | 65 |
+| `app/.../vnt/VntMeshPrefs.kt` | `654d83700d7240d5` | 214 |
+| `app/.../vnt/VntConfigBuilder.kt` | `07a24f2367753876` | 63 |
+| `app/.../vnt/VntMeshController.kt` | `2f824fd92d5359c9` | 298 |
+| `app/.../vnt/VntVpnService.kt` | `d3c5b0700cd65fe7` | 369 |
+| `app/.../vnt/VntAutoStart.kt` | `4499b73babd6aca1` | 46 |
+| `app/.../ui/VntPages.kt` | `88a76f7929db77f6` | 575 |
+| `app/.../di/CommandModule.kt` | `58d2363278664686` | 1894 |
+| `java/top/wherewego/vnt/jni/Vnt.java` | `ed605054f24a4373` | 60 |
+| `jniLibs/arm64-v8a/libvnt_jni.so` | `53dcc30a81efc05e` | 2,729,632 B |
+| `jniLibs/x86_64/libvnt_jni.so` | `fac9d1ee9f40911f` | 2,373,272 B |
+| `server/app/core/command_catalog.py` | `90a14c819fceb2e5` | 453 |
+| `tools/vnt/verify_so.py` | `7ec641c9e824e36d` | 242 |
+| `docs/research/vnt-mesh-integration.md` | `34dd7b92ee2d23b9` | 791 |
+| `docs/api/commands/system.md` | `faaf986dfc32d3ea` | 149 |
+| `docs/INDEX.md` | `764176e033f51ec4` | 77 |
+| `docs/CHANGELOG.md` | `56b4dc144271b695` | 976 |
+| `docs/dev/crash-ledger.md` | `0866336fa33f6c36` | 142 |
+| `docs/dev/heartbeat-inventory.md` | `fa23530723a982b8` | 555 |
+| `assets/design/ui-mockup-vnt-mesh.html` | `5deca1539d77e92a` | 320 |
+| `server/data/updates/update.json` | `d099494143b7d482` | 4 |
+
+> 注：本表指纹为 §6.8 回填时的工作区快照；本文件自身在回填后会变化，以远端 commit 为准。
+
+#### 6.8.3 本地验证结果（2026-11-02）
+
+- `:app:compileDebugKotlin`：**BUILD SUCCESSFUL**（3m32s，gradle rc=0，无 `e:` 错误，仅既有 deprecation 警告）。
+- `:app:assembleDebug`：**BUILD SUCCESSFUL**（2m15s，含 `compileDebugJavaWithJavac` 编译 14 个 1.x Java 绑定类）；仅有已知无害警告 `Unable to strip ... libvnt_jni.so`（AGP 按原样打包）。
+- `tools/vnt/verify_so.py`：两套 so 全 PASS —— 6 个 `Java_top_wherewego_vnt_jni_Vnt_*` 导出符号 ↔ 6 个 native 声明零缺失；ELF64 / AArch64 / x86-64；**4KB 页对齐**（非 2.x 的 16KB）。
+- 本地 APK 40,093,287 B：`arm64-v8a` / `x86_64` 各 6 个 so，`armeabi-v7a` / `x86` 为 0；两份 `libvnt_jni.so` 与 `tools/vnt/artifacts/v1.2.9/` 逐字节一致；21 dex + Manifest + resources.arsc；`versionName=0.2.32`；AXML 解析器确认 specialUse 四件套齐全（`foregroundServiceType` = 整数 flag `0x40000000`，故二进制明文搜不到属正常）；dex 中无 `Lcom/vnt/` 残留、`top/wherewego/vnt/jni` 命中 3 个 dex。
+- 原型 HTML：`ul/li/div/text/svg/b/code` 标签全部闭合 OK。
+
+#### 6.8.4 发布链路结果（按 `docs/dev/release-pipeline.md` 铁律）
+
+| 项 | 结果 |
+|---|---|
+| 本地提交 | `19b9a6e`（52 文件：17 A / 12 D / 23 M，中文详细 message 见 `.workbuddy/vnt_commit_msg_v0232.txt`） |
+| API 通道发布 | 沿用 `.workbuddy/release_v0232_retry.py`（显式清代理 + 6 次指数退避重试 + blob 0.3s 限速 + PATCH 前二次校验 main）；**一次成功，无 `RemoteDisconnected`** |
+| 远端 commit / tag | `11c1f1746e4a165713267401b8f224fef95d64c6` / `v0.2.32` |
+| CI | Actions run `41367207306`，`event=push` 由 tag **自动触发**（无需 dispatch），`conclusion=success`，11 步全 OK 含 `Create Release` |
+| Release 资产 | `app-debug.apk` 40,093,287 B，`published=2026-11-02T00:31:15Z` |
+| 下载 | gh-proxy `v4.gh-proxy.org` http=200 / 3.05s → `releases/app-debug-v0.2.32.apk`，sha256 `7457a6f2f4cd69069559875f8190ec1a49e8d929d58d6eb5ade82615cb0c8a88` |
+| CI APK 内容校验 | 与本地一致：2 套 ABI、so 与官方 v1.2.9 一致、`versionName=0.2.32`、不含 0.2.31、无 `com/vnt` 残留 |
+| 服务端更新目录 | `server/data/updates/bridge-v0.2.32.apk`（40,093,287 B，被 `.gitignore:53` 忽略）；`update.json → 0.2.32` |
+| 发布后追平 | ① 清代理直连 `git fetch` 一次成功 `0f7f509..11c1f17`；`git diff --ignore-cr-at-eol --stat HEAD 11c1f174` **为空**；校验 `origin/main == 11c1f174…` 后才 `reset --hard` → `HEAD=11c1f174…`、工作区干净（「fetch 失败绝不 reset」已遵守） |
+
+#### 6.8.5 真机验证结论（**待做，非失败**）
+
+§6.7 的 6 条回滚信号均未触发；以下仍需用户真机环境：
+1. 两套 ABI 真机安装 + `System.loadLibrary("vnt_jni")` 加载；
+2. 与存量 1.x 客户端互 ping（`token/password/cipherModel/serverEncrypt/finger` 逐项一致）；
+3. 冷启动自动开始 / 点停止后下次不自动开始；
+4. `dumpsys batterystats` 开关省电对照；
+5. Android 15+ 16KB 页设备对 4KB 对齐 so 的兼容性（官方 1.x 产物固有限制，见报告 §13.6）。
 
 ### 6.9 实施清单（逐项打勾）
 
 | # | 动作 | 状态 |
 |---|---|---|
-| 1 | 删除 `com/vnt/*` 11 个类 + 3 套 2.x so | ☐ |
-| 2 | 拷入 `v1.2.9` 14 个 Java 绑定（`Vnt.java` 补 `System.loadLibrary`）+ 2 套 so | ☐ |
-| 3 | `build.gradle.kts`：0.2.32、abiFilters 2 套 | ☐ |
-| 4 | `proguard-rules.pro`：keep 包名改 `top.wherewego.vnt.jni.**` | ☐ |
-| 5 | 重写 6 个 `my.bridge.com.vnt` 文件（1.x Config / CallBack / list() 时序） | ☐ |
-| 6 | 重写 `VntPages.kt`（1.x 字段、移除速率/RTT/NAT 的 2.x 专属 UI） | ☐ |
-| 7 | `CommandModule.kt` / `command_catalog.py` / `system.md` 参数与文案改 1.x | ☐ |
-| 8 | `verify_so.py` 适配 1.x（6 个 JNI 符号、2 套 ABI） | ☐ |
-| 9 | 文档：报告 §十三、INDEX、CHANGELOG、崩溃/心跳台账、原型页脚、update.json、工作日志 | ☐ |
-| 10 | `compileDebugKotlin` + `assembleDebug` + APK 静态自检 | ☐ |
-| 11 | 发布 v0.2.32（铁律）+ 下载 + 追平本地 git + 回填 §6.8 | ☐ |
+| 1 | 删除 `com/vnt/*` 11 个类 + 3 套 2.x so | ✅ |
+| 2 | 拷入 `v1.2.9` 14 个 Java 绑定（`Vnt.java` 补 `System.loadLibrary`）+ 2 套 so | ✅ |
+| 3 | `build.gradle.kts`：0.2.32、abiFilters 2 套 | ✅ |
+| 4 | `proguard-rules.pro`：keep 包名改 `top.wherewego.vnt.jni.**` | ✅ |
+| 5 | 重写 6 个 `my.bridge.com.vnt` 文件（1.x Config / CallBack / list() 时序） | ✅ |
+| 6 | 重写 `VntPages.kt`（1.x 字段、移除速率/RTT/NAT 的 2.x 专属 UI） | ✅ |
+| 7 | `CommandModule.kt` / `command_catalog.py` / `system.md` 参数与文案改 1.x | ✅ |
+| 8 | `verify_so.py` 适配 1.x（6 个 JNI 符号、2 套 ABI） | ✅ |
+| 9 | 文档：报告 §十三、INDEX、CHANGELOG、崩溃/心跳台账、原型页脚、update.json、工作日志 | ✅ |
+| 10 | `compileDebugKotlin` + `assembleDebug` + APK 静态自检 | ✅ |
+| 11 | 发布 v0.2.32（铁律）+ 下载 + 追平本地 git + 回填 §6.8 | ✅ |
 
