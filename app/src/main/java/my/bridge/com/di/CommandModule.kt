@@ -322,10 +322,11 @@ object CommandModule {
             // 改配置、也不能重写自动组网记忆——否则运行中的实例仍用启动时的旧配置，
             // 后台却以为新参数已生效；迟到的 start 还会把用户刚点「停止」清掉的记忆写回。
             val st = VntMeshController.state.value.status
-            if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
+            // v0.2.38：RECONNECTING = 断线自动重连中（监督循环存活），与 RUNNING 同等对待
+            if (st == VntStatus.RUNNING || st == VntStatus.STARTING || st == VntStatus.RECONNECTING) {
                 return CommandResult(
                     command.commandId, command.command, false,
-                    "重复下发被忽略：组网已在运行（${VntMeshController.statusText()}）；" +
+                    "重复下发被忽略：组网已在运行/自动重连中（${VntMeshController.statusText()}）；" +
                         "本次参数未生效、未改动自动组网记忆。如需变更配置请先停止再开始",
                 )
             }

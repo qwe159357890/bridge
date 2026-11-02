@@ -2,7 +2,21 @@
 
 > 本文档是 Bridge 项目**所有文档的唯一导航入口**。新增文档后必须在此登记。
 
+## ★ 模块使用文档约定
+
+每个功能模块在以下两个时机，必须在 `guides/` 目录总结一篇**面向使用者**的功能使用文档（功能概览 / 如何启动 / 连接参数 / 使用说明 / 能做与不能做 / 配置项 / FAQ）：
+
+1. **阶段性**——功能主干可用、经过真机验证时；
+2. **完全完成**——功能模块整体收尾时。
+
+使用文档与开发文档（`dev/` 台账、`research/` 调研）分工：guides 写「怎么用」，dev/research 写「怎么做的」。
+
 ## 📚 文档清单
+
+### 模块使用文档（guides/）
+| 文档 | 说明 |
+|---|---|
+| [ssh-server.md](guides/ssh-server.md) | **SSH 服务器使用文档**（SFTP 文件管理 + 远程终端：启动方式、连接参数、快捷目录/内置 alias、存储档、能做与不能做（含为何装不了 zsh/oh-my-zsh）、配置项、FAQ） |
 
 ### 架构类（architecture/）
 | 文档 | 说明 |
@@ -24,9 +38,9 @@
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | **变更记录（版本里程碑与关键修复脉络）** |
 | release-pipeline.md | 构建与发布链路（git 推送 + GitHub Actions 打包 + 签名密钥管理） |
-| [heartbeat-inventory.md](dev/heartbeat-inventory.md) | **心跳与周期任务台账**（6 条长连接的心跳/传输 ping/判死/重连全景，含 v0.2.30/v0.2.32 VNT 黑盒保活（v0.2.32 起为 1.x `awaitTimeout` 循环）+ 各连接周期硬约束 + 耗电量级模型 + 优化点与实测方法；调任何周期前先查这里） |
+| [heartbeat-inventory.md](dev/heartbeat-inventory.md) | **心跳与周期任务台账**（6 条长连接的心跳/传输 ping/判死/重连全景，含 VNT 黑盒保活与 **v0.2.38 监督重连**（可重试失败不停服务 + 退避 + NetworkCallback 立即重试）+ 各连接周期硬约束 + 耗电量级模型 + 优化点与实测方法；调任何周期前先查这里） |
 | [crash-ledger.md](dev/crash-ledger.md) | **崩溃台账**（三次根因时间线 + `startForegroundService` 义务按次计铁律 + 全量审计表 + 排障工具链 + **新前台服务接入检查清单 §5**；新服务接入前对照） |
-| [vnt-integration-change-ledger.md](dev/vnt-integration-change-ledger.md) | **VNT 集成改前留档台账**（§一~四 = v0.2.30 P1+P2 全部既有文件改前原文逐字固化 + 回滚配方 + 触发回滚信号 + 新增文件删除清单 + 改后回填；**§五 = v0.2.31** 诊断证据链、改前原文/哈希、新增文件、回滚配方；**§六 = v0.2.32** A1 纯替换 1.x 全量改前留档 + 删除清单 + 回滚配方 + 改后回填） |
+| [vnt-integration-change-ledger.md](dev/vnt-integration-change-ledger.md) | **VNT 集成改前留档台账**（§一~四 = v0.2.30 P1+P2 全部既有文件改前原文逐字固化 + 回滚配方 + 触发回滚信号 + 新增文件删除清单 + 改后回填；**§五 = v0.2.31** 诊断证据链、改前原文/哈希、新增文件、回滚配方；**§六 = v0.2.32** A1 纯替换 1.x 全量改前留档 + 删除清单 + 回滚配方 + 改后回填；**§七 = v0.2.38** 断线自动重连的改前原文/哈希、监督循环改造、回滚配方与真机验收清单） |
 | coding-style.md | 代码规范（待补充） |
 | git-workflow.md | Git 协作规范（待补充） |
 | commit-convention.md | 提交信息规范（待补充） |

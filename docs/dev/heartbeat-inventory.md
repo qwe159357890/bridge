@@ -1,8 +1,8 @@
 # 心跳与周期任务台账
 
-> **权威文档**：本项目所有「心跳 / 保活 / 周期任务」的唯一台账。  
-> 调整任何周期前先查本文档；调完必须回来更新本表。  
-> 背景：v0.2.20 微信集成引入第 5 套长连接、v0.2.30 VNT 组网引入第 6 套（Rust 内部黑盒保活），  
+> **权威文档**：本项目所有「心跳 / 保活 / 周期任务」的唯一台账。
+> 调整任何周期前先查本文档；调完必须回来更新本表。
+> 背景：v0.2.20 微信集成引入第 5 套长连接、v0.2.30 VNT 组网引入第 6 套（Rust 内部黑盒保活），
 > 周期参数散落各处，本文档用于避免「改一处、忘四处」。VNT 的周期不可从 Java 侧调整，见 §1.2。
 
 ---
@@ -22,7 +22,7 @@
 | 连接   | 源码                                                        | 应用层心跳           | 传输层 ping | 判死                       | 重连                |
 | ---- | --------------------------------------------------------- | --------------- | -------- | ------------------------ | ----------------- |
 | 音频中继 | `app/.../relay/RelayClient.kt`<br />常量 `RelayProtocol.kt` | **30s** 文本 ping | 无        | 60s 无数据判死 + ready 超时 10s | 1/2/4/8/16/30s 退避 |
-| VNT 组网（v0.2.32 改 1.x） | `app/.../vnt/VntVpnService.kt`<br />官方 v1.2.9 `libvnt_jni.so`（Rust） | **黑盒**：周期在 Rust 内部、不可从 Java 侧调；Java 侧只是 `Vnt.awaitTimeout(2000)` 保活/停止信号循环，**不发网络包** | — | 实例停止由 `Vnt.stop()` 让 `awaitTimeout` 返回 true；错误经 `CallBack.error(ErrorInfo)` 上报 | 用户显式「开始组网」才重建实例（`START_NOT_STICKY`，进程被杀不复活） | 
+| VNT 组网（v0.2.32 改 1.x；v0.2.38 加断线自动重连） | `app/.../vnt/VntVpnService.kt`<br />官方 v1.2.9 `libvnt_jni.so`（Rust） | **黑盒**：周期在 Rust 内部、不可从 Java 侧调；Java 侧只是 `Vnt.awaitTimeout(2000)` 保活/停止信号循环，**不发网络包** | — | 实例停止由 `Vnt.stop()` 让 `awaitTimeout` 返回 true；错误经 `CallBack.error(ErrorInfo)` 上报 | **v0.2.38 监督重连**：可重试失败（Disconnect 等）worker 不 stopSelf，退避 **2/4/8/16/30/60s** 封顶（成功即重置）+ NetworkCallback 网络恢复立即重试；致命错误（TokenError/InvalidIp/授权被抢）转 ERROR 等人工；`START_NOT_STICKY` 进程被杀不复活 |
 
 > **VNT 登记说明（v0.2.32 更新）**：这是第 6 条长连接，但心跳周期参数**不在 Kotlin 里**
 > （1.x 由 Rust 内部维护，`awaitTimeout(2000)` 只是 Java 侧的保活/停止信号循环，**不发网络包**），
@@ -75,13 +75,13 @@
 
 
 
-> **重要纠正（v0.2.20 期间的错误结论）**：早前记录「微信心跳放宽到 30s 需服务端同步调 Pong 超时」  
-> 是错的。中心服务器 WS 主循环是裸 `while True: await websocket.receive_text()`（`api/routes/client.py:630`），  
-> **没有读超时**；唯一约束是 `CLIENT_HEARTBEAT_TIMEOUT = 300`。  
+> **重要纠正（v0.2.20 期间的错误结论）**：早前记录「微信心跳放宽到 30s 需服务端同步调 Pong 超时」
+> 是错的。中心服务器 WS 主循环是裸 `while True: await websocket.receive_text()`（`api/routes/client.py:630`），
+> **没有读超时**；唯一约束是 `CLIENT_HEARTBEAT_TIMEOUT = 300`。
 > 因此 15s → 30s / 60s / 120s 全部合法且**服务端零改动**。
 >
-> 真正卡住「心跳上限」的不是服务端，是**运营商/路由器 NAT 空闲超时**（移动网络常见 30s–5 分钟，  
-> 家用/企业 NAT 常见 5–30 分钟）。间隔超过 NAT 超时 → 连接变「半死」，双向都收不到包，  
+> 真正卡住「心跳上限」的不是服务端，是**运营商/路由器 NAT 空闲超时**（移动网络常见 30s–5 分钟，
+> 家用/企业 NAT 常见 5–30 分钟）。间隔超过 NAT 超时 → 连接变「半死」，双向都收不到包，
 > 只能等客户端 Pong 超时才能发现。
 
 ---
@@ -121,11 +121,11 @@
 
 1. **WiFi 场景下，调心跳间隔的收益很小。** 15s→30s 大约只省 **10–100 mAh/天**（0.2%–2%，
    取决于 Wi-Fi 是否真的在 power save）。**只有当设备跑在移动数据下，间隔才是关键变量。**
-2. **常驻基线比心跳更值得优化。** `PARTIAL_WAKE_LOCK` + `WifiLock` + `SilentPlayer`（20ms/tick）  
-   三者叠加，量级约 **400–1500 mAh/天**，与 15s 心跳同数量级甚至更大。  
+2. **常驻基线比心跳更值得优化。** `PARTIAL_WAKE_LOCK` + `WifiLock` + `SilentPlayer`（20ms/tick）
+   三者叠加，量级约 **400–1500 mAh/天**，与 15s 心跳同数量级甚至更大。
    其中 SilentPlayer 每 20ms 唤醒一次写音频帧，是三者里最激进的一项。
-3. **合并心跳（coalescing）的收益 > 放宽间隔。** 多条连接的心跳若错相，各自独立触发一次无线唤醒；  
-   对齐到同一时刻后共用一次唤醒。当前进程级就有 3 个计时器（15s + 20s + 20s），  
+3. **合并心跳（coalescing）的收益 > 放宽间隔。** 多条连接的心跳若错相，各自独立触发一次无线唤醒；
+   对齐到同一时刻后共用一次唤醒。当前进程级就有 3 个计时器（15s + 20s + 20s），
    错相约 600 次唤醒/小时，对齐到 20s 栅格后约 180 次/小时，**省约 70% 且零可靠性损失**。
 
 ---
@@ -162,9 +162,9 @@ adb shell dumpsys batterystats > batterystats.txt
 
 更精确的做法：
 
-- **对照法**：同一台设备、同一网络、熄屏静置 8 小时，分别在「心跳 15s」「心跳 30s」「心跳 60s」下跑，  
+- **对照法**：同一台设备、同一网络、熄屏静置 8 小时，分别在「心跳 15s」「心跳 30s」「心跳 60s」下跑，
   比较 `batterystats` 里 `radio active` 与总 mAh 的差值。这是唯一可信的数字。
-- **区分基线与心跳**：把 `WechatRuntime` 整体停掉（保留保活服务）跑一轮，  
+- **区分基线与心跳**：把 `WechatRuntime` 整体停掉（保留保活服务）跑一轮，
   再只停心跳（保持连接）跑一轮，两次差值即为心跳的真实净成本。
 - 用 Battery Historian 看 `wake_lock_in` / `mobile_radio` 的条形密度，能直观看到对齐效果。
 
@@ -226,8 +226,8 @@ adb shell dumpsys batterystats > batterystats.txt
 
 1. 更新本文档 §1 对应表格；
 2. 检查 §2 的约束（服务端超时、客户端 Pong 超时、NAT）；
-3. 若涉及 Bridge 主 WS，同时核对 `docs/api/ws-client.md` 与 `server/config.yaml` 的  
-   `heartbeat.interval` / `client_pong_timeout` / `server_read_timeout` 三者一致性  
+3. 若涉及 Bridge 主 WS，同时核对 `docs/api/ws-client.md` 与 `server/config.yaml` 的
+   `heartbeat.interval` / `client_pong_timeout` / `server_read_timeout` 三者一致性
    （**该组参数按约定双端硬编码、无配置入口，见 `WsConfig` 注释**）。
 
 ---

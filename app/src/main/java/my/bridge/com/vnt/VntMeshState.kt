@@ -20,6 +20,12 @@ enum class VntStatus {
     /** 已连接，虚拟 IP 可用。 */
     RUNNING,
 
+    /**
+     * 断线重连中（v0.2.38）：监督循环仍在服务内运行，将按退避节奏自动重建连接；
+     * 用户点「停止组网」随时可终止。**不是终态**，勿当 ERROR 处理。
+     */
+    RECONNECTING,
+
     /** 正在停止。 */
     STOPPING,
 
@@ -60,6 +66,15 @@ data class VntMeshState(
     val message: String = "",
     /** 最后一次成功刷新时间（System.currentTimeMillis），0 = 从未刷新。 */
     val lastUpdatedAt: Long = 0L,
+    /** v0.2.38：RECONNECTING 专用——第几次重连尝试（从 1 起）。 */
+    val retryAttempt: Int = 0,
+    /** v0.2.38：RECONNECTING 专用——距下次重连的秒数。 */
+    val retryDelaySec: Int = 0,
 ) {
     val isRunning: Boolean get() = status == VntStatus.RUNNING
+
+    /** 服务/监督循环仍在为「保持组网」工作（含启动与重连），UI 据此决定显示停止按钮。 */
+    val isActive: Boolean
+        get() = status == VntStatus.RUNNING || status == VntStatus.STARTING ||
+            status == VntStatus.RECONNECTING
 }

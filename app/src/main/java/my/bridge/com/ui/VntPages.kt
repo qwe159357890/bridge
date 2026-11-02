@@ -60,6 +60,7 @@ import my.bridge.com.vnt.VntStatus
 private val VntBlue = Color(0xFF1A6EE8)
 private val VntGreen = Color(0xFF2E9E5B)
 private val VntRed = Color(0xFFE5484D)
+private val VntOrange = Color(0xFFED9A3C)
 private val VntInk = Color(0xFF1F2329)
 private val VntGray = Color(0xFF6B7280)
 private val VntBg = Color(0xFFF5F6F8)
@@ -174,7 +175,8 @@ fun VntPage() {
             ) {
                 Text("组网配置", color = VntInk, fontSize = 14.sp)
             }
-            if (state.status == VntStatus.RUNNING || state.status == VntStatus.STARTING) {
+            // v0.2.38：RECONNECTING（断线自动重连中）也算「在工作」，随时可终止监督循环
+            if (state.isActive) {
                 Button(
                     onClick = {
                         // v0.2.31：用户主动点「停止组网」→ 清记忆，下次启动需手动开启。
@@ -198,7 +200,8 @@ fun VntPage() {
         }
 
         Text(
-            "组网是基础设施：开始后切 Tab / 退后台不中断，只有点「停止组网」或退出应用才结束。" +
+            "组网是基础设施：开始后切 Tab / 退后台不中断，断线后自动重连，" +
+                "只有点「停止组网」或退出应用才结束。" +
                 " Android 同时只允许一个 VPN，启动会断开其它 VPN。" +
                 " ★ 1.x 互通要求：Token、密码、加密模式、服务端加密、指纹校验必须与存量 1.x 客户端逐项一致。",
             color = VntGray,
@@ -218,6 +221,9 @@ fun VntPage() {
                 if (VntMeshController.state.value.isRunning) {
                     VntMeshController.restart(context)
                     Toast.makeText(context, "配置已保存，正在重连", Toast.LENGTH_SHORT).show()
+                } else if (VntMeshController.state.value.status == VntStatus.RECONNECTING) {
+                    // v0.2.38：监督循环每轮重读 Prefs，无需手动 restart，下一轮自动用新配置
+                    Toast.makeText(context, "配置已保存，自动重连将使用新配置", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
                 }
@@ -249,6 +255,13 @@ private fun VntStatusCard(state: VntMeshState) {
             "虚拟局域网已建立，可与同组网编号（Token）下的设备互访",
         )
         VntStatus.STARTING -> Triple(VntBlue, "正在建立虚拟网络…", state.message)
+        VntStatus.RECONNECTING -> Triple(
+            VntOrange,
+            "断线，正在自动重连…",
+            "第 ${state.retryAttempt} 次重连" +
+                (if (state.retryDelaySec > 0) "（${state.retryDelaySec}s 后重试）" else "（进行中）") +
+                " · 原因：${state.message}",
+        )
         VntStatus.STOPPING -> Triple(VntGray, "正在停止…", state.message)
         VntStatus.ERROR -> Triple(VntRed, "组网异常", state.message)
         VntStatus.STOPPED -> Triple(VntBlue, "组网未连接", "点击下方「开始组网」建立虚拟局域网")
@@ -262,7 +275,7 @@ private fun VntStatusCard(state: VntMeshState) {
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (state.status == VntStatus.STARTING) {
+            if (state.status == VntStatus.STARTING || state.status == VntStatus.RECONNECTING) {
                 CircularProgressIndicator(
                     color = Color.White,
                     modifier = Modifier.size(22.dp),

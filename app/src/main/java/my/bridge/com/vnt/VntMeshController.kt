@@ -107,6 +107,8 @@ object VntMeshController {
                 serverVersion = serverVersion,
                 message = "已连接",
                 lastUpdatedAt = System.currentTimeMillis(),
+                retryAttempt = 0,
+                retryDelaySec = 0,
             )
         }
     }
@@ -127,12 +129,38 @@ object VntMeshController {
                 status = VntStatus.ERROR,
                 message = message,
                 peers = emptyList(),
+                retryAttempt = 0,
+                retryDelaySec = 0,
+            )
+        }
+    }
+
+    /**
+     * v0.2.38：进入断线重连（服务内监督循环继续工作，非终态）。
+     * 由 [VntVpnService] 在「可重试失败」后调用；`reason` 供 UI/admin 展示断线原因。
+     */
+    fun onReconnecting(attempt: Int, delaySec: Int, reason: String) {
+        provider = null
+        publish {
+            it.copy(
+                status = VntStatus.RECONNECTING,
+                message = reason,
+                peers = emptyList(),
+                retryAttempt = attempt,
+                retryDelaySec = delaySec,
             )
         }
     }
 
     fun onStopping() {
-        publish { it.copy(status = VntStatus.STOPPING, message = "正在停止…") }
+        publish {
+            it.copy(
+                status = VntStatus.STOPPING,
+                message = "正在停止…",
+                retryAttempt = 0,
+                retryDelaySec = 0,
+            )
+        }
     }
 
     fun onStopped() {
@@ -145,6 +173,8 @@ object VntMeshController {
                 serverVersion = null,
                 peers = emptyList(),
                 lastUpdatedAt = 0L,
+                retryAttempt = 0,
+                retryDelaySec = 0,
             )
         }
     }
@@ -164,7 +194,10 @@ object VntMeshController {
      */
     fun start(context: Context): Boolean {
         val s = _state.value.status
-        if (s == VntStatus.RUNNING || s == VntStatus.STARTING) return true
+        // v0.2.38：RECONNECTING 也视为「已在工作」（监督循环会自动建回来），勿重复拉起
+        if (s == VntStatus.RUNNING || s == VntStatus.STARTING || s == VntStatus.RECONNECTING) {
+            return true
+        }
         val intent = Intent(context, VntVpnService::class.java)
             .setAction(VntVpnService.ACTION_START)
         return try {
@@ -231,6 +264,8 @@ object VntMeshController {
                     "在线设备 ${s.peers.count { it.online }} · 服务端版本 ${s.serverVersion ?: "?"}" +
                     "（详细列表需打开组网页，命令不主动拉列表）"
             VntStatus.STARTING -> "正在建立连接（${s.message}）"
+            VntStatus.RECONNECTING ->
+                "断线重连中（第 ${s.retryAttempt} 次，${s.retryDelaySec}s 后重试 · ${s.message}）"
             VntStatus.STOPPING -> "正在停止（${s.message}）"
             VntStatus.STOPPED -> "未连接"
             VntStatus.ERROR -> "异常：${s.message}"

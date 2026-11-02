@@ -789,3 +789,34 @@ SHA256 与官方 `.sha256` 一致、PT_LOAD 页对齐（64 位 16KB / 32 位 4KB
   Manifest `versionName` 与 specialUse 四件套、无残留 2.x 类/so —— 结果回填 §6.8。
 - **仍待真机验证**：两套 ABI 安装与 native 加载、冷启动自动开始 / 停止后不自动开始、
   与存量 1.x 客户端互 ping、`finger`/加密组合一致性、开关省电对照。
+
+### 13.8 v0.2.38：断线自动重连（真机反馈驱动）
+
+**用户反馈**：切网（WiFi↔蜂窝）/ 断网恢复后 VNT 不自动重连，界面「组网失败 Disconnect」，
+按钮恢复「开始组网」，手动点即成功；官方 VntApp 任意切网/断网都能恢复。
+
+**根因（代码级，台账 §七有完整证据链）**：
+1. native 1.x 断线后回调 `CallBack.error`，错误码 **2 = Disconnect** → 运行期 `runtimeError` 置位；
+2. `runConnect` 的 awaitTimeout 循环一检测到错误就 throw → `onError()` → finally 释放 + `stopSelf()`
+   → 服务死亡、ERROR 终态、无任何重试；
+3. 全链路无补偿：`vnt/` 包无 NetworkCallback（同项目 AudioRelayService / WechatRuntime 都有），
+   `VntAutoStart` 仅冷启动触发一次，START_NOT_STICKY 也不复活；
+4. 历史决策盲区：官方 VntApp 靠 **START_STICKY + null intent 自动恢复**（§5.2 记录过）；
+   v0.2.30 为「退出即整体结束」有意删掉 STICKY 时，只论证了切 Tab/退后台/锁屏不受影响，
+   **漏了断线自恢复这条官方靠 STICKY 实现的路径**，且未在应用层补替代。
+
+**修复（用户拍板「进程内监督重连」，不恢复 STICKY）**：
+- `VntVpnService` worker 改为监督循环：`tryConnectOnce()`（原 runConnect 主体）+ 退避重试；
+  可重试失败**不停服务、不 stopSelf** ⇒ 天然绕开 Android 12+ 后台 FGS 限制，不新增 FGS 义务点。
+- 错误分类：`TokenError` / `InvalidIp` / `establish()` 返回 null（VPN 授权被抢）→ 致命，ERROR 等人工；
+  其余（Disconnect / AddressExhausted / IpAlreadyExists / Unknown / 普通异常）→ 可重试。
+- 退避 2/4/8/16/30/60s 封顶，连接成功过即重置；`registerDefaultNetworkCallback` onAvailable
+  立即结束退避等待并重置退避计数。
+- 新增 `VntStatus.RECONNECTING`：UI 橙色「断线，正在自动重连…」+ 第 N 次 / Ns 后重试，
+  主按钮仍显示「停止组网」；`vnt_start` 幂等守卫同样拦截该态；admin `VNT_STATE_RULES`
+  加 `reconnecting`（vnt_stop 允许）、`parseVntStatus` / `VntResultDetailDialog.stateTagOf` 同步登记。
+- **接管竞态防护**：stop→快速 start（restart 流程）时旧 worker 仍可能卡在退避/构造里；
+  以 generation 校验 + `running` 重入判定，旧 attempt 只释放自己的实例、
+  不碰新 attempt 的共享字段、不 stopSelf、不发布 STOPPED（详见台账 §7.4）。
+
+**回滚**：`docs/dev/vnt-integration-change-ledger.md` §7.3（`git checkout 6f12c26 -- <8 files>`）。

@@ -32,8 +32,9 @@ object VntAutoStart {
             return
         }
         val st = VntMeshController.state.value.status
-        if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
-            DiagLog.i(TAG, "自动组网：已在运行/启动中，跳过")
+        // v0.2.38：RECONNECTING 也视为已在工作（监督循环会自动建回来）
+        if (st == VntStatus.RUNNING || st == VntStatus.STARTING || st == VntStatus.RECONNECTING) {
+            DiagLog.i(TAG, "自动组网：已在运行/启动中/重连中，跳过")
             return
         }
         if (!VntMeshController.isPrepared(context)) {

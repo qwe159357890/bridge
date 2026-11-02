@@ -813,17 +813,19 @@ function progressTextOf(row: { status: string; command_id: string }): string | n
 //   ⇒ 不违反「虚拟网必可达（可接受延迟、不可永远访问不到）」硬约束。
 // ---------------------------------------------------------------------------
 
-type VntState = 'running' | 'starting' | 'stopping' | 'stopped' | 'error' | 'unknown'
+type VntState = 'running' | 'starting' | 'reconnecting' | 'stopping' | 'stopped' | 'error' | 'unknown'
 
 /** 需要按组网状态限制下发的命令 → 允许的设备状态。vnt_status 自身不受限。 */
 const VNT_STATE_RULES: Record<string, VntState[]> = {
   vnt_start: ['stopped', 'error'],
-  vnt_stop: ['running', 'starting', 'stopping'],
+  // v0.2.38：reconnecting = 设备端断线自动重连中（监督循环存活），与 running 同属「在工作中」
+  vnt_stop: ['running', 'starting', 'reconnecting', 'stopping'],
 }
 
 const VNT_STATE_LABELS: Record<VntState, string> = {
   running: '运行中',
   starting: '正在建立连接',
+  reconnecting: '断线重连中',
   stopping: '正在停止',
   stopped: '未连接',
   error: '异常',
@@ -854,6 +856,7 @@ const vntTagType = computed(() => {
       return 'success'
     case 'starting':
     case 'stopping':
+    case 'reconnecting':
       return 'warning'
     case 'error':
       return 'danger'
@@ -875,6 +878,8 @@ function parseVntStatus(message: string): VntState {
   const m = message || ''
   if (m.startsWith('运行中 ·')) return 'running'
   if (m.startsWith('正在建立连接')) return 'starting'
+  // v0.2.38：客户端 statusText() 的 RECONNECTING 前缀；不识别会被当 unknown 误禁 vnt_start
+  if (m.startsWith('断线重连中')) return 'reconnecting'
   if (m.startsWith('正在停止')) return 'stopping'
   if (m.startsWith('未连接')) return 'stopped'
   if (m.startsWith('异常：') || m.startsWith('执行失败')) return 'error'
@@ -942,6 +947,8 @@ const SSH_STATE_RULES: Record<string, SshState[]> = {
 const SSH_STATE_LABELS: Record<SshState, string> = {
   running: '运行中',
   starting: '正在启动',
+  // SSH 无重连态；仅为 SshState=VntState 类型完整补键，永不匹配
+  reconnecting: '重连中',
   stopping: '正在停止',
   stopped: '未运行',
   error: '异常',

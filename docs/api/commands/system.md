@@ -86,6 +86,15 @@
 点「开始组网」/ 下发 `vnt_start` 后，**切 Tab、退后台、锁屏都不断连**；只有
 `vnt_stop`、页面「停止组网」、或 `AppExit.kill`（退出应用 / 切后台立即结束）才终止。
 
+**v0.2.38 断线自动重连**：切网（WiFi↔蜂窝）/ 断网恢复后**自动重建组网**，无需人工点击。
+机制 = worker 内**监督重连循环**（可重试失败不停服务，天然绕开 Android 12+ 后台 FGS 限制），
+错误分类（`TokenError` / `InvalidIp` / VPN 授权被抢为致命错误，转 ERROR 等人工处理；
+`Disconnect` / `AddressExhausted` / `IpAlreadyExists` / `Unknown` 可重试）+
+指数退避 2/4/8/16/30/60s 封顶（连接成功即重置）+
+`registerDefaultNetworkCallback` 网络恢复立即重试并重置退避。
+重连期间状态为 **`RECONNECTING`**（非终态），UI 主按钮仍显示「停止组网」可随时终止。
+改前留档与实现细节见 `docs/dev/vnt-integration-change-ledger.md` §七。
+
 **1.x 启动时序（与 2.x 相反）**：`new Vnt(Config, CallBack)` → native 依次回调
 `connect / handshake / register / generateTun(DeviceConfig)` → **Java 在 `generateTun`
 回调里建 `VpnService.Builder` 并 `return fd`** → `success()` → `awaitTimeout` 保活循环。
@@ -105,7 +114,7 @@
 - **需 App 在前台或已授权过 VPN**。`VpnService.prepare()` 授权框必须由 Activity 弹出；
   Android 12+ 后台 `startForegroundService` 还会抛 `ForegroundServiceStartNotAllowedException`。
   执行器先查 `VntMeshController.isPrepared()`，未授权直接回执失败，**不假装成功**。
-- **v0.2.33**：`RUNNING`/`STARTING`/`STOPPING` 一律 `success=false`「重复下发被忽略」，不重复建网（详见下方「状态联动、幂等守卫与强制下发」）。
+- **v0.2.33**：`RUNNING`/`STARTING`/`STOPPING` 一律 `success=false`「重复下发被忽略」，不重复建网（详见下方「状态联动、幂等守卫与强制下发」）；**v0.2.38 起 `RECONNECTING`（断线自动重连中）同样拦截**，与「正在运行」同等对待。
 - 参数覆盖**仅在真正启动前**写回单套配置 Prefs（与页面「组网配置」共用一份）；已在运行时参数不生效，回执明确说明，避免配置漂移。
 - 按崩溃台账 §5：`startForegroundService` 每调一次欠一次前台义务，
   `VntVpnService.onStartCommand` 每次幂等补挂、`startForeground` try/catch + 失败 `stopSelf`。
@@ -127,7 +136,8 @@
 **v0.2.31 自动组网记忆（1.x 沿用）**：`vnt_start` 成功下发（或回「已在运行」）会把
 `VntMeshPrefs.autoStart` 置 `true`，`vnt_stop` 置 `false`。记忆为 `true` 时，
 App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自动开始组网；
-三道守卫（记忆未开 / 已 RUNNING·STARTING / VPN 授权失效）会跳过，且**失败不重试**。
+三道守卫（记忆未开 / 已 RUNNING·STARTING·RECONNECTING / VPN 授权失效）会跳过，且**失败不重试**
+（运行期断线恢复由 v0.2.38 的监督重连循环负责，与冷启动自动组网是两条独立路径）。
 与页面「开始组网」/「停止组网」按钮共用同一份记忆；退出应用 / 切后台结束进程**不动记忆**。
 
 ### 状态联动、幂等守卫与强制下发（v0.2.33）
@@ -142,9 +152,11 @@ App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自�
 **后台状态联动（纯前端，零 APK / 零服务端改动）**：
 
 - 状态来源 = `vnt_status` **按需查询命令的回执**（`ws.py:446` 的 `command_result` 广播已带 `command` / `message`），按 `device_id` 缓存快照。
-  `VntMeshController.statusText()` 固定前缀解析：`运行中 ·`→running、`正在建立连接（`→starting、`正在停止（`→stopping、`未连接`→stopped、`异常：`→error，其余→unknown。
+  `VntMeshController.statusText()` 固定前缀解析：`运行中 ·`→running、`正在建立连接（`→starting、
+  `断线重连中`→reconnecting（v0.2.38 新增）、`正在停止（`→stopping、`未连接`→stopped、
+  `异常：`→error，其余→unknown。
 - 自动探测时机：选中 `vnt_start`/`vnt_stop` 卡片（防重复 key + 800ms 防抖）、切换目标设备、顶栏「刷新设备状态」按钮、这两条命令回执后 1.5s。
-- 禁用规则：`vnt_start` 仅 `stopped`/`error` 可用；`vnt_stop` 仅 `running`/`starting`/`stopping` 可用；`vnt_status` 自身不受限；**`unknown`（状态未知 / 从未查询 / 回执解析失败）一律禁用**。
+- 禁用规则：`vnt_start` 仅 `stopped`/`error` 可用；`vnt_stop` 仅 `running`/`starting`/`reconnecting`（v0.2.38 新增）/`stopping` 可用；`vnt_status` 自身不受限；**`unknown`（状态未知 / 从未查询 / 回执解析失败）一律禁用**。
   UI = 卡片置灰 + 「下发命令」按钮禁用 + 参数区状态条（含采集时刻与「刷新」）+ 顶栏组网状态徽标 + `blockHint` 原因文案。
 - **unknown 禁用（2026-11-02 用户拍板，推翻 v0.2.33 的「不硬禁用」）**：v0.2.33 曾因「快照可能失真 ⇒ 硬禁用会想开开不了」放行 unknown；用户实测认为「状态未知时仍允许下发」不合理 ⇒ 改为一律禁用，先点「刷新状态」取得确态再操作。**出口仍在**：unknown 时命令被禁用 ⇒ 强制下发开关可勾选（正是「命令可用时置灰」规则的反面），二次确认后可直接下发 ⇒ 不违反「必可达」硬约束。详见下方 ④。
 

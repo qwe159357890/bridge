@@ -172,6 +172,8 @@ function stateTagOf(msg: string): StateTag {
   const m = msg || ''
   if (m.startsWith('运行中 ·')) return { label: '运行中', type: 'success' }
   if (m.startsWith('正在建立连接')) return { label: '正在建立连接', type: 'warning' }
+  // v0.2.38：客户端断线自动重连状态（监督循环存活，非终态）
+  if (m.startsWith('断线重连中')) return { label: '断线重连中', type: 'warning' }
   if (m.startsWith('正在停止')) return { label: '正在停止', type: 'warning' }
   if (m.startsWith('未连接')) return { label: '未连接', type: 'info' }
   if (m.startsWith('异常：') || m.startsWith('执行失败')) return { label: '异常', type: 'danger' }

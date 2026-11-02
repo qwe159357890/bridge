@@ -1146,3 +1146,299 @@ grep 'versionName = ' app/build.gradle.kts   # 应回到 "0.2.31"
 | 10 | `compileDebugKotlin` + `assembleDebug` + APK 静态自检 | ✅ |
 | 11 | 发布 v0.2.32（铁律）+ 下载 + 追平本地 git + 回填 §6.8 | ✅ |
 
+---
+
+## 七、VNT 断线自动重连（v0.2.38，2026-11-02 晚）
+
+### 7.0 触发本次变更的用户诉求与诊断结论
+
+**现象**：切网（WiFi↔蜂窝）/ 断网一段时间恢复后，VNT 不自动重连——界面「组网失败 Disconnect」，按钮恢复「开始组网」，手动点即成功。
+
+**根因链**：
+1. 网络切换 → native 1.x 回调 `CallBack.error`，错误码 **2=Disconnect**（`ErrorInfo.java`）→ `runtimeError` 置位；
+2. `VntVpnService.runConnect` 的 awaitTimeout 循环检测到 runtimeError 即 **throw** → `onError("组网失败：Disconnect")` → finally 释放 native/pfd + **stopSelf()** → 服务死亡，ERROR 终态，无任何重试；
+3. 全链路无补偿：`vnt/` 包无 NetworkCallback（AudioRelayService/WechatRuntime 均有，唯 VNT 没有）；`VntAutoStart` 仅 MainActivity.onStart 冷启动触发；`START_NOT_STICKY` 进程死也不复活；
+4. 官方 VntApp 能恢复 = **START_STICKY + null intent 自动恢复**（报告 §5.2 有记录）；v0.2.30 为「退出即整体结束」有意删掉 STICKY，漏了断线自恢复这条官方靠 STICKY 实现的路径，且未在应用层补替代。
+
+**修复方案（用户拍板「进程内监督重连」）**：worker 内监督重连循环（服务不 stopSelf，天然绕开 Android 12+ 后台 FGS 限制）+ 错误分类（TokenError/InvalidIp/establish null 不可重试，其余可重试）+ 指数退避 2/4/8/16/30/60s 封顶 + `registerDefaultNetworkCallback` onAvailable 立即重试并重置退避 + 新增 `RECONNECTING` 状态（UI/admin 规则/文档联动）。
+
+### 7.1 改前原文逐字固化（既有文件，git 已跟踪；基线 commit `6f12c26`）
+
+改前 sha256：
+
+```
+93c211e8328285efe72bab31af22d83ea4989a9f7651dd63af7d9aeab9d44e54  app/src/main/java/my/bridge/com/vnt/VntMeshState.kt
+9108ea3273baced251fce4f0f2db39ebe6c429351bacd670dbd8e912f1289653  app/src/main/java/my/bridge/com/vnt/VntMeshController.kt
+c8cade7b566e8afc9bccb263f3c283ff64978431b20ed55fb4482482a3ccc852  app/src/main/java/my/bridge/com/vnt/VntVpnService.kt
+4499b73babd6aca11cd8e273beeaf0183c67020e2a168475b986096f152fb582  app/src/main/java/my/bridge/com/vnt/VntAutoStart.kt
+88a76f7929db77f68f0ae065f45fb48e8be48649816c819fa118effe0a7944b8  app/src/main/java/my/bridge/com/ui/VntPages.kt
+4bf80af2a8468855ccf4798a61dead1ef6ef09733edf94c1f8ed830a82a6e31a  app/src/main/java/my/bridge/com/di/CommandModule.kt
+4684b98992aaa1f9226c52fe0a5b3b2c8312e24f2c1b3f226494ede1b54e6754  admin/src/views/command/index.vue
+a982e69bc23321305f1bfd5672c4d57c0ea456bb6d34c14df04098c2f063a154  docs/api/commands/system.md
+```
+
+完整原文以 `git show 6f12c26:<path>` 为准（全部 git 跟踪、工作区干净），此处固化**改动点**摘录：
+
+**① VntMeshState.kt — 枚举与状态字段**
+
+```kotlin
+enum class VntStatus {
+    /** 未连接（默认）。 */
+    STOPPED,
+
+    /** 已下发 START，等待 native 注册并在回调里建立 VPN 接口。 */
+    STARTING,
+
+    /** 已连接，虚拟 IP 可用。 */
+    RUNNING,
+
+    /** 正在停止。 */
+    STOPPING,
+
+    /** 启动/运行期出错，[VntMeshState.message] 为原因。 */
+    ERROR,
+}
+```
+
+```kotlin
+    /** 状态/错误说明（显示在状态卡下方）。 */
+    val message: String = "",
+    /** 最后一次成功刷新时间（System.currentTimeMillis），0 = 从未刷新。 */
+    val lastUpdatedAt: Long = 0L,
+) {
+    val isRunning: Boolean get() = status == VntStatus.RUNNING
+}
+```
+
+**② VntMeshController.kt — start() 守卫 / statusText()**
+
+```kotlin
+    fun start(context: Context): Boolean {
+        val s = _state.value.status
+        if (s == VntStatus.RUNNING || s == VntStatus.STARTING) return true
+```
+
+```kotlin
+            VntStatus.STARTING -> "正在建立连接（${s.message}）"
+            VntStatus.STOPPING -> "正在停止（${s.message}）"
+            VntStatus.STOPPED -> "未连接"
+            VntStatus.ERROR -> "异常：${s.message}"
+```
+
+**③ VntVpnService.kt — runConnect 整体（本次主战场）**
+
+```kotlin
+            // 运行期循环：awaitTimeout(2000) 是 1.x 实例保活与接收停止事件的唯一机制，
+            // 不发网络包；设备列表刷新由 Controller 在「前台 + 页面可见」时另行调度。
+            while (running && gen == generation) {
+                runtimeError?.let { throw IllegalStateException(it) }
+                val out = nativeVnt.awaitTimeout(2000)
+                if (out || gen != generation) break
+            }
+        } catch (e: Throwable) {
+            failed = true
+            DiagLog.e(TAG, "组网失败", e)
+            VntMeshController.onError("组网失败：${e.message}")
+        } finally {
+            // 到这里 awaitTimeout 已返回（或构造抛异常），native 线程不再使用该对象，
+            // 可以安全释放；shutdown()/onDestroy() 只发 stop 信号，不在这里之外 close。
+            synchronized(nativeLock) { vnt = null }
+            runCatching { v?.stop() }
+            runCatching { v?.close() }
+            val f = synchronized(nativeLock) {
+                val x = pfd
+                pfd = null
+                x
+            }
+            runCatching { f?.close() }
+
+            VntMeshController.clearProvider()
+            // v0.2.31 修的坑沿用：失败时**保留 ERROR 状态**，别被 onStopped() 覆盖成「未连接」。
+            if (!failed) VntMeshController.onStopped()
+            running = false
+            stopSelf()
+        }
+```
+
+另：`error` 回调里 `if (ready) runtimeError = text else startupError = text`（语义保留，本次增加错误码记录）；`onCreate`/`onDestroy` 原无网络回调注册；`startConnect` 原直接起 worker 跑 `runConnect(gen)`。
+
+**④ VntAutoStart.kt — 守卫**
+
+```kotlin
+        val st = VntMeshController.state.value.status
+        if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
+            DiagLog.i(TAG, "自动组网：已在运行/启动中，跳过")
+            return
+        }
+```
+
+**⑤ VntPages.kt — 主按钮条件 / 状态卡 when / 转圈条件 / 底部说明**
+
+```kotlin
+            if (state.status == VntStatus.RUNNING || state.status == VntStatus.STARTING) {
+```
+
+```kotlin
+        VntStatus.STARTING -> Triple(VntBlue, "正在建立虚拟网络…", state.message)
+        VntStatus.STOPPING -> Triple(VntGray, "正在停止…", state.message)
+        VntStatus.ERROR -> Triple(VntRed, "组网异常", state.message)
+        VntStatus.STOPPED -> Triple(VntBlue, "组网未连接", "点击下方「开始组网」建立虚拟局域网")
+```
+
+```kotlin
+            if (state.status == VntStatus.STARTING) {
+                CircularProgressIndicator(
+```
+
+```kotlin
+            "组网是基础设施：开始后切 Tab / 退后台不中断，只有点「停止组网」或退出应用才结束。" +
+```
+
+**⑥ CommandModule.kt — executeVntStart 幂等守卫**
+
+```kotlin
+            val st = VntMeshController.state.value.status
+            if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：组网已在运行（${VntMeshController.statusText()}）；" +
+                        "本次参数未生效、未改动自动组网记忆。如需变更配置请先停止再开始",
+                )
+            }
+```
+
+**⑦ admin/src/views/command/index.vue — VNT 状态联动**
+
+```typescript
+type VntState = 'running' | 'starting' | 'stopping' | 'stopped' | 'error' | 'unknown'
+
+const VNT_STATE_RULES: Record<string, VntState[]> = {
+  vnt_start: ['stopped', 'error'],
+  vnt_stop: ['running', 'starting', 'stopping'],
+}
+
+const VNT_STATE_LABELS: Record<VntState, string> = {
+  running: '运行中',
+  starting: '正在建立连接',
+  stopping: '正在停止',
+  stopped: '未连接',
+  error: '异常',
+  unknown: '未知',
+}
+```
+
+```typescript
+const vntTagType = computed(() => {
+  switch (vntState.value) {
+    case 'running':
+      return 'success'
+    case 'starting':
+    case 'stopping':
+      return 'warning'
+    case 'error':
+      return 'danger'
+    default:
+      return 'info'
+  }
+})
+```
+
+```typescript
+function parseVntStatus(message: string): VntState {
+  const m = message || ''
+  if (m.startsWith('运行中 ·')) return 'running'
+  if (m.startsWith('正在建立连接')) return 'starting'
+  if (m.startsWith('正在停止')) return 'stopping'
+  if (m.startsWith('未连接')) return 'stopped'
+  if (m.startsWith('异常：') || m.startsWith('执行失败')) return 'error'
+  return 'unknown'
+}
+```
+
+注：`type SshState = VntState`（SSH 复用 VNT 五态口径），SSH_STATE_LABELS 为 `Record<SshState, string>`，加 `reconnecting` 枚举后 SSH 标签表须同步补键（SSH 永远不会产生该态，仅为类型完整）。
+
+**⑧ docs/api/commands/system.md — 「状态联动、幂等守卫与强制下发」小节**：补 RECONNECTING 状态语义与命令联动（改前原文见 `git show 6f12c26:docs/api/commands/system.md`）。
+
+### 7.2 新增文件清单
+
+无（全部为既有文件修改；不新增文件、不新增依赖、不动 Manifest/ABI/so）。
+
+### 7.3 回滚配方
+
+```bash
+git checkout 6f12c26 -- \
+  app/src/main/java/my/bridge/com/vnt/VntMeshState.kt \
+  app/src/main/java/my/bridge/com/vnt/VntMeshController.kt \
+  app/src/main/java/my/bridge/com/vnt/VntVpnService.kt \
+  app/src/main/java/my/bridge/com/vnt/VntAutoStart.kt \
+  app/src/main/java/my/bridge/com/ui/VntPages.kt \
+  app/src/main/java/my/bridge/com/di/CommandModule.kt \
+  admin/src/views/command/index.vue \
+  docs/api/commands/system.md
+```
+
+**触发回滚信号**：
+1. `compileDebugKotlin` 失败且 30 分钟内无法定位；
+2. 真机出现「断线重连风暴」（DiagLog 刷屏组网失败、耗电异常上升）；
+3. 重连循环内存泄漏（native 实例未释放导致 `close()` 崩溃 / tombstone）；
+4. 点「停止组网」后服务不死（监督循环退不出）或通知残留；
+5. 用户明确要求撤销。
+
+### 7.4 改后回填
+
+**实现要点**：
+- `VntVpnService`：worker 由「一次 runConnect」改为监督循环 `runSupervisor(gen)` +
+  `tryConnectOnce(gen)`。可重试失败 → `onReconnecting(attempt, delaySec, reason)` +
+  通知「断线重连中 · 第 N 次」→ 退避等待（250ms 轮询，可被停止/接管/网络恢复提前打断）
+  → 下一轮重建；**服务不停、不 stopSelf**。致命错误（`TokenError` / `InvalidIp` /
+  `FatalVntException`=establish null）→ `onError()` + stopSelf。
+- 错误码记录：`error` 回调在原文案之外增记 `startupErrorCode` / `runtimeErrorCode`，
+  分类以错误码为准（`Disconnect`=2 等可重试），普通异常默认可重试。
+- `registerDefaultNetworkCallback` 在 `onCreate` 注册、`onDestroy` 注销；onAvailable
+  只置 `networkJustRecovered` 标志，监督循环轮询消费并重置退避计数。
+- **接管竞态防护**：stop→快速 start（restart 流程）时旧 worker 可能仍在退避/构造中。
+  处理 = ① 各 attempt 的 finally 只在 `gen == generation` 时清共享字段（vnt/pfd），
+  关闭只认**本轮**局部 `localPfd`；② 旧 supervisor 退出时若 `running` 已为 true
+  （新 startConnect 接管）⇒ 不 releaseNative、不发布 STOPPED、不 stopSelf；
+  ③ `hadConnected` / `localPfd` 用 AtomicBoolean / AtomicReference
+  （generateTun 在 native 线程写、worker 线程读，需跨线程可见性）。
+- `VntMeshState`：新增 `RECONNECTING` + `retryAttempt` / `retryDelaySec` +
+  `isActive`（RUNNING/STARTING/RECONNECTING）。
+- `VntMeshController`：`onReconnecting()`；`start()` 守卫含 RECONNECTING；
+  `statusText()` 前缀 `断线重连中（第 N 次，Ns 后重试 · 原因）`（admin 解析契约）。
+- `VntPages`：RECONNECTING 状态卡橙色 + 转圈、主按钮走 `state.isActive`（重连中仍显示
+  「停止组网」）；底部说明补「断线后自动重连」；重连中保存配置 toast 提示下一轮自动生效
+  （监督循环每轮重读 Prefs，无需手动 restart）。
+- `CommandModule.executeVntStart`：幂等守卫把 RECONNECTING 视为「已在运行」，
+  回执「重复下发被忽略：组网已在运行/自动重连中」（详情弹窗前缀分类仍兼容）。
+- `VntAutoStart`：RECONNECTING 跳过（监督循环已在工作）。
+- admin：`VntState` 加 `reconnecting`；`vnt_stop` 允许态 + `VNT_STATE_LABELS` /
+  `vntTagType`（warning）/ `parseVntStatus`（`断线重连中` 前缀）；
+  `VntResultDetailDialog.stateTagOf` 同步登记；`SshState=VntState` 类型耦合 ⇒
+  SSH 标签表补 `reconnecting` 键（永不产生，仅类型完整）。
+
+**改动文件清单（10 个，全部既有文件，无新增）**：
+1. `app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`（主战场）
+2. `app/src/main/java/my/bridge/com/vnt/VntMeshState.kt`
+3. `app/src/main/java/my/bridge/com/vnt/VntMeshController.kt`
+4. `app/src/main/java/my/bridge/com/vnt/VntAutoStart.kt`
+5. `app/src/main/java/my/bridge/com/ui/VntPages.kt`
+6. `app/src/main/java/my/bridge/com/di/CommandModule.kt`
+7. `admin/src/views/command/index.vue`
+8. `admin/src/components/VntResultDetailDialog.vue`
+9. `docs/api/commands/system.md`
+10. `docs/research/vnt-mesh-integration.md`（§13.8）
+
+**本地验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL（含 Hilt/KSP，两轮，
+第二轮覆盖全部最终改动）；admin 前端为 TS 常量/函数级改动，无新依赖。
+**未做**：assembleDebug / 真机回归（交用户手动验收）。
+
+**真机验收清单（用户手动）**：
+1. WiFi→走出覆盖→蜂窝：界面应转「断线，正在自动重连…」，**服务不停止**，
+   蜂窝就绪后自动恢复「已连接 · 虚拟IP」；不再需要手动点开始。
+2. 断网数分钟再恢复 WiFi：同上，日志可见退避节奏（2/4/8/16/30/60s 封顶）。
+3. 重连中点「停止组网」：服务立即停止、状态「未连接」、不再自动重连；
+   下次冷启动也不自动开始（autoStart 已清）。
+4. 重连中保存新配置：下一轮自动用新配置。
+5. token 配错：应直接 ERROR（不无限重试）。
+6. 退出应用：整体结束、无复活（START_NOT_STICKY 不变）。

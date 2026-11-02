@@ -22,6 +22,23 @@
 
 ---
 
+## 2026-11-02 · 🌐 v0.2.38 组网断线自动重连 + SSH 终端内置美化
+
+**节点意义**：用户实测发现 VNT 在切网/断网恢复后不会自动组网，只能手动点「开始组网」；这是移植官方 1.x 时删掉 `START_STICKY` 恢复链后未补应用层替代造成的。本版以**进程内监督重连**根治，并顺带收口 SSH 终端内置美化。
+
+**脉络（问题 → 根因 → 收敛）**：
+- 根因链：网络切换 → native 报 `ErrorInfo(Disconnect)` → 旧 worker 一见错误即 `throw` → `onError("组网失败：Disconnect")` → 释放 native/TUN 并 `stopSelf()` → 无任何补偿（`vnt/` 包无 NetworkCallback，冷启动自动组网也不会触发）。
+- 官方 VntApp 能恢复 = `START_STICKY + null intent` 自动拉回；v0.2.30 为「退出即整体结束」删掉 STICKY 时漏了这条断线自恢复路径。
+- 修复：`VntVpnService` worker 改为监督重连循环（可重试失败不 `stopSelf`，退避 2/4/8/16/30/60s 封顶 + `registerDefaultNetworkCallback` 网络恢复立即重试）；`TokenError`/`InvalidIp`/VPN 授权被抢仍转 ERROR；新增 `RECONNECTING` 状态，UI/admin/命令幂等守卫/文档全链路联动。
+- SSH 部分：内置彩色路径提示符、常用 alias、h 帮助；不引入 zsh/oh-my-zsh 等不可行依赖。
+- 校验：`:app:compileDebugKotlin` BUILD SUCCESSFUL；admin `vue-tsc -b && vite build` 通过。
+
+**关键经验沉淀**：
+- **删掉系统的自动恢复机制时，必须同步补上应用层替代**：STICKY 不是唯一方案，但「错误 → 自停 → 无人拉起」这种半成品移植会在网络抖动场景必现。
+- **重连循环放服务 worker 内比反复 startService 更稳**：进程内重建天然绕开 Android 12+ 后台启动前台服务限制，也更容易做退避、错误分类和竞态防护。
+
+---
+
 ## 2026-11-02 · 🚦 组网状态「未知」时禁用下发（v0.2.33 后续，**无 APK 发版**）
 
 **节点意义**：用户实测发现，管理后台在组网状态为「未知」时，`vnt_start` / `vnt_stop` 的「下发命令」按钮仍可点。v0.2.33 当初为照顾「快照失真」而放行 unknown，用户判定该取舍不合理 ⇒ 改为 **unknown 一律禁用**。仅改管理后台前端一处判定 + 提示文案，服务端、APK 均不涉及。

@@ -5,6 +5,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -27,25 +29,39 @@ import top.wherewego.vnt.jni.param.PeerClientInfo
 import top.wherewego.vnt.jni.param.RegisterInfo
 
 /**
- * VNT 组网前台服务（v0.2.32，1.x / VntApp v1.2.9）——持有 [VpnService] 通道与 [Vnt] 实例。
+ * VNT 组网前台服务（v0.2.32，1.x / VntApp v1.2.9；v0.2.38 加断线自动重连）——
+ * 持有 [VpnService] 通道与 [Vnt] 实例。
  *
- * ★ 与 2.x 的**时序完全相反**（这是本次重写的核心）：
+ * ★ 与 2.x 的**时序完全相反**（这是 v0.2.32 重写的核心）：
  * - 2.x：Java 先 `VpnService.Builder.establish()` 拿 fd → `net.startTun(fd)` 传进 native；
  * - 1.x：`new Vnt(Config, CallBack)` → native 在 **`CallBack.generateTun(DeviceConfig)` 回调里
  *   反过来向 Java 要 fd**，Java 在回调内建 VPN 接口并 `return fd` → 之后 `awaitTimeout` 循环。
  *   对照官方 `MyVpnService.run0()`。
  *
- * 调用时序：
- * `Vnt(config, callback)` → connect → handshake → register → **generateTun(建 TUN 返回 fd)** →
- * success → `awaitTimeout(2000)` 循环（期间 `list()` 由 Controller 前台 5 秒轮询）→
- * 停止时 `vnt.stop()` 让 awaitTimeout 返回 true → `vnt.close()` 释放 native。
+ * ★ v0.2.38 断线自动重连（本次变更的核心，见台账 §七）：
+ * - **根因**：v0.2.32 里运行期 native 报错（切网后 `ErrorInfo.code == Disconnect`）→
+ *   worker 直接 throw → 释放 + `stopSelf()` → 服务死亡，ERROR 终态，无人重试。
+ *   官方 VntApp 靠 `START_STICKY` + null intent 自动恢复，v0.2.30 为「退出即整体结束」
+ *   有意删掉了 STICKY，却没有在应用层补替代 ⇒ 断线后永远躺平。
+ * - **修复：进程内监督重连**——worker 改为「一次尝试 [tryConnectOnce] + 退避重试」的
+ *   监督循环，**可重试失败不停服务、不 stopSelf**：
+ *   - 不需要新的 `startForegroundService` 调用 ⇒ 天然绕开 Android 12+ 后台启动前台服务
+ *     限制，**不新增 FGS 义务点**（崩溃台账 §5 无新风险）；
+ *   - 错误分类：`TokenError` / `InvalidIp` / VPN 授权被抢（establish 返回 null）为**致命**，
+ *     转 ERROR 终态等用户处理；`Disconnect` / `AddressExhausted` / `IpAlreadyExists` /
+ *     `Unknown` / 普通异常为**可重试**；
+ *   - 指数退避 2/4/8/16/30/60s 封顶（照 `RelayClient` 既有范式）；连接成功过即重置退避；
+ *   - `registerDefaultNetworkCallback`：网络恢复/切换瞬间唤醒退避等待并重置退避
+ *     （照 `AudioRelayService` 既有范式）——否则「网络刚恢复还要干等满退避计时」。
+ * - 生命周期语义不变：**只有用户点「停止组网」/ `AppExit.kill` / 致命错误才真正停止**；
+ *   监督循环期间状态为 [VntStatus.RECONNECTING]，UI 主按钮仍显示「停止组网」可随时终止。
  *
- * ★ 崩溃台账 §5 检查清单（逐条落实）：
+ * ★ 崩溃台账 §5 检查清单（逐条落实，v0.2.32 起未变）：
  * - manifest 已声明 `foregroundServiceType="specialUse"` + `FOREGROUND_SERVICE_SPECIAL_USE` 权限；
  * - 所有 `startForegroundService` 调用点在 [VntMeshController.start] 里 try/catch；
  * - **onCreate 挂前台**，且 `startForeground` 有 try/catch + 失败 `stopSelf()`；
  * - **onStartCommand 对每次拉起都幂等补挂前台**（不依赖 onCreate 一定执行）；
- * - 返回 `START_NOT_STICKY`：进程被杀后系统**不自动复活**服务；
+ * - 返回 `START_NOT_STICKY`：进程被杀后系统**不自动复活**服务（冷启动由 `VntAutoStart` 恢复）；
  * - 调用点已登记到 `docs/dev/crash-ledger.md` §3.1。
  *
  * ★ 路由红线：**绝不加 `0.0.0.0/0`**（会劫持整机流量）。
@@ -54,6 +70,8 @@ import top.wherewego.vnt.jni.param.RegisterInfo
  * 仅 `stop()` + 置 null。这里在 worker **确认退出 awaitTimeout 循环之后**才 `close()`，
  * 避免「另一个线程还在 awaitTimeout 时 drop 掉 Rust 对象」的 use-after-free；
  * `shutdown()` / `onDestroy()` 只发 `stop()` 信号，不做 `close()`。
+ * 重连循环每轮 attempt 在 [tryConnectOnce] 的 finally 里**只释放本轮自己的实例**
+ * （以 generation 校验防「接管竞态误关新实例」，见台账 §7.4）。
  */
 class VntVpnService : VpnService() {
 
@@ -66,6 +84,9 @@ class VntVpnService : VpnService() {
         const val CHANNEL_ID = "vntConnectionChannel"
 
         private const val TAG = "组网"
+
+        /** 指数退避表（秒）：2/4/8/16/30/60 封顶，照 RelayClient 既有范式。 */
+        private val BACKOFF_SEC = intArrayOf(2, 4, 8, 16, 30, 60)
 
         @Volatile
         private var instance: VntVpnService? = null
@@ -90,7 +111,7 @@ class VntVpnService : VpnService() {
     @Volatile
     private var running = false
 
-    /** 代次：停止时自增，让阻塞在 awaitTimeout 的旧循环退出。 */
+    /** 代次：停止/新拉起时自增，让阻塞在 awaitTimeout / 退避等待的旧循环退出。 */
     @Volatile
     private var generation = 0L
 
@@ -98,13 +119,26 @@ class VntVpnService : VpnService() {
     @Volatile
     private var startupError: String? = null
 
+    @Volatile
+    private var startupErrorCode: ErrorInfo.ErrorCodeEnum? = null
+
     /** native 在运行期回调的错误。 */
     @Volatile
     private var runtimeError: String? = null
 
+    @Volatile
+    private var runtimeErrorCode: ErrorInfo.ErrorCodeEnum? = null
+
     /** 握手时服务端返回的版本，供 UI 核对 1.x 服务端。 */
     @Volatile
     private var serverVersion: String? = null
+
+    /** 网络回调（onAvailable 唤醒重连等待），onDestroy 注销。 */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** onAvailable 置 true：监督循环据此重置退避（新一轮故障从 2s 重新数）。 */
+    @Volatile
+    private var networkJustRecovered = false
 
     override fun onCreate() {
         super.onCreate()
@@ -112,18 +146,20 @@ class VntVpnService : VpnService() {
         createNotificationChannel()
         // 崩溃台账 §5：onCreate 立刻挂前台（try/catch + 失败 stopSelf 在 promoteForeground 内）
         promoteForeground("正在准备虚拟网络…", connected = false)
+        registerNetworkCallback()
     }
 
     /**
      * 每次拉起都履行一次前台化义务（义务按次计，服务运行中重复拉起不走 onCreate）。
-     * 返回 START_NOT_STICKY：进程被杀不自动复活，符合「退出即整体结束」的最高优先级。
+     * 返回 START_NOT_STICKY：进程被杀不自动复活，符合「退出即整体结束」的最高优先级
+     * （断线恢复不靠 STICKY，靠 worker 内监督循环）。
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         promoteForeground("正在准备虚拟网络…", connected = false)
         when (intent?.action) {
             ACTION_STOP -> shutdown()
             ACTION_START -> startConnect()
-            else -> DiagLog.i(TAG, "onStartCommand 无有效 action，忽略（不自动重连）")
+            else -> DiagLog.i(TAG, "onStartCommand 无有效 action，忽略")
         }
         return Service.START_NOT_STICKY
     }
@@ -157,7 +193,13 @@ class VntVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(if (connected) "VNT 虚拟网络已连接" else "VNT 正在启动")
+            .setContentTitle(
+                when {
+                    connected -> "VNT 虚拟网络已连接"
+                    text.startsWith("断线重连中") -> "VNT 断线重连"
+                    else -> "VNT 正在启动"
+                }
+            )
             .setContentText(text)
             .setContentIntent(pendingOpen)
             .setOngoing(true)
@@ -177,7 +219,33 @@ class VntVpnService : VpnService() {
     }
 
     // ------------------------------------------------------------------
-    // 连接主流程（worker 线程）
+    // 网络监听（v0.2.38：网络恢复立即重连，照 AudioRelayService 范式）
+    // ------------------------------------------------------------------
+
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                // 只置标志，不在回调里做任何重活（回调跑在系统线程）；
+                // 监督循环的退避等待以 250ms 粒度轮询该标志（最长 60s，开销可忽略）。
+                networkJustRecovered = true
+                DiagLog.i(TAG, "默认网络可用，重连等待将立即结束并重置退避")
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+            .onFailure { DiagLog.w(TAG, "注册默认网络回调失败（不影响重连循环，靠退避兜底）：${it.message}") }
+        networkCallback = cb
+    }
+
+    private fun unregisterNetworkCallback() {
+        val cb = networkCallback ?: return
+        networkCallback = null
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        runCatching { cm.unregisterNetworkCallback(cb) }
+    }
+
+    // ------------------------------------------------------------------
+    // 连接主流程（worker 线程：监督循环 + 单次尝试）
     // ------------------------------------------------------------------
 
     private fun startConnect() {
@@ -186,20 +254,114 @@ class VntVpnService : VpnService() {
             return
         }
         running = true
-        startupError = null
-        runtimeError = null
-        serverVersion = null
+        clearAttemptErrors()
         val gen = ++generation
-        worker = Thread({ runConnect(gen) }, "vnt-network").apply {
+        worker = Thread({ runSupervisor(gen) }, "vnt-network").apply {
             isDaemon = true
             start()
         }
     }
 
-    private fun runConnect(gen: Long) {
+    private fun clearAttemptErrors() {
+        startupError = null
+        startupErrorCode = null
+        runtimeError = null
+        runtimeErrorCode = null
+        serverVersion = null
+    }
+
+    /** 一次尝试的结局：`null` = 干净退出（停止/被接管），否则为失败与是否可重试。 */
+    private class AttemptResult(
+        val retryable: Boolean,
+        val reason: String,
+        /** 本次尝试是否曾连接成功（用于成功后重置退避计数）。 */
+        val hadConnected: Boolean,
+    )
+
+    /** 致命错误（重试无意义）：token/配置错、VPN 授权被抢。 */
+    private class FatalVntException(message: String) : IllegalStateException(message)
+
+    /**
+     * 监督循环（v0.2.38）：失败 → 退避 → 重建，直到用户停止 / 被新拉起接管 / 致命错误。
+     * 服务**不因可重试失败而 stopSelf**——这是「断线自动重连」的核心。
+     */
+    private fun runSupervisor(gen: Long) {
+        var attempt = 0
+        var fatal: String? = null
+        while (running && gen == generation) {
+            val res = tryConnectOnce(gen) ?: break
+            if (res.hadConnected) attempt = 0          // 一次成功即重置退避
+            if (!res.retryable) {
+                fatal = res.reason
+                break
+            }
+            attempt++
+            val delaySec = BACKOFF_SEC[(attempt - 1).coerceAtMost(BACKOFF_SEC.size - 1)]
+            DiagLog.w(
+                TAG,
+                "组网失败（可重试）：${res.reason}；第 $attempt 次重连将在 ${delaySec}s 后进行",
+            )
+            VntMeshController.onReconnecting(attempt, delaySec, res.reason)
+            promoteForeground("断线重连中 · 第 $attempt 次（${delaySec}s 后重试）", connected = false)
+            if (!sleepInterruptible(gen, delaySec)) break
+            // 网络刚恢复 ⇒ 新一轮故障从 2s 重新数，不等满旧退避
+            if (networkJustRecovered) {
+                networkJustRecovered = false
+                attempt = 0
+            }
+        }
+
+        // ---- 收尾（与 v0.2.32 的 finally 语义对齐）----
+        val superseded = running                  // running 仍为 true = 新 startConnect 已接管
+        if (!superseded) releaseNative()
+        VntMeshController.clearProvider()
+        if (fatal != null) {
+            // v0.2.31 坑沿用：失败保留 ERROR，别被 onStopped() 覆盖成「未连接」
+            DiagLog.e(TAG, "组网失败（不可重试）：$fatal")
+            VntMeshController.onError("组网失败：$fatal（需人工处理，重试无意义）")
+        } else if (!superseded) {
+            VntMeshController.onStopped()
+        }
+        if (!superseded) {
+            running = false
+            stopSelf()
+        }
+    }
+
+    /**
+     * 可中断的退避等待（250ms 轮询，最长 60s，开销可忽略）：
+     * 停止 / 新拉起 / 网络恢复都会提前结束。返回 false = 该退出监督循环。
+     */
+    private fun sleepInterruptible(gen: Long, seconds: Int): Boolean {
+        val deadline = System.currentTimeMillis() + seconds * 1000L
+        while (running && gen == generation) {
+            if (System.currentTimeMillis() >= deadline) return true
+            if (networkJustRecovered) return true
+            try {
+                Thread.sleep(250)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        return false
+    }
+
+    /**
+     * 单次连接尝试（原 v0.2.32 的 runConnect 主体）。
+     * 返回 null = 干净退出（用户停止 / 被接管）；否则带失败原因与可重试性。
+     * finally 只释放**本轮**的 native 实例与 TUN；以 generation 校验防止
+     * 「接管竞态下误关新 attempt 的实例」（详见台账 §7.4 改后回填）。
+     */
+    private fun tryConnectOnce(gen: Long): AttemptResult? {
         var v: Vnt? = null
-        var failed = false
+        // generateTun 在 native 线程执行、worker 线程读取 ⇒ 必须原子引用保证可见性
+        val hadConnected = java.util.concurrent.atomic.AtomicBoolean(false)
+        // 本轮自己的 TUN 句柄：关闭只认它，共享 [pfd] 字段仅供 onDestroy 兜底
+        val localPfd = java.util.concurrent.atomic.AtomicReference<ParcelFileDescriptor?>(null)
         try {
+            clearAttemptErrors()
+            networkJustRecovered = false     // 清掉上一轮残留标志，避免陈旧「网络恢复」跳过退避
             val cfg = VntMeshPrefs.load(this)
             val config: Config = VntConfigBuilder.build(this, cfg)
             val mtu = config.mtu ?: VntMeshConfig.DEFAULT_MTU
@@ -256,15 +418,19 @@ class VntVpnService : VpnService() {
                         .allowFamily(OsConstants.AF_INET)
 
                     val f: ParcelFileDescriptor = builder.establish()
-                        ?: throw IllegalStateException(
+                        ?: throw FatalVntException(
                             "VpnService.Builder.establish() 返回 null（VPN 授权可能已被撤销，" +
                                 "或系统已把唯一 VPN 通道给了其它 App）"
                         )
+                    localPfd.set(f)
                     synchronized(nativeLock) { pfd = f }
 
-                    VntMeshController.onConnected(ip, prefix, cfg, mtu, serverVersion)
-                    promoteForeground("已连接 · $ip", connected = true)
-                    DiagLog.i(TAG, "VNT 已连接：$ip/$prefix，服务端版本 ${serverVersion ?: "?"}")
+                    if (gen == generation) {
+                        hadConnected.set(true)
+                        VntMeshController.onConnected(ip, prefix, cfg, mtu, serverVersion)
+                        promoteForeground("已连接 · $ip", connected = true)
+                        DiagLog.i(TAG, "VNT 已连接：$ip/$prefix，服务端版本 ${serverVersion ?: "?"}")
+                    }
                     return f.fd
                 }
 
@@ -279,7 +445,13 @@ class VntVpnService : VpnService() {
                     // ★ 构造期间 vnt 尚未赋值，绝不能在这里调 v.stop()
                     //   （官方 MyVpnService 这里会 NPE，属其已知缺陷）。
                     val ready = synchronized(nativeLock) { vnt != null }
-                    if (ready) runtimeError = text else startupError = text
+                    if (ready) {
+                        runtimeError = text
+                        runtimeErrorCode = e.code
+                    } else {
+                        startupError = text
+                        startupErrorCode = e.code
+                    }
                 }
 
                 override fun stop() {
@@ -297,7 +469,7 @@ class VntVpnService : VpnService() {
             )
 
             // 构造期间若已发生错误（TokenError / AddressExhausted / InvalidIp ...），
-            // 不能假装连上了，立刻转 ERROR 状态。
+            // 不能假装连上了，立刻按错误码分类。
             startupError?.let { throw IllegalStateException(it) }
 
             // 运行期循环：awaitTimeout(2000) 是 1.x 实例保活与接收停止事件的唯一机制，
@@ -307,28 +479,41 @@ class VntVpnService : VpnService() {
                 val out = nativeVnt.awaitTimeout(2000)
                 if (out || gen != generation) break
             }
+            // 到这里若还在跑且仍是当前代次 ⇒ native 自行退出（stop 回调）——按可重试处理
+            if (running && gen == generation) {
+                return AttemptResult(true, "native 实例自行退出（视为断线）", hadConnected.get())
+            }
+            return null                                        // 用户停止 / 被接管
         } catch (e: Throwable) {
-            failed = true
-            DiagLog.e(TAG, "组网失败", e)
-            VntMeshController.onError("组网失败：${e.message}")
+            DiagLog.e(TAG, "组网尝试失败", e)
+            val code = runtimeErrorCode ?: startupErrorCode
+            val retryable = when {
+                e is FatalVntException -> false                // VPN 授权被抢
+                code == ErrorInfo.ErrorCodeEnum.TokenError -> false
+                code == ErrorInfo.ErrorCodeEnum.InvalidIp -> false
+                else -> true    // Disconnect / AddressExhausted / IpAlreadyExists / Unknown / 普通异常
+            }
+            return AttemptResult(retryable, e.message ?: "未知异常", hadConnected.get())
         } finally {
-            // 到这里 awaitTimeout 已返回（或构造抛异常），native 线程不再使用该对象，
-            // 可以安全释放；shutdown()/onDestroy() 只发 stop 信号，不在这里之外 close。
-            synchronized(nativeLock) { vnt = null }
+            // 只释放本轮自己的实例；generation 已变（被接管）时不碰共享字段，
+            // 防止旧 worker 关掉新 attempt 刚建好的 vnt/pfd。
+            val stillCurrent = gen == generation
+            if (stillCurrent) synchronized(nativeLock) { vnt = null; pfd = null }
             runCatching { v?.stop() }
             runCatching { v?.close() }
-            val f = synchronized(nativeLock) {
-                val x = pfd
-                pfd = null
-                x
-            }
-            runCatching { f?.close() }
+            runCatching { localPfd.get()?.close() }
+        }
+    }
 
-            VntMeshController.clearProvider()
-            // v0.2.31 修的坑沿用：失败时**保留 ERROR 状态**，别被 onStopped() 覆盖成「未连接」。
-            if (!failed) VntMeshController.onStopped()
-            running = false
-            stopSelf()
+    /** 收尾兜底：清共享字段（正常路径各 attempt 的 finally 已自行清理）。 */
+    private fun releaseNative() {
+        val v = synchronized(nativeLock) { vnt }
+        runCatching { v?.stop() }
+        synchronized(nativeLock) {
+            vnt = null
+            val f = pfd
+            pfd = null
+            runCatching { f?.close() }
         }
     }
 
@@ -337,8 +522,9 @@ class VntVpnService : VpnService() {
     // ------------------------------------------------------------------
 
     /**
-     * 停止：只发 `stop()` 信号让 awaitTimeout 返回，**不在别处 close native 对象**，
-     * 由 worker 的 finally 统一收尾（避免并发 drop 造成 use-after-free）。
+     * 停止：只发 `stop()` 信号让 awaitTimeout 返回 + 唤醒退避等待，
+     * **不在别处 close native 对象**，由 worker 的 finally 统一收尾
+     * （避免并发 drop 造成 use-after-free）。
      */
     private fun shutdown() {
         DiagLog.i(TAG, "收到停止指令")
@@ -355,6 +541,7 @@ class VntVpnService : VpnService() {
         if (!hadConnection) {
             VntMeshController.clearProvider()
             VntMeshController.onStopped()
+            releaseNative()
             stopSelf()
         }
     }
@@ -371,6 +558,7 @@ class VntVpnService : VpnService() {
             x
         }
         runCatching { f?.close() }
+        unregisterNetworkCallback()
         VntMeshController.clearProvider()
         worker = null
         if (instance === this) instance = null

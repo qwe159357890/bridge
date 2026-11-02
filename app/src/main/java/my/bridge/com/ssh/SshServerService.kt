@@ -351,10 +351,26 @@ class SshServerService : Service() {
             EchoShellCommand(
                 listOf(
                     "/system/bin/sh", "-c",
+                    // cd 函数：区分裸 cd（→ App 目录）与 cd ~（→ HOME）；顺带维护 PS1D 供提示符显示
                     "cd(){ if [ \"\$#\" -eq 0 ]; then command cd /data/data/my.bridge.com; " +
-                        "else command cd \"\$@\"; fi; }; " +
-                        "print ':/ \$ '; " +
-                        "while IFS= read -r line; do eval \"\$line\"; print ':/ \$ '; done",
+                        "else command cd \"\$@\"; fi; PS1D=\$PWD; }; " +
+                        // 内置 alias（oh-my-zsh 最常用子集；alias 名 .. ... mksh 支持）
+                        "alias ll='ls -l'; alias la='ls -la'; alias lh='ls -lh'; " +
+                        "alias ..='cd ..'; alias ...='cd ../..'; alias df='df -h'; " +
+                        // 彩色提示符：青色路径（HOME→~ 缩写）+ 绿色 $；mksh print 默认解译 \e
+                        // /sdcard 与 /storage/emulated/0 同一位置（symlink），cd 内建会把
+                        // $PWD 刷成 getcwd 真实路径；case 必须前缀通配（含 /* 子路径），
+                        // 否则 cd ~/DCIM 落全路径显示（真机实证）
+                        "P(){ case \"\$PS1D\" in /sdcard|/sdcard/*) _p=\"~\${PS1D#/sdcard}\";; " +
+                        "/storage/emulated/0|/storage/emulated/0/*) _p=\"~\${PS1D#/storage/emulated/0}\";; " +
+                        "/data/data/my.bridge.com|/data/data/my.bridge.com/*) _p=\"[app]\${PS1D#/data/data/my.bridge.com}\";; " +
+                        "*) _p=\"\$PS1D\";; esac; " +
+                        "print -n \"\\e[36m\$_p \\e[32m\\$ \\e[0m\"; }; " +
+                        // h = 内置命令帮助（替代 oh-my-zsh 无补全下的发现性）
+                        "h(){ print \"\\e[1mBuilt-in\\e[0m\\n ll/la/lh  list\\n .. ...    up dir\\n cd        = app dir\\n cd ~      = /sdcard (HOME)\\n cd -      previous dir\\n df        disk usage\"; }; " +
+                        "PS1D=\$PWD; " +
+                        "print \"\\e[1;33mBridge SSH\\e[0m \\e[2m(type h for help)\\e[0m\"; P; " +
+                        "while IFS= read -r line; do eval \"\$line\"; P; done",
                 ),
                 // shell 起始目录 = SFTP home（真机实证：不设则 pwd=/ 且 ls 无权限）
                 workDir = home,
