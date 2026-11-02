@@ -25,7 +25,9 @@ import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.auth.password.PasswordAuthenticator
 import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
 import org.apache.sshd.server.command.CommandFactory
-import org.apache.sshd.server.shell.ProcessShellFactory
+import org.apache.sshd.server.shell.ShellFactory
+import org.apache.sshd.server.shell.InvertedShellWrapper
+import org.apache.sshd.server.shell.ProcessShell
 import org.apache.sshd.scp.server.ScpCommandFactory
 import org.apache.sshd.sftp.server.SftpSubsystemFactory
 import org.bouncycastle.jce.provider.BouncyCastleProvider
@@ -321,15 +323,22 @@ class SshServerService : Service() {
         // SFTP 子系统（setUpDefaultServer 不含，必须显式挂载）
         sshd.subsystemFactories = listOf(SftpSubsystemFactory())
 
-        // 远程终端：交互式 /system/bin/sh（完整 sh，用户拍板）；PTY 由 ProcessShellFactory 处理
-        // 2.20 实证：构造器为 (String executable, String... args)（javap 核对，非数组）
-        sshd.shellFactory = ProcessShellFactory("/system/bin/sh", "-i")
+        // 远程终端：交互式 /system/bin/sh（完整 sh，用户拍板）。
+        // ★ v0.2.36 修复（javap + 桌面/真机双复现实证）：2.20 的 ProcessShellFactory
+        //   在 resolveEffectiveCommand 里【无视调用者传入的 elements】，非 Windows 一律
+        //   硬编码执行 ["/bin/sh", "-c", 构造器第一个参数]——Android 端 exec 通道实际跑
+        //   `/bin/sh -c "/system/bin/sh"`（起一个无人喂数据的交互 sh）→ MobaXterm 执行
+        //   命令卡死、SCP 同源受影响；shell 通道只是碰巧可用。
+        //   修复 = 绕开 OS 推断，用 ProcessShell 直接构造器（精确命令列表）+ InvertedShellWrapper。
+        sshd.shellFactory = ShellFactory { _ ->
+            InvertedShellWrapper(ProcessShell("/system/bin/sh", "-i"))
+        }
 
         // 命令通道：scp 命令走 SCP，其余 exec 命令经 /system/bin/sh -c（完整 sh 语义）
         // 2.20 实证：委托入口是 setDelegateCommandFactory（javap 核对，非 setDelegate）
         val scpFactory = ScpCommandFactory()
-        scpFactory.setDelegateCommandFactory(CommandFactory { channel, command ->
-            ProcessShellFactory("/system/bin/sh", "-c", command).createShell(channel)
+        scpFactory.setDelegateCommandFactory(CommandFactory { _, command ->
+            InvertedShellWrapper(ProcessShell("/system/bin/sh", "-c", command))
         })
         sshd.commandFactory = scpFactory
 
