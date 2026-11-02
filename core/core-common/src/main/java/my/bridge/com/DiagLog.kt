@@ -106,11 +106,18 @@ object DiagLog {
     /** 警告级日志：记入内存缓冲 + 落盘。 */
     fun w(tag: String, message: String) = append("W", tag, message)
 
-    /** 错误级日志：记入内存缓冲 + 落盘，附异常类型与堆栈首部。 */
+    /** 错误级日志：记入内存缓冲 + 落盘，附异常类型与堆栈首部；cause 链最多带 3 层（ExceptionInInitializerError 等包装异常的真凶在 cause 里）。 */
     fun e(tag: String, message: String, throwable: Throwable? = null) {
         val extra = throwable?.let {
+            val causes = generateSequence(it as Throwable) { t -> t.cause?.takeIf { c -> c !== t } }
+                .drop(1)
+                .take(3)
+                .joinToString(" ← ") { c ->
+                    "${c.javaClass.simpleName}: ${c.message} @ ${c.stackTrace.firstOrNull() ?: "无堆栈"}"
+                }
             " | ${it.javaClass.simpleName}: ${it.message} @ " +
-                (it.stackTrace.firstOrNull()?.toString() ?: "无堆栈")
+                (it.stackTrace.firstOrNull()?.toString() ?: "无堆栈") +
+                (if (causes.isNotEmpty()) " | cause: $causes" else "")
         } ?: ""
         append("E", tag, message + extra)
     }

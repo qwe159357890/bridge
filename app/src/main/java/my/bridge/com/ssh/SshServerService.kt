@@ -256,10 +256,38 @@ class SshServerService : Service() {
     private fun buildServer(port: Int): SshServer {
         val home = SshPrefs.homeDir(this)
 
-        // Android 无 user.home/user.dir 概念（调研报告 §3.5 官方 hooks）
+        // Android 无 user.home/user.dir 概念（调研报告 §3.5 官方 hooks）。
+        // ★ v0.2.35 双修复（首次真机实锤，见 ssh-integration-change-ledger §四）：
+        // ① 2.20 签名是 setAndroid(java.lang.Boolean)（包装类型），之前反射用
+        //    javaPrimitiveType（原始 boolean）→ NoSuchMethodException → Android 模式没设上。
+        //    主开关改用官方系统属性 org.apache.sshd.androidMode=true（javap 实证
+        //    ANDROID_MODE_OVERRIDE_PROP），反射退为兜底。
+        // ② 仅 setAndroid=true 不够：PathUtils$LazyDefaultUserHomeFolderHolder.<clinit>
+        //    仍会读 System.getProperty("user.home")，Android 上为 null →
+        //    ValidateUtils.checkNotNullAndNotEmpty 抛异常 → ExceptionInInitializerError，
+        //    之后该类永久失败 → 连锁 NoClassDefFoundError: ServerBuilder（真机日志实证）。
+        //    官方设计是 Android 上必须 setUserHomeFolderResolver 主动提供目录。
+        //    用应用私有 filesDir（sshd 内部解析用，不对外暴露；对外 home 由
+        //    NativeFileSystemFactory.usersHomeDir 单独控制）。
+        System.setProperty("org.apache.sshd.androidMode", "true")
+        java.nio.file.Paths.get(filesDir.absolutePath) // 预热：确认 NIO 可用，失败直接进 catch 汇报
+        try {
+            org.apache.sshd.common.util.io.PathUtils.setUserHomeFolderResolver {
+                java.nio.file.Paths.get(filesDir.absolutePath)
+            }
+            DiagLog.i(TAG, "PathUtils.setUserHomeFolderResolver 已设置 → ${filesDir.absolutePath}")
+        } catch (e: Throwable) {
+            DiagLog.w(TAG, "setUserHomeFolderResolver 失败（版本差异）：${e.message}")
+        }
         try {
             val osUtils = Class.forName("org.apache.sshd.common.util.OsUtils")
-            osUtils.getMethod("setAndroid", Boolean::class.javaPrimitiveType).invoke(null, true)
+            val boxed = try {
+                osUtils.getMethod("setAndroid", java.lang.Boolean::class.java)
+            } catch (e: NoSuchMethodException) {
+                osUtils.getMethod("setAndroid", java.lang.Boolean.TYPE)
+            }
+            boxed.invoke(null, java.lang.Boolean.TRUE)
+            DiagLog.i(TAG, "OsUtils.setAndroid(true) 成功（Android 模式已开启）")
         } catch (e: Throwable) {
             DiagLog.w(TAG, "OsUtils.setAndroid 不可用（版本差异），继续：${e.message}")
         }
