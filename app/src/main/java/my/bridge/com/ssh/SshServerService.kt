@@ -29,7 +29,6 @@ import org.apache.sshd.server.shell.ShellFactory
 import org.apache.sshd.server.shell.InvertedShellWrapper
 import org.apache.sshd.server.shell.ProcessShell
 import org.apache.sshd.scp.server.ScpCommandFactory
-import org.apache.sshd.sftp.server.SftpSubsystemFactory
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 /**
@@ -320,8 +319,13 @@ class SshServerService : Service() {
             }
         }
 
-        // SFTP 子系统（setUpDefaultServer 不含，必须显式挂载）
-        sshd.subsystemFactories = listOf(SftpSubsystemFactory())
+        // SFTP 子系统（setUpDefaultServer 不含，必须显式挂载）。
+        // ★ 0.2.36 六次修复（javap 实证）：SftpSubsystem 的初始目录 defaultDir 取
+        //   fs.getPath("").toAbsolutePath() = 进程工作目录（Android 上 = "/"），
+        //   usersHomeDir 只在 createHome=true 时建目录用，对初始目录无效 →
+        //   WinSCP/MobaXterm 连上落在 "/" 全无权限。用 HomeSftpSubsystemFactory
+        //   覆写 getDefaultDirectory() 钉到 SshPrefs.homeDir（全盘档 = /sdcard）。
+        sshd.subsystemFactories = listOf(HomeSftpSubsystemFactory(home))
 
         // 远程终端：交互式 /system/bin/sh（完整 sh，用户拍板）。
         // ★ v0.2.36 修复（javap + 桌面/真机双复现实证）：2.20 的 ProcessShellFactory
@@ -330,15 +334,32 @@ class SshServerService : Service() {
         //   `/bin/sh -c "/system/bin/sh"`（起一个无人喂数据的交互 sh）→ MobaXterm 执行
         //   命令卡死、SCP 同源受影响；shell 通道只是碰巧可用。
         //   修复 = 绕开 OS 推断，用 ProcessShell 直接构造器（精确命令列表）+ InvertedShellWrapper。
+        // v0.2.36 三次修复：ProcessShell 无 PTY → 终端无回显、\r 不被 mksh 认。交互 shell 换
+        //   EchoShellCommand（内置迷你行规程：回显 + 退格 + \r→\n 翻译，见 SshLineDiscipline.kt）。
+        // v0.2.36 四次修复（第 4 层）：mksh -i（交互模式）从管道拿到完整整行也不执行
+        //   （`-c` 模式一切正常，现象唯一指向交互模式对非 tty stdin 的特殊处理路径）。
+        //   无 PTY 环境下放弃交互模式，改用「读取-执行循环」：非交互 sh 逐行 read + eval，
+        //   机制与已验证正常的 -c 模式完全同源；提示符由循环内 print 合成（输出即「上条
+        //   命令已执行完」信号）。代价：不支持跨行语法块（if/fi、for/done 需一行写完）、
+        //   子命令读 stdin 会与循环抢输入——无 PTY 固有限制，可接受。
         sshd.shellFactory = ShellFactory { _ ->
-            InvertedShellWrapper(ProcessShell("/system/bin/sh", "-i"))
+            EchoShellCommand(
+                listOf(
+                    "/system/bin/sh", "-c",
+                    "print ':/ \$ '; while IFS= read -r line; do eval \"\$line\"; print ':/ \$ '; done",
+                ),
+                // shell 起始目录 = SFTP home（真机实证：不设则 pwd=/ 且 ls 无权限）
+                workDir = home,
+            )
         }
 
-        // 命令通道：scp 命令走 SCP，其余 exec 命令经 /system/bin/sh -c（完整 sh 语义）
+        // 命令通道：scp 命令走 SCP，其余 exec 命令经 /system/bin/sh -c（完整 sh 语义）。
+        // ★ 0.2.36 六次修复：OpenSSH 语义里 exec 命令也在用户 home 下执行，补 cd 前缀对齐。
         // 2.20 实证：委托入口是 setDelegateCommandFactory（javap 核对，非 setDelegate）
         val scpFactory = ScpCommandFactory()
         scpFactory.setDelegateCommandFactory(CommandFactory { _, command ->
-            InvertedShellWrapper(ProcessShell("/system/bin/sh", "-c", command))
+            val prefixed = if (command.isBlank()) command else "cd \"$home\" && $command"
+            InvertedShellWrapper(ProcessShell("/system/bin/sh", "-c", prefixed))
         })
         sshd.commandFactory = scpFactory
 

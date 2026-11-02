@@ -526,3 +526,44 @@ Composable 内 `LocalContext.current` 直读，hack 已删。
    EC hostkey 生成、BouncyCastle provider 重装。
 6. **admin 状态联动**：选中 ssh_start/stop 卡片自动探测、unknown 禁用、强制下发二次确认、
    详情弹窗三套布局回执解析。
+
+---
+
+## §五 终端与 SFTP 修复（v0.2.36，2026-11-02 下午—晚间，五轮真机迭代）
+
+> 背景：v0.2.35 真机首验，SFTP 可用但终端「执行命令卡死 → 无回显 → 整行不执行 → 格式错乱 → 落点 / 无权限」逐层暴露，共五层，全部当日修复。
+
+### 5.1 第一层：exec 通道卡死（本地 commit eaeab07）
+
+- **根因**（javap + 桌面 MiniSshd 复现 + 真机双实证）：sshd 2.20 `ProcessShellFactory.resolveEffectiveCommand` **无视调用者传入 elements**，非 Windows 硬编码 `["/bin/sh","-c",构造器首参]` → exec 实跑 `/bin/sh -c "/system/bin/sh"`（无人喂数据的交互 sh）→ 卡死。
+- **改后**：绕开 OS 推断，直接 `InvertedShellWrapper(ProcessShell(...))` 精确构造。
+- **回滚**：`git show eaeab07` 之前状态 = `shellFactory = ProcessShellFactory(...)`。
+
+### 5.2 第二层：终端无回显、回车无反应
+
+- **根因**：ProcessShell 用管道无 PTY，内核行规程（回显/`\r`→`\n`）缺失。
+- **改后**：新增 `SshLineDiscipline.kt`——`LineDisciplineInputStream`（回显+退格+CJK 整字符擦除+ESC/CSI 吞除+`\r`→`\n`+Ctrl+C/U/D）+ `EchoShellCommand`。
+- **回滚**：新文件，删除 + shellFactory 还原即回滚。
+
+### 5.3 第三层：行规程与泵的死锁
+
+- **根因**（javap pumpStream 实证）：`InvertedShellWrapper` 轮转泵靠 `available()` 判断，行规程整行缓冲时 available()==0 → 字节永远不流动。且 sshd 独立 err 流真机写不达客户端（CHILD_ERR 实验实锤），mksh 提示符/警告全走 stderr。
+- **改后**：`EchoShellCommand` 改**推送式泵**（stdin 行规程线程 / stdout 泵线程 / exit-watch 线程）+ `ProcessBuilder.redirectErrorStream(true)` OS 层合并 stderr；输出统一过 `SynchronizedOutputStream` 防双线程写字节交错。
+
+### 5.4 第四层：mksh 交互模式拿到整行不执行 → 读取-执行循环
+
+- **现象**：`-c` 模式一切正常，`-i` 模式从管道拿到完整行也不执行（诊断日志版未及装机，WiFi/VNT 链路不稳中断）。
+- **改后**：**放弃 `-i`**，用 `sh -c 'print ':/ $ '; while IFS= read -r line; do eval "$line"; print ':/ $ '; done'`——与已验证的 `-c` 同源机制；提示符由循环内 mksh 内建 `print` 合成（兼作「上条执行完」信号）。**取舍**：跨行语法块（if/fi、for/done）不支持需一行写完；子命令读 stdin 会与循环抢输入；Ctrl+C 只清行不能杀前台进程（无 PTY 固有限制）。
+
+### 5.5 第五层：输出阶梯缩进 + SFTP/终端落点 `/`（v0.2.36 装机验证版，三处）
+
+- **阶梯缩进**：无 PTY 时子进程输出裸 `\n`，缺真实 PTY 的 ONLCR 补 `\r` → EchoShellCommand stdout 泵逐字节扫描，仅对前面无 `\r` 的裸 LF 补 `\r`（防 `\r\n`→`\r\r\n`）。
+- **SFTP 初始目录 = `/`**（javap 实证）：`SftpSubsystem.setFileSystem` 里 `defaultDir = fs.getPath("").toAbsolutePath()` = **进程工作目录**（Android = `/`）；`NativeFileSystemFactory.usersHomeDir` 只在 createHome=true 时建目录用，对初始目录**无效**。→ 新增 `HomeSftpSubsystemFactory.kt` 覆写 `getDefaultDirectory()` 钉到 `SshPrefs.homeDir`（全盘档 /sdcard）。
+- **shell/exec 落点 `/`**：ProcessBuilder 未设工作目录 → EchoShellCommand 增加 `workDir` 参数（shell 起始 /sdcard）；exec 委托补 `cd "<home>" &&` 前缀（对齐 OpenSSH「exec 在 home 执行」语义）。
+- **回滚配方**：`git checkout <v0.2.36 上一提交> -- app/src/main/java/my/bridge/com/ssh/`；新文件删除即回滚。
+
+### 5.6 发布与装机通道（当日实锤）
+
+- **central-server 跑在本机**（`F:/pythonWork/appClient/server/.venv`，端口 15160）→ `server/data/updates/` 即实时生效升级目录，装包流程 = bump versionName → assembleDebug → cp APK + 改 update.json → 手机 App「检查更新」。
+- **adb over VNT 不可靠**：外网地址走 VNT 隧道，push 45MB 两次成功但 `adb shell` 恒失败（device offline/连接蒸发），同机 WiFi adb 正常 → 高延迟移动数据隧道下 adb 握手不稳；且大流量可能压崩 App 连带 VNT 失效（用户推断，主 WS 曾掉线佐证）。**装机优先 check_update / USB / WiFi adb，禁 adb over VNT 传大文件。**
+- git 直连/代理均挂时，发布走 Git Data API 重建提交（`build/_api_push_v0236.py`），**远端 commit hash 与本地不同（内容一致）**，本地 origin/main 引用滞后，下次发布先 API 查远端真实 sha。
