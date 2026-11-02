@@ -53,6 +53,7 @@ import my.bridge.com.media.ScreenCaptureHolder
 import my.bridge.com.media.MusicPlayer
 import my.bridge.com.vnt.VntMeshController
 import my.bridge.com.vnt.VntMeshPrefs
+import my.bridge.com.vnt.VntServerAddress
 import my.bridge.com.vnt.VntStatus
 import retrofit2.HttpException
 import timber.log.Timber
@@ -279,39 +280,53 @@ object CommandModule {
     }
 
     // ------------------------------------------------------------------
-    // VNT 组网命令（v0.2.30）
+    // VNT 组网命令（v0.2.30 引入，v0.2.32 改为 1.x 语义）
     //
     // 平台限制（已在回执里如实说明）：
     // - VpnService.prepare() 授权框必须有 Activity 才能弹；
     // - Android 12+ 后台 startForegroundService 会抛 ForegroundServiceStartNotAllowedException；
     // ⇒ vnt_start 实际只在「App 在前台」或「用户此前已授权过 VPN」时可靠生效。
-    // - vnt_status 刻意只读本地快照，不调 getClientList()（那是主动 RPC + 最多阻塞 3 秒）。
+    // - vnt_status 刻意只读本地快照，不调 Vnt.list()（1.x 是本地内存读，但仍属 JNI，
+    //   且详细设备列表只在页面可见时刷新，命令通道不该触发）。
+    // - 1.x：组网编号叫 token（兼容旧 network_code 别名）；服务端是裸 host:port；
+    //   UDP/TCP 由布尔 tcp 决定，不接受 udp:// / tcp:// 前缀。
     // ------------------------------------------------------------------
 
-    /** vnt_start：可选覆盖服务端/网络编号/密码后启动组网。 */
+    /** vnt_start：可选覆盖服务端 / 组网编号 / 密码 / 协议后启动组网。 */
     private fun executeVntStart(context: Context, command: Command): CommandResult {
         return try {
             val server = command.strParam("server", "")
-            val code = command.strParam("network_code", "")
+            // 1.x 叫 token；兼容 v0.2.30/31 管理后台沿用的 network_code 参数名
+            val token = command.strParam("token", "").ifEmpty { command.strParam("network_code", "") }
             val password = command.strParam("password", "")
-            if (server.isNotEmpty() || code.isNotEmpty() || password.isNotEmpty()) {
+            val tcpText = command.strParam("tcp", "").lowercase()
+            val tcp = when (tcpText) {
+                "true", "1", "tcp" -> true
+                "false", "0", "udp" -> false
+                else -> null
+            }
+            if (server.isNotEmpty() || token.isNotEmpty() || password.isNotEmpty() || tcp != null) {
                 val old = VntMeshPrefs.load(context)
                 // 单套配置：覆盖写回，与 APP 内「组网配置」共用同一份 Prefs
                 VntMeshPrefs.save(
                     context,
                     old.copy(
                         server = server.ifEmpty { old.server },
-                        networkCode = code.ifEmpty { old.networkCode },
+                        token = token.ifEmpty { old.token },
                         password = password.ifEmpty { old.password },
+                        tcp = tcp ?: old.tcp,
                     ),
                 )
             }
             val cfg = VntMeshPrefs.load(context)
-            if (cfg.networkCode.isBlank()) {
+            if (cfg.token.isBlank()) {
                 return CommandResult(
                     command.commandId, command.command, false,
-                    "网络编号为空：请先在 APP「组网配置」里填写，或用本命令 network_code 参数指定",
+                    "组网编号（Token）为空：请先在 APP「组网配置」里填写，或用本命令 token 参数指定",
                 )
+            }
+            VntServerAddress.error(cfg.server)?.let {
+                return CommandResult(command.commandId, command.command, false, "服务端地址非法：$it")
             }
             if (!VntMeshController.isPrepared(context)) {
                 return CommandResult(
@@ -333,7 +348,8 @@ object CommandModule {
             CommandResult(
                 command.commandId, command.command, launched,
                 if (launched) {
-                    "已下发开始组网：${cfg.server} / ${cfg.networkCode}" +
+                    "已下发开始组网：${cfg.server} / Token ${cfg.token}（" +
+                        "${if (cfg.tcp) "TCP" else "UDP"}）" +
                         "（首次需等待服务器注册，用 vnt_status 查状态；切 Tab/退后台不断连）"
                 } else {
                     "启动失败：多为 Android 12+ 后台启动前台服务受限，详见设备日志；请让 App 回到前台再试"
@@ -362,7 +378,7 @@ object CommandModule {
         }
     }
 
-    /** vnt_status：只读本地缓存快照，不触发 getClientList RPC。 */
+    /** vnt_status：只读本地缓存快照，不触发 Vnt.list()。 */
     private fun executeVntStatus(command: Command): CommandResult {
         return try {
             CommandResult(

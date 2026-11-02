@@ -22,13 +22,15 @@
 | 连接   | 源码                                                        | 应用层心跳           | 传输层 ping | 判死                       | 重连                |
 | ---- | --------------------------------------------------------- | --------------- | -------- | ------------------------ | ----------------- |
 | 音频中继 | `app/.../relay/RelayClient.kt`<br />常量 `RelayProtocol.kt` | **30s** 文本 ping | 无        | 60s 无数据判死 + ready 超时 10s | 1/2/4/8/16/30s 退避 |
-| VNT 组网（v0.2.30） | `app/.../vnt/VntVpnService.kt`<br />官方 `libvnt_jni.so`（Rust） | **黑盒**：QUIC `keep_alive_interval=5s`、P2P 邻居 60s 刷新，**周期在 Rust 内部、不可从 Java 侧调** | — | 实例停止经 `nextEvent()` 吐 `InstanceStopped` | native 内部重建实例，订阅连接不断 | 
+| VNT 组网（v0.2.32 改 1.x） | `app/.../vnt/VntVpnService.kt`<br />官方 v1.2.9 `libvnt_jni.so`（Rust） | **黑盒**：周期在 Rust 内部、不可从 Java 侧调；Java 侧只是 `Vnt.awaitTimeout(2000)` 保活/停止信号循环，**不发网络包** | — | 实例停止由 `Vnt.stop()` 让 `awaitTimeout` 返回 true；错误经 `CallBack.error(ErrorInfo)` 上报 | 用户显式「开始组网」才重建实例（`START_NOT_STICKY`，进程被杀不复活） | 
 
-> **VNT 登记说明（v0.2.30）**：这是第 6 条长连接，但周期参数**不在 Kotlin 里**，
+> **VNT 登记说明（v0.2.32 更新）**：这是第 6 条长连接，但心跳周期参数**不在 Kotlin 里**
+> （1.x 由 Rust 内部维护，`awaitTimeout(2000)` 只是 Java 侧的保活/停止信号循环，**不发网络包**），
 > 调本文档任何周期都影响不到它——升级 VNT 版本时才可能变化，届时需重新核实。
-> 另外它还有一条「UI 侧 5 秒轮询」（设备列表 `getClientList()` 主动 RPC），
+> 另外它还有一条「UI 侧 5 秒轮询」（`Vnt.list()` 读 native 侧缓存路由表，**本地内存读、不是网络 RPC**），
 > **仅 App 在前台且处于组网页时运行**，退后台零请求、零定时器（详见
-> `docs/research/vnt-mesh-integration.md` §2.5），不计入常驻心跳耗电模型。
+> `docs/research/vnt-mesh-integration.md` §十三），不计入常驻心跳耗电模型。
+> ⚠️ v0.2.30/31 的 2.x 描述（QUIC `keep_alive_interval=5s` / `nextEvent()` / `getClientList` RPC）**已作废**。
 
 ### 1.3 页面级（进页面才连，退出即断）
 

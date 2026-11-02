@@ -67,24 +67,38 @@
 
 ---
 
-## VNT 组网命令（v0.2.30，v0.2.31 修订）
+## VNT 组网命令（v0.2.30 引入，v0.2.32 改为 1.x / VntApp v1.2.9 语义）
 
 > 三条命令走「三步法」：`server/app/core/command_catalog.py` 的 `_cmd()` →
 > `core/core-network/.../ws/Command.kt` 常量 + `CommandModule.kt` 执行器 → 本文档 + README 索引。
 > 页面与生命周期设计见 [../../research/vnt-mesh-integration.md](../../research/vnt-mesh-integration.md)，
 > 交互原型见 `assets/design/ui-mockup-vnt-mesh.html`。
 
+> **★ v0.2.32 重大变更（决策链见 `docs/dev/vnt-integration-change-ledger.md` §六）**：
+> 用户的自建 VNTS 与所有存量客户端**全是 1.x，且必须互通**，而 VNT 2.0 与 1.0
+> 官方明写「不兼容」（`vnt-main/README.md:167`）。因此 Bridge 核心整体替换为官方
+> **VntApp `v1.2.9`（最后一个 Java JNI 版）** 的 `libvnt_jni.so` + `top.wherewego.vnt.jni.*` 绑定。
+> v0.2.30/31 的 2.0.11 表述（`udp://` 非法、`network_code`、`tcp(tls)`/`wss`/`quic`、
+> ChaCha20、certMode、getClientList、NAT/RTT）**全部作废，以本节为准**。
+> 2.x 成果已由「改前留档」台账 §六 + git 历史完整保留，将来服务端升级可按配方还原。
+
 **架构**：连接由 `VntVpnService`（`specialUse` 前台服务）常驻，页面只订阅状态。
 点「开始组网」/ 下发 `vnt_start` 后，**切 Tab、退后台、锁屏都不断连**；只有
 `vnt_stop`、页面「停止组网」、或 `AppExit.kill`（退出应用 / 切后台立即结束）才终止。
+
+**1.x 启动时序（与 2.x 相反）**：`new Vnt(Config, CallBack)` → native 依次回调
+`connect / handshake / register / generateTun(DeviceConfig)` → **Java 在 `generateTun`
+回调里建 `VpnService.Builder` 并 `return fd`** → `success()` → `awaitTimeout` 保活循环。
+2.x 是「Java 先建 TUN 再 `startTun(fd)` 传进去」，两者不可混用。
 
 ### vnt_start 开始组网
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `server` | text | 否 | 可选覆盖 APP 内保存的服务端地址（默认 `vnt2.rustvnt.com:29872`，可填自建 VNTS）。**v2.0.11 规则**：裸 `host:port` 默认 **`tcp://`（TLS TCP）**，可显式写 `tcp://` / `wss://` / `quic://` / `dynamic://`；**不支持 `udp://`**（1.2.x 旧协议）。非法前缀会在配置弹窗 / `VntConfigBuilder` 两处被拦下，不再让 native 抛 `Unknown protocol in server address` |
-| `network_code` | text | 否 | 可选覆盖网络编号；为空且 APP 内也未保存 → 回执失败 |
-| `password` | text | 否 | 可选覆盖组网密码；非空启用 ChaCha20-Poly1305 端到端加密 |
+| `server` | text | 否 | 可选覆盖 APP 内保存的服务端地址（默认 `039039.xyz:31007`，用户自建 1.x VNTS）。**1.x 只接受裸 `host:port`，不接受任何 `://` 前缀**（`udp://` / `tcp://` 都会被 `VntServerAddress.error()` 与 `VntConfigBuilder` 双处拦下）；UDP/TCP 由下方 `tcp` 参数选择 |
+| `token` | text | 否 | 组网编号（1.x 叫 **Token**，2.x 叫 network_code）。**兼容旧参数名 `network_code`**；为空且 APP 内也未保存 → 回执失败 |
+| `password` | text | 否 | 客户端间加密密码；**须与存量 1.x 客户端逐项一致**（连同 `cipherModel` / `serverEncrypt` / `finger`），不同加密状态不能通信 |
+| `tcp` | text | 否 | 可选覆盖连接协议：`tcp` / `true` / `1` → TCP，`udp` / `false` / `0` → **UDP（默认，与用户 1.2.13 原生 APK 一致）** |
 
 **回执与限制**（重要）：
 
@@ -95,14 +109,18 @@
 - 参数覆盖会写回单套配置 Prefs（与页面「组网配置」共用一份）。
 - 按崩溃台账 §5：`startForegroundService` 每调一次欠一次前台义务，
   `VntVpnService.onStartCommand` 每次幂等补挂、`startForeground` try/catch + 失败 `stopSelf`。
+- **互通前提**：`token` / `password` / `cipherModel` / `serverEncrypt` / `finger` 必须与
+  存量 1.x 客户端一致，否则可能「注册成功但互 ping 不通」。配置弹窗已按官方
+  `AddActivity` 默认值预填（aes_gcm / serverEncrypt=true / finger=false）。
 
 ### vnt_stop 停止组网
 
 无参数。走普通 `startService(ACTION_STOP)`（不产生前台义务），服务内部
-`network.stop()` → 释放 VPN 通道 → `stopSelf()`。回执含停止前状态。
+`Vnt.stop()` 让 `awaitTimeout` 返回 → worker 的 `finally` 统一 `close()` native 实例、
+关闭 VPN 的 `ParcelFileDescriptor` → `stopSelf()`。回执含停止前状态。
 **无平台限制，三条里最可靠**，适合运维远程收口。
 
-**v0.2.31 自动组网记忆**：`vnt_start` 成功下发（或回「已在运行」）会把
+**v0.2.31 自动组网记忆（1.x 沿用）**：`vnt_start` 成功下发（或回「已在运行」）会把
 `VntMeshPrefs.autoStart` 置 `true`，`vnt_stop` 置 `false`。记忆为 `true` 时，
 App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自动开始组网；
 三道守卫（记忆未开 / 已 RUNNING·STARTING / VPN 授权失效）会跳过，且**失败不重试**。
@@ -110,21 +128,22 @@ App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自�
 
 ### vnt_status 组网状态
 
-无参数。回执格式：
+无参数。回执格式（1.x）：
 
 ```
-运行中 · 虚拟IP 10.26.0.5 · NAT Cone · 服务端RTT 24ms · 在线设备 3
-（详细列表需打开组网页，命令不主动拉 RPC）
+运行中 · 虚拟IP 10.26.0.5 · Token xxx · 服务端 039039.xyz:31007（UDP）· 在线设备 3 · 服务端版本 1.2.x
+（详细列表需打开组网页，命令不主动拉列表）
 ```
 
 未连接 / 连接中 / 停止中 / 异常 各有对应文案。
 
 **性能红线**：只读 `VntMeshController` 的本地状态快照，
-**刻意不调 `VntApi.getClientList()`** —— 那是主动 RPC（`send_to_gateway_expired` +
-最多阻塞 3 秒等待响应），运维在后台连点几下就会把命令通道打爆。需要完整设备列表
-将来另开 `vnt_clients` 并在文档标注「有网络开销」。
+**刻意不调 `Vnt.list()`** —— 虽是 native 侧缓存表的本地内存读（**不是网络 RPC**），
+但仍属 JNI 调用，且按已拍板约定「详细设备列表只在组网页可见时刷新」，
+命令通道不该触发。1.x 没有 2.x 的 `getClientList` RPC / NAT 类型 / 真实 RTT / 流量速率，
+`vnt_status` 也不再展示这些字段。
 
-**为什么没有「设备上下线推送」**：底层服务端会实时推 `PushClientIps`，
-但 `RuntimeEvent` 枚举只有 `InstanceStopped` / `Changed` 两个变体，Java 层收不到
-`PeerOnline`/`PeerOffline`。UI 最长滞后一个刷新周期；刷新仅在「App 在前台 +
-处于组网页」时进行（进页面立即刷一次，之后 5 秒一次），退后台零请求。
+**为什么没有「设备上下线推送」**：1.x 底层没有设备上下线事件回调，Java 层只能
+轮询 `Vnt.list() -> PeerRouteInfo[]`（native 侧缓存的路由表）。UI 最长滞后一个刷新周期；
+刷新仅在「App 在前台 + 处于组网页」时进行（进页面立即刷一次，之后 5 秒一次），
+退后台零请求、零定时器。P2P/中继由 `Route.metric == 1` 判定（官方 `ConnectActivity` 同款逻辑）。

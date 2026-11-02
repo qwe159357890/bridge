@@ -1,0 +1,2 @@
+53dcc30a81efc05e383cfeee09ef1028ca6a37bf0b6a3e3f0d623357c7ef0d03 *vnt-jni-arm64-v8a-v1.2.9.so
+fac9d1ee9f40911f0e3ecf64a7bf1b2394016212ba2d8075ff04bb964b9848b6 *vnt-jni-x86_64-v1.2.9.so

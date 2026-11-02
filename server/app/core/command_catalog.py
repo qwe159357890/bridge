@@ -413,24 +413,27 @@ COMMANDS: list[dict[str, Any]] = [
           _param("force_download", "强制重新下载", PARAM_TYPE_SWITCH, default=False,
                  description="忽略本地缓存强制重下（md5 校验删除污染缓存的自救手段，仅自动安装模式有效）")]),
 
-    # ---- VNT 组网（v0.2.30）----
+    # ---- VNT 组网（v0.2.30 引入，v0.2.32 改为 1.x / VntApp v1.2.9 语义）----
     _cmd("vnt_start", "开始组网", "system", "🕸️",
-         "启动 VNT 虚拟局域网（前台服务常驻，切 Tab / 退后台不断连）；"
+         "启动 VNT 虚拟局域网（1.x 核心，与自建 1.x VNTS 及存量客户端互通；前台服务常驻，切 Tab / 退后台不断连）；"
          "★ 需 App 在前台或已授予系统 VPN 授权：后台下发大概率失败，回执会如实说明而不假装成功",
          [_param("server", "服务端地址", PARAM_TYPE_TEXT,
-                 placeholder="vnt2.rustvnt.com:29872",
-                 description="可选覆盖 APP 内已保存的配置；支持 tcp:// wss:// quic:// 前缀，裸 host:port 默认 UDP"),
-          _param("network_code", "网络编号", PARAM_TYPE_TEXT,
+                 placeholder="039039.xyz:31007",
+                 description="可选覆盖 APP 内已保存的配置；1.x 只接受裸 host:port，不要带 udp:// / tcp:// 前缀"),
+          _param("token", "组网编号 Token", PARAM_TYPE_TEXT,
                  placeholder="留空用 APP 内保存的配置",
-                 description="可选覆盖；同编号设备互通"),
-          _param("password", "组网密码", PARAM_TYPE_TEXT,
+                 description="可选覆盖；同编号设备互通。兼容旧参数名 network_code"),
+          _param("password", "客户端加密密码", PARAM_TYPE_TEXT,
                  placeholder="留空用 APP 内保存的配置",
-                 description="可选覆盖；非空启用 ChaCha20-Poly1305 端到端加密")]),
+                 description="可选覆盖；须与存量 1.x 客户端一致，不同加密状态不能通信"),
+          _param("tcp", "连接协议", PARAM_TYPE_TEXT,
+                 placeholder="留空用 APP 内保存的配置",
+                 description="可选覆盖；填 tcp/true/1 走 TCP，填 udp/false/0 走 UDP（默认 UDP，与 1.2.13 原生 APK 一致）")]),
     _cmd("vnt_stop", "停止组网", "system", "🛑",
          "停止 VNT 虚拟局域网并释放系统 VPN 通道；无平台限制，最可靠"),
     _cmd("vnt_status", "组网状态", "system", "📶",
-         "查询 VNT 组网状态（状态 / 虚拟 IP / NAT / 服务端 RTT / 在线设备数）；"
-         "只读本地缓存快照，**不触发 getClientList RPC**（避免运维连点把命令通道打爆）"),
+         "查询 VNT 组网状态（状态 / 虚拟 IP / Token / 协议 / 在线设备数 / 服务端版本）；"
+         "只读本地缓存快照，**不触发 Vnt.list()**（详细设备列表仅在组网页可见时刷新）"),
 ]
 
 

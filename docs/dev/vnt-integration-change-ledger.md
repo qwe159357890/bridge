@@ -736,3 +736,335 @@ APK 内出现 `lib/x86/`（32 位）或多于/少于 3 套 ABI；自动组网导
 > 自建 VNTS 升级到 2.x 后的 TLS TCP 连通、`batterystats` 省电实测。
 > 见报告 §十一 D 组 + §12.6。
 
+---
+
+## 六、v0.2.32：A1 纯替换 1.x（2026-11-01 23:00 用户拍板「a1 开工」）
+
+> **本节是 v0.2.32 的「改前留档」，动手改任何一行之前先写。**
+> 改完必须回填 §6.8「改后原文 + 验证结果」，形成「改前 / 改后 / 回滚」闭环。
+
+### 6.1 用户诉求与决策链（不可省略的背景）
+
+1. 用户自建 VNTS 与**全部其它客户端都是 1.X**，**不能升级**（存量客户端要继续用），因此
+   `vnt-main/README.md:167`「2.0 与 1.0 不兼容」决定了 **2.x so 无法加入现有 1.x 网络**。
+2. 用户明确：`我的其它客户端和自建服务端都是1.X版本的 所以必须互通1.X` ⇒ 排除 B（双服务端并存，两网不互通）。
+3. 助手核实：官方 **1.x 最后一个 Java JNI 版 = `v1.2.9`**（1.2.10.1 起转 Flutter / Dart FFI，
+   `librust_lib_vnt_app.so` 的 `Java_*` 符号 = 0，Bridge 用不了）；用户回 `a1 开工`。
+4. **决策 A1**：删除 2.x 全套（`com/vnt/*` 11 个类 + 3 套 so），换成 `v1.2.9` 全套
+   （14 个 `top/wherewego/vnt/jni/*.java` + 2 套 so），**重写** VNT 层 / UI / 命令 / 文档。
+   2.x 成果不删除历史，靠本台账 + git 可 100% 恢复。
+5. 版本号 `v0.2.32`；`armeabi-v7a` 失去支持（官方 1.x JNI 版从未提供，见工作日志 22:54 核实）。
+
+### 6.2 改前基线（git 可 100% 兜底）
+
+```
+HEAD = 0f7f50985059f46fe342d7a3f9a30ac984b147c0   （tag v0.2.31）
+git status --short = 空（工作区干净）
+```
+
+**本节列出的全部待改 / 待删文件，`git ls-files --error-unmatch` 全部 = tracked** ⇒
+不需要靠抄原文来兜底，但按「改前留档」约定仍在 §6.4 逐字固化关键片段，
+便于人眼核对回滚是否到位。
+
+### 6.3 改前文件指纹（sha256 前 16 位 / 行数）
+
+| 文件 | sha256(16) | 行/字节 |
+|---|---|---|
+| `app/build.gradle.kts` | `5a3f98e70a9bc2ab` | 126 行 |
+| `app/proguard-rules.pro` | `5c095bd6f916d93f` | 6 行 |
+| `app/src/main/java/my/bridge/com/vnt/VntMeshState.kt` | `b7d261bc0f03158f` | 70 行 |
+| `app/src/main/java/my/bridge/com/vnt/VntMeshPrefs.kt` | `4d592fcf68ca36d8` | 176 行 |
+| `app/src/main/java/my/bridge/com/vnt/VntConfigBuilder.kt` | `a47707b80d45ee14` | 76 行 |
+| `app/src/main/java/my/bridge/com/vnt/VntMeshController.kt` | `0a49a7fb9488aee8` | 336 行 |
+| `app/src/main/java/my/bridge/com/vnt/VntVpnService.kt` | `97dded50515756d8` | 345 行 |
+| `app/src/main/java/my/bridge/com/vnt/VntAutoStart.kt` | `5e28b891f5fc2e67` | 46 行 |
+| `app/src/main/java/my/bridge/com/ui/VntPages.kt` | `8ebeaff708543714` | 593 行 |
+| `app/src/main/java/my/bridge/com/di/CommandModule.kt` | `940b5e401f09fd23` | 1878 行 |
+| `app/src/main/java/my/bridge/com/MainActivity.kt` | `a622043df6def734` | 181 行 |
+| `app/src/main/java/my/bridge/com/AppExit.kt` | `935885d180cd4d66` | 144 行 |
+| `app/src/main/AndroidManifest.xml` | `9e5ed4c6a54680ce` | 308 行 |
+| `server/app/core/command_catalog.py` | `1002c758c7cb6a7b` | 450 行 |
+| `docs/api/commands/system.md` | `2531a30c68a12fe1` | 130 行 |
+| `docs/INDEX.md` | `75353f1207e9b7df` | 77 行 |
+| `docs/CHANGELOG.md` | `eaaf4218d1ae8435` | 953 行 |
+| `docs/research/vnt-mesh-integration.md` | `1337521efa244fb8` | 699 行 |
+| `docs/dev/vnt-integration-change-ledger.md` | `f3cda2d536f95750` | 738 行 |
+| `docs/dev/crash-ledger.md` | `0aaf7692deed8f22` | 133 行 |
+| `docs/dev/heartbeat-inventory.md` | `7a679f80dd8bf8c6` | 553 行 |
+| `assets/design/ui-mockup-vnt-mesh.html` | `07663d46b0b0651d` | 319 行 |
+| `tools/vnt/verify_so.py` | `f152dd467c4c5310` | 235 行 |
+| `server/data/updates/update.json` | `a89e889c7bc5370d` | 4 行 |
+| `app/src/main/jniLibs/arm64-v8a/libvnt_jni.so` | `c33535b17b860ae3` | 5,042,792 B |
+| `app/src/main/jniLibs/armeabi-v7a/libvnt_jni.so` | `454908dffb7afcbe` | 3,500,728 B |
+| `app/src/main/jniLibs/x86_64/libvnt_jni.so` | `0ee3865b9c3ea360` | 5,756,440 B |
+| `app/src/main/java/com/vnt/*.java`（11 个） | — | 见 §一 |
+
+### 6.4 改前原文（逐字固化，关键片段）
+
+**① `app/build.gradle.kts:23-33`（版本号 + ABI）**
+```kotlin
+        versionName = "0.2.31"
+
+        // VNT 组网（v0.2.31）：对齐官方 universal，收录官方现成的 3 套 ABI JNI so
+        // （arm64-v8a / armeabi-v7a / x86_64，均来自 vnt-dev/vnt v2.0.11 Release）。
+        // 官方未提供 x86（32 位）so：若不限定，其它依赖的 x86 so 仍会被打进 APK，
+        // 但该 ABI 上 VNT 加载不到 native 库，造成「装上了但组网不可用」的假成功，故显式排除。
+        ndk {
+            abiFilters += "arm64-v8a"
+            abiFilters += "armeabi-v7a"
+            abiFilters += "x86_64"
+        }
+```
+
+**② `app/proguard-rules.pro` 全文（6 行）**
+```
+# Bridge 混淆规则
+# 保活模块：KeepAliveService 通过反射注册入口 Activity，保持相关类
+-keep class my.bridge.com.keepalive.** { *; }
+# VNT 组网（v0.2.30）：com.vnt.* 是官方 JNI 绑定，native 侧符号按「包名+类名」硬编码
+# （Java_com_vnt_VntManager_nativeInit 等）。R8 混淆或移除会直接抛 UnsatisfiedLinkError。
+-keep class com.vnt.** { *; }
+```
+
+**③ `VntMeshPrefs.kt` 改前核心（默认服 / 地址规则）**
+```kotlin
+        /** 官方公共测试服，仅作默认值；生产可填自建 VNTS。 */
+        const val DEFAULT_SERVER = "vnt2.rustvnt.com:29872"
+        const val DEFAULT_MTU = 1380
+```
+```kotlin
+object VntServerAddress {
+    private val ALLOWED_PREFIXES = listOf("tcp://", "wss://", "quic://", "dynamic://")
+
+    fun error(raw: String): String? {
+        val s = raw.trim()
+        if (s.isBlank()) return null                 // 空串由 VntConfigBuilder 兜底成默认公共服
+        if (!s.contains("://")) return null          // 裸 host:port 合法
+        val lower = s.lowercase()
+        if (ALLOWED_PREFIXES.any { lower.startsWith(it) }) return null
+        val proto = s.substringBefore("://") + "://"
+        return "不支持的协议前缀「$proto」。VNT v2.0.11 只支持 " +
+            "tcp:// / wss:// / quic:// / dynamic://，或裸 host:port（默认 tcp:// TLS）。" +
+            "udp:// 是 1.2.x 旧版协议，请升级自建 VNTS 到 2.x 并开启 TLS TCP/WSS/QUIC，" +
+            "或先用公共服 vnt2.rustvnt.com:29872 验证。"
+    }
+}
+```
+
+**④ `VntConfigBuilder.kt:18-29`（2.x 装配 + 非法前缀防线）**
+```kotlin
+    fun build(context: Context, cfg: VntMeshConfig): VntConfig {
+        // 网络编号 / 服务端是必填项，UI 层已校验；此处再兜一层防止空串进 native。
+        val config = cfg.copy(
+            server = cfg.server.ifBlank { VntMeshConfig.DEFAULT_SERVER },
+            deviceId = cfg.deviceId.ifBlank { VntMeshPrefs.stableDeviceId(context) },
+        )
+
+        // v0.2.31 防线：非法前缀（尤其 1.2.x 旧协议的 udp://）不能进 native。
+        // 否则 VntManager.createNetwork() 会抛晦涩的
+        // 「Unknown protocol in server address」，且用户反复点开始会一直刷错误日志。
+        // 这里抛可读异常，由 VntVpnService.runConnect 的 catch 转成页面 ERROR 文案。
+        VntServerAddress.error(config.server)?.let { throw IllegalArgumentException(it) }
+
+        val builder = VntConfig.Builder()
+            .addServer(config.server)
+            .setNetworkCode(config.networkCode)
+```
+
+**⑤ `VntMeshController.kt` 改前依赖（2.x JNI import + 唯一 RPC）**
+```kotlin
+import com.vnt.NetworkResult
+import com.vnt.VntApi
+```
+```kotlin
+            // ★ 唯一会发网络包的调用：主动 RPC，最多阻塞 3 秒，必须在后台线程
+            val clients = a.getClientList()
+```
+```kotlin
+    fun onConnected(
+        newApi: VntApi,
+        result: NetworkResult,
+        cfg: VntMeshConfig,
+        mtu: Int,
+    ) {
+```
+
+**⑥ `VntVpnService.kt` 改前时序（2.x：Java 先建 TUN 再把 fd 传进去）**
+```kotlin
+import com.vnt.ChangeApplyResult
+import com.vnt.NetworkResult
+import com.vnt.RuntimeChange
+import com.vnt.RuntimeEvent
+import com.vnt.VirtualIpv6
+import com.vnt.VntApi
+import com.vnt.VntException
+import com.vnt.VntManager
+import com.vnt.VntNetwork
+```
+```kotlin
+            // 1) 创建网络实例（后台连服务器并注册）
+            net = VntManager.createNetwork(config)
+            // 2) 等待注册完成，取分配的网段信息
+            val registered: NetworkResult = net.getNetwork()
+            val cidr = registered.toCidr()
+            // 3) 建立 VPN 接口并把 detached fd 交给 VNT
+            val tunFd = establishVpn(cidr, currentMtu, registered.getRoutes())
+            net.startTun(tunFd)
+            // 4) 对外发布查询接口 + 状态
+            val api: VntApi = net.getApi()
+            VntMeshController.onConnected(api, registered, cfg, currentMtu)
+            // 5) 变更循环（阻塞 nextEvent，直到实例停止或异常）
+            runChangeLoop(net, gen)
+```
+```kotlin
+        } finally {
+            runCatching { net?.stop() }
+            network = null
+            // v0.2.31：失败时**保留 ERROR 状态**，别被 onStopped() 覆盖成「未连接」
+            if (!failed) VntMeshController.onStopped()
+            running = false
+            stopSelf()
+        }
+```
+（★ `finally` 里 `if (!failed)` 是 v0.2.31 修的坑，重写 1.x 时必须保留「失败保留 ERROR」语义。）
+
+**⑦ `VntPages.kt` 改前配置弹窗（2.x 字段 + 保存前拦截）**
+```kotlin
+                VntField("服务端地址", server, { server = it }, "vnt2.rustvnt.com:29872")
+                Text(
+                    "VNT v2.0.11 规则：裸 host:port 默认 tcp://（TLS）；可显式写 " +
+                        "tcp:// / wss:// / quic:// / dynamic://。不支持 udp://（1.2.x 旧版协议）。" +
+                        "自建 VNTS 需升级到 2.x 并开启 TLS TCP/WSS/QUIC，或先用公共服验证。",
+```
+```kotlin
+                VntServerAddress.error(server)?.let {
+                    Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                    return@TextButton
+                }
+```
+```kotlin
+        val serverNotConnected = state.isRunning &&
+            state.servers.isNotEmpty() && state.servers.none { it.connected }
+```
+
+**⑧ `CommandModule.kt:300-312`（vnt_start 参数覆盖）**
+```kotlin
+                VntMeshPrefs.save(
+                    context,
+                    old.copy(
+                        server = server.ifEmpty { old.server },
+                        networkCode = code.ifEmpty { old.networkCode },
+                        password = password.ifEmpty { old.password },
+                    ),
+                )
+            }
+            val cfg = VntMeshPrefs.load(context)
+            if (cfg.networkCode.isBlank()) {
+```
+
+**⑨ `server/app/core/command_catalog.py:417-428`（vnt_start 参数）**
+```python
+    _cmd("vnt_start", "开始组网", "system", "🕸️",
+         "启动 VNT 虚拟局域网（前台服务常驻，切 Tab / 退后台不断连）；"
+         "★ 需 App 在前台或已授予系统 VPN 授权：后台下发大概率失败，回执会如实说明而不假装成功",
+         [_param("server", "服务端地址", PARAM_TYPE_TEXT,
+                 placeholder="vnt2.rustvnt.com:29872",
+                 description="可选覆盖 APP 内已保存的配置；支持 tcp:// wss:// quic:// 前缀，裸 host:port 默认 UDP"),
+          _param("network_code", "网络编号", PARAM_TYPE_TEXT,
+                 placeholder="留空用 APP 内保存的配置",
+                 description="可选覆盖；同编号设备互通"),
+          _param("password", "组网密码", PARAM_TYPE_TEXT,
+                 placeholder="留空用 APP 内保存的配置",
+                 description="可选覆盖；非空启用 ChaCha20-Poly1305 端到端加密")]),
+```
+
+**⑩ `docs/api/commands/system.md:85`（server 参数说明）**
+```markdown
+| `server` | text | 否 | 可选覆盖 APP 内保存的服务端地址（默认 `vnt2.rustvnt.com:29872`，可填自建 VNTS）。**v2.0.11 规则**：裸 `host:port` 默认 **`tcp://`（TLS TCP）**，可显式写 `tcp://` / `wss://` / `quic://` / `dynamic://`；**不支持 `udp://`**（1.2.x 旧协议）。非法前缀会在配置弹窗 / `VntConfigBuilder` 两处被拦下，不再让 native 抛 `Unknown protocol in server address` |
+```
+
+### 6.5 新增文件清单（**改前不存在，git 兜不住，必须靠删除配方**）
+
+| 新增路径 | 来源 |
+|---|---|
+| `app/src/main/java/top/wherewego/vnt/jni/{CallBack,Config,DeviceBean,IpUtils,PeerRouteInfo,Route,Vnt}.java` | 官方 `VntApp` tag `v1.2.9`，gh-proxy 下载 |
+| `app/src/main/java/top/wherewego/vnt/jni/param/{ConnectInfo,DeviceConfig,DeviceInfo,ErrorInfo,HandshakeInfo,PeerClientInfo,RegisterInfo}.java` | 同上（共 14 个绑定类） |
+| `tools/vnt/artifacts/v1.2.9/*`（2 套 so + `.sha256`） | 官方 `v1.2.9` 产物存档 |
+| `docs/dev/vnt-integration-change-ledger.md` §六回填 | 本文件 |
+| `releases/app-debug-v0.2.32.apk`、`server/data/updates/bridge-v0.2.32.apk` | 发布产物（APK 被 `.gitignore:53` 忽略） |
+
+**改前存在 → 改后删除**（git tracked，仍具名列出）：
+- `app/src/main/java/com/vnt/` 全部 11 个 `.java`
+- `app/src/main/jniLibs/armeabi-v7a/libvnt_jni.so`（1.x 无 v7a so）
+- `app/src/main/jniLibs/arm64-v8a/libvnt_jni.so`、`x86_64/libvnt_jni.so`：内容替换为 v1.2.9 产物
+
+### 6.6 回滚配方（**100% 恢复到 v0.2.31**）
+
+```bash
+cd /f/pythonWork/appClient
+# ① 一键恢复所有 git tracked 的改前状态（含被删的 com/vnt 与 v7a so）
+git checkout 0f7f50985059f46fe342d7a3f9a30ac984b147c0 -- \
+  app/build.gradle.kts \
+  app/proguard-rules.pro \
+  app/src/main/java/com/vnt \
+  app/src/main/jniLibs \
+  app/src/main/java/my/bridge/com/vnt \
+  app/src/main/java/my/bridge/com/ui/VntPages.kt \
+  app/src/main/java/my/bridge/com/di/CommandModule.kt \
+  app/src/main/java/my/bridge/com/MainActivity.kt \
+  app/src/main/java/my/bridge/com/AppExit.kt \
+  app/src/main/AndroidManifest.xml \
+  server/app/core/command_catalog.py \
+  docs/api/commands/system.md docs/INDEX.md docs/CHANGELOG.md \
+  docs/research/vnt-mesh-integration.md \
+  docs/dev/vnt-integration-change-ledger.md \
+  docs/dev/crash-ledger.md docs/dev/heartbeat-inventory.md \
+  assets/design/ui-mockup-vnt-mesh.html \
+  tools/vnt/verify_so.py \
+  server/data/updates/update.json
+
+# ② 删除 v0.2.32 新增（git 未跟踪，必须显式删）
+rm -rf app/src/main/java/top/wherewego/vnt/jni
+rm -rf tools/vnt/artifacts/v1.2.9
+rm -f  releases/app-debug-v0.2.32.apk
+rm -f  server/data/updates/bridge-v0.2.32.apk
+
+# ③ 校验
+git status --short        # 应为空
+grep 'versionName = ' app/build.gradle.kts   # 应回到 "0.2.31"
+```
+
+> 若已本地提交 v0.2.32 但**尚未发布**，用 `git reset --hard 0f7f5098...` 更彻底；
+> 若**已发布到远端**，不要 force push，改走「再发一版 v0.2.33 回滚版」。
+
+### 6.7 触发回滚的信号（出现任一即停手并回滚）
+
+1. `compileDebugKotlin` / `assembleDebug` 失败且 30 分钟内无法定位（尤其
+   `UnsatisfiedLinkError` / `NoSuchMethodError` / JNI 符号对不上）。
+2. `System.loadLibrary("vnt_jni")` 在真机抛 `UnsatisfiedLinkError`（包名/ABI/符号三者有其一不符）。
+3. 真机点「开始组网」后 native 无任何回调、`Vnt` 构造阻塞不返回，或进程崩溃（signal 11 / SIGSEGV）。
+4. 与 1.x 服务端**注册成功但互 ping 不通**（协议代际仍有差异，`token/password/cipherModel/serverEncrypt/finger` 逐项核对后仍不通）。
+5. 前台服务触发崩溃台账 §5 任一条（前台义务欠账、`startForeground` 抛异常未兜住）。
+6. 用户中途改变决策（例如决定升服务端到 2.x）。
+
+### 6.8 改后回填（**实施完成后填写，先占位**）
+
+> ⏳ 待 §6.9 实施完成回填：改后原文（关键片段）、文件指纹、编译/APK 校验结果、发布链路结果、
+> 真机验证结论。**未回填前本节不算闭环。**
+
+### 6.9 实施清单（逐项打勾）
+
+| # | 动作 | 状态 |
+|---|---|---|
+| 1 | 删除 `com/vnt/*` 11 个类 + 3 套 2.x so | ☐ |
+| 2 | 拷入 `v1.2.9` 14 个 Java 绑定（`Vnt.java` 补 `System.loadLibrary`）+ 2 套 so | ☐ |
+| 3 | `build.gradle.kts`：0.2.32、abiFilters 2 套 | ☐ |
+| 4 | `proguard-rules.pro`：keep 包名改 `top.wherewego.vnt.jni.**` | ☐ |
+| 5 | 重写 6 个 `my.bridge.com.vnt` 文件（1.x Config / CallBack / list() 时序） | ☐ |
+| 6 | 重写 `VntPages.kt`（1.x 字段、移除速率/RTT/NAT 的 2.x 专属 UI） | ☐ |
+| 7 | `CommandModule.kt` / `command_catalog.py` / `system.md` 参数与文案改 1.x | ☐ |
+| 8 | `verify_so.py` 适配 1.x（6 个 JNI 符号、2 套 ABI） | ☐ |
+| 9 | 文档：报告 §十三、INDEX、CHANGELOG、崩溃/心跳台账、原型页脚、update.json、工作日志 | ☐ |
+| 10 | `compileDebugKotlin` + `assembleDebug` + APK 静态自检 | ☐ |
+| 11 | 发布 v0.2.32（铁律）+ 下载 + 追平本地 git + 回填 §6.8 | ☐ |
+

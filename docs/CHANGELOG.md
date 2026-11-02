@@ -22,6 +22,29 @@
 
 ---
 
+## 2026-11-02 · 🔁 v0.2.32 VNT 核心整体替换为 1.x（协议互通 · A1 纯替换）
+
+**节点意义**：v0.2.31 落地后确认了一条此前被忽略的硬约束——**用户自建 VNTS 与全部存量客户端都是 1.x，且服务端不能升级**（升级会打断存量设备）。VNT 2.0 官方明写与 1.0 不兼容（`vnt-main/README.md:167`），2.x 服务端也只支持 `tcp(tls)/wss/quic`、没有普通 UDP 监听 ⇒ **不存在「兼容 1.x 客户端的 2.x 服务端」这个两全版本**。因此 v0.2.30/31 的 2.0.11 集成方向整体推翻，Bridge 客户端核心改为官方 VntApp `v1.2.9`（最后一个 Java JNI 版），与全 1.x 生态互通。
+
+**脉络**：
+- 起因：真机点「开始组网」报 `Unknown protocol in server address: udp://039039.xyz:31007`（MySQL `device_logs` 拉到 11 条）。
+- 定位：2.0.11 `parse_server()` 无 `Udp`；本机 TLS 握手 0.01s EOF ⇒ 端口后面是 1.x UDP 服务；用户真机 1.2.13 原生 APK 填「协议 UDP」可正常连。
+- 决策：先拍板「按最新规则实现」→ 补充「服务端与存量客户端全 1.x、必须互通」→ 改为「集成 1.x so」→ 核实架构差异后拍板 **A1 纯替换**（放弃双栈），版本号 `v0.2.32`。
+- 版本选型：官方 15 个 tag + 3 个维护分支逐个枚举 `.so`，锁定 `v1.2.9`（1.2.10.1 起转 Flutter，用户真机 1.2.13 是 Dart FFI、`Java_*` 符号为 0 不可用）；**所有 Java JNI 版都无 armeabi-v7a**，接受 2 套 ABI。
+
+**落地**：删 `com/vnt/*` 11 类 + 3 套 2.x so → 拷入 `top/wherewego/vnt/jni/*` 14 类（`Vnt.java` 补 `System.loadLibrary`）+ 2 套官方 so（存档 `tools/vnt/artifacts/v1.2.9/`）→ 重写 6 个核心文件（`generateTun` 时序反转、`token`/裸地址/`tcp` 布尔配置、`Vnt.list()→PeerRouteInfo[]`）→ 重写 `VntPages.kt` → 命令三步法与全量文档登记 → `verify_so.py` 适配 1.x（6 符号 / 2 ABI / 4KB 页对齐）。
+
+**经验沉淀**：
+- **「官方原生 APK 能连」不能反推「同仓库最新 so 也能连」**——必须先锁定用户实际跑的二进制版本，再核对协议解析源码与官方兼容性声明。
+- **架构代际 ≠ 协议代际**：1.x 早期是 Java JNI、后期是 Flutter Dart FFI、2.x 又回到 Java JNI，但包名 / JNI 符号 / 配置模型全不同；「换个 .so」几乎从不成立，要连绑定层一起换。
+- **ABI 交集要按「接口 × 协议」二维核对**：有 v7a 的版本要么接口不对（Flutter）、要么协议不对（2.x），没有交集。
+- **推翻式重写必须靠改前留档兜底**：台账 §六 逐字固化改前原文 + 未跟踪文件删除清单 + 回滚配方；git 只兜得住已跟踪文件。
+- 官方 1.x so 是 **4KB 页对齐**，Android 15+ 16KB 页设备可能加载失败（固有限制，如实登记）。
+
+**仍待真机**：与存量 1.x 客户端互 ping（`token/password/cipherModel/serverEncrypt/finger` 逐项一致）、两套 ABI 加载、冷启动自动组网 / 停止后不自动开始、开关省电对照。详见 `docs/research/vnt-mesh-integration.md` §十三、`docs/dev/vnt-integration-change-ledger.md` §六。
+
+---
+
 ## 2026-11-01 · 🔧 v0.2.31 VNT 真机反馈修订里程碑（universal ABI · 协议代际 · 自动组网记忆）
 
 **节点意义**：v0.2.30 上真机后用户提出 4 项修订，并补了一张 **VNT 1.2.13 原生 APK**

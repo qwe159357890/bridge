@@ -6,6 +6,7 @@
 > **决策已定**：9 项拍板见 **§九**（只 arm64 / 单配置 / 服务端可输入默认公共服 / 常驻至手动停止 / 退出流程最高优先级 / 不做子网转发 / 三条命令全做）。
 > **工程约定**：本地不安装任何程序；`libvnt_jni.so` 走官方预编译产物（§2.4），任何需安装的动作必须先经用户同意。
 > **★ v0.2.31 修订（2026-11-01 晚）**：真机反馈驱动的 4 项修订（对齐官方 universal 三套 ABI / 关于页滚动 / 自动组网记忆 / v2.0.11 地址规则与报错修复）见 **§十二**。§2.4、§5.1、§九 中关于「只 arm64」「裸地址默认 UDP」的旧表述**以 §十二 为准**（原文保留不删，避免破坏改前留档）。
+> **★★ v0.2.32 重大修订（2026-11-02，当前实现以此为准）**：用户确认**自建 VNTS 与全部存量客户端都是 1.x 且必须互通**，而 VNT 2.0 官方明写与 1.0 **不兼容**（`vnt-main/README.md:167`），服务端又不能升级（会打断存量客户端）。因此 **Bridge 核心整体回退替换为官方 VntApp `v1.2.9`（最后一个 Java JNI 版）**：`top.wherewego.vnt.jni.*` 14 个绑定类 + 2 套 `libvnt_jni.so`（arm64-v8a / x86_64）。本报告 §2.4 / §5.1 / §九 / §十二 中所有 **2.0.11 相关表述（`udp://` 非法、`network_code`、`tcp(tls)`/`wss`/`quic`、certMode、getClientList、NAT/RTT/速率、三套 ABI）现仅作历史记录**，**当前代码以 §十三 为准**。2.x 成果由改前留档台账 §六 + git 历史完整保留，将来服务端升级可按配方还原。
 
 ---
 
@@ -697,3 +698,94 @@ SHA256 与官方 `.sha256` 一致、PT_LOAD 页对齐（64 位 16KB / 32 位 4KB
 
 > ⚠️ 旧版 1.2.13 的「协议 UDP」单选在 2.0.x 核心里**没有对应项**；
 > 不要再把 `udp://` 前缀填进服务端地址。
+
+---
+
+## 十三、v0.2.32：整体替换为 VNT 1.x（当前实现的权威记录）
+
+> **本节是 v0.2.32 及之后当前代码的唯一权威说明。** 前十二节（尤其 §2.4、§5.1、§九、
+> §十二）描述的 2.0.11 集成方案已被整体替换，保留原文仅为「改前留档」与决策溯源。
+> 改前原文、文件指纹、删除清单与回滚配方见 `docs/dev/vnt-integration-change-ledger.md` §六。
+
+### 13.1 决策链（不可省略的背景）
+
+1. v0.2.31 真机点「开始组网」报错，日志为 `invalid server address 'udp://039039.xyz:31007': Unknown protocol`。
+2. 核实 `vnt-core/.../config.rs::parse_server()`（v2.0.2~v2.0.11 逐 tag 一致）：合法前缀只有
+   `tcp:// / wss:// / quic:// / dynamic://`，裸 `host:port` 默认 `TlsTcp`，`ProtocolType` 无 `Udp`。
+3. `vnt-main/README.md:167`：**「vnt2.0 整体重构了一遍，和 1.0 不兼容」**。本机实测
+   `039039.xyz:31007` TLS 握手 0.01s 即 `UNEXPECTED_EOF` —— 该端口后面是 1.x UDP 服务。
+4. 用户确认：真机原生 APK 是 **1.2.13**，**自建 VNTS 与全部存量客户端都是 1.x**，且
+   **必须互通**；服务端**不能升级**（会打断存量客户端）。
+5. ⇒ 唯一出路：**Bridge 客户端核心也换成 1.x**。A1 方案（纯替换，非双栈）由用户拍板
+   「a1 开工」，版本号 `v0.2.32`。
+
+### 13.2 为什么不是「只换一个 .so」
+
+官方 1.x 的 Android 客户端与 2.x 是**两套完全不同的架构**（已下载官方 APK 只读解析）：
+
+| | 早期 1.x（1.1.0~1.2.8 / **v1.2.9**） | 后期 1.x（1.2.10.1+，含 1.2.13） | 2.x（v0.2.30/31 曾用） |
+|---|---|---|---|
+| 架构 | 原生 Android + **Java JNI** | **Flutter** + flutter_rust_bridge | Java JNI |
+| native 库 | `libvnt_jni.so`（`app/libs/`，2 套 ABI） | `librust_lib_vnt_app.so`（4 套 ABI） | `libvnt_jni.so`（3 套 ABI） |
+| Java 绑定 | `top.wherewego.vnt.jni.*`（14 类） | 无（Dart FFI） | `com.vnt.*`（11 类） |
+| JNI 符号 | 6 个 `Java_top_wherewego_vnt_jni_Vnt_*` | **`Java_*` 符号 = 0**（全是 `frb_*/wire_*`） | 23 个 `Java_com_vnt_*` |
+
+实测 1.2.13 的 so 里 `Java_*` 符号为 0 ⇒ 直接拿来给 Bridge 用必然 `UnsatisfiedLinkError`。
+**唯一能复用的是 Java JNI 版**，定位到官方**最后一个** JNI 版 `v1.2.9`（1.2.10.1 起转 Flutter），
+比 1.2.8 更新、更贴近用户 1.x 服务端。
+
+### 13.3 版本 / ABI 核实结论
+
+- `vnt-dev/VntApp` 15 个 tag + 3 个维护分支逐个枚举 `.so` 路径：**所有 Java JNI 版都只有
+  `arm64-v8a` / `x86_64`，没有任何版本提供 `armeabi-v7a` 的 JNI so**。
+- 有 v7a 的只有 Flutter 版（接口不对）与 2.x（协议不对），**没有交集**。
+- 结论：**v0.2.32 只支持 2 套 ABI**，纯 32 位 ARM 设备装不上 1.x 核心（用户已登记机型推测均为 arm64）。
+- 官方 1.x Rust 仓库（含最后一版 `v1.2.17`）**始终没有 `vnt-jni` 模块**，也不发布 1.x JNI 预编译产物；
+  自行补 v7a 需 NDK 交叉编译 + backport JNI 层，违反「不擅自本地安装程序」硬约束，不做。
+
+### 13.4 2.x → 1.x 全量差异对照（重写依据）
+
+| 维度 | 2.0.11（旧） | 1.2.9（当前） |
+|---|---|---|
+| 启动时序 | Java 先 `Builder.establish()` 拿 fd → `net.startTun(fd)` | `new Vnt(Config, CallBack)` → native 回调 **`generateTun(DeviceConfig)` 里由 Java 建 TUN 并 `return fd`** → `awaitTimeout` 循环 |
+| 服务端地址 | `tcp:// / wss:// / quic:// / dynamic://`，裸地址默认 TLS TCP | **裸 `host:port`**，任何 `://` 前缀都非法 |
+| UDP/TCP | 由协议前缀决定 | **布尔 `Config.tcp`**（`false`=UDP，对应 1.2.13 的「协议 UDP」） |
+| 组网编号 | `networkCode` | **`token`**（Prefs 已做 `network_code`→`token` 升级迁移） |
+| 加密 | ChaCha20-Poly1305 / `certMode` | `cipherModel`（aes_gcm / aes_cbc / aes_ecb）+ `serverEncrypt` + `finger` + `password` |
+| 设备/状态 | `getClientList/getServerList/getNatInfo/getTrafficInfo/RuntimeEvent`，速率差分、RTT 估算、NAT 类型 | **只有 `Vnt.list() -> PeerRouteInfo[]`**（native 缓存表，本地内存读非 RPC），`Route.metric==1` 判 P2P；**无速率/NAT/真实 RTT** |
+| 错误通道 | `nextEvent()` 事件循环 | `CallBack.error(ErrorInfo)`；构造期错误记 `startupError`，构造返回后立刻转 ERROR |
+| native 释放 | `net.stop()` | `Vnt.stop()` 让 awaitTimeout 返回 → worker `finally` 里 `close()`（避免并发 drop 的 use-after-free） |
+| JNI 符号 / ABI | 23 个 / 3 套（16KB 页对齐） | 6 个 / 2 套（**4KB 页对齐**） |
+
+### 13.5 落地实现清单（v0.2.32）
+
+| 层 | 文件 | 变更 |
+|---|---|---|
+| native | `jniLibs/{arm64-v8a,x86_64}/libvnt_jni.so` | 换官方 v1.2.9；删除 `armeabi-v7a` 与 2.x 三套；`tools/vnt/artifacts/v1.2.9/` 存档 + SHA256SUMS |
+| 绑定 | `java/top/wherewego/vnt/jni/*`（14 类） | 原样拷入；`Vnt.java` 补 `static { System.loadLibrary("vnt_jni"); }`（官方绑定未带） |
+| Gradle | `app/build.gradle.kts` | `versionName=0.2.32`；`abiFilters` 收为 2 套 |
+| 混淆 | `app/proguard-rules.pro` | keep 包名 `com.vnt.**` → `top.wherewego.vnt.jni.**` |
+| 核心 | `my/bridge/com/vnt/` 6 文件 | 全量重写：`VntMeshPrefs`（1.x 字段 + 2.x 迁移 + `VntServerAddress` 反转为裸地址校验）、`VntConfigBuilder`（装配 1.x `Config`）、`VntMeshState`（`VntPeer`）、`VntMeshController`（`PeerListProvider` + `list()` 解析）、`VntVpnService`（generateTun 时序）、`VntAutoStart`（沿用） |
+| UI | `ui/VntPages.kt` | 配置弹窗改 1.x 字段（Token / 裸地址 / UDP-TCP 开关 / cipherModel / MTU / STUN），移除 2.x 速率·RTT·NAT 卡片 |
+| 命令 | `CommandModule.kt` / `command_catalog.py` / `system.md` | `token`（兼容 `network_code`）、裸 `host:port`、`tcp` 布尔参数；回执改 1.x 文案 |
+| 工具 | `tools/vnt/verify_so.py` | 适配 1.x：2 套 ABI、6 个 JNI 符号、4KB 页对齐、6↔6 声明/导出对应；两套 so 全 PASS |
+
+### 13.6 已知限制与风险（如实登记）
+
+1. **ABI 只有 2 套**（无 armeabi-v7a），来自官方产物固有限制。
+2. **4KB 页对齐**：官方 1.x so 的 PT_LOAD `p_align=0x1000`，**Android 15+ 16KB 页设备可能加载失败**；
+   2.x 产物是 16KB。这是 1.x 官方二进制的固有限制，无法在不重编的前提下消除。
+3. **协议互通只能真机实测**：1.2.9 与 1.2.13 同属 1.x，理论上可连同一服务端，但
+   `token / password / cipherModel / serverEncrypt / finger` 必须**逐项一致**，否则会
+   「注册成功但互 ping 不通」。本地没有用户 1.x 服务端实体，配置 UI 已按官方
+   `AddActivity` 默认值预填，用户照 1.2.13 里填的抄入即可。
+4. **前台服务四件套与崩溃台账 §5 契约不变**：`VntVpnService` 类名/权限/Manifest 未改，
+   `AppExit.kill` 的 `stopService` 仍生效；新增的 `generateTun` 回调在主流程内，不新增 FGS 义务点。
+
+### 13.7 回滚与验证
+
+- **回滚配方、改前原文/哈希、删除清单、触发回滚信号**：`docs/dev/vnt-integration-change-ledger.md` §6.5~6.7。
+- **本地验证**：`compileDebugKotlin` / `assembleDebug`、APK 两套 ABI 与官方产物逐字节比对、
+  Manifest `versionName` 与 specialUse 四件套、无残留 2.x 类/so —— 结果回填 §6.8。
+- **仍待真机验证**：两套 ABI 安装与 native 加载、冷启动自动开始 / 停止后不自动开始、
+  与存量 1.x 客户端互 ping、`finger`/加密组合一致性、开关省电对照。

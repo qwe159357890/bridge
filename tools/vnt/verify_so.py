@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校验 VNT 官方预编译 libvnt_jni.so（支持 arm64-v8a / armeabi-v7a / x86_64 三套 ABI）。
+"""校验 VNT 官方预编译 libvnt_jni.so（v0.2.32 起：1.x / VntApp v1.2.9，2 套 ABI）。
 
 用法:
     python tools/vnt/verify_so.py <path-to-so> [expected-sha256-file] [--abi <abi>]
@@ -8,16 +8,20 @@ ABI 依次从 --abi、路径中的 ``jniLibs/<abi>/``、文件名 ``vnt-jni-<abi
 
 校验项:
   1. ELF 头（class/data/machine）与目标 ABI 匹配
-     - arm64-v8a   : ELF64 / EM_AARCH64 (183)
-     - armeabi-v7a : ELF32 / EM_ARM (40)
-     - x86_64      : ELF64 / EM_X86_64 (62)
-  2. PT_LOAD 段页对齐：64 位 ABI 要求 16KB（Android 15+），32 位 armeabi-v7a 要求 4KB
-  3. .dynstr / .dynsym 中存在 com.vnt 的 JNI 导出符号
+     - arm64-v8a : ELF64 / EM_AARCH64 (183)
+     - x86_64    : ELF64 / EM_X86_64 (62)
+  2. PT_LOAD 段页对齐：**1.x 官方产物是 4KB（0x1000）对齐**。
+     ⚠️ 这不是 Android 15+ 要求的 16KB 页对齐；官方 1.x 已停更且无 16KB 重编产物，
+     在 16KB page size 设备上存在加载失败风险，属已知限制，脚本按 4KB 判定并 WARN。
+  3. .dynstr / .dynsym 中存在 top.wherewego.vnt.jni 的 JNI 导出符号（6 个）
   4. Java 层每个 native 声明都能找到对应导出符号（防止漏符号导致 UnsatisfiedLinkError）
   5. （可选）与官方 .sha256 文件比对
 
 纯 Python 标准库实现，不依赖 NDK 的 llvm-nm / llvm-readelf，
 因此本机无需安装任何工具链即可完成产物校验。
+
+历史：v0.2.30~v0.2.31 校验的是 2.x / com.vnt.*（3 套 ABI、16KB 对齐、23 个符号）；
+v0.2.32 起因「存量服务端与客户端全为 1.x、必须互通」改为 1.x / top.wherewego.vnt.jni.*。
 """
 
 import hashlib
@@ -26,24 +30,28 @@ import struct
 import sys
 from pathlib import Path
 
-# Java 绑定目录的候选位置：先在 app/ 下找（实现后），再回退到 references/ 源码
+# Java 绑定目录（v0.2.32：官方 VntApp v1.2.9 的 14 个类，包名不可改）
 JAVA_BINDING_CANDIDATES = [
-    Path("app/src/main/java/com/vnt"),
-    Path("references/vnt/vnt-main/vnt-jni/java_example/com/vnt"),
+    Path("app/src/main/java/top/wherewego/vnt/jni"),
 ]
 
 # 目标 ABI -> (ELF class, e_machine, 页对齐要求, 描述)
+# 1.x 官方产物 2023 年前编译，PT_LOAD p_align 均为 0x1000（4KB），不是 16KB。
 ABI_SPEC = {
-    "arm64-v8a": (2, 183, 16384, "ELF64 / AArch64 / little-endian"),
-    "armeabi-v7a": (1, 40, 4096, "ELF32 / ARM / little-endian"),
-    "x86_64": (2, 62, 16384, "ELF64 / x86-64 / little-endian"),
+    "arm64-v8a": (2, 183, 4096, "ELF64 / AArch64 / little-endian / 4KB"),
+    "x86_64": (2, 62, 4096, "ELF64 / x86-64 / little-endian / 4KB"),
 }
 
 REQUIRED_SYMBOLS = [
-    "Java_com_vnt_VntManager_nativeInit",
-    "Java_com_vnt_VntNetwork_nativeNextEvent",
-    "Java_com_vnt_VntNetwork_nativeApplyRuntimeChangeFd",
+    "Java_top_wherewego_vnt_jni_Vnt_new0",
+    "Java_top_wherewego_vnt_jni_Vnt_stop0",
+    "Java_top_wherewego_vnt_jni_Vnt_wait0",
+    "Java_top_wherewego_vnt_jni_Vnt_waitTimeout0",
+    "Java_top_wherewego_vnt_jni_Vnt_list0",
+    "Java_top_wherewego_vnt_jni_Vnt_drop0",
 ]
+
+JNI_PREFIX = "Java_top_wherewego_vnt_jni_"
 
 
 def guess_abi(path: Path, explicit: str | None) -> str:
@@ -63,7 +71,7 @@ def guess_abi(path: Path, explicit: str | None) -> str:
 
 
 def parse_elf(data: bytes, elf_class: int, machine: int, page: int):
-    """解析 ELF，返回 (PT_LOAD 列表, 导出符号集合)。同时兼容 ELF32/ELF64。"""
+    """解析 ELF，返回 (PT_LOAD 列表, 导出符号集合, page)。兼容 ELF32/ELF64。"""
     if data[:4] != b"\x7fELF":
         raise ValueError("不是 ELF 文件")
     if data[4] != elf_class:
@@ -80,7 +88,7 @@ def parse_elf(data: bytes, elf_class: int, machine: int, page: int):
         e_shoff = struct.unpack_from("<Q", data, 40)[0]
         e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
         e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", data, 58)
-        ph_fmt, ph_align_off = "<IIQQQQQQ", 48      # p_align 是第 8 个字段
+        ph_fmt, ph_align_off = "<IIQQQQQQ", 48
         sh_fmt = "<IIQQQQIIQQ"
         sym_fmt, sym_size, sym_shndx_idx = "<IBBHQQ", 24, 3
     else:
@@ -88,24 +96,21 @@ def parse_elf(data: bytes, elf_class: int, machine: int, page: int):
         e_shoff = struct.unpack_from("<I", data, 32)[0]
         e_phentsize, e_phnum = struct.unpack_from("<HH", data, 42)
         e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", data, 46)
-        ph_fmt, ph_align_off = "<IIIIIIII", 28      # p_align 是第 8 个字段（全 32 位）
+        ph_fmt, ph_align_off = "<IIIIIIII", 28
         sh_fmt = "<IIIIIIIIII"
         sym_fmt, sym_size, sym_shndx_idx = "<IIIBBH", 16, 5
 
-    # ---- program headers: PT_LOAD 对齐 ----
     loads = []
     for i in range(e_phnum):
         off = e_phoff + i * e_phentsize
         fields = struct.unpack_from(ph_fmt, data, off)
-        p_type = fields[0]
-        if p_type != 1:  # PT_LOAD
+        if fields[0] != 1:  # PT_LOAD
             continue
         p_offset = fields[2] if is64 else fields[1]
         p_vaddr = fields[3] if is64 else fields[2]
         p_align = fields[7]
         loads.append((p_offset, p_vaddr, p_align))
 
-    # ---- section headers ----
     def sh(i):
         off = e_shoff + i * e_shentsize
         f = struct.unpack_from(sh_fmt, data, off)
@@ -137,7 +142,7 @@ def parse_elf(data: bytes, elf_class: int, machine: int, page: int):
     for off in range(dynsym["offset"], dynsym["offset"] + dynsym["size"], entsize):
         f = struct.unpack_from(sym_fmt, data, off)
         st_name, st_shndx = f[0], f[sym_shndx_idx]
-        if st_shndx == 0:  # SHN_UNDEF，未定义/导入符号
+        if st_shndx == 0:  # SHN_UNDEF
             continue
         exported.add(cstr(dstr, st_name))
 
@@ -145,9 +150,9 @@ def parse_elf(data: bytes, elf_class: int, machine: int, page: int):
 
 
 def native_declarations(java_dir: Path):
-    """从 com/vnt/*.java 中抽出所有 native 方法名。"""
+    """从 top/wherewego/vnt/jni/**/*.java 中抽出所有 native 方法名。"""
     names = []
-    for f in sorted(java_dir.glob("*.java")):
+    for f in sorted(java_dir.rglob("*.java")):
         text = f.read_text(encoding="utf-8", errors="replace")
         names += re.findall(r"\bnative\s+[\w<>,\[\]\.]+\s+(\w+)\s*\(", text)
     return names
@@ -195,12 +200,15 @@ def main() -> int:
         return 1
 
     print(f"ELF       : {label}  PASS")
-    print(f"PT_LOAD 段: {len(loads)} 个（页对齐要求 {page // 1024}KB）")
+    print(f"PT_LOAD 段: {len(loads)} 个（本版要求 {page // 1024}KB 对齐）")
     for off, vaddr, align in loads:
         aligned = align >= page or (align > 0 and (vaddr - off) % page == 0)
         print(f"  off=0x{off:x} vaddr=0x{vaddr:x} align=0x{align:x} "
               f"{page // 1024}KB对齐={'PASS' if aligned else 'FAIL'}")
         ok &= aligned
+    if align < 16384:
+        print("  ⚠️ WARN: 1.x 官方 so 仅 4KB 对齐，非 Android 15+ 要求的 16KB 页对齐；"
+              "在 16KB page size 设备上可能加载失败（官方已停更，无重编产物）。")
 
     print("JNI 导出符号:")
     for sym in REQUIRED_SYMBOLS:
@@ -208,10 +216,9 @@ def main() -> int:
         print(f"  {'PASS' if present else 'FAIL'}  {sym}")
         ok &= present
 
-    java_vnt = sorted(s for s in exported if s.startswith("Java_com_vnt_"))
-    print(f"com.vnt 导出符号总数: {len(java_vnt)}")
+    java_vnt = sorted(s for s in exported if s.startswith(JNI_PREFIX))
+    print(f"{JNI_PREFIX}* 导出符号总数: {len(java_vnt)}")
 
-    # ---- Java 声明 vs so 导出，逐个对应 ----
     java_dir = next((p for p in JAVA_BINDING_CANDIDATES if p.is_dir()), None)
     if java_dir is None:
         print("Java 绑定目录未找到，跳过声明比对")

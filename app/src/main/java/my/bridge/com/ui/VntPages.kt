@@ -51,13 +51,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import my.bridge.com.vnt.VntMeshConfig
 import my.bridge.com.vnt.VntMeshController
 import my.bridge.com.vnt.VntMeshPrefs
+import my.bridge.com.vnt.VntMeshState
+import my.bridge.com.vnt.VntPeer
 import my.bridge.com.vnt.VntServerAddress
 import my.bridge.com.vnt.VntStatus
 
 // 与交互原型 ui-mockup-vnt-mesh.html 对齐的配色
 private val VntBlue = Color(0xFF1A6EE8)
 private val VntGreen = Color(0xFF2E9E5B)
-private val VntAmber = Color(0xFFC77700)   // v0.2.31：本地 TUN 已建但服务端未连上的警示色
 private val VntRed = Color(0xFFE5484D)
 private val VntInk = Color(0xFF1F2329)
 private val VntGray = Color(0xFF6B7280)
@@ -65,13 +66,16 @@ private val VntBg = Color(0xFFF5F6F8)
 private val VntCard = Color(0xFFFFFFFF)
 
 /**
- * 组网页面（v0.2.30，主页第 5 个 Tab，排在「快递扫码」之后）。
+ * 组网页面（v0.2.32，1.x / VntApp v1.2.9，主页第 5 个 Tab）。
  *
- * 生命周期：连接由 [VntVpnService] 前台常驻，页面**只订阅状态、不启停连接**
- * （照 `AudioRelayPage` 做法）。切 Tab / 退后台不断网。
+ * 生命周期：连接由 [my.bridge.com.vnt.VntVpnService] 前台常驻，页面**只订阅状态、
+ * 不启停连接**（照 `AudioRelayPage` 做法）。切 Tab / 退后台不断网。
  *
  * 刷新：仅「App 在前台 + 处于本页面」时才刷新；进页面立即刷一次，之后 5 秒一次；
  * 离开页面 / ON_PAUSE 取消定时任务（细节见 [VntMeshController.startRefresh]）。
+ *
+ * ★ 1.x 能力边界：底层只有 `Vnt.list() -> PeerRouteInfo[]`，**没有速率 / NAT / 真实 RTT /
+ * 服务端列表**，也不存在 2.x 的 `udp://` 协议前缀；配置改为裸 `host:port` + UDP/TCP 开关。
  */
 @Composable
 fun VntPage() {
@@ -148,13 +152,7 @@ fun VntPage() {
 
         // ② 本机信息卡（连接后显示）
         if (state.isRunning) {
-            VntInfoCard(
-                ip = state.virtualIp ?: "—",
-                ipv6 = state.virtualIpv6 ?: "—",
-                networkCode = state.networkCode,
-                deviceName = state.deviceName,
-                mtu = state.mtu,
-            )
+            VntInfoCard(state = state)
         } else {
             // 未连接时展示当前配置摘要，方便点开始之前核对
             val cfg = remember { VntMeshPrefs.load(context) }
@@ -164,12 +162,7 @@ fun VntPage() {
         // ③ 设备列表
         VntPeerCard(peers = state.peers, lastUpdatedAt = state.lastUpdatedAt, running = state.isRunning)
 
-        // ④ 服务端
-        if (state.servers.isNotEmpty()) {
-            VntServerCard(servers = state.servers)
-        }
-
-        // ⑤ 主按钮 + 配置入口
+        // ④ 主按钮 + 配置入口
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -206,7 +199,8 @@ fun VntPage() {
 
         Text(
             "组网是基础设施：开始后切 Tab / 退后台不中断，只有点「停止组网」或退出应用才结束。" +
-                " Android 同时只允许一个 VPN，启动会断开其它 VPN。",
+                " Android 同时只允许一个 VPN，启动会断开其它 VPN。" +
+                " ★ 1.x 互通要求：Token、密码、加密模式、服务端加密、指纹校验必须与存量 1.x 客户端逐项一致。",
             color = VntGray,
             fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 2.dp),
@@ -247,29 +241,17 @@ private fun VntCard(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun VntStatusCard(state: my.bridge.com.vnt.VntMeshState) {
-    // v0.2.31：RUNNING 只代表本地 TUN 已建立并拿到虚拟 IP；若刷新后服务端列表
-    // 里没有任何 connected=true，说明尚未注册上服务端，不能再显示绿色「已连接」误导
-    // （v0.2.30 真机截图正是这个矛盾状态：绿卡「已连接」+「服务端 未连接」+ RTT —）。
-    val serverNotConnected = state.isRunning &&
-        state.servers.isNotEmpty() && state.servers.none { it.connected }
-    val (bg, title, subtitle) = when {
-        serverNotConnected -> Triple(
-            VntAmber,
-            "未连上服务端",
-            "虚拟网卡已建立（${state.virtualIp ?: "—"}），但尚未连上 " +
-                "${state.servers.firstOrNull()?.address ?: "服务端"}；" +
-                "请检查地址协议（v2.0.11 不支持 udp://）、端口与 VNTS 版本",
-        )
-        state.status == VntStatus.RUNNING -> Triple(
+private fun VntStatusCard(state: VntMeshState) {
+    val (bg, title, subtitle) = when (state.status) {
+        VntStatus.RUNNING -> Triple(
             VntGreen,
             "已连接 · ${state.virtualIp ?: "—"}",
-            "虚拟局域网已建立，可与同网络编号下的设备互访",
+            "虚拟局域网已建立，可与同组网编号（Token）下的设备互访",
         )
-        state.status == VntStatus.STARTING -> Triple(VntBlue, "正在建立虚拟网络…", state.message)
-        state.status == VntStatus.STOPPING -> Triple(VntGray, "正在停止…", state.message)
-        state.status == VntStatus.ERROR -> Triple(VntRed, "组网异常", state.message)
-        else -> Triple(VntBlue, "组网未连接", "点击下方「开始组网」建立虚拟局域网")
+        VntStatus.STARTING -> Triple(VntBlue, "正在建立虚拟网络…", state.message)
+        VntStatus.STOPPING -> Triple(VntGray, "正在停止…", state.message)
+        VntStatus.ERROR -> Triple(VntRed, "组网异常", state.message)
+        VntStatus.STOPPED -> Triple(VntBlue, "组网未连接", "点击下方「开始组网」建立虚拟局域网")
     }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -299,9 +281,9 @@ private fun VntStatusCard(state: my.bridge.com.vnt.VntMeshState) {
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                VntChip("NAT ${state.natType ?: "—"}")
-                VntChip("RTT ${state.serverRttMs ?: "—"} ms")
+                VntChip(if (state.tcp) "TCP" else "UDP")
                 VntChip("MTU ${state.mtu}")
+                VntChip("在线 ${state.peers.count { it.online }}")
             }
         }
     }
@@ -319,21 +301,17 @@ private fun VntChip(text: String) {
 }
 
 @Composable
-private fun VntInfoCard(
-    ip: String,
-    ipv6: String,
-    networkCode: String,
-    deviceName: String,
-    mtu: Int,
-) {
+private fun VntInfoCard(state: VntMeshState) {
     VntCard {
         Text("本机信息", color = VntInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        VntInfoRow("虚拟 IPv4", ip)
-        VntInfoRow("虚拟 IPv6", ipv6)
-        VntInfoRow("网络编号", networkCode.ifBlank { "—" })
-        VntInfoRow("设备名", deviceName)
-        VntInfoRow("MTU", mtu.toString())
+        VntInfoRow("虚拟 IPv4", state.virtualIp ?: "—")
+        VntInfoRow("组网编号 Token", state.token.ifBlank { "—" })
+        VntInfoRow("设备名", state.deviceName)
+        VntInfoRow("服务端", state.server)
+        VntInfoRow("协议", if (state.tcp) "TCP" else "UDP")
+        VntInfoRow("服务端版本", state.serverVersion ?: "—")
+        VntInfoRow("MTU", state.mtu.toString())
     }
 }
 
@@ -365,15 +343,16 @@ private fun VntConfigSummaryCard(cfg: VntMeshConfig, onEdit: () -> Unit) {
         }
         Spacer(Modifier.height(4.dp))
         VntInfoRow("服务端", cfg.server)
-        VntInfoRow("网络编号", cfg.networkCode.ifBlank { "未填写" })
+        VntInfoRow("组网编号", cfg.token.ifBlank { "未填写（必填）" })
+        VntInfoRow("协议", if (cfg.tcp) "TCP" else "UDP")
+        VntInfoRow("加密模式", cfg.cipherModel)
         VntInfoRow("设备名", cfg.deviceName)
-        VntInfoRow("设备 ID", cfg.deviceId.take(12).ifEmpty { "—" })
     }
 }
 
 @Composable
 private fun VntPeerCard(
-    peers: List<my.bridge.com.vnt.VntPeer>,
+    peers: List<VntPeer>,
     lastUpdatedAt: Long,
     running: Boolean,
 ) {
@@ -413,6 +392,8 @@ private fun VntPeerCard(
                         )
                         Spacer(Modifier.width(7.dp))
                         Text(peer.ip, color = VntInk, fontSize = 13.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(peer.name, color = VntGray, fontSize = 11.sp)
                     }
                     Spacer(Modifier.height(2.dp))
                     Text(
@@ -423,24 +404,20 @@ private fun VntPeerCard(
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        "↑${fmtRate(peer.txBytesPerSec)} ↓${fmtRate(peer.rxBytesPerSec)}",
+                        peer.rt?.let { "RT $it" } ?: "—",
                         color = VntGray,
                         fontSize = 11.sp,
                     )
                     Spacer(Modifier.height(2.dp))
-                    Text(
-                        peer.rttMs?.let { if (peer.rttEstimated) "≈$it ms" else "$it ms" } ?: "— ms",
-                        color = VntGray,
-                        fontSize = 11.sp,
-                    )
+                    Text(peer.status, color = VntGray, fontSize = 11.sp)
                 }
             }
         }
         if (lastUpdatedAt > 0L) {
             Spacer(Modifier.height(4.dp))
             Text(
-                "设备上下线由服务端实时推送，但 Java 层无对应事件，UI 最长滞后一个刷新周期（5 秒）；" +
-                    "退到后台不刷新，回前台首次刷新补齐。中继 RTT 为估算值。",
+                "设备上下线无 Java 层事件，UI 最长滞后一个刷新周期（5 秒）；" +
+                    "退到后台不刷新，回前台首次刷新补齐。P2P / 中继由底层路由 metric 判定。",
                 color = VntGray,
                 fontSize = 10.sp,
             )
@@ -448,36 +425,7 @@ private fun VntPeerCard(
     }
 }
 
-@Composable
-private fun VntServerCard(servers: List<my.bridge.com.vnt.VntServer>) {
-    VntCard {
-        Text("服务端", color = VntInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(6.dp))
-        servers.forEach { s ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 3.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(s.address, color = VntInk, fontSize = 12.sp)
-                Text(
-                    (if (s.connected) "已连接" else "未连接") + (s.rttMs?.let { " · $it ms" } ?: ""),
-                    color = if (s.connected) VntGreen else VntGray,
-                    fontSize = 11.sp,
-                )
-            }
-        }
-    }
-}
-
-private fun fmtRate(bytes: Long): String = when {
-    bytes >= 1_048_576L -> String.format("%.1fM", bytes / 1_048_576.0)
-    bytes >= 1024L -> "${bytes / 1024L}K"
-    else -> "${bytes}B"
-}
-
-// ============ 配置弹窗（单套配置） ============
+// ============ 配置弹窗（单套配置，1.x 字段） ============
 
 @Composable
 private fun VntConfigDialog(
@@ -487,18 +435,21 @@ private fun VntConfigDialog(
 ) {
     val context = LocalContext.current
     var server by remember { mutableStateOf(initial.server) }
-    var networkCode by remember { mutableStateOf(initial.networkCode) }
+    var token by remember { mutableStateOf(initial.token) }
+    var tcp by remember { mutableStateOf(initial.tcp) }
     var password by remember { mutableStateOf(initial.password) }
+    var cipherModel by remember { mutableStateOf(initial.cipherModel) }
     var deviceName by remember { mutableStateOf(initial.deviceName) }
     var ip by remember { mutableStateOf(initial.ip) }
     var mtuText by remember { mutableStateOf(initial.mtu.toString()) }
-    var compress by remember { mutableStateOf(initial.compress) }
-    var fec by remember { mutableStateOf(initial.fec) }
-    var noPunch by remember { mutableStateOf(initial.noPunch) }
+    var serverEncrypt by remember { mutableStateOf(initial.serverEncrypt) }
+    var finger by remember { mutableStateOf(initial.finger) }
+    var firstLatency by remember { mutableStateOf(initial.firstLatency) }
+    var stunText by remember { mutableStateOf(initial.stunServers.joinToString("\n")) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("组网配置", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text("组网配置（1.x）", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(
                 modifier = Modifier
@@ -506,26 +457,45 @@ private fun VntConfigDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                VntField("服务端地址", server, { server = it }, "vnt2.rustvnt.com:29872")
+                VntField("服务端地址", server, { server = it }, "039039.xyz:31007")
                 Text(
-                    "VNT v2.0.11 规则：裸 host:port 默认 tcp://（TLS）；可显式写 " +
-                        "tcp:// / wss:// / quic:// / dynamic://。不支持 udp://（1.2.x 旧版协议）。" +
-                        "自建 VNTS 需升级到 2.x 并开启 TLS TCP/WSS/QUIC，或先用公共服验证。",
+                    "1.x 只接受裸 host:port，**不要带 udp:// / tcp:// 等协议前缀**；" +
+                        "UDP / TCP 用下方开关选择。默认指向你的自建 VNTS。",
                     color = VntGray,
                     fontSize = 10.sp,
                 )
-                VntField("网络编号", networkCode, { networkCode = it }, "必填，同编号设备互通")
-                VntField("组网密码", password, { password = it }, "留空不加密；非空启用 ChaCha20-Poly1305")
+                VntField("组网编号 Token", token, { token = it }, "必填，与存量 1.x 客户端一致")
+                VntToggle("使用 TCP（关闭=UDP）", tcp) { tcp = it }
+                Text(
+                    "你真机 1.2.13 原生 APK 选的是「协议 UDP」，对应此处开关**关闭**。",
+                    color = VntGray,
+                    fontSize = 10.sp,
+                )
+                VntField("客户端加密密码", password, { password = it }, "留空不加密；须与其它客户端一致")
+                VntField("加密模式", cipherModel, { cipherModel = it }, "aes_gcm")
+                Text(
+                    "官方 v1.2.9 可选：aes_gcm / aes_cbc / aes_ecb（默认 aes_gcm）。" +
+                        "不同加密状态的客户端不能通信。",
+                    color = VntGray,
+                    fontSize = 10.sp,
+                )
                 VntField("设备名", deviceName, { deviceName = it }, "Bridge")
                 VntField("固定虚拟 IP", ip, { ip = it }, "留空由服务端动态分配")
-                VntField("MTU", mtuText, { mtuText = it }, "1380（下限 1280）")
-                VntToggle("压缩", compress) { compress = it }
-                VntToggle("FEC 前向纠错", fec) { fec = it }
-                VntToggle("禁用打洞（强制中继）", noPunch) { noPunch = it }
+                VntField("MTU", mtuText, { mtuText = it }, "1410")
+                VntToggle("服务端加密", serverEncrypt) { serverEncrypt = it }
+                VntToggle("指纹校验", finger) { finger = it }
+                VntToggle("延迟优先（关闭=P2P 优先）", firstLatency) { firstLatency = it }
+                VntField(
+                    "STUN 服务器（每行一个）",
+                    stunText,
+                    { stunText = it },
+                    "stun1.l.google.com:19302",
+                    multiLine = true,
+                )
                 Spacer(Modifier.height(2.dp))
                 Text(
                     "高级（子网转发 / 端口映射）：本期不做，后续版本开放。" +
-                        "接口已预留，启用会触发 VPN 接口重建。",
+                        " ★ 与存量 1.x 客户端互通的前提：Token / 密码 / 加密模式 / 服务端加密 / 指纹校验逐项一致。",
                     color = VntGray,
                     fontSize = 10.sp,
                 )
@@ -533,26 +503,36 @@ private fun VntConfigDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                // v0.2.31：保存前先按 v2.0.11 规则校验地址，非法前缀（尤其 udp://）
-                // 直接拦下并给出可操作提示，避免存进去后 native 抛晦涩异常 + 反复重试刷屏。
+                // 保存前按 1.x 规则校验，避免存进去后 native 抛晦涩异常
                 VntServerAddress.error(server)?.let {
                     Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                    return@TextButton
+                }
+                if (token.isBlank()) {
+                    Toast.makeText(context, "组网编号（Token）不能为空", Toast.LENGTH_LONG).show()
                     return@TextButton
                 }
                 val mtu = mtuText.trim().toIntOrNull()
                     ?.coerceIn(VntMeshConfig.MIN_MTU, VntMeshConfig.MAX_MTU)
                     ?: VntMeshConfig.DEFAULT_MTU
+                val stuns = stunText.lines()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .ifEmpty { VntMeshConfig.DEFAULT_STUN }
                 onSave(
                     initial.copy(
-                        server = server.trim().ifBlank { VntMeshConfig.DEFAULT_SERVER },
-                        networkCode = networkCode.trim(),
+                        server = server.trim(),
+                        token = token.trim(),
+                        tcp = tcp,
                         password = password,
+                        cipherModel = cipherModel.trim().ifBlank { VntMeshConfig.DEFAULT_CIPHER },
                         deviceName = deviceName.trim(),
                         ip = ip.trim(),
                         mtu = mtu,
-                        compress = compress,
-                        fec = fec,
-                        noPunch = noPunch,
+                        serverEncrypt = serverEncrypt,
+                        finger = finger,
+                        firstLatency = firstLatency,
+                        stunServers = stuns,
                     )
                 )
             }) { Text("保存并重连", color = VntBlue) }
@@ -569,13 +549,15 @@ private fun VntField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
+    multiLine: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label, fontSize = 11.sp) },
         placeholder = { Text(placeholder, fontSize = 11.sp) },
-        singleLine = true,
+        singleLine = !multiLine,
+        maxLines = if (multiLine) 4 else 1,
         modifier = Modifier.fillMaxWidth(),
     )
 }

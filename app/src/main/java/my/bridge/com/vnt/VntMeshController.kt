@@ -6,19 +6,29 @@ import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
-import com.vnt.NetworkResult
-import com.vnt.VntApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import my.bridge.com.core.common.DiagLog
-import java.util.concurrent.ConcurrentHashMap
+import top.wherewego.vnt.jni.IpUtils
+import top.wherewego.vnt.jni.PeerRouteInfo
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * VNT 组网状态机 + 启停编排 + 设备列表刷新（v0.2.30）。
+ * 由 [VntVpnService] 注册的设备列表提供者。
+ *
+ * 1.x 的 `Vnt.list()` 读的是 native 侧缓存的路由表（**不是网络 RPC**），
+ * 但仍是 JNI 调用，必须在后台线程执行；Controller 只持有这个接口，
+ * 不直接持有 `Vnt` 实例，避免 Service 结束后对象泄漏。
+ */
+fun interface PeerListProvider {
+    fun list(): Array<PeerRouteInfo>?
+}
+
+/**
+ * VNT 组网状态机 + 启停编排 + 设备列表刷新（v0.2.32，1.x）。
  *
  * 生命周期（已拍板）：**服务常驻 + 显式开关**。切 Tab / 退后台 / 锁屏都不断连；
  * 只有点「停止组网」、进程结束（[my.bridge.com.AppExit]）或系统把 VPN 通道给了别的 App 才断。
@@ -26,11 +36,13 @@ import java.util.concurrent.TimeUnit
  *
  * 刷新策略（已拍板，见调研报告 §2.5 / §九）：
  * - **仅 App 在前台 + 处于组网页**时才刷新；
- * - 进页面**立即刷一次**（修掉 VntApp 原版「初始延迟 3 秒才出数据」的空白观感）；
- * - 之后每 **5 秒**一次（官方 3 秒，设备列表不需要 3 秒级精度，请求量降 40%）；
- * - 离开页面 / 退后台 / 锁屏 → 取消定时任务并 `resetTrafficSamples()`，**一次都不再拉**；
- * - `getClientList()` 是**主动 RPC 且最多阻塞 3 秒**，绝不在主线程调；
+ * - 进页面**立即刷一次**，之后每 **5 秒**一次；
+ * - 离开页面 / 退后台 / 锁屏 → 取消定时任务，**一次都不再拉**；
+ * - `Vnt.list()` 是本地内存读（不是 RPC），省电成本主要在定时器与 JNI 调用；
  * - 快速进出页面用 **generation 校验**防止慢请求回来覆盖新状态。
+ *
+ * ★ 与 2.x 的差异：没有 getClientList RPC、没有速率采样、没有 RuntimeEvent 变更循环；
+ * P2P/中继由 `Route.metric == 1` 判定（官方 ConnectActivity 同款逻辑）。
  */
 object VntMeshController {
 
@@ -43,25 +55,20 @@ object VntMeshController {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lock = Any()
 
-    /** 当前组网实例的查询接口；可能为 null（未连接 / 实例内部重建瞬间）。 */
+    /** 由 Service 在 `Vnt` 构造成功后注册，停止/出错时清空。 */
     @Volatile
-    private var api: VntApi? = null
+    private var provider: PeerListProvider? = null
 
     /** 刷新调度器（仅页面可见期间存在）。 */
     private var refreshExecutor: java.util.concurrent.ScheduledExecutorService? = null
     private var refreshFuture: ScheduledFuture<*>? = null
 
-    /** 是否正在刷新（startRefresh/stopRefresh 幂等守卫）。 */
     @Volatile
     private var refreshing = false
 
     /** 代次：每次启动/停止刷新都自增，用于在途慢请求失效。 */
     @Volatile
     private var refreshGeneration = 0L
-
-    /** 每个对端 IP 的上一次累计流量采样（速率 = 差分 ÷ 间隔）。 */
-    private data class Sample(val tx: Long, val rx: Long, val at: Long)
-    private val samples = ConcurrentHashMap<String, Sample>()
 
     // ------------------------------------------------------------------
     // 状态发布（统一切主线程写，与 AudioRelayPage 的 mainHandler.post 惯例一致）
@@ -75,45 +82,51 @@ object VntMeshController {
         mainHandler.post { _state.value = block(_state.value) }
     }
 
-    /** 连接成功：保存查询接口并切换到 RUNNING。 */
+    /**
+     * 连接成功：由 [VntVpnService] 在 1.x 的 `CallBack.generateTun()` 回调里调用
+     * （那时虚拟 IP 与网段已确定、VPN 接口刚建立）。
+     */
     fun onConnected(
-        newApi: VntApi,
-        result: NetworkResult,
+        virtualIp: String,
+        prefixLen: Int,
         cfg: VntMeshConfig,
         mtu: Int,
+        serverVersion: String?,
     ) {
-        api = newApi
-        resetTrafficSamples()
         publish {
             it.copy(
                 status = VntStatus.RUNNING,
-                virtualIp = result.ip,
-                prefixLen = result.prefixLen,
-                virtualIpv6 = result.virtualIpv6,
+                virtualIp = virtualIp,
+                prefixLen = prefixLen,
                 mtu = mtu,
-                networkCode = cfg.networkCode,
+                token = cfg.token,
                 deviceName = cfg.deviceName,
                 deviceId = cfg.deviceId,
+                server = cfg.server,
+                tcp = cfg.tcp,
+                serverVersion = serverVersion,
                 message = "已连接",
                 lastUpdatedAt = System.currentTimeMillis(),
             )
         }
     }
 
-    /** 运行期实例内部重建后，native 侧会换查询句柄，必须刷新对外接口。 */
-    fun onApiRefreshed(newApi: VntApi) {
-        api = newApi
+    /** `Vnt` 构造成功后注册列表提供者（构造期间还不能调 list()）。 */
+    fun onVntReady(p: PeerListProvider) {
+        provider = p
+    }
+
+    fun clearProvider() {
+        provider = null
     }
 
     fun onError(message: String) {
-        api = null
-        resetTrafficSamples()
+        provider = null
         publish {
             it.copy(
                 status = VntStatus.ERROR,
                 message = message,
                 peers = emptyList(),
-                servers = emptyList(),
             )
         }
     }
@@ -123,18 +136,14 @@ object VntMeshController {
     }
 
     fun onStopped() {
-        api = null
-        resetTrafficSamples()
+        provider = null
         publish {
             it.copy(
                 status = VntStatus.STOPPED,
                 message = "已断开",
                 virtualIp = null,
-                virtualIpv6 = null,
-                natType = null,
-                serverRttMs = null,
+                serverVersion = null,
                 peers = emptyList(),
-                servers = emptyList(),
                 lastUpdatedAt = 0L,
             )
         }
@@ -148,7 +157,7 @@ object VntMeshController {
     fun isPrepared(context: Context): Boolean = VpnService.prepare(context) == null
 
     /**
-     * 开始组网。调用方（UI）必须先确认 `isPrepared()`，否则 `establish()` 会返回 null。
+     * 开始组网。调用方（UI）必须先确认 `isPrepared()`。
      *
      * `startForegroundService` 每调一次欠一次前台义务，按崩溃台账 §5 由
      * [VntVpnService.onStartCommand] 每次幂等补挂；这里 try/catch 防后台启动限制抛异常。
@@ -165,7 +174,6 @@ object VntMeshController {
             }
             true
         } catch (e: Exception) {
-            // Android 12+ 后台启动会抛 ForegroundServiceStartNotAllowedException
             DiagLog.e(TAG, "startForegroundService 启动失败", e)
             publish {
                 it.copy(status = VntStatus.ERROR, message = "启动失败：${e.message}（请在前台操作）")
@@ -174,7 +182,7 @@ object VntMeshController {
         }
     }
 
-    /** 停止组网：走普通 startService（无前台义务），服务内部 shutdown 后 stopSelf。 */
+    /** 停止组网：走普通 startService（无前台义务），服务内部 stop native 后 stopSelf。 */
     fun stop(context: Context) {
         onStopping()
         try {
@@ -202,14 +210,15 @@ object VntMeshController {
         }, 1200L)
     }
 
-    /** 供 `vnt_status` 命令回执：只读本地快照，**刻意不调 getClientList()**（那是 RPC）。 */
+    /** 供 `vnt_status` 命令回执：只读本地快照，**刻意不调 list()**。 */
     fun statusText(): String {
         val s = _state.value
         return when (s.status) {
             VntStatus.RUNNING ->
-                "运行中 · 虚拟IP ${s.virtualIp ?: "?"} · NAT ${s.natType ?: "?"} · " +
-                    "服务端RTT ${s.serverRttMs ?: "?"}ms · 在线设备 ${s.peers.count { it.online }}" +
-                    "（详细列表需打开组网页，命令不主动拉 RPC）"
+                "运行中 · 虚拟IP ${s.virtualIp ?: "?"} · Token ${s.token} · " +
+                    "服务端 ${s.server}（${if (s.tcp) "TCP" else "UDP"}）· " +
+                    "在线设备 ${s.peers.count { it.online }} · 服务端版本 ${s.serverVersion ?: "?"}" +
+                    "（详细列表需打开组网页，命令不主动拉列表）"
             VntStatus.STARTING -> "正在建立连接（${s.message}）"
             VntStatus.STOPPING -> "正在停止（${s.message}）"
             VntStatus.STOPPED -> "未连接"
@@ -231,8 +240,7 @@ object VntMeshController {
                 Thread(r, "vnt-refresh").apply { isDaemon = true }
             }
             refreshExecutor = exec
-            // ★ 立即刷一次，避免进页面后空等第一个周期（VntApp 原版的观感缺陷）
-            exec.execute { refreshOnce(gen) }
+            exec.execute { refreshOnce(gen) }          // ★ 立即刷一次，避免进页面空白
             refreshFuture?.cancel(false)
             refreshFuture = exec.scheduleWithFixedDelay(
                 { refreshOnce(gen) },
@@ -241,7 +249,7 @@ object VntMeshController {
         }
     }
 
-    /** 离开组网页 / ON_PAUSE / onDispose 时调用：取消定时任务、清采样基准。幂等。 */
+    /** 离开组网页 / ON_PAUSE / onDispose 时调用：取消定时任务。幂等。 */
     fun stopRefresh() {
         synchronized(lock) {
             if (!refreshing) return
@@ -251,86 +259,40 @@ object VntMeshController {
             refreshFuture = null
             refreshExecutor?.shutdownNow()
             refreshExecutor = null
-            resetTrafficSamples()         // ★ 否则回到页面时差分会算出虚假巨大尖峰
         }
-    }
-
-    /** 页面隐藏→再显示必须重置采样基准（由 startRefresh/stopRefresh 内部调用）。 */
-    private fun resetTrafficSamples() {
-        samples.clear()
     }
 
     private fun refreshOnce(gen: Long) {
-        val a = api ?: return
+        val p = provider ?: return
         if (gen != refreshGeneration || !refreshing) return
         try {
-            val now = System.currentTimeMillis()
-            // ★ 唯一会发网络包的调用：主动 RPC，最多阻塞 3 秒，必须在后台线程
-            val clients = a.getClientList()
+            // Vnt.list()：本地内存读（非网络 RPC），但仍是 JNI，必须在后台线程
+            val arr = p.list() ?: return
             if (gen != refreshGeneration || !refreshing) return
-
-            // 以下都是纯本地内存读取，不发网络包
-            val serverList = runCatching { a.getServerList() }.getOrNull() ?: emptyList()
-            val routeTable = runCatching { a.getRouteTable() }.getOrNull() ?: emptyList()
-            val natType = runCatching { a.getNatInfo()?.natType }.getOrNull()
-            val serverRtt = serverList.firstOrNull { it.isConnected }?.rtt
-
-            val peers = clients.map { c ->
-                val ip = c.ip
-                val direct = runCatching { a.isDirect(ip) }.getOrDefault(false)
-                var rttMs: Int? = null
-                var estimated = false
-                // 有路由表记录 = 真实 RTT；无路由（中继）= 服务端 RTT × 2 的估算值
-                val routeRtt = routeTable.firstOrNull { it.ip == ip }
-                    ?.routes?.minByOrNull { it.metric }?.rtt
-                if (routeRtt != null && routeRtt > 0) {
-                    rttMs = routeRtt
-                } else if (serverRtt != null) {
-                    rttMs = serverRtt * 2
-                    estimated = true
-                }
-
-                var txRate = 0L
-                var rxRate = 0L
-                runCatching { a.getTrafficInfo(ip) }.getOrNull()?.let { t ->
-                    val prev = samples[ip]
-                    if (prev != null) {
-                        val dt = now - prev.at
-                        if (dt > 0) {
-                            txRate = (t.txBytes - prev.tx).coerceAtLeast(0) * 1000 / dt
-                            rxRate = (t.rxBytes - prev.rx).coerceAtLeast(0) * 1000 / dt
-                        }
-                    }
-                    samples[ip] = Sample(t.txBytes, t.rxBytes, now)
-                }
-
+            val peers = arr.map { pr ->
+                val route = pr.route
                 VntPeer(
-                    ip = ip,
-                    online = c.isOnline,
-                    direct = direct,
-                    rttMs = rttMs,
-                    rttEstimated = estimated,
-                    txBytesPerSec = txRate,
-                    rxBytesPerSec = rxRate,
+                    ip = IpUtils.intToIpAddress(pr.virtualIp),
+                    name = pr.name.orEmpty(),
+                    status = pr.status.orEmpty(),
+                    online = isOnline(pr.status),
+                    direct = route?.metric?.toInt() == 1,   // 官方判定：metric==1 即 p2p
+                    rt = route?.rt,
                 )
-            }
-
-            val servers = serverList.map {
-                VntServer(address = it.serverAddr, connected = it.isConnected, rttMs = it.rtt)
             }
             if (gen != refreshGeneration || !refreshing) return
             publish {
-                it.copy(
-                    peers = peers,
-                    servers = servers,
-                    natType = natType ?: it.natType,
-                    serverRttMs = serverRtt ?: it.serverRttMs,
-                    lastUpdatedAt = System.currentTimeMillis(),
-                )
+                it.copy(peers = peers, lastUpdatedAt = System.currentTimeMillis())
             }
         } catch (e: Throwable) {
-            // getClientList 在实例停止/重建瞬间会抛 VntException，属正常，不升级为页面错误
+            // 实例停止/重建瞬间 native 可能抛异常，属正常，不升级为页面错误
             DiagLog.e(TAG, "刷新设备列表失败", e)
         }
+    }
+
+    /** native 的 status 字符串没有枚举契约，做宽松判定并原样展示。 */
+    private fun isOnline(status: String?): Boolean {
+        val s = status?.trim()?.lowercase() ?: return false
+        return s != "offline" && s != "off" && s != "0" && s != "false" && s.isNotEmpty()
     }
 }

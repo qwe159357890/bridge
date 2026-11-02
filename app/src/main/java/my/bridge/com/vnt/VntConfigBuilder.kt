@@ -1,76 +1,63 @@
 package my.bridge.com.vnt
 
 import android.content.Context
-import com.vnt.VntConfig
+import top.wherewego.vnt.jni.Config
 
 /**
- * 把 [VntMeshConfig] 装配成官方 `com.vnt.VntConfig`（v0.2.30）。
+ * 把 [VntMeshConfig] 装配成官方 1.x `top.wherewego.vnt.jni.Config`（v0.2.32）。
  *
- * ⚠️ `com.vnt.*` 是官方 JNI 绑定，包名不可改（JNI 符号按包名+类名硬编码），
- * 且 release 开了 minify，已在 `proguard-rules.pro` 加 `-keep class com.vnt.** { *; }`。
+ * ⚠️ `top.wherewego.vnt.jni.*` 是官方 VntApp `v1.2.9` 的 JNI 绑定，**包名不可改**
+ * （so 里的符号按包名+类名硬编码：`Java_top_wherewego_vnt_jni_Vnt_new0`）。
+ * release 开了 minify，`proguard-rules.pro` 已加 `-keep class top.wherewego.vnt.jni.** { *; }`。
  *
- * 调用时序见 `AndroidVpnExample.java`：
- * `VntManager.init()` → `createNetwork(config)` → `getNetwork()` → `VpnService.Builder` →
- * `startTun(fd)` → `getApi()` → `nextEvent()` 变更循环 → `stop()`。
+ * 字段默认值对齐官方 `AddActivity.save()`：cipherModel=aes_gcm、serverEncrypt=true、
+ * finger=false、firstLatency=false、三个固定 STUN、mtu 空则底层按 1410 兜底。
+ *
+ * 注意 `Config.deviceName` 是**虚拟网卡名（仅桌面端有效）**，Android 不用；
+ * 设备名走 `Config.name`。别把两者搞混。
  */
 object VntConfigBuilder {
 
-    fun build(context: Context, cfg: VntMeshConfig): VntConfig {
-        // 网络编号 / 服务端是必填项，UI 层已校验；此处再兜一层防止空串进 native。
+    fun build(context: Context, cfg: VntMeshConfig): Config {
         val config = cfg.copy(
             server = cfg.server.ifBlank { VntMeshConfig.DEFAULT_SERVER },
             deviceId = cfg.deviceId.ifBlank { VntMeshPrefs.stableDeviceId(context) },
         )
 
-        // v0.2.31 防线：非法前缀（尤其 1.2.x 旧协议的 udp://）不能进 native。
-        // 否则 VntManager.createNetwork() 会抛晦涩的
-        // 「Unknown protocol in server address」，且用户反复点开始会一直刷错误日志。
-        // 这里抛可读异常，由 VntVpnService.runConnect 的 catch 转成页面 ERROR 文案。
+        // 防线：非法地址 / 空 token 不进 native，否则 JNI 侧报错晦涩且难定位。
         VntServerAddress.error(config.server)?.let { throw IllegalArgumentException(it) }
+        if (config.token.isBlank()) {
+            throw IllegalArgumentException(
+                "组网编号（Token）不能为空：请与存量 1.x 客户端填同一个编号，否则无法互通"
+            )
+        }
 
-        val builder = VntConfig.Builder()
-            .addServer(config.server)
-            .setNetworkCode(config.networkCode)
-            .setDeviceId(config.deviceId)
-            .setDeviceName(config.deviceName)
-            .setMtu(config.mtu)
-            .setCompress(config.compress)
-            .setFec(config.fec)
-            .setRtx(config.rtx)
-            .setNoPunch(config.noPunch)
-            .setDeviceMode("tun")
+        val c = Config()
+        c.token = config.token.trim()
+        c.server = config.server.trim()
+        c.name = config.deviceName.trim().ifBlank { "Bridge" }
+        c.deviceId = config.deviceId
+        c.cipherModel = config.cipherModel.trim().ifBlank { VntMeshConfig.DEFAULT_CIPHER }
+        c.mtu = config.mtu.coerceIn(VntMeshConfig.MIN_MTU, VntMeshConfig.MAX_MTU)
 
-        if (config.password.isNotEmpty()) builder.setPassword(config.password)
-        if (config.ip.isNotBlank()) builder.setIp(config.ip)
-        if (config.certMode.isNotBlank()) builder.setCertMode(config.certMode)
+        // ★ 布尔字段的 Java getter 是 isXxx()，Kotlin 合成属性名会是 isTcp / isServerEncrypt
+        //   / isFinger / isFirstLatency；写 `c.tcp = ...` 会被解析成同名的**私有 Java 字段**
+        //   而报 "Cannot access 'field tcp'"。这里统一显式调 setXxx() 规避。
+        c.setTcp(config.tcp)                     // false = UDP（用户存量 1.2.13 的选择）
+        c.setServerEncrypt(config.serverEncrypt)
+        c.setFinger(config.finger)
+        c.setFirstLatency(config.firstLatency)
+        c.stunServer = (config.stunServers.ifEmpty { VntMeshConfig.DEFAULT_STUN }).toTypedArray()
 
-        // ------------------------------------------------------------------
-        // ★ 预留位：子网转发 / 端口映射（本期不做，接口已核准，见调研报告 §9.3）
-        //
-        // 官方 Builder 接口与参数格式：
-        //   addOutputRoute("真实CIDR")                     我访问对端 LAN
-        //   addInputRoute("源网段CIDR,目标虚拟IP")          对端访问我的 LAN
-        //   addSubnetMapping("映射CIDR,真实CIDR")          网段冲突时映射（真实范围须被 output 覆盖）
-        //   setAutoSyncSubnet(Boolean)                     自动同步对端子网
-        //   setAllowMapping(Boolean) + addPortMapping("tcp://0.0.0.0:81-10.26.0.2-192.168.1.10:80")
-        //
-        // 启用条件与风险：
-        //   1. 对端 LAN 网段必须 addRoute 进 VpnService.Builder，而对端子网是运行期才知道的；
-        //   2. 一变化就经 nextEvent() 吐出 needsVpnRebuild=true → 必须重建 VPN 接口
-        //      （重新 establish() 拿新 fd），期间隧道短暂中断；
-        //   3. 耗电几乎为 0 增量（纯数据面转发，无新增定时器），成本全在复杂度与 fd 切换。
-        // 建议：将来有硬需求时只做 output 单向，可砍掉一半复杂度与大部分网段冲突。
-        //
-        // TODO(后续版本): 放开以下调用，并在 VntVpnService.establishVpn() 里把
-        //   config.outputRoutes / subnetMappings 转成 addRoute 网段；同时处理 needsVpnRebuild。
-        // ------------------------------------------------------------------
-        // config.outputRoutes.forEach { builder.addOutputRoute(it) }
-        // config.inputRoutes.forEach { builder.addInputRoute(it) }
-        // config.subnetMappings.forEach { builder.addSubnetMapping(it) }
-        // builder.setAutoSyncSubnet(config.autoSyncSubnet)
-        // builder.setAllowMapping(config.allowMapping)
-        // config.portMappings.forEach { builder.addPortMapping(it) }
+        // 可选字段：留空就是 null（底层用默认值），绝不塞空串
+        if (config.password.isNotBlank()) c.password = config.password
+        if (config.ip.isNotBlank()) c.ip = config.ip.trim()
+        if (config.punchModel.isNotBlank()) c.punchModel = config.punchModel.trim()
+        if (config.useChannel.isNotBlank()) c.useChannel = config.useChannel.trim()
 
-        return builder.build()
+        // 本期不做：dns / portMapping / inIps / outIps / ports / packetLossRate /
+        // packetDelay / tap / deviceName（虚拟网卡名），保持底层默认值。
+        // 子网转发 / 端口映射仍是「本期不做但保留」的预留位（见报告 §9.3）。
+        return c
     }
 }
