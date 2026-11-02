@@ -126,10 +126,17 @@ async def send_command(body: CommandRequest, request: Request) -> CommandRespons
             detail="命令下发失败（设备连接已断开）",
         )
 
-    # 登记命令（pending），等待客户端回执更新
-    _get_store(request).create(command_id, body.device_id, body.command, body.params)
+    # 登记命令（pending），等待客户端回执更新。
+    # silent=True（管理后台自动探测）只跳过入库：命令已送达设备，回执仍由
+    # ws.py 的 command_result 分支经 admin_event_bus 广播给管理后台，
+    # 状态联动照常工作；CommandStore.set_result 找不到记录会打一条 warning，属预期。
+    if not body.silent:
+        _get_store(request).create(command_id, body.device_id, body.command, body.params)
 
-    logger.info("向 device %s 下发命令 %s（command_id=%s）", body.device_id, body.command, command_id)
+    logger.info(
+        "向 device %s 下发命令 %s（command_id=%s%s）",
+        body.device_id, body.command, command_id, "，静默不入历史" if body.silent else "",
+    )
     return CommandResponse(
         command_id=command_id,
         device_id=body.device_id,

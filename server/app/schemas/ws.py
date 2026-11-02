@@ -117,6 +117,14 @@ class CommandRequest(BaseModel):
         default=False,
         description="强制下发：跳过采集类命令互斥守卫（设备采集无响应卡 pending 时用于解锁重发）",
     )
+    silent: bool = Field(
+        default=False,
+        description=(
+            "静默下发：命令照常送达设备、回执照常广播给管理后台，但不登记命令历史。"
+            "用于管理后台自动探测类查询（如选中开始/停止组网时自动下发 vnt_status），"
+            "避免内部状态查询污染用户主动下发的命令记录"
+        ),
+    )
 
 
 class CommandResponse(BaseModel):

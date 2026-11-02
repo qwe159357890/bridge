@@ -13,11 +13,14 @@ export function sendCommand(
   command: string,
   params: Record<string, any> = {},
   force = false,
+  silent = false,
 ): Promise<SendCommandResult> {
+  // silent=true：管理后台自动探测（如 vnt_status 状态查询）照常下发、回执照常广播，
+  // 但服务端不登记命令历史，避免内部查询污染用户主动下发的记录。
   return request<SendCommandResult>({
     url: '/api/commands',
     method: 'post',
-    data: { device_id: deviceId, command, params, force },
+    data: { device_id: deviceId, command, params, force, silent },
   })
 }
 

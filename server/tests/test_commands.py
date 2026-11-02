@@ -118,3 +118,50 @@ def test_command_query_endpoints(client, admin_headers):
 
     resp = client.get("/api/commands/not-exist", headers=admin_headers)
     assert resp.status_code == 404
+
+
+def test_send_command_silent_not_recorded(client, admin_headers):
+    """静默下发（管理后台自动探测 vnt_status）不登记命令历史，普通下发仍登记。
+
+    silent 只跳过入库：命令照常送达设备，回执由 ws.py 的 command_result 分支
+    经 admin_event_bus 广播，状态联动不受影响。
+    """
+    import asyncio
+
+    from app.core.command_store import CommandStore
+    from app.models.connection import Connection
+
+    manager: ConnectionManager = client.app.state.connection_manager
+    sent: list[str] = []
+
+    async def _send(raw_json: str) -> None:
+        sent.append(raw_json)
+
+    conn = Connection()
+    conn.set_send_handler(_send)
+    asyncio.run(manager.register("dev-silent", conn))
+    client.app.state.command_store = CommandStore()
+
+    resp = client.post(
+        "/api/commands",
+        json={"device_id": "dev-silent", "command": "vnt_status", "params": {}, "silent": True},
+        headers=admin_headers,
+    )
+    assert resp.status_code == 200
+    silent_id = resp.json()["command_id"]
+    assert len(sent) == 1  # 命令确实送达设备
+    assert '"command":"vnt_status"' in sent[0].replace(" ", "")
+
+    records = client.get("/api/commands", headers=admin_headers).json()
+    assert all(r["command_id"] != silent_id for r in records)
+
+    resp2 = client.post(
+        "/api/commands",
+        json={"device_id": "dev-silent", "command": "vnt_status", "params": {}},
+        headers=admin_headers,
+    )
+    assert resp2.status_code == 200
+    normal_id = resp2.json()["command_id"]
+    records2 = client.get("/api/commands", headers=admin_headers).json()
+    assert any(r["command_id"] == normal_id for r in records2)
+    assert all(r["command_id"] != silent_id for r in records2)

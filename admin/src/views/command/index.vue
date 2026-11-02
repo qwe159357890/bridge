@@ -264,7 +264,12 @@
                 :content="forceSendTip"
                 placement="top"
               >
-                <el-checkbox v-model="forceSend" class="force-send">强制下发</el-checkbox>
+                <!-- 包一层 span：disabled 的 checkbox 自身不触发 hover，tooltip 需要外层承接 -->
+                <span class="force-send-wrap">
+                  <el-checkbox v-model="forceSend" :disabled="forceSendDisabled" class="force-send">
+                    强制下发
+                  </el-checkbox>
+                </span>
               </el-tooltip>
               <span v-if="!form.deviceId" class="send-hint">请先选择在线设备</span>
               <span v-else-if="blockHint" class="send-hint warn">{{ blockHint }}</span>
@@ -286,6 +291,9 @@
 
     <!-- 流式采集实时播放：stream_status 事件驱动（视频 mpegts.js / 录音 Web Audio 实时出声） -->
     <StreamPlayerCard ref="streamCard" :device-names="deviceNameMap" @request-stop="stopActiveCapture" />
+
+    <!-- VNT 三条命令的「查看详情」弹窗（按命令分三套布局，见组件内注释） -->
+    <VntResultDetailDialog ref="vntDetail" :device-names="deviceNameMap" />
 
     <el-card class="list-card">
       <template #header>
@@ -348,6 +356,16 @@
               >
                 查看
               </el-button>
+              <!-- v0.2.33+：VNT 三条命令的回执单独设计详情弹窗；pending 行不显示 -->
+              <el-button
+                v-if="canViewVntDetail(row)"
+                size="small"
+                type="primary"
+                link
+                @click="vntDetail?.show(row)"
+              >
+                查看详情
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -402,6 +420,7 @@ import LocationResultCard from '@/components/LocationResultCard.vue'
 import VolumeResultCard from '@/components/VolumeResultCard.vue'
 import { parseVolumeMessage, volumeCurrentText, type VolumeSnapshot } from '@/utils/volume'
 import StreamPlayerCard from '@/components/StreamPlayerCard.vue'
+import VntResultDetailDialog from '@/components/VntResultDetailDialog.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -414,6 +433,14 @@ const devices = ref<Device[]>([])
 const commands = ref<CommandRecord[]>([])
 const loading = ref(false)
 const sending = ref(false)
+
+// VNT 三条命令的「查看详情」：每条单独设计弹窗（见 VntResultDetailDialog.vue）。
+// 只在 VNT 三条、且已有回执时显示，pending 行点开没有内容。
+const VNT_DETAIL_COMMANDS = ['vnt_status', 'vnt_start', 'vnt_stop']
+const vntDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
+function canViewVntDetail(row: CommandRecord): boolean {
+  return VNT_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
+}
 
 // ---------------------------------------------------------------------------
 // 命令产物内嵌预览（v0.1.41）：截屏/拍照/录屏回执里点「查看」直接弹窗预览，
@@ -834,14 +861,20 @@ function setVntSnapshot(deviceId: string, state: VntState, message: string) {
   vntSnapshots.value = { ...vntSnapshots.value, [deviceId]: { state, message, at: Date.now() } }
 }
 
-/** 下发 vnt_status 探测（回执经 WS command_result 流入）。800ms 防抖避免重复探测。 */
+/**
+ * 下发 vnt_status 探测（回执经 WS command_result 流入）。800ms 防抖避免重复探测。
+ * ★ silent=true：4 个自动探测（选中开始/停止组网卡片、切换设备、顶栏刷新设备状态、
+ *   开始/停止回执后 1.5s 重查）全部不登记命令历史——避免内部状态查询污染用户主动
+ *   下发的命令记录。服务端仍照常下发、回执照常广播，状态联动不受影响。
+ *   用户在卡片墙上手动选中「组网状态」再点「下发命令」走 doSend，不带 silent，正常入库。
+ */
 let lastVntProbeAt = 0
 function refreshVntStatus() {
   if (!form.deviceId) return
   const now = Date.now()
   if (now - lastVntProbeAt < 800) return
   lastVntProbeAt = now
-  sendCommand(form.deviceId, 'vnt_status', {}).catch(() => {
+  sendCommand(form.deviceId, 'vnt_status', {}, false, true).catch(() => {
     setVntSnapshot(form.deviceId, 'unknown', '组网状态查询下发失败')
   })
 }
@@ -875,8 +908,10 @@ const MUSIC_STATE_RULES: Record<string, string[]> = {
 const forceSend = ref(false)
 
 /**
- * 强制下发开关只对音乐控制命令显示（状态联动死锁的兜底）。
- * 约定（2026-10-25）：其余命令一律不显示，除非确有同类「状态联动可能死锁」场景。
+ * 强制下发开关的显示范围：音乐控制命令（2026-10-25 约定）、
+ * v0.2.33 新增的 VNT 开始/停止组网（状态快照可能失真，需留兜底出口）、
+ * 采集互斥在途时。其余命令一律不显示。
+ * ★ 显示 ≠ 可用：VNT 两条在命令本来可下发时由 forceSendDisabled 置灰。
  */
 const showForceSend = computed(() => {
   const cmd = selectedCommand.value
@@ -892,6 +927,7 @@ const showForceSend = computed(() => {
 const forceSendTip = computed(() => {
   const name = selectedCommand.value?.name
   if (name && VNT_STATE_RULES[name] !== undefined) {
+    if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
     return '开启后忽略后台记录的组网状态，直接下发开始/停止组网命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
   }
   return '开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）'
@@ -930,9 +966,11 @@ const mediaButtonText = computed(() => {
   return `最近按键：${b.action}（${time}）`
 })
 
-/** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
-function isBlocked(cmd: CommandDef): boolean {
-  if (forceSend.value) return false
+/**
+ * 纯状态判定（不受 forceSend 影响）：这条命令「本来」能不能下发。
+ * 与 isBlocked 分开，是为了让「强制下发置灰」不受用户是否已勾选的影响。
+ */
+function isStateBlocked(cmd: CommandDef): boolean {
   const musicAllowed = MUSIC_STATE_RULES[cmd.name]
   const vntAllowed = VNT_STATE_RULES[cmd.name]
   if (!musicAllowed && !vntAllowed) return false
@@ -947,6 +985,29 @@ function isBlocked(cmd: CommandDef): boolean {
   if (vntState.value === 'unknown') return false
   return !vntAllowed.includes(vntState.value)
 }
+
+/** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
+function isBlocked(cmd: CommandDef): boolean {
+  if (forceSend.value) return false
+  return isStateBlocked(cmd)
+}
+
+/**
+ * v0.2.33+（用户 2026-11-02 拍板）：VNT 两条在「下发命令本来可用」时，
+ * 强制下发置灰不可用——按钮能直接点就不需要强制下发。开关仍显示（不隐藏）。
+ * 音乐 3 条 / 采集互斥保持 v0.2.33 原行为，不受影响。
+ */
+const forceSendDisabled = computed(() => {
+  const cmd = selectedCommand.value
+  if (!cmd || VNT_STATE_RULES[cmd.name] === undefined) return false
+  return !isStateBlocked(cmd)
+})
+
+// 命令由「被禁用」变为「可用」时清掉残留的强制勾选，否则开关虽已置灰、
+// forceSend 仍为 true，点下发会误触发二次确认 / 走强制通道。
+watch(forceSendDisabled, (disabled) => {
+  if (disabled && forceSend.value) forceSend.value = false
+})
 
 const commandBlocked = computed(() => {
   const cmd = selectedCommand.value

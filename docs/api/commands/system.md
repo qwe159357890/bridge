@@ -156,6 +156,38 @@ App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自�
 
 **幂等口径**：重复命令回执改为 `success=false`（文案以「重复下发被忽略」开头），后台不再显示「命令执行成功」造成误导；`STARTING`/`STOPPING` 也视为「进行中」，不重复拉起。
 
+### 命令历史、查看详情与强制下发置灰（v0.2.33 后续修订，仅后台 + 服务端）
+
+> 本轮**不改 APK、不发版本号**：改动落在管理后台前端与服务端下发接口各一处。
+
+**① 自动探测静默，不进命令历史**
+
+v0.2.33 的 4 个 `vnt_status` 自动探测（选中开始/停止组网卡片、切换设备、顶栏「刷新设备状态」、开始/停止回执后 1.5s 重查）原先都走普通 `sendCommand()` ⇒ 服务端 `CommandStore.create()` 登记 ⇒ 出现在「命令历史」表格里，把内部状态查询和用户主动下发的命令混在一起。
+
+链路：`admin/src/api/commands.ts` 的 `sendCommand(..., silent=true)` → `CommandRequest.silent` → `commands.py` 在 `silent=True` 时**跳过 `store.create()`**。命令照常送达设备，回执仍由 `ws.py:434-452` 的 `command_result` 分支经 `admin_event_bus` 广播给管理后台 ⇒ **状态联动完全不受影响**；`CommandStore.set_result()` 找不到记录会打一条 warning，属预期。
+
+用户在卡片墙上**手动选中「组网状态」再点「下发命令」**走 `doSend()`，不带 `silent` ⇒ 正常入库、正常显示在历史里（也是「查看详情」的主要入口）。服务端测试 `test_send_command_silent_not_recorded` 覆盖「静默不入历史 + 普通下发仍入历史 + 命令确实送达设备」。
+
+**② 三条 VNT 命令的「查看详情」（按命令单独设计）**
+
+用户确立的约定：**每条命令的详情弹窗要针对自身返回的参数/数据单独设计，不做通用回执文本框，也不做全命令统一入口**。本期只做 `vnt_status` / `vnt_start` / `vnt_stop` 三条，组件 `admin/src/components/VntResultDetailDialog.vue`，数据仅取现有 `CommandRecord`（`params` + `result_message`），**不改客户端回执结构**。
+
+| 命令 | 弹窗主体 | 数据来源 |
+|---|---|---|
+| `vnt_status` | 大号状态徽标 + KV 网格（虚拟 IP / Token / 服务端地址 / TCP·UDP / 在线设备数 / 服务端版本）；解析不出的字段不显示；提示「详细列表需打开组网页」 | 解析 `statusText()` 固定格式 |
+| `vnt_start` | 结果横幅（已下发 / 重复被忽略 / 启动失败 / 未授权 / Token 为空 / 地址非法 / 执行失败）+「本次下发参数」KV + 下一步建议 | `params`（含旧别名 `network_code`）+ `result_message` 前缀分类 |
+| `vnt_stop` | 结果横幅 +「停止前状态」徽标与快照 KV +「是否执行停止」+ **开机自动组网记忆：已清除 / 保持不变** 醒目标签 | 从「停止前：…」/「当前未组网（…）」提取后再按 `vnt_status` 解析器拆字段 |
+
+共同：命令 ID / 设备 / 下发与回执时间 / 执行状态条，以及「回执原文」可复制折叠区。**密码脱敏**（`params.password` 只显示「已设置（••••）」）；**`pending` 行不显示按钮**（点开无内容）；现有媒体「查看」按钮与悬停 tooltip 均保留。
+
+**③ 命令本来可用时，强制下发置灰**
+
+v0.2.33 的 `showForceSend` 对 VNT 两条恒定显示。本轮按用户拍板：选中 `vnt_stop` 且当前「运行中」时，下发按钮本来就能点 ⇒ 强制下发**仍显示但置灰不可用**（tooltip：「当前命令可直接下发，无需强制下发」）。
+
+实现上把「纯状态判定」`isStateBlocked()` 与 `isBlocked()`（后者会被 `forceSend` 绕过）拆开，`forceSendDisabled = 选中 VNT 两条 && !isStateBlocked(cmd)`；并 `watch(forceSendDisabled)` 在命令由禁用变可用时把 `forceSend` 复位 `false`，否则开关虽置灰、残留勾选仍会误触发二次确认。**音乐 3 条 / 采集互斥的强制下发保持 v0.2.33 原行为不变。**
+
+**生效方式**：服务端改动需**重启服务器**；后台改动需**重新构建部署 `admin/dist` + 刷新页面**；APK 不涉及、无需重装。
+
 ### vnt_status 组网状态
 
 无参数。回执格式（1.x）：
