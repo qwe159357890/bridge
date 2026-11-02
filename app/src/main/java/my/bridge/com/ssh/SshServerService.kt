@@ -342,11 +342,19 @@ class SshServerService : Service() {
         //   机制与已验证正常的 -c 模式完全同源；提示符由循环内 print 合成（输出即「上条
         //   命令已执行完」信号）。代价：不支持跨行语法块（if/fi、for/done 需一行写完）、
         //   子命令读 stdin 会与循环抢输入——无 PTY 固有限制，可接受。
+        // v0.2.37 补充（用户拍板）：裸 cd（无参数）→ App 内部私有目录
+        //   /data/data/my.bridge.com；cd ~ → HOME（/sdcard，EchoShellCommand 补设）。
+        //   shell 里裸 cd 与 cd ~ 默认同义，必须用 cd() 函数区分两者；
+        //   cd - 走 OLDPWD 透传给 command cd，行为不变。函数定义在循环外只执行一次，
+        //   同一 shell 进程内持续生效。
         sshd.shellFactory = ShellFactory { _ ->
             EchoShellCommand(
                 listOf(
                     "/system/bin/sh", "-c",
-                    "print ':/ \$ '; while IFS= read -r line; do eval \"\$line\"; print ':/ \$ '; done",
+                    "cd(){ if [ \"\$#\" -eq 0 ]; then command cd /data/data/my.bridge.com; " +
+                        "else command cd \"\$@\"; fi; }; " +
+                        "print ':/ \$ '; " +
+                        "while IFS= read -r line; do eval \"\$line\"; print ':/ \$ '; done",
                 ),
                 // shell 起始目录 = SFTP home（真机实证：不设则 pwd=/ 且 ls 无权限）
                 workDir = home,
