@@ -342,11 +342,21 @@ class VntVpnService : VpnService() {
      */
     private fun shutdown() {
         DiagLog.i(TAG, "收到停止指令")
+        // v0.2.33：先记录「是否确有运行中的连接」。服务可能被 ACTION_STOP 直接拉起
+        // （未组网时重复下发 vnt_stop / 通知栏点停止），此时 worker 根本没启动，
+        // worker 的 finally 里 onStopped()/stopSelf() 永远不会被调用 ⇒ 空前台服务
+        // 常驻、状态卡在 STOPPING。这类情况必须在下面直接收尾。
+        val hadConnection = running || worker?.isAlive == true
         ++generation
         running = false
         VntMeshController.onStopping()
         val v = synchronized(nativeLock) { vnt }
         runCatching { v?.stop() }
+        if (!hadConnection) {
+            VntMeshController.clearProvider()
+            VntMeshController.onStopped()
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {

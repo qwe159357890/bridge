@@ -105,8 +105,8 @@
 - **需 App 在前台或已授权过 VPN**。`VpnService.prepare()` 授权框必须由 Activity 弹出；
   Android 12+ 后台 `startForegroundService` 还会抛 `ForegroundServiceStartNotAllowedException`。
   执行器先查 `VntMeshController.isPrepared()`，未授权直接回执失败，**不假装成功**。
-- 已处于 `RUNNING`/`STARTING` 时回执「已在运行」+ 当前状态快照，不重复建网。
-- 参数覆盖会写回单套配置 Prefs（与页面「组网配置」共用一份）。
+- **v0.2.33**：`RUNNING`/`STARTING`/`STOPPING` 一律 `success=false`「重复下发被忽略」，不重复建网（详见下方「状态联动、幂等守卫与强制下发」）。
+- 参数覆盖**仅在真正启动前**写回单套配置 Prefs（与页面「组网配置」共用一份）；已在运行时参数不生效，回执明确说明，避免配置漂移。
 - 按崩溃台账 §5：`startForegroundService` 每调一次欠一次前台义务，
   `VntVpnService.onStartCommand` 每次幂等补挂、`startForeground` try/catch + 失败 `stopSelf`。
 - **互通前提**：`token` / `password` / `cipherModel` / `serverEncrypt` / `finger` 必须与
@@ -120,11 +120,41 @@
 关闭 VPN 的 `ParcelFileDescriptor` → `stopSelf()`。回执含停止前状态。
 **无平台限制，三条里最可靠**，适合运维远程收口。
 
+**v0.2.33**：未组网（`STOPPED`/`ERROR`）时设备端直接回 `success=false`「重复下发被忽略」，
+不执行停止、不清除开机自动组网记忆；`VntMeshController.stop()` 与 `VntVpnService.shutdown()`
+双重收口，杜绝「未组网时重复 stop 拉起一个空前台服务」的僵尸通知与假 `STOPPING` 状态。
+
 **v0.2.31 自动组网记忆（1.x 沿用）**：`vnt_start` 成功下发（或回「已在运行」）会把
 `VntMeshPrefs.autoStart` 置 `true`，`vnt_stop` 置 `false`。记忆为 `true` 时，
 App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自动开始组网；
 三道守卫（记忆未开 / 已 RUNNING·STARTING / VPN 授权失效）会跳过，且**失败不重试**。
 与页面「开始组网」/「停止组网」按钮共用同一份记忆；退出应用 / 切后台结束进程**不动记忆**。
+
+### 状态联动、幂等守卫与强制下发（v0.2.33）
+
+**起因**：`vnt_start` / `vnt_stop` 原先不判断当前组网状态，重复下发有隐性副作用。
+
+| 重复场景 | 改前行为 | v0.2.33 |
+|---|---|---|
+| 已组网再 `vnt_start` | 不重复建网，但**在状态守卫之前**把带参覆盖写回 Prefs（运行中的实例仍用启动时的旧配置 ⇒ 配置漂移，后台却以为新参数已生效）；且无条件 `setAutoStart(true)`，一条迟到的 start 会把用户刚点「停止」清掉的记忆写回 | 后台按钮置灰；设备端状态守卫放在**所有写操作之前**，返回 `success=false`「重复下发被忽略：组网已在运行」，不写 Prefs、不动记忆 |
+| 未组网再 `vnt_stop` | 无条件 `setAutoStart(false)`（下次冷启动不再自动组网，与「必可达」硬约束冲突）；且 `startService(ACTION_STOP)` 在服务不存在时会**新建空前台服务**——`onCreate` 挂通知、`shutdown()` 里 worker 为 null ⇒ 没人调 `onStopped()/stopSelf()` ⇒ 通知常驻、状态卡 `STOPPING` | 后台按钮置灰；设备端未组网直接返回 `success=false`，不停止、不清记忆；`VntMeshController.stop()` 与 `VntVpnService.shutdown()` 双重收口，任何入口拉起的空服务立即 `onStopped()` + `stopSelf()` |
+
+**后台状态联动（纯前端，零 APK / 零服务端改动）**：
+
+- 状态来源 = `vnt_status` **按需查询命令的回执**（`ws.py:446` 的 `command_result` 广播已带 `command` / `message`），按 `device_id` 缓存快照。
+  `VntMeshController.statusText()` 固定前缀解析：`运行中 ·`→running、`正在建立连接（`→starting、`正在停止（`→stopping、`未连接`→stopped、`异常：`→error，其余→unknown。
+- 自动探测时机：选中 `vnt_start`/`vnt_stop` 卡片（防重复 key + 800ms 防抖）、切换目标设备、顶栏「刷新设备状态」按钮、这两条命令回执后 1.5s。
+- 禁用规则：`vnt_start` 仅 `stopped`/`error` 可用；`vnt_stop` 仅 `running`/`starting`/`stopping` 可用；`vnt_status` 自身不受限。
+  UI = 卡片置灰 + 「下发命令」按钮禁用 + 参数区状态条（含采集时刻与「刷新」）+ 顶栏组网状态徽标 + `blockHint` 原因文案。
+- **unknown 不硬禁用**：状态是快照不是事实——设备端手动操作、冷启动自动组网、系统撤销 VPN 授权、native 崩溃、回执丢失都会让缓存失真。硬禁用会变成「想开开不了」，与「虚拟网必可达」冲突；改为显示警示并保留下发出口。
+
+**强制下发（调研结论：需要，且必须二次确认）**：
+
+- 复用音乐命令的 `forceSend` 开关，只对 `vnt_start` / `vnt_stop` 显示；勾选后点「下发命令」弹确认框，明写「后台记录的组网状态为 X，将忽略该状态直接下发」，用户确认才真正发（不是静默放行）。
+- 它**不是**「强制重启 VNT」：服务端 `force` 只对采集互斥组生效（`commands.py` 的 `CAPTURE_COMMANDS`），VNT 命令走的仍是普通下发，设备端守卫照常按真实状态执行或忽略 ⇒ 强制下发只是**绕过后台按钮禁用**的兜底出口。
+- 存在理由：状态快照失真、设备刚上线没探测、回执丢失/超时、离线刚恢复时，仍要能恢复可达性 —— 对应「可接受延迟，不可永远访问不到」。
+
+**幂等口径**：重复命令回执改为 `success=false`（文案以「重复下发被忽略」开头），后台不再显示「命令执行成功」造成误导；`STARTING`/`STOPPING` 也视为「进行中」，不重复拉起。
 
 ### vnt_status 组网状态
 

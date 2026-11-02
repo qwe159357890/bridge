@@ -182,8 +182,19 @@ object VntMeshController {
         }
     }
 
-    /** 停止组网：走普通 startService（无前台义务），服务内部 stop native 后 stopSelf。 */
+    /**
+     * 停止组网：走普通 startService（无前台义务），服务内部 stop native 后 stopSelf。
+     *
+     * v0.2.33：未组网且服务没在跑时直接收状态，**不再 startService** —— 否则
+     * Android 会新建一个空的 VntVpnService（页面「停止组网」/通知栏「停止」同样会
+     * 走到这里），前台通知常驻且状态卡在 STOPPING。真正的收尾由服务自己完成。
+     */
     fun stop(context: Context) {
+        val s = _state.value.status
+        if ((s == VntStatus.STOPPED || s == VntStatus.ERROR) && !VntVpnService.isRunning()) {
+            onStopped()
+            return
+        }
         onStopping()
         try {
             context.startService(

@@ -305,9 +305,26 @@ object CommandModule {
                 "false", "0", "udp" -> false
                 else -> null
             }
+            // v0.2.33：状态守卫提到最前面。重复下发（含管理后台「强制下发」）绝不能
+            // 改配置、也不能重写自动组网记忆——否则运行中的实例仍用启动时的旧配置，
+            // 后台却以为新参数已生效；迟到的 start 还会把用户刚点「停止」清掉的记忆写回。
+            val st = VntMeshController.state.value.status
+            if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：组网已在运行（${VntMeshController.statusText()}）；" +
+                        "本次参数未生效、未改动自动组网记忆。如需变更配置请先停止再开始",
+                )
+            }
+            if (st == VntStatus.STOPPING) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：正在停止组网，请稍后用 vnt_status 确认状态后再试",
+                )
+            }
+            // 确认要真正启动，才把覆盖参数写回单套配置 Prefs（与页面「组网配置」共用）
             if (server.isNotEmpty() || token.isNotEmpty() || password.isNotEmpty() || tcp != null) {
                 val old = VntMeshPrefs.load(context)
-                // 单套配置：覆盖写回，与 APP 内「组网配置」共用同一份 Prefs
                 VntMeshPrefs.save(
                     context,
                     old.copy(
@@ -334,15 +351,6 @@ object CommandModule {
                     "尚未授予系统 VPN 权限：需 App 在前台由用户点一次「开始组网」完成授权后，远程启动才可用",
                 )
             }
-            val st = VntMeshController.state.value.status
-            if (st == VntStatus.RUNNING || st == VntStatus.STARTING) {
-                // v0.2.31：远程 start 同样是「用户希望组网开着」的显式意图，同步写记忆
-                VntMeshPrefs.setAutoStart(context, true)
-                return CommandResult(
-                    command.commandId, command.command, true,
-                    "组网已在运行：" + VntMeshController.statusText(),
-                )
-            }
             val launched = VntMeshController.start(context)
             if (launched) VntMeshPrefs.setAutoStart(context, true)
             CommandResult(
@@ -365,6 +373,19 @@ object CommandModule {
     private fun executeVntStop(context: Context, command: Command): CommandResult {
         return try {
             val before = VntMeshController.statusText()
+            // v0.2.33：未组网时不下发停止。原实现无条件 startService(ACTION_STOP)：
+            // 服务不存在时 Android 会新建一个 VntVpnService → onCreate 挂前台通知 →
+            // shutdown() 里 worker 为 null ⇒ 没人调 onStopped()/stopSelf() ⇒ 空前台服务
+            // 常驻、状态卡在 STOPPING；且无条件清 autoStart 会让下次冷启动不再自动组网，
+            // 与「虚拟网必可达」硬约束冲突。
+            val st = VntMeshController.state.value.status
+            if (st == VntStatus.STOPPED || st == VntStatus.ERROR) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：当前未组网（$before）；未执行停止、开机自动组网记忆保持不变。" +
+                        "若后台记录与实际不符，请点「刷新状态」或勾选「强制下发」重新确认",
+                )
+            }
             // v0.2.31：远程 stop 与页面「停止组网」一致，清自动组网记忆
             VntMeshPrefs.setAutoStart(context, false)
             VntMeshController.stop(context)

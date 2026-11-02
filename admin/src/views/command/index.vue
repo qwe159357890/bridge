@@ -30,13 +30,24 @@
             >
               🎧 {{ mediaButtonText }}
             </el-tag>
+            <!-- v0.2.33：组网状态徽标（vnt_status 回执快照，悬停看完整回执） -->
+            <el-tooltip
+              v-if="form.deviceId"
+              :content="vntSnapshot?.message || '尚未取得组网状态，点右侧刷新按钮查询'"
+              placement="top"
+              :show-after="300"
+            >
+              <el-tag :type="vntTagType" size="small" class="music-tag">
+                🕸️ 组网：{{ vntStateText }}
+              </el-tag>
+            </el-tooltip>
             <el-button
               v-if="form.deviceId"
               :icon="Refresh"
               size="small"
               circle
-              title="刷新播放状态"
-              @click="loadMusicState"
+              title="刷新设备状态（播放 / 组网）"
+              @click="refreshDeviceStates"
             />
           </div>
         </div>
@@ -104,6 +115,25 @@
                 {{ selectedCommand.icon }} {{ selectedCommand.label }}
                 <span class="command-key">({{ selectedCommand.name }})</span>
               </span>
+            </div>
+
+            <!-- v0.2.33：选中开始/停止组网时展示状态快照（必须放在 el-form 外，
+                 vnt_stop 无参数走 no-params 分支、不渲染 el-form） -->
+            <div
+              v-if="selectedIsVntStateCommand"
+              class="sim-hint"
+              :class="{ 'sim-hint-empty': !vntSnapshot }"
+            >
+              <template v-if="vntSnapshot">
+                当前组网状态：<b>{{ vntStateText }}</b>
+                <span style="margin-left: 8px; color: var(--el-text-color-secondary)">
+                  {{ vntProbeTimeText }}
+                </span>
+                <el-button type="primary" link size="small" @click="refreshVntStatus">
+                  刷新
+                </el-button>
+              </template>
+              <template v-else>正在查询设备组网状态…</template>
             </div>
 
             <div v-if="selectedCommand.params.length === 0" class="no-params">
@@ -231,7 +261,7 @@
               </el-button>
               <el-tooltip
                 v-if="showForceSend"
-                content="开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）"
+                :content="forceSendTip"
                 placement="top"
               >
                 <el-checkbox v-model="forceSend" class="force-send">强制下发</el-checkbox>
@@ -723,6 +753,117 @@ function progressTextOf(row: { status: string; command_id: string }): string | n
   return `执行中 ${p.percent ?? 0}%`
 }
 
+// ---------------------------------------------------------------------------
+// VNT 组网状态联动（v0.2.33）
+// 状态来源 = vnt_status 回执（按需查询命令，不是实时通道），按设备缓存。
+// ★ 状态只是「查询那一刻的快照」不是事实：设备端手动操作 / 冷启动自动组网 /
+//   系统撤销 VPN 授权 / native 崩溃 / 回执丢失都会让缓存失真。因此 unknown 一律
+//   不硬禁用（否则「想开开不了」，与「虚拟网必可达」硬约束冲突），并提供
+//   强制下发 + 二次确认作为兜底出口。
+// ---------------------------------------------------------------------------
+
+type VntState = 'running' | 'starting' | 'stopping' | 'stopped' | 'error' | 'unknown'
+
+/** 需要按组网状态限制下发的命令 → 允许的设备状态。vnt_status 自身不受限。 */
+const VNT_STATE_RULES: Record<string, VntState[]> = {
+  vnt_start: ['stopped', 'error'],
+  vnt_stop: ['running', 'starting', 'stopping'],
+}
+
+const VNT_STATE_LABELS: Record<VntState, string> = {
+  running: '运行中',
+  starting: '正在建立连接',
+  stopping: '正在停止',
+  stopped: '未连接',
+  error: '异常',
+  unknown: '未知',
+}
+
+interface VntSnapshot {
+  state: VntState
+  /** 原始回执文案（悬停徽标看全文）。 */
+  message: string
+  /** 采集时刻（毫秒），供用户判断快照有多旧。 */
+  at: number
+}
+
+/** 按设备缓存（切换设备不清空，避免来回切换反复探测）。 */
+const vntSnapshots = ref<Record<string, VntSnapshot>>({})
+const vntSnapshot = computed<VntSnapshot | null>(() => vntSnapshots.value[form.deviceId] ?? null)
+const vntState = computed<VntState>(() => vntSnapshot.value?.state ?? 'unknown')
+const vntStateText = computed(() => {
+  const snap = vntSnapshot.value
+  if (!snap) return '未查询'
+  if (snap.state === 'unknown') return snap.message ? `未知（${snap.message}）` : '未知'
+  return VNT_STATE_LABELS[snap.state]
+})
+const vntTagType = computed(() => {
+  switch (vntState.value) {
+    case 'running':
+      return 'success'
+    case 'starting':
+    case 'stopping':
+      return 'warning'
+    case 'error':
+      return 'danger'
+    default:
+      return 'info'
+  }
+})
+const vntProbeTimeText = computed(() => {
+  const at = vntSnapshot.value?.at
+  return at ? `采集于 ${new Date(at).toLocaleTimeString('zh-CN', { hour12: false })}` : ''
+})
+const selectedIsVntStateCommand = computed(() => {
+  const name = selectedCommand.value?.name
+  return !!name && VNT_STATE_RULES[name] !== undefined
+})
+
+/** 解析 VntMeshController.statusText() 的固定前缀；无法解析一律 unknown（不硬禁用）。 */
+function parseVntStatus(message: string): VntState {
+  const m = message || ''
+  if (m.startsWith('运行中 ·')) return 'running'
+  if (m.startsWith('正在建立连接')) return 'starting'
+  if (m.startsWith('正在停止')) return 'stopping'
+  if (m.startsWith('未连接')) return 'stopped'
+  if (m.startsWith('异常：') || m.startsWith('执行失败')) return 'error'
+  return 'unknown'
+}
+
+function setVntSnapshot(deviceId: string, state: VntState, message: string) {
+  vntSnapshots.value = { ...vntSnapshots.value, [deviceId]: { state, message, at: Date.now() } }
+}
+
+/** 下发 vnt_status 探测（回执经 WS command_result 流入）。800ms 防抖避免重复探测。 */
+let lastVntProbeAt = 0
+function refreshVntStatus() {
+  if (!form.deviceId) return
+  const now = Date.now()
+  if (now - lastVntProbeAt < 800) return
+  lastVntProbeAt = now
+  sendCommand(form.deviceId, 'vnt_status', {}).catch(() => {
+    setVntSnapshot(form.deviceId, 'unknown', '组网状态查询下发失败')
+  })
+}
+
+/** 顶栏刷新按钮：同时刷新播放状态与组网状态。 */
+function refreshDeviceStates() {
+  loadMusicState()
+  refreshVntStatus()
+}
+
+// 选中「开始/停止组网」或切换设备时自动探测一次（与音量 get_volume 同款范式）
+let vntQueryKey = ''
+const vntAutoKey = computed(() => {
+  const name = selectedCommand.value?.name
+  return name && VNT_STATE_RULES[name] && form.deviceId ? `${form.deviceId}:${name}` : ''
+})
+watch(vntAutoKey, (key) => {
+  if (!key || key === vntQueryKey) return
+  vntQueryKey = key
+  refreshVntStatus()
+})
+
 /** 控制类命令允许下发的设备状态（播放音乐不受限，设备在线即可）。 */
 const MUSIC_STATE_RULES: Record<string, string[]> = {
   pause_music: ['playing'],
@@ -740,9 +881,20 @@ const forceSend = ref(false)
 const showForceSend = computed(() => {
   const cmd = selectedCommand.value
   if (!cmd) return false
+  // v0.2.33：组网状态是快照，失真时不能把「开始/停止」锁死，必须留强制出口
+  if (VNT_STATE_RULES[cmd.name] !== undefined) return true
   if (MUSIC_STATE_RULES[cmd.name] !== undefined) return true
   // 采集互斥场景：目标设备有采集命令在途时，提供强制下发出口
   return CAPTURE_COMMANDS.includes(cmd.name) && !!pendingCapture.value
+})
+
+/** 强制下发 tooltip 按命令类别切换说明（组网命令需二次确认，见 handleSend）。 */
+const forceSendTip = computed(() => {
+  const name = selectedCommand.value?.name
+  if (name && VNT_STATE_RULES[name] !== undefined) {
+    return '开启后忽略后台记录的组网状态，直接下发开始/停止组网命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
+  }
+  return '开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）'
 })
 
 const musicStateText = computed(() => {
@@ -780,12 +932,20 @@ const mediaButtonText = computed(() => {
 
 /** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
 function isBlocked(cmd: CommandDef): boolean {
-  const allowed = MUSIC_STATE_RULES[cmd.name]
-  if (!allowed) return false
   if (forceSend.value) return false
+  const musicAllowed = MUSIC_STATE_RULES[cmd.name]
+  const vntAllowed = VNT_STATE_RULES[cmd.name]
+  if (!musicAllowed && !vntAllowed) return false
   if (!form.deviceId) return true
-  const state = musicState.value?.state ?? 'unknown'
-  return !allowed.includes(state)
+  if (musicAllowed) {
+    const state = musicState.value?.state ?? 'unknown'
+    return !musicAllowed.includes(state)
+  }
+  if (!vntAllowed) return false
+  // unknown 不硬禁用：设备刚上线 / 回执丢失 / 状态无法解析时硬禁用会变成
+  // 「想开开不了」，与「虚拟网必可达」硬约束冲突；保留出口并用 blockHint 警示。
+  if (vntState.value === 'unknown') return false
+  return !vntAllowed.includes(vntState.value)
 }
 
 const commandBlocked = computed(() => {
@@ -805,6 +965,21 @@ const blockHint = computed(() => {
   }
   if (forceSend.value && CAPTURE_COMMANDS.includes(selectedCommand.value.name) && pendingCapture.value) {
     return '强制模式：命令将直接下发，若设备确实仍在采集，会由设备端互斥兜底回执失败'
+  }
+  // v0.2.33：组网状态联动提示（优先于音乐状态，两类不重叠）
+  if (VNT_STATE_RULES[selectedCommand.value.name]) {
+    if (forceSend.value) {
+      return '强制模式：将忽略后台记录的组网状态直接下发（已二次确认），设备端仍按真实状态执行或忽略重复命令'
+    }
+    if (vntState.value === 'unknown') {
+      return '尚未取得设备组网状态（或回执超时）：命令未禁用，但请先点「刷新状态」确认；确需直接下发可勾选「强制下发」（需二次确认）'
+    }
+    if (!commandBlocked.value) return ''
+    const label = VNT_STATE_LABELS[vntState.value]
+    if (selectedCommand.value.name === 'vnt_start') {
+      return `设备当前「${label}」，无需再次开始组网；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+    }
+    return `设备当前「${label}」，无需停止组网（重复下发会清除开机自动组网记忆）；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
   }
   if (!MUSIC_STATE_RULES[selectedCommand.value.name]) return ''
   if (forceSend.value) {
@@ -841,6 +1016,7 @@ watch(
   () => form.deviceId,
   () => {
     forceSend.value = false // 切换目标设备时重置强制下发，防止残留开启误操作
+    vntQueryKey = '' // v0.2.33：换设备后允许重新自动探测组网状态
     pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
     locationCard.value?.hide()
     volumeCard.value?.hide() // 音量卡片随设备切换关闭（新设备需重新获取）
@@ -1078,9 +1254,28 @@ async function handleSend() {
     ElMessage.warning('请选择目标设备')
     return
   }
-  if (!selectedCommand.value) {
+  const cmd = selectedCommand.value
+  if (!cmd) {
     ElMessage.warning('请选择命令')
     return
+  }
+  // v0.2.33：组网命令的「强制下发」必须二次确认。状态是快照，强制下发会绕过
+  // 按钮禁用，需让用户明确看到后台记录的状态并自行核对设备真实状态。
+  if (forceSend.value && VNT_STATE_RULES[cmd.name] !== undefined) {
+    try {
+      await ElMessageBox.confirm(
+        `后台记录的组网状态为「${vntStateText.value}」。本次将忽略该状态直接下发「${cmd.label}」。` +
+          '请确认设备真实状态后再继续：重复命令不会产生第二次组网/停止，且可能被设备端守卫忽略。',
+        '强制下发确认',
+        {
+          confirmButtonText: '确认强制下发',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return // 用户取消
+    }
   }
   await doSend(forceSend.value)
 }
@@ -1189,6 +1384,28 @@ function connectWS() {
             deviceNameOf(msg.data.device_id),
             msg.data.message || '',
           )
+        }
+        // v0.2.33：vnt_status 回执 → 解析并缓存组网状态，驱动开始/停止按钮联动
+        if (
+          msg.data.command === 'vnt_status' &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const state = msg.data.success ? parseVntStatus(msg.data.message || '') : 'unknown'
+          setVntSnapshot(msg.data.device_id, state, msg.data.message || '')
+        }
+        // 开始/停止回执后自动重新探测（状态收敛有延迟，1.5s 后再查一次）。
+        // 失败回执同样重查：设备端守卫可能已把「重复下发」忽略，状态并未改变。
+        if (
+          (msg.data.command === 'vnt_start' || msg.data.command === 'vnt_stop') &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const dev = msg.data.device_id as string
+          window.setTimeout(() => {
+            if (form.deviceId === dev) {
+              lastVntProbeAt = 0 // 绕过防抖，确保这次探测一定发出
+              refreshVntStatus()
+            }
+          }, 1500)
         }
       } else if (msg.type === 'stream_status') {
         // 流式采集起止：驱动实时播放卡片开/关（分片重负载不经过本通道）

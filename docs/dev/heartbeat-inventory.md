@@ -553,3 +553,198 @@ heartbeat:
 - 微信消息延迟明显变长或长时间收不到（NAT 超时 < 60s）
 - 日志出现 `Pong 超时` 频率显著上升
 - 设备待机耗电不降反升（说明重连次数增加抵消了心跳收益）
+
+---
+
+## 九、VNT 1.x 空闲发包取证 + 组网耗电增量评估（2026-11-02）
+
+> 触发：用户真机 v0.2.32 组网成功、局域网互访已通，问「开 / 不开组网的耗电差多少」。
+> 本节**只追加、不改动上文任何原文**（保留改前留档）。§1.2 说 VNT 周期「黑盒、不可从 Java 侧调」
+> 依旧成立，但周期数值现已从 1.x 源码取到确数，登记于此避免日后重复调研。
+
+### 9.1 取证来源与版本歧义
+
+线上 `github.com/lbl8603/vnt` 的 tag 归档（codeload / raw 经 ghproxy 镜像），
+对 `1.2.9`、`v1.2.9`、`v1.2.14`、`v1.2.17` 四个 tag 逐 tag 比对。
+⚠️ **存在两个同名 1.2.9 tag**：`1.2.9`(sha `8a4d218`，旧 `Context` 架构) 与
+`v1.2.9`(sha `4dca4c4f`，`ChannelContext` 架构)。官方 raw/codeload 的 `v1.2.9` 是后者；
+本项目 `libvnt_jni.so` 具体对应哪一个**无法从二进制判定**，故下表两个版本分别列出。
+
+### 9.2 1.x 空闲期周期任务（★ 心跳 3s 是硬编码，无条件发，不可配）
+
+| 任务 | 周期 | 源码（1.x） |
+| --- | --- | --- |
+| **心跳**（发往网关 + 每条路由 + 每个在线 peer） | **3s**，四 tag 一致 | `vnt/src/handle/maintain/heartbeat.rs:34-35` `Duration::from_secs(3)`，注释「心跳包 3秒发送一次」；`:27-35` 无条件先发再重排 |
+| 中继路径探测 | 首 30s，之后 30s | `heartbeat.rs:133`、`:157` |
+| 状态上报（仅 `v1.2.9+`） | 首 60s，之后 600s | `vnt/src/handle/maintain/up_status.rs:21`、`:47` |
+| P2P 打洞 | `v1.2.9`：**[5,6,7]s 循环**，离线 5s；`1.2.9`：质数序列 3,5,7,11,13,17,19,23,29 | `vnt/src/handle/maintain/punch.rs:192-195` / `:131-135` |
+| AddrRequest / STUN 刷新 | `v1.2.9`：**1s**（各通道轮转）/ **19s**（最后一通道）/ 对称 NAT 且已获公网端口降频 **600s**；`1.2.9`：固定 **9s** | `vnt/src/handle/maintain/addr_request.rs:43`、`:57`、`:61` / `:22-23` |
+| NAT 类型重测 | 600s | `vnt/src/handle/maintain/re_nat_type.rs:10,18` |
+| 路由判死 | 10s 无数据 | `vnt/src/core/conn.rs:315`、`vnt/src/channel/idle.rs:35` |
+| 空闲检查本地定时器（**不发网络包**） | 100ms / 3000ms | `vnt/src/handle/maintain/idle.rs:112,115` |
+
+**结论**：1.x **没有任何全局「空闲停止发包 / 休眠 / 省电」机制**（`heartbeat.rs:27-35`、
+`vnt/src/util/scheduler.rs:58-67` 均无空闲判定），README 也**没有心跳间隔配置项** ⇒
+3s 是 Rust 侧硬编码，Java `Config` 与本项目的 `VntConfigBuilder` 都改不了它。
+只有局部降频（离线不探测、通道数够不再打洞、对称 NAT 降频 600s），不影响 3s 主心跳。
+
+> 对照：本地 `references/vnt/` 全为 2.x（心跳 5~15s 量级），**不可套用到 1.x**。
+
+### 9.3 为什么增量不是「整机流量翻倍」
+
+`VntVpnService.generateTun()` 只 `addRoute(虚拟网段)`，**没有 `0.0.0.0/0`**（`:250-256`）。
+⇒ 其它 App 流量、Bridge 自身的主 WS / 微信 WS / 销售 / 扫码连接**都不经过 TUN**。
+增量仅限 VNT 自己发的包与 native 线程 CPU；空闲时 TUN 零流量。
+前台「5 秒刷新」走 `Vnt.list()` 本地内存读，且仅前台组网页运行（§1.2），**不计入**。
+
+### 9.4 加密的额外 CPU
+
+项目 `VntConfigBuilder` 默认 `cipherModel=aes_gcm` / `serverEncrypt=true`（对齐官方 `AddActivity.save()`）；
+1.x 源码默认 `serverEncrypt=false`、无 password 时 `Cipher::None` 是 **no-op**（`vnt/src/cipher/cipher.rs:286`）。
+心跳包虽调 `encrypt_ipv4()`，但只有设了密码 / 开 `serverEncrypt` 才真加密。
+本项目开了 `serverEncrypt` ⇒ 服务端通道有 AES 开销，包很小、频率虽高但 CPU 成本仍是次要项。
+
+### 9.5 耗电增量估算（量级，非实测；分母 = 5000 mAh 电池）
+
+沿用 §3.1 单次唤醒模型（LTE 2.5 J / WiFi 0.15 J，1 mAh ≈ 13.9 J），
+**基线** = 不开通组网：进程级 ~60 次/小时（双 WS 60s 对齐栅格）+ 保活三锁常驻基线 400–1500 mAh/天。
+
+| 场景（空闲、无业务流量、单 peer） | VNT 净增量 | 占整机 | 主导项 |
+| --- | --- | --- | --- |
+| **WiFi 常驻** | **约 +100~300 mAh/天** | **2%~6%** | 3s 心跳把 WiFi 从 PSM 拽成近持续活跃 |
+| **LTE 移动数据** | **约 +1000~1800 mAh/天** | **20%~36%** | 射频长期停在 RRC Connected，无法回落 |
+| 有业务流量（互访/传文件，如 10 Mbps） | 再 **+50~150 mW**（约 +300~900 mAh/天·持续传输） | 视时长 | TUN 每包内核↔用户态拷贝 + AES-GCM；中继模式流量再翻倍 |
+| 前台停在组网页 | 近似 0 增量 | — | `Vnt.list()` 本地读，5s 定时器仅前台 |
+
+> **⚠️ 模型边界（必须知道）**：§3.2 的线性表只在「间隔 > RRC tail ≈ 10s」时成立。
+> VNT 是 **3s < 10s tail** ⇒ LTE 下射频**不会每次重建**，而是持续停在高功耗态，
+> 线性外推的 1200 次/h × 2.5 J ≈ 5180 mAh/天 是**物理上不成立的虚高值**。
+> 饱和上限应按「常驻功率差」算：LTE 持续活跃约 200~300 mW，扣待机基线后即上表量级。
+> 这也意味着：**在 LTE 下把 VNT 心跳放宽到 > 10s 的收益，远大于在 WiFi 下调任何参数。**
+
+### 9.6 与现有基线的叠加关系（别重复计算）
+
+- Bridge 默认持有 `PARTIAL_WAKE_LOCK`，CPU 本来就不休眠 ⇒ VNT 的 native 定时器
+  **不产生额外的「CPU 唤醒」成本**，只占用 CPU 时间片（粗估常驻 +5~20 mW）。
+- VNT 前台服务未额外申请 WakeLock（`VntVpnService` 源码核对），通知常驻本身近零耗电。
+- 因此增量几乎全在**射频**，不是 CPU、不是内存、不是 APK 体积。
+
+### 9.7 把估算收敛成实测（当前 `adb devices` 为空，未实测）
+
+```bash
+# 用项目自带 adb（PATH 上的 adb 是古董版，见项目记忆/配置）
+F:/pythonWork/appClient/tools/adb/platform-tools/adb.exe devices
+
+# ① 测 VNT 真实空闲发包频率（最关键的不确定量）
+adb shell dumpsys netstats --reset        # 熄屏静置，组网开 / 关各跑 1 小时
+adb shell dumpsys netstats detail | grep -i <bridge_uid>   # 看 tx/rx packets 差值
+#   预期：3s 心跳 ⇒ 约 1200 包/小时（×peer 数），关组网时约 60 包/小时
+
+# ② 测整机与 App 耗电（对照法，唯一可信）
+adb shell dumpsys batterystats --reset   # 熄屏静置 8h，两轮条件完全一致
+adb shell dumpsys batterystats > bs_on.txt   # 组网开
+#   重点看 Estimated power use(mAh) 里 my.bridge.com、mobile/wifi radio active ms
+```
+
+更硬的手段：外接电流计 / 支持 `current_now` 的机型读 `/sys/class/power_supply/battery/current_now`。
+真机对照时务必固定网络（纯 WiFi 或纯 LTE）、熄屏、关闭其它 App 后台、两轮时长一致。
+
+### 9.8 若将来要省电（**本轮未改任何代码**，仅登记方向）
+
+1. **最有效**：让 VNT 只在 WiFi 下常驻、移动数据下自动断开（或提示用户），绕开 LTE 最大头。
+2. 3s 心跳在 Rust 内部硬编码 ⇒ 从 Java / Kotlin 侧**无法调**；要改只有三条路：换 so 版本、
+   自编 JNI（违反「不擅自本地安装程序」硬约束）、或接受它。
+3. 本项目双 WS 已对齐 60s 栅格，但 **VNT 的 3s 心跳无法与之对齐**（native 独立计时），
+   所以 §3.3「合并心跳收益 > 放宽间隔」这条优化**对 VNT 不适用**。
+4. 禁用打洞（`punchModel` 留空走底层默认）只能省掉打洞探测包，省不掉 3s 主心跳，收益有限。
+
+### 9.9 口径澄清 + 心跳启动/停止条件（2026-11-02 追问补充，只追加不改原文）
+
+**① §9.5 表格「前台停在组网页 ≈0」的口径（易误读，以此为准）**
+该行**不是**「App 在前台就零耗电」，而是说「**前台停在组网页** 相对 **组网开着但退到后台**
+几乎不增加耗电」——5s 刷新走 `Vnt.list()` 本地内存读，退后台即取消定时器。
+把它与 §9.5 前两行（「开组网 vs 不开组网」的净增量）并列属**口径混用**，应单独看。
+实际恰恰相反：**前台亮屏时整机耗电远高于后台**（屏幕 300~800 mW + Compose 渲染/重组），
+且 **VNT 的 3s 心跳与前后台无关**（前台 / 后台 / 锁屏都照样发）。正确对照：
+
+| 状态 | 3s 心跳 | 整机耗电 |
+| --- | --- | --- |
+| 后台熄屏 + 组网开 | 一直发 | 基线 + VNT 增量 |
+| 前台亮屏 + 组网开 | 一样发 | 更高（屏幕 + UI） |
+| 前台组网页 vs 后台：VNT 模块额外增量 | — | ≈0 |
+
+**② 心跳不是 REST / HTTP**：是 Rust 硬编码的 VNT 自有 **UDP 控制包**
+（`Protocol::Control` + `control_packet::Protocol::Ping`，`12+4+ENCRYPTION_RESERVED` 字节，
+`heartbeat.rs:211-225`），非 HTTP / JSON / WebSocket。§9.2 的「Rust 硬编码」勿读作 REST。
+
+**③ 启动 / 停止条件（v1.2.9 源码取证）**
+`Vnt(config,callback)` → native `new0` → `ChannelContext::new` 里
+`scheduler.timeout(3s, start)`（`vnt/src/core/conn.rs:256`）→ 3 秒后 `start()` 第一件事
+`maintain::heartbeat(...)`（`conn.rs:306`）→ `heartbeat()` **先立刻发一轮** `heartbeat0()`，
+再 `scheduler.timeout(3s, 递归)`（`heartbeat.rs:27-44`），无条件循环。
+⇒ **从「开始组网」约 3 秒后，到「停止组网」为止，每 3 秒一轮**；
+与是否连上服务端、有无业务流量、App 前后台 / 锁屏**全部无关**。
+停止：`Vnt.stop()` → `stop_manager.stop()`（`conn.rs:415-416`）→ Scheduler listener 触发
+（`util/scheduler.rs:45`）→ `timeout` 返回 false → 循环退出。
+本项目 `START_NOT_STICKY` ⇒ 进程被杀也不复活，心跳随之停止。
+
+**④ 没连上服务器时会不会发？会，而且不是「断线才开始发」**
+`heartbeat0()` 给网关那次**没有 offline 检查**（`heartbeat.rs:61-73`），UDP 下
+`send_default` 直接 `send_main_udp(...)` 真发包（`channel/context.rs:194-200`），
+服务端不可达只是没回应。只有两处离线跳过：`heartbeat.rs:105`（在线但无路由的 peer 探测）、
+`heartbeat.rs:172`（`client_relay0` 中继探测）。
+且断线时另有更密的包：`idle` 5s 网关检查触发握手重连、`punch` 5/6/7s 打洞、
+`addr_request` 1s/19s STUN ⇒ **断线不省电，可能更耗**。
+心跳的作用是保 NAT/UDP 映射、维持 P2P 路由（10s 无数据判死，`conn.rs:315`）、
+下发节点列表 epoch（`heartbeat.rs:245`），**不是**「探测服务器在不在」。
+
+### 9.10 各周期任务的作用与互通约束（2026-11-02 追问补充）
+
+> ⚠️ **勘误**：本节 ③ 修正 §9.9④ 中「且断线时另有更密的包……断线不省电，可能更耗」这句表述。
+> 该句原文保留不改（遵守改前留档），以本节 ③ 为准。
+
+**① 3s 心跳的四个作用（不是「探测服务器在不在」）**
+1. **保 NAT/UDP 映射**：UDP 无连接，NAT 空闲超时（移动网常见 30s~5min）后下行包被丢弃；
+   3s 远小于任何 NAT 超时，非常保守。
+2. **维持路由存活**：本地 `Idle::new(Duration::from_secs(10))`（`conn.rs:315`）按
+   `last_read >= 10s` 删路由；网关路由过期还会触发 `Disconnect` 进重连
+   （`maintain/idle.rs:104-111`、`channel/idle.rs:35`）。
+3. **在线状态 / 节点列表同步**：发给网关的心跳带 `device_list` epoch（`heartbeat.rs:245`），
+   对端靠收包判断你在线。
+4. **P2P 链路探测载体**：发给每条已建路由，以及「在线但无路由」的 peer（经服务端转发）。
+
+**② 各周期任务作用一览（v1.2.9 实证）**
+
+| 任务 | 周期 | 作用 | 离线时发包 |
+| --- | --- | --- | --- |
+| `heartbeat` | **3s** | 上述四项 | 网关包照发；peer 探测跳过 |
+| `idle_gateway` | **5s** | **断线重连**：离线时重新 DNS 解析服务端域名（应对服务端 IP 变化）、发握手包、TCP 模式重建连接（`idle.rs:129-155`） | **是**（唯一新增的） |
+| `addr_request` / STUN | **1s**（各 UDP 通道轮转）/ **19s**（最后一通道）/ 对称 NAT 拿到公网端口后 **600s** | 向服务端 AddrRequest / STUN 探测，拿本机公网 IP:端口、判断 NAT 类型，供打洞用 | **否**（`:84-86` 离线 return） |
+| `punch` | 在线 **5/6/7s** 抖动 / 离线 5s | P2P 打洞：交换公网地址尝试建直连；抖动避免多端撞车；通道够了就不再打（`punch.rs:253-265`） | **否**（`:179-196` 离线只 sleep） |
+| `retrieve_nat_type` | **600s** | 重测 NAT 类型（锥形/对称），应对 WiFi↔LTE 切换 | 独立线程，与在线无关 |
+| `client_relay` | **30s** | 探测「借道其它客户端中继」，减少对服务端中继的依赖 | **否**（`heartbeat.rs:172` 离线 return） |
+| `idle_route` | 本地 **100ms / 3000ms** | 检查 10s 无数据的路由并删除；**不发网络包**，只耗 CPU 唤醒 | 本地空转 |
+| `up_status` | 首 **60s**，之后 **600s** | 上报流量统计、P2P 列表、NAT 类型给服务端（管理/统计用） | **否**（`:68` 离线 return） |
+
+**③ 勘误：断线时到底发不发这些包**
+离线时 `addr_request`、`punch`、`client_relay`、`up_status` **都有 offline 检查、不发网络包**；
+只有 `idle_gateway` 5s 重连（DNS + 握手）新增发包，心跳网关包照发。
+⇒ 准确说法：**断线时发包总量比在线少，但不会因此省电**（3s 心跳照发、5s 重连不停且含 DNS 查询）。
+不能靠「让它掉线」来省电。
+
+**④ ★ 互通约束：为什么「心跳不能改」**
+- 本地 `Idle` 10s 判死（`conn.rs:315`）+ **对端（存量 1.x 客户端）的 `Idle` 同样是 10s 硬编码**：
+  它们靠收到我们的心跳包刷新路由 `last_read`。单方面把 3s 放宽 → 对端 10s 收不到 →
+  删路由 → 判定我们离线 → **互通中断**。而服务端不能升级、存量客户端不能改。
+- 服务端侧（vnts v1.2.9）无显式客户端心跳超时常量，只有会话缓存 TTL
+  （`cipher_session` 120s / `addr_session` 20s / `ip_session` 24h，`core/store/cache.rs:117-127`）。
+- ⇒ **「放宽心跳」在「必须互通存量 1.x」前提下基本堵死**，最多 3s→4~5s 的微小调整
+  （且丢包容错变差），收益很小。可安全改的只有「本地探测类任务」与「发包相位」，
+  因为它们不改变对外协议语义。
+
+> **变更记录（2026-11-02，改后回填）**：原 ④「省电路径分层」、⑥「重编译可做/不可做清单」、
+> ⑦「分类勘误 + 用户决策」三段，因用户确立硬约束「**无论什么状态下虚拟网内必须可互访、
+> 且其它设备可访问本机，可接受延迟、不接受永远访问不到**」而整体作废，已删除。
+> 事实部分（① 心跳四作用 / ② 周期任务表 / ③ 断线勘误 / ④ 互通约束）与 §9.1~§9.9 全部保留；
+> 代码里的 `useChannel` 预留字段与 `VntConfigBuilder.kt:56` 透传未动。
+> 改前原文逐字留档 + 回滚配方见 `.workbuddy/memory/2026-11-02.md` 末尾「改前留档」段。
