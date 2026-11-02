@@ -195,7 +195,13 @@ class EchoShellCommand(
 
     override fun start(channel: ChannelSession, env: Environment) {
         val pb = ProcessBuilder(argv)
-        if (workDir != null) pb.directory(java.io.File(workDir))
+        if (workDir != null) {
+            pb.directory(java.io.File(workDir))
+            // ★ HOME 必须显式设置（0.2.36 补充）：App 进程环境无 HOME，而 mksh 的
+            //   `cd ~`、裸 `cd`、~ 路径展开全依赖 $HOME——不设则这些快捷方式全失效。
+            //   （`cd -` 走 OLDPWD，是 shell 自管的开箱即用能力，与此无关。）
+            pb.environment()["HOME"] = workDir
+        }
         pb.environment().putIfAbsent("PATH", "/system/bin:/system/xbin:/vendor/bin")
         // ★ stderr 合并进 stdout（OS 层）：真机实测 sshd 提供的独立 err 流写不达客户端
         //   （CHILD_ERR 实验实锤），而 mksh -i 的警告/提示符全走 stderr —— 合并后统一走
