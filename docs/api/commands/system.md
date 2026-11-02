@@ -144,9 +144,9 @@ App 下次冷启动由 `MainActivity.onStart` → `VntAutoStart.tryStart()` 自�
 - 状态来源 = `vnt_status` **按需查询命令的回执**（`ws.py:446` 的 `command_result` 广播已带 `command` / `message`），按 `device_id` 缓存快照。
   `VntMeshController.statusText()` 固定前缀解析：`运行中 ·`→running、`正在建立连接（`→starting、`正在停止（`→stopping、`未连接`→stopped、`异常：`→error，其余→unknown。
 - 自动探测时机：选中 `vnt_start`/`vnt_stop` 卡片（防重复 key + 800ms 防抖）、切换目标设备、顶栏「刷新设备状态」按钮、这两条命令回执后 1.5s。
-- 禁用规则：`vnt_start` 仅 `stopped`/`error` 可用；`vnt_stop` 仅 `running`/`starting`/`stopping` 可用；`vnt_status` 自身不受限。
+- 禁用规则：`vnt_start` 仅 `stopped`/`error` 可用；`vnt_stop` 仅 `running`/`starting`/`stopping` 可用；`vnt_status` 自身不受限；**`unknown`（状态未知 / 从未查询 / 回执解析失败）一律禁用**。
   UI = 卡片置灰 + 「下发命令」按钮禁用 + 参数区状态条（含采集时刻与「刷新」）+ 顶栏组网状态徽标 + `blockHint` 原因文案。
-- **unknown 不硬禁用**：状态是快照不是事实——设备端手动操作、冷启动自动组网、系统撤销 VPN 授权、native 崩溃、回执丢失都会让缓存失真。硬禁用会变成「想开开不了」，与「虚拟网必可达」冲突；改为显示警示并保留下发出口。
+- **unknown 禁用（2026-11-02 用户拍板，推翻 v0.2.33 的「不硬禁用」）**：v0.2.33 曾因「快照可能失真 ⇒ 硬禁用会想开开不了」放行 unknown；用户实测认为「状态未知时仍允许下发」不合理 ⇒ 改为一律禁用，先点「刷新状态」取得确态再操作。**出口仍在**：unknown 时命令被禁用 ⇒ 强制下发开关可勾选（正是「命令可用时置灰」规则的反面），二次确认后可直接下发 ⇒ 不违反「必可达」硬约束。详见下方 ④。
 
 **强制下发（调研结论：需要，且必须二次确认）**：
 
@@ -186,7 +186,15 @@ v0.2.33 的 `showForceSend` 对 VNT 两条恒定显示。本轮按用户拍板�
 
 实现上把「纯状态判定」`isStateBlocked()` 与 `isBlocked()`（后者会被 `forceSend` 绕过）拆开，`forceSendDisabled = 选中 VNT 两条 && !isStateBlocked(cmd)`；并 `watch(forceSendDisabled)` 在命令由禁用变可用时把 `forceSend` 复位 `false`，否则开关虽置灰、残留勾选仍会误触发二次确认。**音乐 3 条 / 采集互斥的强制下发保持 v0.2.33 原行为不变。**
 
-**生效方式**：服务端改动需**重启服务器**；后台改动需**重新构建部署 `admin/dist` + 刷新页面**；APK 不涉及、无需重装。
+**④ 状态未知时禁用下发（2026-11-02 用户拍板，推翻 ① 节的「unknown 不硬禁用」）**
+
+用户实测发现：状态未知时 `vnt_start` / `vnt_stop` 的「下发命令」按钮仍可点，判定不合理 ⇒ 改为 **unknown 一律禁用**。
+
+实现：`isStateBlocked()` 删掉 `if (vntState.value === 'unknown') return false` 特判；因 `VNT_STATE_RULES` 不含 `unknown`，`!vntAllowed.includes('unknown')` 自然为 `true` ⇒ 卡片置灰 + 按钮禁用。`blockHint` 改为「下发按钮已禁用，请先点『刷新状态』」。覆盖三种 unknown 来源：从未查询（`vntSnapshot` 为空、徽标「未查询」）、探测回执超时/下发失败、回执文案解析失败。
+
+**与 ③ 的自洽**：unknown 时命令被禁用 ⇒ `forceSendDisabled = !isStateBlocked = false` ⇒ 强制下发**可勾选**，配合二次确认仍是唯一出口 ⇒ 不违反「必可达（可接受延迟、不可永远访问不到）」硬约束。`watch(forceSendDisabled)` 只在置灰变 true 时复位 `forceSend`，unknown 下恒为 false，不会误清用户勾选。**音乐 3 条 / 采集互斥不受影响。**
+
+**生效方式**：①②③ 的服务端改动需**重启服务器**；①②③④ 的后台改动需**重新构建部署 `admin/dist` + 刷新页面**；④ 仅前端、服务端与 APK 均不涉及；全流程 APK 不涉及、无需重装。
 
 ### vnt_status 组网状态
 

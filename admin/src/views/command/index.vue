@@ -781,12 +781,14 @@ function progressTextOf(row: { status: string; command_id: string }): string | n
 }
 
 // ---------------------------------------------------------------------------
-// VNT 组网状态联动（v0.2.33）
+// VNT 组网状态联动（v0.2.33；2026-11-02 修订：unknown 禁用）
 // 状态来源 = vnt_status 回执（按需查询命令，不是实时通道），按设备缓存。
 // ★ 状态只是「查询那一刻的快照」不是事实：设备端手动操作 / 冷启动自动组网 /
-//   系统撤销 VPN 授权 / native 崩溃 / 回执丢失都会让缓存失真。因此 unknown 一律
-//   不硬禁用（否则「想开开不了」，与「虚拟网必可达」硬约束冲突），并提供
-//   强制下发 + 二次确认作为兜底出口。
+//   系统撤销 VPN 授权 / native 崩溃 / 回执丢失都会让缓存失真。
+//   用户拍板：状态未知（含从未查询 / 回执解析失败）时一律禁用下发按钮，
+//   避免在对设备真实组网状态毫无把握时盲目下发；此时「强制下发」仍可勾选并二次确认
+//   作为唯一兜底出口（命令被禁用 ⇒ forceSendDisabled=false ⇒ 开关可用），
+//   ⇒ 不违反「虚拟网必可达（可接受延迟、不可永远访问不到）」硬约束。
 // ---------------------------------------------------------------------------
 
 type VntState = 'running' | 'starting' | 'stopping' | 'stopped' | 'error' | 'unknown'
@@ -846,7 +848,7 @@ const selectedIsVntStateCommand = computed(() => {
   return !!name && VNT_STATE_RULES[name] !== undefined
 })
 
-/** 解析 VntMeshController.statusText() 的固定前缀；无法解析一律 unknown（不硬禁用）。 */
+/** 解析 VntMeshController.statusText() 的固定前缀；无法解析一律 unknown（禁用下发，走强制出口）。 */
 function parseVntStatus(message: string): VntState {
   const m = message || ''
   if (m.startsWith('运行中 ·')) return 'running'
@@ -916,7 +918,7 @@ const forceSend = ref(false)
 const showForceSend = computed(() => {
   const cmd = selectedCommand.value
   if (!cmd) return false
-  // v0.2.33：组网状态是快照，失真时不能把「开始/停止」锁死，必须留强制出口
+  // 组网状态未知 / 不匹配时下发按钮均被禁用，强制下发是唯一出口（需二次确认）
   if (VNT_STATE_RULES[cmd.name] !== undefined) return true
   if (MUSIC_STATE_RULES[cmd.name] !== undefined) return true
   // 采集互斥场景：目标设备有采集命令在途时，提供强制下发出口
@@ -980,9 +982,10 @@ function isStateBlocked(cmd: CommandDef): boolean {
     return !musicAllowed.includes(state)
   }
   if (!vntAllowed) return false
-  // unknown 不硬禁用：设备刚上线 / 回执丢失 / 状态无法解析时硬禁用会变成
-  // 「想开开不了」，与「虚拟网必可达」硬约束冲突；保留出口并用 blockHint 警示。
-  if (vntState.value === 'unknown') return false
+  // 2026-11-02 用户拍板：unknown 一律禁用（含从未查询 / 回执超时 / 解析失败）。
+  // VNT_STATE_RULES 不含 unknown ⇒ includes() 为 false ⇒ 这里返回 true（禁用）。
+  // 出口由「强制下发」承担：命令被禁用时 forceSendDisabled=false，开关可勾选 + 二次确认，
+  // 故仍满足「必可达（可接受延迟、不可永远访问不到）」硬约束。
   return !vntAllowed.includes(vntState.value)
 }
 
@@ -1033,7 +1036,7 @@ const blockHint = computed(() => {
       return '强制模式：将忽略后台记录的组网状态直接下发（已二次确认），设备端仍按真实状态执行或忽略重复命令'
     }
     if (vntState.value === 'unknown') {
-      return '尚未取得设备组网状态（或回执超时）：命令未禁用，但请先点「刷新状态」确认；确需直接下发可勾选「强制下发」（需二次确认）'
+      return '尚未取得设备组网状态（从未查询 / 回执超时 / 解析失败）：下发按钮已禁用，请先点「刷新状态」；确需直接下发可勾选「强制下发」（需二次确认）'
     }
     if (!commandBlocked.value) return ''
     const label = VNT_STATE_LABELS[vntState.value]
