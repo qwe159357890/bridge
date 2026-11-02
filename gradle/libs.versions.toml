@@ -40,6 +40,14 @@ mlkitBarcode = "17.3.0"
 # ---- 日志 ----
 timber = "5.0.1"
 
+# ---- SSH 服务器（v0.2.34：Apache MINA SSHD 纯 Java 内嵌，见 docs/research/sshd-integration.md）----
+# 3.0.0-M* 与 2.x API 不兼容，锁定 2.20.x；sshd-mina 替换默认 NIO2 传输层（AsynchronousSocketChannel
+# 是 API 26+，我们 minSdk 24）；java.nio.file 依赖 core library desugaring（desugar_jdk_libs 2.x 含 NIO）。
+sshd = "2.20.0"
+bouncycastle = "1.78.1"
+slf4jAndroid = "1.7.36"
+desugar = "2.1.5"
+
 # ---- 测试 ----
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -95,6 +103,15 @@ mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning"
 
 # 日志
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
+
+# SSH 服务器（sshd-core 含 sshd-common；sshd-mina = I/O 传输层替换；sshd-sftp/sshd-scp = 子系统）
+sshd-core = { group = "org.apache.sshd", name = "sshd-core", version.ref = "sshd" }
+sshd-sftp = { group = "org.apache.sshd", name = "sshd-sftp", version.ref = "sshd" }
+sshd-scp = { group = "org.apache.sshd", name = "sshd-scp", version.ref = "sshd" }
+sshd-mina = { group = "org.apache.sshd", name = "sshd-mina", version.ref = "sshd" }
+bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+slf4j-android = { group = "org.slf4j", name = "slf4j-android", version.ref = "slf4jAndroid" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar" }
 
 # 测试
 junit = { group = "junit", name = "junit", version.ref = "junit" }

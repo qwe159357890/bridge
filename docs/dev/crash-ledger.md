@@ -65,6 +65,7 @@ v0.2.01 改「正常补获」：其它媒体播放即让位、停播自动补获
 | 通知「停止接收」按钮（PendingIntent.getService） | AudioRelayService | 普通 startService | — | ✅ |
 | `CommandModule`×4（screenshot/photo/video/audio 命令） | MediaCaptureService | 全部 try/catch | onStartCommand 主路径挂前台；**并发拒绝路径补挂（v0.2.01 补）**；挂前台异常 catch+stopSelf（v0.2.01 补） | ✅ |
 | `VntMeshController.start`（组网页「开始组网」+ `vnt_start` 命令 + **`VntAutoStart.tryStart` 冷启动自动组网 v0.2.31**，v0.2.30 起） | VntVpnService（specialUse） | try/catch（start 内，三个入口共用） | **onCreate 挂前台 + onStartCommand 每次幂等补挂**；`startForeground` try/catch + 失败 `stopSelf`；返回 `START_NOT_STICKY`（进程被杀不自动复活）；manifest 四件套齐全 | ✅ 按 §5 清单逐条落实；**v0.2.31 新入口**放在 `MainActivity.onStart`（Activity 已可见，避开 Android 12+ 后台 FGS 限制），每实例仅一次、失败不重试，**不新增义务点**（仍走同一个 `start()`）；**v0.2.32 核心换 1.x 后服务类名 / Manifest / 调用点 / 冷启动入口全部未变**，仅内部启动时序改为 native 回调 `generateTun` 里建 TUN，仍不新增义务点 |
+| `SshServerController.start`（APP「设置→连接→SSH 服务」开关 + `ssh_start` 命令 + **`SshAutoStart.tryStart` 自愈链：BOOT/MY_PACKAGE_REPLACED receiver + MainActivity.onStart + START_STICKY 重建**，v0.2.34 起） | SshServerService（specialUse，通知 ID 2103） | try/catch（start 内，全部入口共用） | **onCreate 挂前台 + onStartCommand 每次幂等补挂**；`startForeground` try/catch + 失败 `stopSelf`；返回 `START_STICKY`（**与 VNT 相反**：意愿 enabled=true 时进程被杀后系统重建服务，onStartCommand null intent 分支据此自动重启 sshd）；manifest specialUse + `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` 齐全 | ✅ 按 §5 清单逐条落实；自愈链入口 `SshBootReceiver` 在开机广播（系统豁免后台 FGS 限制）+ `MainActivity.onStart`（Activity 已可见）；`stop()` 走普通 `startService` 且**未运行不拉起**（VNT 僵尸服务同款防护），不新增义务点 |
 
 ### 3.2 其它已消除/已验证的崩溃向量
 

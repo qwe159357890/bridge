@@ -68,6 +68,9 @@
 | `vnt_start` | 开始组网 | [system.md#vnt_start-开始组网](system.md#vnt_start-开始组网) |
 | `vnt_stop` | 停止组网 | [system.md#vnt_stop-停止组网](system.md#vnt_stop-停止组网) |
 | `vnt_status` | 组网状态 | [system.md#vnt_status-组网状态](system.md#vnt_status-组网状态) |
+| `ssh_start` | 启动 SSH 服务 | [system.md#ssh_start-启动-ssh-服务](system.md#ssh_start-启动-ssh-服务) |
+| `ssh_stop` | 停止 SSH 服务 | [system.md#ssh_stop-停止-ssh-服务](system.md#ssh_stop-停止-ssh-服务) |
+| `ssh_status` | SSH 服务状态 | [system.md#ssh_status-ssh-服务状态](system.md#ssh_status-ssh-服务状态) |
 
 ---
 

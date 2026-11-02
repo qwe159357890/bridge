@@ -1,4 +1,4 @@
-# 系统类命令（check_update / vnt_start / vnt_stop / vnt_status）
+# 系统类命令（check_update / vnt_start / vnt_stop / vnt_status / ssh_start / ssh_stop / ssh_status）
 
 > 命令定义单一事实来源：`server/app/core/command_catalog.py` 的 `system` 分类。
 > `upload_log` 见 [../ws-client.md](../ws-client.md) §五/§七。
@@ -217,3 +217,83 @@ v0.2.33 的 `showForceSend` 对 VNT 两条恒定显示。本轮按用户拍板�
 轮询 `Vnt.list() -> PeerRouteInfo[]`（native 侧缓存的路由表）。UI 最长滞后一个刷新周期；
 刷新仅在「App 在前台 + 处于组网页」时进行（进页面立即刷一次，之后 5 秒一次），
 退后台零请求、零定时器。P2P/中继由 `Route.metric == 1` 判定（官方 `ConnectActivity` 同款逻辑）。
+
+---
+
+## SSH 服务器命令（v0.2.34 引入）
+
+> 三条命令走「三步法」：`server/app/core/command_catalog.py` 的 `_cmd()` →
+> `core/core-network/.../ws/Command.kt` 常量 + `CommandModule.kt` 执行器 → 本文档 + README 索引。
+> 调研报告见 [../../research/sshd-integration.md](../../research/sshd-integration.md)，
+> 改前留档台账见 [../ssh-integration-change-ledger.md](../ssh-integration-change-ledger.md)，
+> 交互原型见 `assets/design/ui-mockup-ssh-page.html`。
+
+**架构**：内嵌 **Apache MINA SSHD 2.20.0**（纯 Java，无需 root / 不依赖 dropbear 二进制），
+由 `SshServerService`（`specialUse` 前台服务，通知 ID 2103）常驻。能力 = **SFTP 文件管理 +
+完整 sh 终端 + SCP**，监听 `0.0.0.0:8022`（可改），用户名固定 `bridge`，访问密码首启随机生成
+（APP 状态页展示、可改、SharedPreferences 持久化）。文件系统根 = 全盘 `/sdcard`
+（需「所有文件访问」授权）或应用外部目录（未授权时自动降级，不崩溃）。
+
+**生命周期（enabled / running 分离）**：`SshPrefs.enabled` 是持久化的「用户意愿」，
+`SshServerController.state` 是进程内的「事实状态机」（STOPPED/STARTING/RUNNING/STOPPING/ERROR）。
+完整自愈链 = BOOT_COMPLETED + MY_PACKAGE_REPLACED（`SshBootReceiver`）→
+`MainActivity.onStart`（每实例一次）→ `START_STICKY` 进程重建 → `ssh_start` 命令兜底，
+四条链共用 `SshAutoStart.tryStart()`，三重守卫（意愿为开 / 非 RUNNING·STARTING / 服务未活），
+失败不重试。运行期默认持有 partial WakeLock（可关，防止 CPU suspend 后主动心跳发不出、
+NAT 过期连接半死）。**页面 onDispose 绝不停服务**（与智能控制页相反，同组网页语义）。
+
+### ssh_start 启动 SSH 服务
+
+无参数（端口 / 密码在 APP「设置 → 连接 → SSH 服务」状态页管理）。
+
+**回执与限制**：
+
+- **幂等守卫放最前（v0.2.33 约定）**：`RUNNING`/`STARTING` → `success=false`
+  「重复下发被忽略：SSH 服务已在运行（…）」，**不写任何状态**；`STOPPING` → 提示稍后用 `ssh_status` 确认。
+- 守卫通过后先 `SshPrefs.setEnabled(true)` 写意愿（开机 / 冷启动 / STICKY 重建据此自动恢复），
+  再 `SshServerController.start(context)` → `startForegroundService`（try/catch，
+  Android 12+ 后台受限时回执「启动失败：多为 Android 12+ …」不假装成功）。
+- 成功回执含端口 / 用户名 / 存储档 / PC 连接示例 `ssh -p 8022 bridge@<手机IP>`。
+- 按崩溃台账 §5：`onCreate` 挂前台、`onStartCommand` 每次幂等补挂、
+  `startForeground` try/catch + 失败 `stopSelf`；manifest `specialUse` 声明齐全。
+
+### ssh_stop 停止 SSH 服务
+
+无参数。走普通 `startService(ACTION_STOP)`（无前台义务），服务内部 `sshd.stop(true)`
+（断开全部活动会话）→ 释放 WakeLock → `onStopped()` → `stopSelf()`。
+
+**幂等守卫**：未运行（`STOPPED`/`ERROR`）时设备端直接回 `success=false`
+「重复下发被忽略：当前 SSH 服务未运行（…）；未执行停止、自恢复意愿保持不变」，
+不执行停止、不动意愿。`SshServerController.stop()`（未运行不拉起）+
+`SshServerService.shutdown()` 双重收口，与 VNT 同款「startService 陷阱」防护。
+
+**自恢复意愿**：`ssh_start` 置 `enabled=true`、`ssh_stop` 置 `false`（远程停止即用户明确
+不想再自动拉起）；守卫忽略的重复命令**不动意愿**。与 APP 状态页开关共用同一份记忆。
+
+### ssh_status SSH 服务状态
+
+无参数。回执格式（`SshServerController.statusText()` 固定前缀，后台解析契约）：
+
+```
+运行中 · 端口 8022 · 用户名 bridge · 活动会话 1 · 存储暴露 全盘（/sdcard）（访问密码与 hostkey 指纹见 APP「设置 → 连接 → SSH 服务」状态页）
+```
+
+其它状态：`正在启动（…）` / `正在停止（…）` / `未运行` / `异常：…`。
+只读本地状态快照，不触发网络操作。**密码与 hostkey 指纹刻意不回显**——只在 APP 状态页
+展示，避免留在命令历史与服务器记录里。hostkey（EC P-256）首次生成后持久化，
+PC 端 `known_hosts` 指纹变化即可判定重置 / 中间人。
+
+### 状态联动、幂等守卫与强制下发（v0.2.34，完全对照 VNT v0.2.33 范式）
+
+- 状态来源 = `ssh_status` 按需查询命令的回执（`silent=true` 静默探测不入历史），
+  按 `device_id` 缓存快照。固定前缀解析：`运行中 ·`→running、`正在启动`→starting、
+  `正在停止`→stopping、`未运行`→stopped、`异常：`/`执行失败`→error，其余→**unknown**。
+- 自动探测时机：选中 `ssh_start`/`ssh_stop` 卡片、切换目标设备、顶栏「刷新设备状态」、
+  这两条命令回执后 1.5s（与 VNT 同款 800ms 防抖 + key 防重复）。
+- 禁用规则：`ssh_start` 仅 `stopped`/`error` 可用；`ssh_stop` 仅 `running`/`starting`/`stopping` 可用；
+  `ssh_status` 不受限；**unknown 一律禁用**（2026-11-02 用户拍板）；命令本来可用时强制下发置灰。
+- **强制下发**：勾选 + 二次确认是 unknown / 状态失真时的唯一出口；服务端 `force` 对 SSH
+  不生效，设备端守卫照常按真实状态执行或忽略。
+- **查看详情单独设计**（2026-11-02 分治约定）：`admin/src/components/SshResultDetailDialog.vue`——
+  `ssh_status` 状态快照 KV（端口 / 用户名 / 活动会话 / 存储暴露）；`ssh_start` 结果分类解读 +
+  从回执解析启动信息；`ssh_stop` 停止前状态 + 是否执行停止 + 自恢复意愿（已清除 / 保持不变）。

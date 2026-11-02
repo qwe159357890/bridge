@@ -55,6 +55,9 @@ import my.bridge.com.vnt.VntMeshController
 import my.bridge.com.vnt.VntMeshPrefs
 import my.bridge.com.vnt.VntServerAddress
 import my.bridge.com.vnt.VntStatus
+import my.bridge.com.ssh.SshPrefs
+import my.bridge.com.ssh.SshServerController
+import my.bridge.com.ssh.SshStatus
 import retrofit2.HttpException
 import timber.log.Timber
 import kotlinx.coroutines.CoroutineScope
@@ -233,6 +236,16 @@ object CommandModule {
         Command.VNT_STATUS to CommandExecutor { command ->
             executeVntStatus(command)
         },
+        // ---- SSH 服务器（v0.2.34）：同三步法，状态联动 + 幂等守卫（调研报告 §6.2/§6.3）----
+        Command.SSH_START to CommandExecutor { command ->
+            executeSshStart(context, command)
+        },
+        Command.SSH_STOP to CommandExecutor { command ->
+            executeSshStop(context, command)
+        },
+        Command.SSH_STATUS to CommandExecutor { command ->
+            executeSshStatus(context, command)
+        },
         )
     }
 
@@ -408,6 +421,79 @@ object CommandModule {
             )
         } catch (e: Exception) {
             Timber.e(e, "命令 vnt_status 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** ssh_start：写意愿 + 启动内嵌 SSH 服务器。幂等守卫放最前（v0.2.33 约定）。 */
+    private fun executeSshStart(context: Context, command: Command): CommandResult {
+        return try {
+            val st = SshServerController.state.value.status
+            if (st == SshStatus.RUNNING || st == SshStatus.STARTING) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：SSH 服务已在运行（${SshServerController.statusText()}）；" +
+                        "如需变更端口等配置请先 ssh_stop 再开始",
+                )
+            }
+            if (st == SshStatus.STOPPING) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：正在停止 SSH 服务，请稍后用 ssh_status 确认状态后再试",
+                )
+            }
+            // 意愿置真：开机自启 / 冷启动 / STICKY 重建据此自动恢复
+            SshPrefs.setEnabled(context, true)
+            val launched = SshServerController.start(context)
+            CommandResult(
+                command.commandId, command.command, launched,
+                if (launched) {
+                    "已下发启动 SSH 服务：端口 ${SshPrefs.port(context)} · 用户名 ${SshPrefs.USERNAME} · " +
+                        "访问密码见 APP 状态页 · 存储暴露 ${SshPrefs.storageModeText()}；" +
+                        "用 ssh_status 查状态，PC 连接示例 ssh -p ${SshPrefs.port(context)} ${SshPrefs.USERNAME}@<手机IP>"
+                } else {
+                    "启动失败：多为 Android 12+ 后台启动前台服务受限，详见设备日志；请让 App 回到前台再试"
+                },
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ssh_start 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** ssh_stop：写意愿 + 停止服务（断开全部会话）。未运行时幂等忽略，不假装成功。 */
+    private fun executeSshStop(context: Context, command: Command): CommandResult {
+        return try {
+            val before = SshServerController.statusText()
+            val st = SshServerController.state.value.status
+            if (st == SshStatus.STOPPED || st == SshStatus.ERROR) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：当前 SSH 服务未运行（$before）；未执行停止、自恢复意愿保持不变。" +
+                        "若后台记录与实际不符，请点「刷新状态」或勾选「强制下发」重新确认",
+                )
+            }
+            SshPrefs.setEnabled(context, false)   // 远程 stop 清自恢复意愿
+            SshServerController.stop(context)
+            CommandResult(
+                command.commandId, command.command, true,
+                "已下发停止 SSH 服务（停止前：$before）；已断开全部活动会话、清除自恢复意愿",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ssh_stop 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** ssh_status：只读本地快照，不触发网络操作。 */
+    private fun executeSshStatus(context: Context, command: Command): CommandResult {
+        return try {
+            CommandResult(
+                command.commandId, command.command, true,
+                SshServerController.statusText(),
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ssh_status 执行失败")
             CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
         }
     }

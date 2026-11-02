@@ -41,12 +41,23 @@
                 🕸️ 组网：{{ vntStateText }}
               </el-tag>
             </el-tooltip>
+            <!-- v0.2.34：SSH 服务状态徽标（ssh_status 回执快照，悬停看完整回执） -->
+            <el-tooltip
+              v-if="form.deviceId"
+              :content="sshSnapshot?.message || '尚未取得 SSH 状态，点右侧刷新按钮查询'"
+              placement="top"
+              :show-after="300"
+            >
+              <el-tag :type="sshTagType" size="small" class="music-tag">
+                🔐 SSH：{{ sshStateText }}
+              </el-tag>
+            </el-tooltip>
             <el-button
               v-if="form.deviceId"
               :icon="Refresh"
               size="small"
               circle
-              title="刷新设备状态（播放 / 组网）"
+              title="刷新设备状态（播放 / 组网 / SSH）"
               @click="refreshDeviceStates"
             />
           </div>
@@ -295,6 +306,9 @@
     <!-- VNT 三条命令的「查看详情」弹窗（按命令分三套布局，见组件内注释） -->
     <VntResultDetailDialog ref="vntDetail" :device-names="deviceNameMap" />
 
+    <!-- SSH 三条命令的「查看详情」弹窗（v0.2.34，同款分治约定） -->
+    <SshResultDetailDialog ref="sshDetail" :device-names="deviceNameMap" />
+
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -356,13 +370,13 @@
               >
                 查看
               </el-button>
-              <!-- v0.2.33+：VNT 三条命令的回执单独设计详情弹窗；pending 行不显示 -->
+              <!-- v0.2.33+：VNT / SSH 命令的回执单独设计详情弹窗；pending 行不显示 -->
               <el-button
-                v-if="canViewVntDetail(row)"
+                v-if="canViewVntDetail(row) || canViewSshDetail(row)"
                 size="small"
                 type="primary"
                 link
-                @click="vntDetail?.show(row)"
+                @click="canViewVntDetail(row) ? vntDetail?.show(row) : sshDetail?.show(row)"
               >
                 查看详情
               </el-button>
@@ -421,6 +435,7 @@ import VolumeResultCard from '@/components/VolumeResultCard.vue'
 import { parseVolumeMessage, volumeCurrentText, type VolumeSnapshot } from '@/utils/volume'
 import StreamPlayerCard from '@/components/StreamPlayerCard.vue'
 import VntResultDetailDialog from '@/components/VntResultDetailDialog.vue'
+import SshResultDetailDialog from '@/components/SshResultDetailDialog.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -440,6 +455,13 @@ const VNT_DETAIL_COMMANDS = ['vnt_status', 'vnt_start', 'vnt_stop']
 const vntDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
 function canViewVntDetail(row: CommandRecord): boolean {
   return VNT_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
+}
+
+// SSH 三条命令的「查看详情」（v0.2.34）：同款分治约定，见 SshResultDetailDialog.vue。
+const SSH_DETAIL_COMMANDS = ['ssh_status', 'ssh_start', 'ssh_stop']
+const sshDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
+function canViewSshDetail(row: CommandRecord): boolean {
+  return SSH_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
 }
 
 // ---------------------------------------------------------------------------
@@ -881,10 +903,11 @@ function refreshVntStatus() {
   })
 }
 
-/** 顶栏刷新按钮：同时刷新播放状态与组网状态。 */
+/** 顶栏刷新按钮：同时刷新播放状态、组网状态与 SSH 状态。 */
 function refreshDeviceStates() {
   loadMusicState()
   refreshVntStatus()
+  refreshSshStatus()
 }
 
 // 选中「开始/停止组网」或切换设备时自动探测一次（与音量 get_volume 同款范式）
@@ -899,6 +922,102 @@ watch(vntAutoKey, (key) => {
   refreshVntStatus()
 })
 
+// ---------------------------------------------------------------------------
+// SSH 服务状态联动（v0.2.34）：完全对照 VNT 联动范式（v0.2.33 约定 + 修订）。
+// 状态来源 = ssh_status 回执快照，按设备缓存；unknown 一律禁用下发，
+// 强制下发（勾选 + 二次确认）是唯一出口，不违反「必可达」硬约束。
+// 客户端 SshServerController.statusText() 固定前缀：
+//   '运行中 ·' / '正在启动（…）' / '正在停止（…）' / '未运行' / '异常：…'
+// ---------------------------------------------------------------------------
+
+/** SSH 复用 VntState 五态口径（标签另行定义，措辞与客户端文案一致）。 */
+type SshState = VntState
+
+/** 需要按 SSH 状态限制下发的命令 → 允许的设备状态。ssh_status 自身不受限。 */
+const SSH_STATE_RULES: Record<string, SshState[]> = {
+  ssh_start: ['stopped', 'error'],
+  ssh_stop: ['running', 'starting', 'stopping'],
+}
+
+const SSH_STATE_LABELS: Record<SshState, string> = {
+  running: '运行中',
+  starting: '正在启动',
+  stopping: '正在停止',
+  stopped: '未运行',
+  error: '异常',
+  unknown: '未知',
+}
+
+interface SshSnapshot {
+  state: SshState
+  /** 原始回执文案（悬停徽标看全文）。 */
+  message: string
+  /** 采集时刻（毫秒），供用户判断快照有多旧。 */
+  at: number
+}
+
+const sshSnapshots = ref<Record<string, SshSnapshot>>({})
+const sshSnapshot = computed<SshSnapshot | null>(() => sshSnapshots.value[form.deviceId] ?? null)
+const sshState = computed<SshState>(() => sshSnapshot.value?.state ?? 'unknown')
+const sshStateText = computed(() => {
+  const snap = sshSnapshot.value
+  if (!snap) return '未查询'
+  if (snap.state === 'unknown') return snap.message ? `未知（${snap.message}）` : '未知'
+  return SSH_STATE_LABELS[snap.state]
+})
+const sshTagType = computed(() => {
+  switch (sshState.value) {
+    case 'running':
+      return 'success'
+    case 'starting':
+    case 'stopping':
+      return 'warning'
+    case 'error':
+      return 'danger'
+    default:
+      return 'info'
+  }
+})
+
+/** 解析 SshServerController.statusText() 的固定前缀；无法解析一律 unknown（禁用下发，走强制出口）。 */
+function parseSshStatus(message: string): SshState {
+  const m = message || ''
+  if (m.startsWith('运行中 ·')) return 'running'
+  if (m.startsWith('正在启动')) return 'starting'
+  if (m.startsWith('正在停止')) return 'stopping'
+  if (m.startsWith('未运行')) return 'stopped'
+  if (m.startsWith('异常：') || m.startsWith('执行失败')) return 'error'
+  return 'unknown'
+}
+
+function setSshSnapshot(deviceId: string, state: SshState, message: string) {
+  sshSnapshots.value = { ...sshSnapshots.value, [deviceId]: { state, message, at: Date.now() } }
+}
+
+/** 下发 ssh_status 探测（回执经 WS command_result 流入）。800ms 防抖，silent=true 不入历史。 */
+let lastSshProbeAt = 0
+function refreshSshStatus() {
+  if (!form.deviceId) return
+  const now = Date.now()
+  if (now - lastSshProbeAt < 800) return
+  lastSshProbeAt = now
+  sendCommand(form.deviceId, 'ssh_status', {}, false, true).catch(() => {
+    setSshSnapshot(form.deviceId, 'unknown', 'SSH 状态查询下发失败')
+  })
+}
+
+// 选中「启动/停止 SSH 服务」或切换设备时自动探测一次（与 vntAutoKey 同款范式）
+let sshQueryKey = ''
+const sshAutoKey = computed(() => {
+  const name = selectedCommand.value?.name
+  return name && SSH_STATE_RULES[name] && form.deviceId ? `${form.deviceId}:${name}` : ''
+})
+watch(sshAutoKey, (key) => {
+  if (!key || key === sshQueryKey) return
+  sshQueryKey = key
+  refreshSshStatus()
+})
+
 /** 控制类命令允许下发的设备状态（播放音乐不受限，设备在线即可）。 */
 const MUSIC_STATE_RULES: Record<string, string[]> = {
   pause_music: ['playing'],
@@ -911,26 +1030,31 @@ const forceSend = ref(false)
 
 /**
  * 强制下发开关的显示范围：音乐控制命令（2026-10-25 约定）、
- * v0.2.33 新增的 VNT 开始/停止组网（状态快照可能失真，需留兜底出口）、
+ * v0.2.33 新增的 VNT 开始/停止组网、v0.2.34 新增的 SSH 启动/停止（状态快照可能失真，需留兜底出口）、
  * 采集互斥在途时。其余命令一律不显示。
- * ★ 显示 ≠ 可用：VNT 两条在命令本来可下发时由 forceSendDisabled 置灰。
+ * ★ 显示 ≠ 可用：VNT / SSH 两条在命令本来可下发时由 forceSendDisabled 置灰。
  */
 const showForceSend = computed(() => {
   const cmd = selectedCommand.value
   if (!cmd) return false
-  // 组网状态未知 / 不匹配时下发按钮均被禁用，强制下发是唯一出口（需二次确认）
+  // 状态未知 / 不匹配时下发按钮均被禁用，强制下发是唯一出口（需二次确认）
   if (VNT_STATE_RULES[cmd.name] !== undefined) return true
+  if (SSH_STATE_RULES[cmd.name] !== undefined) return true
   if (MUSIC_STATE_RULES[cmd.name] !== undefined) return true
   // 采集互斥场景：目标设备有采集命令在途时，提供强制下发出口
   return CAPTURE_COMMANDS.includes(cmd.name) && !!pendingCapture.value
 })
 
-/** 强制下发 tooltip 按命令类别切换说明（组网命令需二次确认，见 handleSend）。 */
+/** 强制下发 tooltip 按命令类别切换说明（VNT / SSH 命令需二次确认，见 handleSend）。 */
 const forceSendTip = computed(() => {
   const name = selectedCommand.value?.name
   if (name && VNT_STATE_RULES[name] !== undefined) {
     if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
     return '开启后忽略后台记录的组网状态，直接下发开始/停止组网命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
+  }
+  if (name && SSH_STATE_RULES[name] !== undefined) {
+    if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
+    return '开启后忽略后台记录的 SSH 状态，直接下发启动/停止 SSH 命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
   }
   return '开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）'
 })
@@ -975,18 +1099,18 @@ const mediaButtonText = computed(() => {
 function isStateBlocked(cmd: CommandDef): boolean {
   const musicAllowed = MUSIC_STATE_RULES[cmd.name]
   const vntAllowed = VNT_STATE_RULES[cmd.name]
-  if (!musicAllowed && !vntAllowed) return false
+  const sshAllowed = SSH_STATE_RULES[cmd.name]
+  if (!musicAllowed && !vntAllowed && !sshAllowed) return false
   if (!form.deviceId) return true
   if (musicAllowed) {
     const state = musicState.value?.state ?? 'unknown'
     return !musicAllowed.includes(state)
   }
-  if (!vntAllowed) return false
   // 2026-11-02 用户拍板：unknown 一律禁用（含从未查询 / 回执超时 / 解析失败）。
-  // VNT_STATE_RULES 不含 unknown ⇒ includes() 为 false ⇒ 这里返回 true（禁用）。
-  // 出口由「强制下发」承担：命令被禁用时 forceSendDisabled=false，开关可勾选 + 二次确认，
-  // 故仍满足「必可达（可接受延迟、不可永远访问不到）」硬约束。
-  return !vntAllowed.includes(vntState.value)
+  // 状态规则表不含 unknown ⇒ includes() 为 false ⇒ 返回 true（禁用）。
+  // 出口由「强制下发」承担：命令被禁用时 forceSendDisabled=false，开关可勾选 + 二次确认。
+  if (vntAllowed) return !vntAllowed.includes(vntState.value)
+  return !sshAllowed!.includes(sshState.value)
 }
 
 /** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
@@ -996,13 +1120,16 @@ function isBlocked(cmd: CommandDef): boolean {
 }
 
 /**
- * v0.2.33+（用户 2026-11-02 拍板）：VNT 两条在「下发命令本来可用」时，
+ * v0.2.33+（用户 2026-11-02 拍板）：VNT / SSH 命令在「下发命令本来可用」时，
  * 强制下发置灰不可用——按钮能直接点就不需要强制下发。开关仍显示（不隐藏）。
  * 音乐 3 条 / 采集互斥保持 v0.2.33 原行为，不受影响。
  */
 const forceSendDisabled = computed(() => {
   const cmd = selectedCommand.value
-  if (!cmd || VNT_STATE_RULES[cmd.name] === undefined) return false
+  if (!cmd) return false
+  const isStateCommand =
+    VNT_STATE_RULES[cmd.name] !== undefined || SSH_STATE_RULES[cmd.name] !== undefined
+  if (!isStateCommand) return false
   return !isStateBlocked(cmd)
 })
 
@@ -1045,6 +1172,21 @@ const blockHint = computed(() => {
     }
     return `设备当前「${label}」，无需停止组网（重复下发会清除开机自动组网记忆）；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
   }
+  // v0.2.34：SSH 状态联动提示（同款范式，与组网提示不重叠）
+  if (SSH_STATE_RULES[selectedCommand.value.name]) {
+    if (forceSend.value) {
+      return '强制模式：将忽略后台记录的 SSH 状态直接下发（已二次确认），设备端仍按真实状态执行或忽略重复命令'
+    }
+    if (sshState.value === 'unknown') {
+      return '尚未取得设备 SSH 状态（从未查询 / 回执超时 / 解析失败）：下发按钮已禁用，请先点「刷新状态」；确需直接下发可勾选「强制下发」（需二次确认）'
+    }
+    if (!commandBlocked.value) return ''
+    const label = SSH_STATE_LABELS[sshState.value]
+    if (selectedCommand.value.name === 'ssh_start') {
+      return `设备当前「${label}」，无需再次启动 SSH 服务；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+    }
+    return `设备当前「${label}」，无需停止 SSH 服务（重复下发不改变自恢复意愿）；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+  }
   if (!MUSIC_STATE_RULES[selectedCommand.value.name]) return ''
   if (forceSend.value) {
     return '强制模式：命令将直接下发，由设备按真实状态执行，状态不匹配会回执失败'
@@ -1081,6 +1223,7 @@ watch(
   () => {
     forceSend.value = false // 切换目标设备时重置强制下发，防止残留开启误操作
     vntQueryKey = '' // v0.2.33：换设备后允许重新自动探测组网状态
+    sshQueryKey = '' // v0.2.34：换设备后允许重新自动探测 SSH 状态
     pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
     locationCard.value?.hide()
     volumeCard.value?.hide() // 音量卡片随设备切换关闭（新设备需重新获取）
@@ -1323,13 +1466,16 @@ async function handleSend() {
     ElMessage.warning('请选择命令')
     return
   }
-  // v0.2.33：组网命令的「强制下发」必须二次确认。状态是快照，强制下发会绕过
+  // v0.2.33+：VNT / SSH 命令的「强制下发」必须二次确认。状态是快照，强制下发会绕过
   // 按钮禁用，需让用户明确看到后台记录的状态并自行核对设备真实状态。
-  if (forceSend.value && VNT_STATE_RULES[cmd.name] !== undefined) {
+  if (forceSend.value && (VNT_STATE_RULES[cmd.name] !== undefined || SSH_STATE_RULES[cmd.name] !== undefined)) {
+    const isVnt = VNT_STATE_RULES[cmd.name] !== undefined
+    const stateText = isVnt ? vntStateText.value : sshStateText.value
+    const stateName = isVnt ? '组网' : 'SSH'
     try {
       await ElMessageBox.confirm(
-        `后台记录的组网状态为「${vntStateText.value}」。本次将忽略该状态直接下发「${cmd.label}」。` +
-          '请确认设备真实状态后再继续：重复命令不会产生第二次组网/停止，且可能被设备端守卫忽略。',
+        `后台记录的${stateName}状态为「${stateText}」。本次将忽略该状态直接下发「${cmd.label}」。` +
+          '请确认设备真实状态后再继续：重复命令不会产生第二次启动/停止，且可能被设备端守卫忽略。',
         '强制下发确认',
         {
           confirmButtonText: '确认强制下发',
@@ -1468,6 +1614,27 @@ function connectWS() {
             if (form.deviceId === dev) {
               lastVntProbeAt = 0 // 绕过防抖，确保这次探测一定发出
               refreshVntStatus()
+            }
+          }, 1500)
+        }
+        // v0.2.34：ssh_status 回执 → 解析并缓存 SSH 状态，驱动启动/停止按钮联动
+        if (
+          msg.data.command === 'ssh_status' &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const state = msg.data.success ? parseSshStatus(msg.data.message || '') : 'unknown'
+          setSshSnapshot(msg.data.device_id, state, msg.data.message || '')
+        }
+        // SSH 启动/停止回执后自动重新探测（与 VNT 同款 1.5s 延迟重查）
+        if (
+          (msg.data.command === 'ssh_start' || msg.data.command === 'ssh_stop') &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const dev = msg.data.device_id as string
+          window.setTimeout(() => {
+            if (form.deviceId === dev) {
+              lastSshProbeAt = 0 // 绕过防抖，确保这次探测一定发出
+              refreshSshStatus()
             }
           }, 1500)
         }

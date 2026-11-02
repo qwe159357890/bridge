@@ -1341,6 +1341,12 @@ fun ConnectionSettings() {
         item {
             RelaySwitchSettings()
         }
+
+        // ===== SSH 服务分区（v0.2.34：内嵌 sshd，入口卡片 + 详情页见 SshPages.kt）=====
+        item { SectionTitle("SSH 服务") }
+        item {
+            SshSettingsSection()
+        }
     }
 
     // 昵称编辑弹窗

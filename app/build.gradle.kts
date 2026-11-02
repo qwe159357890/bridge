@@ -20,7 +20,7 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.2.33"
+        versionName = "0.2.34"
 
         // VNT 组网（v0.2.32）：用户自建 VNTS 与存量客户端全为 1.x、必须互通 ⇒ 集成
         // 官方最后一个 Java JNI 版 VntApp v1.2.9。该版本仓库内只带 2 套 ABI 的
@@ -66,11 +66,28 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // SSH 服务器（v0.2.34）：MINA SSHD 大量使用 java.nio.file.*（API 26+ 才有），
+        // core library desugaring（desugar_jdk_libs 2.x 含 NIO）使其在 minSdk 24 可用。
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    // SSH 服务器：sshd jar 内带 META-INF/DEPENDENCIES 等引发打包冲突（社区实锤
+    // 「3 files found with path 'META-INF/DEPENDENCIES'」），显式排除。
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/ASL2.0",
+            )
+        }
     }
 }
 
@@ -120,6 +137,17 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
     implementation(libs.mlkit.barcode.scanning)
+
+    // ---- SSH 服务器（v0.2.34）：Apache MINA SSHD 2.20.x 纯 Java 内嵌 ----
+    // 传输层用 sshd-mina（默认 NIO2 的 AsynchronousSocketChannel 是 API 26+，minSdk 24 不可用）；
+    // BouncyCastle 供 ed25519/部分 KEX 使用（Android 9+ 系统 BC provider 被弃用，服务启动时重装）。
+    implementation(libs.sshd.core)
+    implementation(libs.sshd.sftp)
+    implementation(libs.sshd.scp)
+    implementation(libs.sshd.mina)
+    implementation(libs.bouncycastle)
+    implementation(libs.slf4j.android)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

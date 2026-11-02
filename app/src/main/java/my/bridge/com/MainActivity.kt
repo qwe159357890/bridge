@@ -39,6 +39,9 @@ class MainActivity : ComponentActivity() {
     /** v0.2.31：自动组网每个 Activity 实例只尝试一次，避免旋转/回前台重复触发。 */
     private var vntAutoStartAttempted = false
 
+    /** v0.2.34：SSH 服务冷启动恢复，同上每实例只尝试一次。 */
+    private var sshAutoStartAttempted = false
+
     /** 批量申请危险权限（返回 Map<权限, 是否授予>）。 */
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
@@ -126,6 +129,10 @@ class MainActivity : ComponentActivity() {
         if (!vntAutoStartAttempted) {
             vntAutoStartAttempted = true
             VntAutoStart.tryStart(this)
+        }
+        if (!sshAutoStartAttempted) {
+            sshAutoStartAttempted = true
+            my.bridge.com.ssh.SshAutoStart.tryStart(this)
         }
     }
 

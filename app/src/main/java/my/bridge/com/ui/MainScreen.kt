@@ -230,6 +230,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     onTabChange = { settingsTab = it },
                 )
             }
+            // SSH 服务状态页（v0.2.34）：设置→连接页卡片进入的独立覆盖层（无 NavHost，
+            // 照项目状态驱动惯例）。SSH 页内注册的 BackHandler 后组合、优先接管返回键。
+            if (SshUiState.showPage) {
+                SshServerPage()
+            }
             // 退出提醒冒泡（内容区底部居中，自动 2 秒消失）。
             // v0.1.57 美化：品牌蓝图标圆徽 + 深色渐变胶囊 + 投影（用户要求美观，
             // 旧版是纯色块白字毫无设计感）

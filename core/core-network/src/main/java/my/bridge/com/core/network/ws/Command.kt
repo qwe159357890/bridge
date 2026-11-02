@@ -54,6 +54,10 @@ data class Command(
         const val VNT_START = "vnt_start"
         const val VNT_STOP = "vnt_stop"
         const val VNT_STATUS = "vnt_status"
+        // ---- SSH 服务器（v0.2.34：内嵌 sshd，SFTP 文件管理 + 远程终端）----
+        const val SSH_START = "ssh_start"
+        const val SSH_STOP = "ssh_stop"
+        const val SSH_STATUS = "ssh_status"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

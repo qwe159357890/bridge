@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge · SSH 服务 UI 原型</title>
+<style>
+  :root {
+    --brand: #1A6EE8;
+    --brand-soft: #EAF2FE;
+    --inactive: #8A919F;
+    --bg: #F5F6F8;
+    --card: #FFFFFF;
+    --text: #1F2329;
+    --text-sub: #6B7280;
+    --green: #2E9E5B;
+    --green-soft: #E8F5EE;
+    --orange: #E8862E;
+    --orange-soft: #FDF1E5;
+    --red: #E5484D;
+    --red-soft: #FDECEC;
+    --border: #E5E7EB;
+    --phone-w: 375px;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    padding: 32px 20px 60px;
+  }
+  h1 { font-size: 26px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+  .subtitle { text-align: center; color: var(--text-sub); font-size: 14px; margin-bottom: 8px; }
+  .meta {
+    max-width: 960px; margin: 0 auto 28px; padding: 14px 18px;
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--text-sub);
+  }
+  .meta b { color: var(--text); }
+  .meta .tag { display: inline-block; background: var(--brand-soft); color: var(--brand); padding: 1px 8px; border-radius: 20px; font-size: 12px; margin: 2px 4px 2px 0; }
+  .meta .tag.ok { background: var(--green-soft); color: var(--green); }
+  h2 { font-size: 20px; font-weight: 700; margin: 36px 0 14px; padding-left: 10px; border-left: 4px solid var(--brand); }
+  .grid { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start; }
+  .scene { flex: 1 1 360px; max-width: 460px; min-width: 320px; }
+  .scene-title { text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .scene-desc { text-align: center; font-size: 12px; color: var(--text-sub); margin-bottom: 12px; }
+  /* ===== 手机框（HTML/CSS 版，便于交互演示） ===== */
+  .phone {
+    width: var(--phone-w); margin: 0 auto; background: #fff; border-radius: 30px;
+    overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.10); border: 1px solid var(--border);
+  }
+  .statusbar { height: 34px; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; font-size: 12px; font-weight: 600; background: #fff; }
+  .statusbar .right { display: flex; gap: 5px; align-items: center; }
+  .statusbar .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text); }
+  .statusbar .batt { width: 18px; height: 9px; border-radius: 2px; border: 1.5px solid var(--text); position: relative; }
+  .statusbar .batt::after { content:""; position:absolute; right:-4px; top:2px; width:2px; height:4px; background:var(--text); border-radius:0 1px 1px 0; }
+  .appbar { height: 48px; display: flex; align-items: center; padding: 0 16px; gap: 10px; background: #fff; border-bottom: 1px solid var(--border); }
+  .appbar .back { font-size: 18px; color: var(--text); width: 22px; text-align: center; }
+  .appbar .title { font-size: 16px; font-weight: 600; }
+  .body { padding: 12px 14px 20px; background: var(--bg); min-height: 480px; }
+  .sect-label { font-size: 12px; color: var(--text-sub); margin: 10px 2px 6px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; border: 1px solid var(--border); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .row + .row { margin-top: 10px; }
+  .lbl { font-size: 14px; font-weight: 600; }
+  .sub { font-size: 12px; color: var(--text-sub); }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .badge.run { background: var(--green-soft); color: var(--green); }
+  .badge.stop { background: #EEF0F3; color: var(--inactive); }
+  .badge.err { background: var(--red-soft); color: var(--red); }
+  .badge .dotled { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  /* 开关 */
+  .switch { width: 46px; height: 26px; border-radius: 13px; background: #D5D9E0; position: relative; transition: background .2s; flex: none; cursor: pointer; }
+  .switch::after { content:""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .2s; }
+  .switch.on { background: var(--green); }
+  .switch.on::after { left: 23px; }
+  /* 按钮 */
+  .btn { display: block; width: 100%; padding: 12px 0; border-radius: 12px; border: none; font-size: 15px; font-weight: 600; text-align: center; cursor: pointer; }
+  .btn-green { background: var(--green); color: #fff; }
+  .btn-red { background: var(--red); color: #fff; }
+  .btn-brand { background: var(--brand); color: #fff; }
+  .btn-ghost { background: var(--brand-soft); color: var(--brand); }
+  .btn-plain { background: #EEF0F3; color: var(--text); }
+  .btn-sm { display: inline-block; padding: 6px 14px; border-radius: 9px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; }
+  /* KV 行 */
+  .kv { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px dashed var(--border); gap: 8px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { font-size: 13px; color: var(--text-sub); flex: none; }
+  .kv .v { font-size: 13px; font-weight: 600; text-align: right; word-break: break-all; }
+  .kv .v.mono { font-family: var(--mono); font-size: 12px; }
+  .pill-code { background: #F3F4F6; border: 1px solid var(--border); border-radius: 8px; padding: 2px 8px; font-family: var(--mono); font-size: 12px; }
+  /* 密码显示 */
+  .pwd-box { display: flex; align-items: center; gap: 8px; }
+  .pwd-box .v { letter-spacing: 1px; }
+  .eye { border: none; background: #F3F4F6; width: 28px; height: 28px; border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; flex: none; }
+  /* 提示条 */
+  .hint { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--text-sub); background: #F8F9FB; border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; margin-bottom: 10px; }
+  .hint.warn { background: var(--orange-soft); border-color: #F5D9B8; color: #92600E; }
+  .hint b { color: inherit; }
+  /* 会话列表 */
+  .sess { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .sess:last-child { border-bottom: none; }
+  .sess .who { font-family: var(--mono); font-size: 12px; }
+  .sess .meta2 { font-size: 11px; color: var(--text-sub); }
+  /* 弹窗 */
+  .dialog-mask { position: absolute; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; }
+  .dialog { width: 300px; background: #fff; border-radius: 18px; padding: 18px 16px 14px; }
+  .dialog h3 { font-size: 16px; text-align: center; margin-bottom: 12px; }
+  .dialog input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; font-size: 14px; font-family: var(--mono); outline: none; }
+  .dialog input:focus { border-color: var(--brand); }
+  .dialog .actions { display: flex; gap: 10px; margin-top: 14px; }
+  .dialog .actions .btn { font-size: 14px; padding: 10px 0; }
+  .phone { position: relative; }
+  .note { max-width: 960px; margin: 36px auto 0; padding: 16px 20px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 12px; font-size: 13px; color: #92400E; }
+  .note b { color: #78350F; }
+  ul.clean { margin: 8px 0 0 18px; }
+  ul.clean li { margin: 4px 0; }
+  .fingerprint { font-family: var(--mono); font-size: 11px; color: var(--text); background: #F8F9FB; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1>Bridge · SSH 服务 UI 原型 <span style="font-size:14px;color:var(--text-sub)">v1</span></h1>
+<div class="subtitle">客户端内嵌 sshd —— 设置 → 连接页分区 + SSH 服务状态页</div>
+
+<div class="meta">
+  <div style="margin-bottom:6px">
+    <span class="tag">方案 A：Apache MINA SSHD 纯 Java 内嵌 + sshd-mina 传输层</span>
+    <span class="tag">端口 8022（可配）</span>
+    <span class="tag ok">全盘：MANAGE_EXTERNAL_STORAGE（已拍板）</span>
+    <span class="tag ok">完整 sh（已拍板）</span>
+    <span class="tag ok">命令 ssh_start / ssh_stop / ssh_status</span>
+  </div>
+  <div><b>交互要点：</b></div>
+  <div>① <b>设置 → 连接页新增「SSH 服务」分区</b>——开关 + 状态徽章 + 进入状态页（参照「智能控制」分区样式）。</div>
+  <div>② <b>状态页（运行中）</b>——连接信息卡（地址/端口/用户名）、访问密码卡（首启随机生成、可隐藏、可随时修改并<b>持久化</b>）、主机密钥指纹卡（首次连接信任凭据）、存储授权卡、活动会话列表、停止按钮（<span style="color:var(--red)">红=点击后动作</span>，与智能控制按钮语义一致）。</div>
+  <div>③ <b>首启引导</b>——hostkey 首次生成提示 + 随机密码展示 + 「所有文件访问」授权引导卡（未授权回退 /sdcard/bridge 基础档）。</div>
+  <div>④ <b>修改密码弹窗</b>——支持「随机生成」与自定义，保存即持久化、立即生效（无需重启服务）。</div>
+  <div>⑤ <b>错误态</b>——端口占用等启动失败给出明确 UI 错误而非静默。</div>
+</div>
+
+<h2>状态一：设置 → 连接页「SSH 服务」分区（关闭 / 运行中 / 失败）</h2>
+<div class="grid">
+  <!-- 关闭态 -->
+  <div class="scene">
+    <div class="scene-title">已停止（默认关闭）</div>
+    <div class="scene-desc">灰徽章「已停止」+ 开关 off + 绿色「开启服务」按钮（颜色=点击后动作）</div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="dot"></span><span class="dot"></span><span class="batt"></span></span></div>
+      <div class="appbar"><span class="back">‹</span><span class="title">设置 · 连接</span></div>
+      <div class="body">
+        <div class="sect-label">音频中继</div>
+        <div class="card"><div class="row"><div><div class="lbl">音频中继服务器</div><div class="sub">192.168.31.2:15152 · 未连接</div></div><span class="switch"></span></div></div>
+        <div class="sect-label">智能控制</div>
+        <div class="card"><div class="row"><div><div class="lbl">ESP32 继电器</div><div class="sub">未配置服务器</div></div><span class="switch"></span></div></div>
+        <div class="sect-label">SSH 服务</div>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl">SSH 服务器（SFTP · 终端）</div><div class="sub">端口 8022 · 局域网与 VNT 虚拟网可达</div></div>
+            <span class="switch" onclick="this.classList.toggle('on')"></span>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <span class="badge stop"><span class="dotled"></span>已停止</span>
+            <button class="btn-sm btn-green" onclick="alert('→ 走 SshServerController.start()：前台服务拉起 + hostkey/密码首启初始化')">开启服务</button>
+          </div>
+        </div>
+        <div class="hint">开启后同一服务同时服务 <b>WiFi 局域网</b> 与 <b>VNT 虚拟网</b>（绑定 0.0.0.0），PC 可经任一网络连接。</div>
+      </div>
+    </div>
+  </div>
+  <!-- 运行态 -->
+  <div class="scene">
+    <div class="scene-title">运行中</div>
+    <div class="scene-desc">绿徽章「运行中 · 2 会话」+ 开关 on + 红色「停止服务」+ 点击行进入状态页</div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="dot"></span><span class="dot"></span><span class="batt"></span></span></div>
+      <div class="appbar"><span class="back">‹</span><span class="title">设置 · 连接</span></div>
+      <div class="body">
+        <div class="sect-label">音频中继</div>
+        <div class="card"><div class="row"><div><div class="lbl">音频中继服务器</div><div class="sub">192.168.31.2:15152 · 未连接</div></div><span class="switch"></span></div></div>
+        <div class="sect-label">SSH 服务</div>
+        <div class="card" onclick="alert('→ 进入 SSH 服务状态页（下一场景）')" style="cursor:pointer">
+          <div class="row">
+            <div><div class="lbl">SSH 服务器（SFTP · 终端）</div><div class="sub">192.168.31.109:8022</div></div>
+            <span class="switch on"></span>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <span class="badge run"><span class="dotled"></span>运行中 · 2 会话</span>
+            <button class="btn-sm btn-red" onclick="event.stopPropagation();alert('→ 走 SshServerController.stop()（幂等守卫：未运行回 success=false 不假装成功）')">停止服务</button>
+          </div>
+        </div>
+        <div class="hint">服务运行期间有<b>常驻前台通知</b>（含 IP:端口 与「停止」快捷操作）。</div>
+      </div>
+    </div>
+  </div>
+  <!-- 失败态 -->
+  <div class="scene">
+    <div class="scene-title">启动失败（端口占用示例）</div>
+    <div class="scene-desc">红徽章「启动失败」+ 具体原因 + 重试入口，绝不静默 ERROR</div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="dot"></span><span class="dot"></span><span class="batt"></span></span></div>
+      <div class="appbar"><span class="back">‹</span><span class="title">设置 · 连接</span></div>
+      <div class="body">
+        <div class="sect-label">SSH 服务</div>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl">SSH 服务器（SFTP · 终端）</div><div class="sub">端口 8022（可修改）</div></div>
+            <span class="switch on"></span>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <span class="badge err"><span class="dotled"></span>启动失败</span>
+            <button class="btn-sm btn-plain">重试</button>
+          </div>
+          <div class="hint warn" style="margin:12px 0 0"><b>⚠ 8022 端口被其它程序占用。</b>可在下方「高级」里修改端口后重试。</div>
+        </div>
+        <div class="card">
+          <div class="row"><div class="lbl" style="font-size:13px">端口</div><span class="pill-code">8022</span></div>
+          <div class="row"><div class="lbl" style="font-size:13px">并发连接上限</div><span class="pill-code">3</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>状态二：SSH 服务状态页（运行中全景）</h2>
+<div class="grid">
+  <div class="scene">
+    <div class="scene-title">运行中 · 信息全景</div>
+    <div class="scene-desc">连接信息 / 访问密码（随机生成·可改·持久化）/ hostkey 指纹 / 存储授权 / 活动会话</div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="dot"></span><span class="dot"></span><span class="batt"></span></span></div>
+      <div class="appbar"><span class="back" onclick="alert('← 返回设置')">‹</span><span class="title">SSH 服务</span><span class="badge run" style="margin-left:auto"><span class="dotled"></span>运行中</span></div>
+      <div class="body">
+        <div class="hint">PC 连接示例：<b>ssh -p 8022 bridge@192.168.31.109</b>，或用 WinSCP（协议 SFTP）。VNT 虚拟网内则把 IP 换成虚拟网地址。</div>
+
+        <div class="sect-label">连接信息</div>
+        <div class="card">
+          <div class="kv"><span class="k">地址（WiFi）</span><span class="v mono">192.168.31.109</span></div>
+          <div class="kv"><span class="k">地址（VNT 虚拟网）</span><span class="v mono">10.x.x.x</span></div>
+          <div class="kv"><span class="k">端口</span><span class="v mono">8022</span></div>
+          <div class="kv"><span class="k">用户名</span><span class="v mono">bridge</span></div>
+        </div>
+
+        <div class="sect-label">访问密码</div>
+        <div class="card">
+          <div class="row">
+            <div class="pwd-box">
+              <span class="v mono" id="pwd">Kf8-mQ2x-Vz47</span>
+              <button class="eye" onclick="togglePwd()" title="显示/隐藏">👁</button>
+            </div>
+            <button class="btn-sm btn-ghost" onclick="alert('→ 打开修改密码弹窗（下一场景）；保存后持久化并立即生效')">修改</button>
+          </div>
+          <div class="sub" style="margin-top:8px">首次启动随机生成 · 修改后持久化，重启服务/重启 App 均沿用</div>
+        </div>
+
+        <div class="sect-label">主机密钥（首次连接时客户端展示的指纹应与此一致）</div>
+        <div class="card">
+          <div class="kv" style="border:none"><span class="k">ED25519</span></div>
+          <div class="fingerprint">SHA256:8ZcTp3Kq1u9xRwAeFhJnLm2YdQ7VoXsB4NgTik5WaQc</div>
+          <div class="kv" style="border:none;margin-top:8px"><span class="k">RSA</span></div>
+          <div class="fingerprint">SHA256:nW1xEvTq0p8mKaLbQ3ZuRy6HdC2VsXoF9gJtNk4PbAs</div>
+          <div class="sub" style="margin-top:8px">首次启动生成并持久化；更换会使所有客户端重新确认</div>
+        </div>
+
+        <div class="sect-label">存储访问</div>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl" style="font-size:13px">所有文件访问</div><div class="sub">已授权 · SFTP 根目录 = /sdcard</div></div>
+            <span class="badge run"><span class="dotled"></span>已授权</span>
+          </div>
+        </div>
+
+        <div class="sect-label">活动会话（2）</div>
+        <div class="card">
+          <div class="sess"><div><div class="who">192.168.31.2 → SFTP</div><div class="meta2">09:31 登录 · 密码认证 · 已传 128 MB</div></div><span class="badge run"><span class="dotled"></span>活跃</span></div>
+          <div class="sess"><div><div class="who">10.66.0.3 → shell</div><div class="meta2">09:35 登录 · 公钥认证</div></div><span class="badge run"><span class="dotled"></span>活跃</span></div>
+        </div>
+
+        <button class="btn btn-red" style="margin-top:6px" onclick="alert('→ SshServerController.stop()：幂等守卫 + 收口，通知同步撤除')">停止服务</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 首启引导 -->
+  <div class="scene">
+    <div class="scene-title">首次启动引导态</div>
+    <div class="scene-desc">hostkey 首次生成提示 + 随机密码醒目展示 + 「所有文件访问」授权引导（未授权回退基础档）</div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="dot"></span><span class="dot"></span><span class="batt"></span></span></div>
+      <div class="appbar"><span class="back">‹</span><span class="title">SSH 服务</span><span class="badge run" style="margin-left:auto"><span class="dotled"></span>运行中</span></div>
+      <div class="body">
+        <div class="hint warn"><b>🎉 服务已就绪。</b>已为你生成访问密码与主机密钥（仅此一次，之后固定沿用）。</div>
+
+        <div class="sect-label">你的访问密码（请记录）</div>
+        <div class="card" style="border:1.5px solid var(--brand)">
+          <div class="row">
+            <span class="v mono" style="font-size:18px;font-weight:700;letter-spacing:1px">Kf8-mQ2x-Vz47</span>
+            <button class="btn-sm btn-ghost" onclick="alert('复制到剪贴板')">复制</button>
+          </div>
+          <div class="sub" style="margin-top:8px">用户名固定 <b>bridge</b> · 可随时在下方修改</div>
+        </div>
+
+        <div class="sect-label">主机密钥已生成</div>
+        <div class="card">
+          <div class="kv"><span class="k">ED25519</span><span class="v mono" style="font-size:11px">SHA256:8ZcT…aQc</span></div>
+          <div class="sub">客户端首次连接会提示指纹，与上面一致即安全</div>
+        </div>
+
+        <div class="sect-label">存储访问（建议授权）</div>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl" style="font-size:13px">所有文件访问</div><div class="sub">未授权 · 当前仅可访问 /sdcard/bridge 与应用目录</div></div>
+            <span class="badge stop"><span class="dotled"></span>未授权</span>
+          </div>
+          <button class="btn btn-brand" style="margin-top:12px" onclick="alert('→ 跳转系统设置「所有文件访问」授权页（照 prim-ftpd 引导路径）')">去授权</button>
+        </div>
+
+        <button class="btn btn-red" style="margin-top:6px">停止服务</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 修改密码弹窗 -->
+  <div class="scene">
+    <div class="scene-title">修改访问密码弹窗</div>
+    <div class="scene-desc">「随机生成」或自定义 · 保存即持久化并立即生效（不断开已连接会话，新连接生效）</div>
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="dot"></span><span class="dot"></span><span class="batt"></span></span></div>
+      <div class="appbar"><span class="back">‹</span><span class="title">SSH 服务</span></div>
+      <div class="body"></div>
+      <div class="dialog-mask">
+        <div class="dialog">
+          <h3>修改访问密码</h3>
+          <input type="text" value="Kf8-mQ2x-Vz47" spellcheck="false">
+          <div class="row" style="margin-top:10px">
+            <span class="sub">至少 8 位；建议使用随机生成</span>
+            <button class="btn-sm btn-ghost" onclick="alert('→ 重新随机生成（SecureRandom，3×5 位组）')">随机生成</button>
+          </div>
+          <div class="hint warn" style="margin-top:12px">保存后立即生效并<b>持久化</b>；已登录的会话不受影响。</div>
+          <div class="actions">
+            <button class="btn btn-plain">取消</button>
+            <button class="btn btn-brand" onclick="alert('→ SshServerPrefs 持久化新密码（存哈希），状态页回填')">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>实现对照（Compose）与已拍板决策：</b>
+  <ul class="clean">
+    <li>设置分区参照「智能控制」<code>RelaySwitchPages</code> 的卡片 + Switch 样式；状态页为独立页（<code>ui/SshPages.kt</code>），开关颜色语义 = <b>按钮颜色表示点击后动作</b>（停止→红、开启→绿，与智能控制一致）。</li>
+    <li>已拍板：端口 <b>8022</b>（Prefs 可改）；首启<b>随机密码</b>展示于状态页、可随时修改且<b>持久化</b>；P0 直接申请<b>全盘</b>（MANAGE_EXTERNAL_STORAGE，未授权回退基础档）；P0 开放<b>完整 sh</b>；命令 <b>ssh_start / ssh_stop / ssh_status</b>（v0.2.33 状态联动全套：后台 unknown 一律禁用下发、强制下发=勾选+二次确认；设备端幂等守卫前置）。</li>
+    <li>安全栈全程<b>无证书</b>：SSH 加密来自协议自身密钥协商；hostkey 为服务端自生成密钥对（非 TLS 证书），指纹即「首次连接信任」凭据。</li>
+    <li>前台服务 = <code>specialUse</code>（照 VntVpnService 模式，crash-ledger §5 清单逐条打勾）；通知含 IP:端口 与停止 action。</li>
+  </ul>
+</div>
+
+<script>
+  function togglePwd() {
+    const el = document.getElementById('pwd');
+    if (el.dataset.hidden === '1') { el.textContent = 'Kf8-mQ2x-Vz47'; el.dataset.hidden = '0'; }
+    else { el.textContent = '•••• •••• ••••'; el.dataset.hidden = '1'; }
+  }
+</script>
+</body>
+</html>

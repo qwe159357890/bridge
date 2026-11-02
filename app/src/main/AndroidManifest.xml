@@ -29,6 +29,10 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- SSH 服务器（v0.2.34）：SFTP 全盘档需要「所有文件访问」（Android 11+ 特殊权限，
+         运行时经设置页引导用户在系统「所有文件访问」列表里开启；内部测试分发无 Play 政策限制） -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
@@ -223,6 +227,30 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <!-- SSH 服务器前台服务（v0.2.34）：内嵌 MINA SSHD（SFTP 文件管理 + 远程终端）。
+             specialUse 四件套（照 VNT 模式，无 BIND_VPN_SERVICE）；返回 START_STICKY——
+             与 VNT 相反，已拍板「完整自愈链」：进程被杀系统重建服务时按用户意愿自动重启。
+             状态联动/幂等收口见 docs/research/sshd-integration.md §6.3。 -->
+        <service
+            android:name="my.bridge.com.ssh.SshServerService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Embedded SSH server (SFTP file transfer and remote shell)" />
+        </service>
+
+        <!-- SSH 服务开机 / 更新自启（v0.2.34）：是否真的拉起由 SshAutoStart 按意愿守卫 -->
+        <receiver
+            android:name="my.bridge.com.ssh.SshBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏（GLOBAL_ACTION_LOCK_SCREEN）
              + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。
