@@ -13,6 +13,8 @@
 
       <el-button :disabled="!selectedNode" @click="doClick">点击</el-button>
       <el-button :disabled="!selectedNode" @click="doLongClick">长按</el-button>
+      <el-input-number v-model="longPressMs" :min="50" :max="60000" :step="100" size="small" class="longpress-ms" controls-position="right" />
+      <span class="ms-unit">毫秒</span>
       <el-button :disabled="!selectedNode" @click="openInputDialog">输入文本</el-button>
 
       <el-divider direction="vertical" />
@@ -205,6 +207,7 @@ const intervalOptions = [
 ]
 const inputVisible = ref(false)
 const inputText = ref('')
+const longPressMs = ref(550)
 
 // 右栏「控件属性 / 选择器」上下比例（属性区占比 %，默认 45%）
 const propPanelRatio = ref(45)
@@ -680,7 +683,10 @@ function doClick() {
 function doLongClick() {
   if (!selectedNode.value) return
   // 用 ui_long_click 命令（支持 selector 三级降级，比坐标长按更鲁棒）
-  sendCommand(deviceId.value, 'ui_long_click', { selector: buildSelector(selectedNode.value) })
+  // duration_ms 可自定义（默认 800ms）
+  sendCommand(deviceId.value, 'ui_long_click', {
+    selector: buildSelector(selectedNode.value), duration_ms: longPressMs.value,
+  })
 }
 function openInputDialog() {
   if (!selectedNode.value) return
@@ -768,6 +774,8 @@ onBeforeUnmount(() => {
 .btn-icon { margin-right: 2px; }
 .auto-refresh { margin-left: 4px; }
 .refresh-interval { width: 88px; margin-left: 4px; }
+.longpress-ms { width: 130px; }
+.ms-unit { font-size: 12px; color: #999; }
 .toolbar-right { margin-left: auto; }
 .ws-state { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
 .ws-state.connected { color: #2e9e5b; background: #e8f7ef; }

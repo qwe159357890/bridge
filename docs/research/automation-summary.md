@@ -109,6 +109,16 @@ notification_dismiss / clipboard（读走 IME 合法路径）。
 7. **scroll_to / wait_idle**：signature 签名在真实滚动场景能否正确判断「到底了 / 静止了」。
 8. **传感器**：各机型 SensorManager 返回格式差异。
 
+### 已真机验证并修复的坑（记录留档）
+
+> 以下是在真机测试中实际发现、已定位并修复的问题，供后续排查参考。
+
+1. **桌面图标长按进「拖动态」而非弹菜单（v0.2.42 修复，已验证正常）**：
+   - **现象**：代码长按桌面图标，弹出「图标拎起 + 半截操作气泡」的拖动态；手动长按弹「应用详情/分享/编辑/卸载」完整文字菜单；且调 `duration_ms` 完全无效果。
+   - **根因**：桌面图标节点 `longClickable=true`，代码命中三级降级的第一级 `ACTION_LONG_CLICK`（`performLongClick()`）。该动作**无时长概念、读不到 `duration_ms`**（故调时长无效），且在 Launcher 上触发的是拖动态而非弹菜单。
+   - **修复**：调整降级顺序为「**坐标手势优先、节点动作兜底**」。手势注入（`dispatchGesture` 真实按压）产生完整触摸事件流，模拟手动长按触发 `onLongClick` 弹菜单；失败才回退 `ACTION_LONG_CLICK`。
+   - **教训**：无障碍 `ACTION_LONG_CLICK` 与 `dispatchGesture` 长按语义不同——前者走 `performLongClick()`（可能是拖动态），后者走完整触摸流（更接近手动）。桌面图标这类 `longClickable=true` 控件要弹菜单，必须手势优先。Droidline/AutoX 默认节点优先，同样会踩此坑。
+
 ---
 
 ## 六、遗留 TODO（暂不做，先放着）

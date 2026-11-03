@@ -22,6 +22,20 @@
 
 ---
 
+## 2026-11-04 · 🔧 v0.2.41 / v0.2.42 长按修复（桌面图标弹菜单而非拖动态）
+
+**节点意义**：真机反馈「代码长按和手动长按结果不一致」。v0.2.41 先误判为「时长问题」——把 `duration_ms` 从 800 调到可调、并让它贯穿手势降级；但用户反馈「调时长完全没效果」，提示读借鉴项目。v0.2.42 才定位到真正根因并根治。
+
+- **v0.2.41（仍误判）**：`duration_ms` 参数此前只传到 `longClickVia(n, ms)` 但手势路径被忽略（硬编码 `getLongPressTimeout()+200`），先让时长贯穿；调试台加长按时长输入框。**未解决**——因为命中的是 `ACTION_LONG_CLICK`，该动作无时长概念。
+- **v0.2.42（根治，已验证正常）**：读完 Droidline/AutoX 源码确认三者长按实现**完全一致**（三级降级：节点 `ACTION_LONG_CLICK` → 祖先 → 坐标手势 `dispatchGesture`）。根因是桌面图标节点 `longClickable=true`，命中第一级 `ACTION_LONG_CLICK`（`performLongClick()`），该动作①无时长概念、读不到 `duration_ms`（故调时长无效）②在 Launcher 上触发「拖动态」而非「弹菜单」。修复 = **调整降级顺序：坐标手势优先、节点动作兜底**，手势注入真实按压走完整触摸流触发 `onLongClick` 弹菜单。默认时长 550ms（贴近 `getLongPressTimeout()`）。
+
+### 关键经验沉淀
+
+- **无障碍 `ACTION_LONG_CLICK` 与 `dispatchGesture` 长按语义不同**：前者走 `View.performLongClick()`（`longClickable=true` 的桌面图标会进拖动态、且读不到时长参数）；后者走完整触摸事件流（DOWN→持续→UP，更接近手动，正常触发 `onLongClick` 弹菜单）。**要「弹菜单」必须手势优先；Droidline/AutoX 默认节点优先，同样踩坑。**
+- **「调参数无效果」往往意味着参数没被读到**：排查时先确认命令实际走的是哪条执行路径（降级链哪一级命中），别只盯参数本身。
+
+---
+
 ## 2026-11-03 · 🔧 v0.2.40 自动化调试台增强（状态栏控件 + 选择器多选 + 可拖动分割线 + 刷新频率可选）
 
 **节点意义**：真机反馈五连修。①「长按测试」报「不支持的命令 ui_long_click」——根因是运行中的 central-server 用旧代码（`reload=False`），`ALLOWED_COMMANDS` 还停在旧 44 条白名单，重启后加载 111 条即修复（手机端代码本就完整）。② 状态栏图标（信号/电池/时间）不可见——根因是 `ui_dump` 只遍历 `rootInActiveWindow`（单活动窗口），状态栏是 SystemUI 独立窗口；改为遍历所有窗口（`allWindowRootsWithType()`）+ 加 `flagIncludeNotImportantViews`。③ 选择器从自动单选改为可勾选多字段组合。④ 属性/选择器区加可拖动分割线。⑤ 自动刷新频率可选。**最新客户端 v0.2.40。**

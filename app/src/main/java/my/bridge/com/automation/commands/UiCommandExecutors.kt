@@ -82,13 +82,16 @@ object UiCommandExecutors {
 
     /** 节点坐标长按（三级降级）。 */
     private fun longClickVia(n: UiObject, ms: Long): String? {
-        // 三级降级：节点 longClickable → 祖先 longClickable → 坐标手势（用真实时长 ms 按压）
-        if (n.longClickable() && n.enabled() && n.longClick()) return "node"
-        Matcher.longClickableAncestor(n)?.let { if (it.longClick()) return "parent" }
+        // 长按策略：优先用坐标手势（dispatchGesture 真实按压，模拟手指按下→持续→抬起），
+        // 因为它产生完整触摸事件流，Launcher 会正常走 onLongClick 弹菜单；而 ACTION_LONG_CLICK
+        // 直接调 View.performLongClick()，在很多桌面(Launcher)上会触发「图标拖动态」而非菜单，
+        // 且该动作无时长概念、读不到 duration_ms。故：坐标手势优先，节点动作为兜底。
         val b = n.bounds()
         if (!b.isEmpty) {
             if (BridgeAccessibilityService.longClick(b.centerX(), b.centerY(), ms)) return "gesture"
         }
+        if (n.longClickable() && n.enabled() && n.longClick()) return "node"
+        Matcher.longClickableAncestor(n)?.let { if (it.longClick()) return "parent" }
         return null
     }
 
@@ -460,7 +463,7 @@ object UiCommandExecutors {
     fun longClick(command: Command): CommandResult {
         return try {
             val target = parseSelector(command)
-            val ms = command.longParam("duration_ms", 800, 50, 60000)
+            val ms = command.longParam("duration_ms", 550, 50, 60000)
             val node = await(target, nth(command), timeoutMs(command).takeIf { it > 0 } ?: 5000)
             if (node == null) {
                 return CommandResult(command.commandId, command.command, false, "未找到匹配控件")
