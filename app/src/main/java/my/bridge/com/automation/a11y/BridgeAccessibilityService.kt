@@ -351,13 +351,23 @@ class BridgeAccessibilityService : AccessibilityService() {
             return UiObject.createRoot(node)
         }
 
-        /** 读取所有窗口根节点（含系统窗口，如通知栏/输入法），供 all_windows 导出。 */
+        /** 读取所有窗口根节点（含系统窗口，如状态栏/输入法），供 all_windows 导出。 */
         fun allWindowRoots(): List<UiObject> {
+            return allWindowRootsWithType().map { it.second }
+        }
+
+        /**
+         * 读取所有窗口根节点，并附带窗口类型（AccessibilityWindowInfo.type）。
+         * 供 ui_dump(all_windows=true) 导出——状态栏图标（信号/电池/时间）是
+         * SystemUI 的独立窗口，不在 rootInActiveWindow 里，必须遍历 windows 才能拿到。
+         */
+        fun allWindowRootsWithType(): List<Pair<Int, UiObject>> {
             val svc = instance ?: return emptyList()
             return try {
                 svc.windows?.filterNotNull()?.mapNotNull { w ->
                     val n = w.root ?: return@mapNotNull null
-                    runCatching { UiObject.createRoot(n) }.getOrNull()
+                    val root = runCatching { UiObject.createRoot(n) }.getOrNull() ?: return@mapNotNull null
+                    w.type to root
                 } ?: emptyList()
             } catch (e: Exception) {
                 Timber.w(e, "读取所有窗口根节点失败")

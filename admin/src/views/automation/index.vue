@@ -18,6 +18,9 @@
       <el-divider direction="vertical" />
 
       <el-switch v-model="autoRefresh" active-text="自动刷新" class="auto-refresh" />
+      <el-select v-model="refreshInterval" size="small" :disabled="!autoRefresh" class="refresh-interval" @change="restartAutoRefresh">
+        <el-option v-for="o in intervalOptions" :key="o.value" :label="o.label" :value="o.value" />
+      </el-select>
 
       <div class="toolbar-right">
         <span v-if="wsState" class="ws-state" :class="wsState">{{ wsStateText }}</span>
@@ -74,13 +77,13 @@
       </div>
 
       <!-- 右栏：属性 + 操作 -->
-      <div class="panel prop-panel">
+      <div ref="propPanelRef" class="panel prop-panel">
         <div class="panel-head">
           <span class="panel-title">控件属性</span>
         </div>
         <div v-if="!selectedNode" class="empty-hint">点击左侧控件树或截图上的框选中控件</div>
         <template v-else>
-          <div class="prop-scroll">
+          <div class="prop-scroll" :style="{ flexBasis: propPanelRatio + '%' }">
             <div class="prop-row"><span class="k">text</span><span class="v">{{ selectedNode.text || '—' }}</span></div>
             <div class="prop-row"><span class="k">desc</span><span class="v">{{ selectedNode.desc || '—' }}</span></div>
             <div class="prop-row"><span class="k">id</span><span class="v code">{{ selectedNode.id || '—' }}</span></div>
@@ -94,8 +97,19 @@
             </div>
           </div>
 
+          <!-- 可拖动分割线：调整「控件属性」与「选择器」上下比例 -->
+          <div class="prop-resizer" @mousedown="startPropResize" title="拖动调整上下比例">
+            <span class="resizer-line"></span>
+          </div>
+
           <div class="prop-actions">
-            <div class="action-sec">选择器（一键复制到脚本）</div>
+            <div class="action-sec">
+              选择器（一键复制到脚本）
+              <el-checkbox-group v-model="selectorFields" size="small" class="selector-fields">
+                <el-checkbox v-for="o in selectorFieldOptions" :key="o.value" :label="o.value" border size="small">{{ o.label }}</el-checkbox>
+              </el-checkbox-group>
+              <div class="selector-mode-hint">{{ selectorFields.length ? '已勾选 ' + selectorFields.length + ' 个字段（按勾选组合）' : '自动模式（智能单选）' }}</div>
+            </div>
             <el-input v-model="selectorText" readonly size="small">
               <template #append>
                 <el-button @click="copySelector">复制</el-button>
@@ -179,8 +193,39 @@ const shotWrap = ref<HTMLDivElement | null>(null)
 
 const refreshing = ref(false)
 const autoRefresh = ref(false)
+const refreshInterval = ref(5)
+const intervalOptions = [
+  { label: '2 秒', value: 2 },
+  { label: '3 秒', value: 3 },
+  { label: '5 秒', value: 5 },
+  { label: '10 秒', value: 10 },
+  { label: '30 秒', value: 30 },
+]
 const inputVisible = ref(false)
 const inputText = ref('')
+
+// 右栏「控件属性 / 选择器」上下比例（属性区占比 %，默认 45%）
+const propPanelRatio = ref(45)
+const propPanelRef = ref<HTMLDivElement | null>(null)
+function startPropResize(e: MouseEvent) {
+  const panel = propPanelRef.value
+  if (!panel) return
+  e.preventDefault()
+  const startY = e.clientY
+  const startRatio = propPanelRatio.value
+  const onMove = (ev: MouseEvent) => {
+    const rect = panel.getBoundingClientRect()
+    const dy = ev.clientY - startY
+    const ratioPx = (dy / rect.height) * 100
+    propPanelRatio.value = Math.min(75, Math.max(15, startRatio + ratioPx))
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 
 let ws: WebSocket | null = null
 const wsState = ref('')
@@ -361,9 +406,38 @@ function selectNode(n: UiNode) {
   drawHighlight()
 }
 
-// ============ 选择器生成（复用 UiResultDetailDialog 逻辑） ============
+// ============ 选择器生成（可多选组合） ============
+// 用户勾选的字段（空数组 = 自动模式，沿用智能单选）
+const selectorFields = ref<string[]>([])
+const selectorFieldOptions = [
+  { label: 'id', value: 'id' },
+  { label: 'text', value: 'text' },
+  { label: 'desc', value: 'desc' },
+  { label: 'className', value: 'className' },
+  { label: 'package', value: 'package' },
+  { label: 'clickable', value: 'clickable' },
+  { label: 'longClickable', value: 'longClickable' },
+  { label: 'editable', value: 'editable' },
+  { label: 'enabled', value: 'enabled' },
+]
+
 function buildSelector(n: UiNode): string {
   const parts: string[] = []
+  const fields = selectorFields.value
+  // 手动勾选模式：按勾选字段组合
+  if (fields.length) {
+    if (fields.includes('id') && n.id) parts.push(`id("${n.id}")`)
+    if (fields.includes('text') && n.text) parts.push(`text("${n.text}")`)
+    if (fields.includes('desc') && n.desc) parts.push(`desc("${n.desc}")`)
+    if (fields.includes('className') && n.className) parts.push(`className("${n.className}")`)
+    if (fields.includes('package') && n.package) parts.push(`package("${n.package}")`)
+    if (fields.includes('clickable') && n.clickable) parts.push('clickable()')
+    if (fields.includes('longClickable') && n.longClickable) parts.push('longClickable()')
+    if (fields.includes('editable') && n.editable) parts.push('editable()')
+    if (fields.includes('enabled') && n.enabled) parts.push('enabled()')
+    return parts.join('.') || 'text("")'
+  }
+  // 自动模式：id > text > desc > className 智能单选（保持原行为）
   if (n.id) parts.push(`id("${n.id}")`)
   else if (n.text) parts.push(`text("${n.text}")`)
   else if (n.desc) parts.push(`desc("${n.desc}")`)
@@ -598,12 +672,13 @@ function connectWS() {
 }
 
 // ============ 自动刷新 ============
-watch(autoRefresh, (on) => {
+function restartAutoRefresh() {
   if (autoTimer) { window.clearInterval(autoTimer); autoTimer = null }
-  if (on && deviceId.value) {
-    autoTimer = window.setInterval(() => refreshAll(), 5000)
+  if (autoRefresh.value && deviceId.value) {
+    autoTimer = window.setInterval(() => refreshAll(), refreshInterval.value * 1000)
   }
-})
+}
+watch(autoRefresh, () => restartAutoRefresh())
 
 watch(deviceId, () => {
   nodes.value = []
@@ -647,6 +722,7 @@ onBeforeUnmount(() => {
 }
 .btn-icon { margin-right: 2px; }
 .auto-refresh { margin-left: 4px; }
+.refresh-interval { width: 88px; margin-left: 4px; }
 .toolbar-right { margin-left: auto; }
 .ws-state { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
 .ws-state.connected { color: #2e9e5b; background: #e8f7ef; }
@@ -731,7 +807,20 @@ onBeforeUnmount(() => {
 
 /* 属性面板 */
 .prop-panel { display: flex; flex-direction: column; }
-.prop-scroll { flex: 1; overflow: auto; padding: 8px 12px; }
+.prop-scroll { flex: 0 1 auto; overflow: auto; padding: 8px 12px; min-height: 60px; }
+.prop-resizer {
+  flex-shrink: 0;
+  height: 8px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fafafa;
+  border-top: 1px solid #f0f0f0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.prop-resizer:hover { background: #eef3fb; }
+.prop-resizer .resizer-line { width: 40px; height: 3px; border-radius: 2px; background: #c8cbd4; }
 .prop-row {
   display: flex;
   gap: 8px;
@@ -744,12 +833,17 @@ onBeforeUnmount(() => {
 .prop-row .v.code { font-family: monospace; font-size: 12px; }
 .prop-flags { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 0; }
 .prop-actions {
-  border-top: 1px solid #f0f0f0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
+.selector-fields { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.selector-fields .el-checkbox { margin-right: 0; }
+.selector-mode-hint { font-size: 11px; color: #b0b0b0; margin-top: 4px; }
 .action-sec { font-size: 12px; color: #999; margin-top: 4px; }
 .action-btns { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>

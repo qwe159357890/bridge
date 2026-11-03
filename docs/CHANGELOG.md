@@ -22,6 +22,17 @@
 
 ---
 
+## 2026-11-03 · 🔧 v0.2.40 自动化调试台增强（状态栏控件 + 选择器多选 + 可拖动分割线 + 刷新频率可选）
+
+**节点意义**：真机反馈五连修。①「长按测试」报「不支持的命令 ui_long_click」——根因是运行中的 central-server 用旧代码（`reload=False`），`ALLOWED_COMMANDS` 还停在旧 44 条白名单，重启后加载 111 条即修复（手机端代码本就完整）。② 状态栏图标（信号/电池/时间）不可见——根因是 `ui_dump` 只遍历 `rootInActiveWindow`（单活动窗口），状态栏是 SystemUI 独立窗口；改为遍历所有窗口（`allWindowRootsWithType()`）+ 加 `flagIncludeNotImportantViews`。③ 选择器从自动单选改为可勾选多字段组合。④ 属性/选择器区加可拖动分割线。⑤ 自动刷新频率可选。**最新客户端 v0.2.40。**
+
+### 关键经验沉淀
+
+- **server `reload=False` 的坑**：改 `command_catalog.py` 后必须重启 central-server，否则白名单不生效，前端下发新命令报「不支持的命令」。这是「长按报错」的根因，不是代码缺失。
+- **状态栏控件不在 `rootInActiveWindow` 里**：Android 无障碍的 `rootInActiveWindow` 只返回当前活动窗口；信号/电池/时间图标属于 SystemUI 的状态栏独立窗口，须遍历 `getWindows()`（`flagRetrieveInteractiveWindows`）才能拿到，且需 `flagIncludeNotImportantViews` 让「不重要」视图也被报告。
+
+---
+
 ## 2026-11-03 · 🤖 v0.2.39 自动化模块全量落地（无障碍执行器 + Python RPC + 管理后台调试台）
 
 **节点意义**：对标 Droidline + AutoX 的自动化能力一次性铺开——逐行阅读两个借鉴项目源码后，按「目录分离 → 关系查询引擎 → 动作/设备/输入/通知执行器 → RPC + Python SDK → 管理后台可视化调试台」六批次实施。**能力与交互分两层**：底层无障碍执行器（66 条 `ui_*` 命令）供 Python 脚本程序化驱动；上层「自动化调试台」页面（对标 Appium Inspector）供人可视化探查控件、一键复制选择器。两层共用同一套执行器，调试台验证通过的选择器粘进脚本行为完全一致。**最新客户端 v0.2.39。**

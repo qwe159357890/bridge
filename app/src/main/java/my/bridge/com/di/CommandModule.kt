@@ -2379,32 +2379,54 @@ object CommandModule {
         return sb.toString()
     }
 
-    /** ui_dump：导出当前窗口控件树（DFS，限制节点数与深度）。 */
+    /** ui_dump：导出控件树（DFS，限制节点数与深度）。
+     *
+     * - all_windows=false（默认）：只导出当前活动窗口（rootInActiveWindow）。
+     * - all_windows=true：遍历所有可见窗口（含状态栏/导航栏/输入法等系统窗口），
+     *   每个节点带 windowId + windowType，供调试台显示信号/电池/时间等状态栏控件。
+     */
     private fun executeUiDump(command: Command): CommandResult {
-        val root = uiRootOrNull() ?: return uiNotReady(command)
-        val maxNodes = command.intParam("max_nodes", 500, 1, 2000)
-        val maxDepth = command.intParam("max_depth", 20, 1, 50)
+        // all_windows 缺省 true（调试台要看到状态栏控件）；传 0 才只导出活动窗口
+        val allWindows = command.intParam("all_windows", 1, 0, 1) == 1
+        val maxNodes = command.intParam("max_nodes", 500, 1, 3000)
+        val maxDepth = command.intParam("max_depth", 24, 1, 60)
         return try {
             val sb = StringBuilder("[")
             var count = 0
-            fun walk(n: my.bridge.com.automation.automator.UiObject, depth: Int) {
+            fun walk(n: my.bridge.com.automation.automator.UiObject, depth: Int, windowType: Int) {
                 if (count >= maxNodes || depth > maxDepth) return
                 if (count > 0) sb.append(',')
                 sb.append(nodeToJson(n, depth))
+                // 在 depth 之后追加窗口类型（nodeToJson 已输出 windowId，这里补 type）
+                sb.setLength(sb.length - 1) // 去掉结尾的 }
+                sb.append(",\"windowType\":").append(windowType).append("}")
                 count++
                 for (i in 0 until n.childCount()) {
                     if (count >= maxNodes) break
                     val c = n.child(i) ?: continue
-                    walk(c, depth + 1)
+                    walk(c, depth + 1, windowType)
                 }
             }
-            walk(root, 0)
+            if (allWindows) {
+                val roots = BridgeAccessibilityService.allWindowRootsWithType()
+                for ((type, root) in roots) {
+                    walk(root, 0, type)
+                    root.recycle()
+                }
+                if (count == 0) {
+                    // all_windows 取不到窗口时回退单窗口
+                    val root = uiRootOrNull()
+                    if (root != null) { walk(root, 0, 0); root.recycle() }
+                }
+            } else {
+                val root = uiRootOrNull() ?: return uiNotReady(command)
+                walk(root, 0, 0)
+                root.recycle()
+            }
             sb.append("]")
-            root.recycle()
             CommandResult(command.commandId, command.command, true, sb.toString())
         } catch (e: Exception) {
             Timber.e(e, "命令 ui_dump 执行失败")
-            runCatching { root.recycle() }
             CommandResult(command.commandId, command.command, false, "导出界面结构失败：${e.message}")
         }
     }
