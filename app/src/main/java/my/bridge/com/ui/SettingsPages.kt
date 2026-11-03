@@ -51,7 +51,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import my.bridge.com.BuildConfig
-import my.bridge.com.access.BridgeAccessibilityService
+import my.bridge.com.automation.a11y.BridgeAccessibilityService
 import my.bridge.com.keepalive.KeepAlivePrefs
 import my.bridge.com.keepalive.KeepAliveService
 import my.bridge.com.keepalive.KeepAliveUtils

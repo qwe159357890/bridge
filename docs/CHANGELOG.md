@@ -22,20 +22,56 @@
 
 ---
 
-## 2026-11-02 · 🌐 v0.2.38 组网断线自动重连 + SSH 终端内置美化
+## 2026-11-03 · 🤖 v0.2.39 自动化模块全量落地（无障碍执行器 + Python RPC + 管理后台调试台）
 
-**节点意义**：用户实测发现 VNT 在切网/断网恢复后不会自动组网，只能手动点「开始组网」；这是移植官方 1.x 时删掉 `START_STICKY` 恢复链后未补应用层替代造成的。本版以**进程内监督重连**根治，并顺带收口 SSH 终端内置美化。
+**节点意义**：对标 Droidline + AutoX 的自动化能力一次性铺开——逐行阅读两个借鉴项目源码后，按「目录分离 → 关系查询引擎 → 动作/设备/输入/通知执行器 → RPC + Python SDK → 管理后台可视化调试台」六批次实施。**能力与交互分两层**：底层无障碍执行器（66 条 `ui_*` 命令）供 Python 脚本程序化驱动；上层「自动化调试台」页面（对标 Appium Inspector）供人可视化探查控件、一键复制选择器。两层共用同一套执行器，调试台验证通过的选择器粘进脚本行为完全一致。**最新客户端 v0.2.39。**
 
-**脉络（问题 → 根因 → 收敛）**：
-- 根因链：网络切换 → native 报 `ErrorInfo(Disconnect)` → 旧 worker 一见错误即 `throw` → `onError("组网失败：Disconnect")` → 释放 native/TUN 并 `stopSelf()` → 无任何补偿（`vnt/` 包无 NetworkCallback，冷启动自动组网也不会触发）。
-- 官方 VntApp 能恢复 = `START_STICKY + null intent` 自动拉回；v0.2.30 为「退出即整体结束」删掉 STICKY 时漏了这条断线自恢复路径。
-- 修复：`VntVpnService` worker 改为监督重连循环（可重试失败不 `stopSelf`，退避 2/4/8/16/30/60s 封顶 + `registerDefaultNetworkCallback` 网络恢复立即重试）；`TokenError`/`InvalidIp`/VPN 授权被抢仍转 ERROR；新增 `RECONNECTING` 状态，UI/admin/命令幂等守卫/文档全链路联动。
-- SSH 部分：内置彩色路径提示符、常用 alias、h 帮助；不引入 zsh/oh-my-zsh 等不可行依赖。
-- 校验：`:app:compileDebugKotlin` BUILD SUCCESSFUL；admin `vue-tsc -b && vite build` 通过。
+### 脉络1 · 自动化能力移植（Droidline 全量 + AutoX 独有，v0.2.39）
+
+- **调研纠偏**：不能只读 `spec/commands.json`，须逐行读 Droidline + AutoX 全部源码；Droidline 能实现的都实现，AutoX 独有的（devices/APP/按键模拟/找色/传感器/文件/通知）一并集成，界面/多线程/Java 调用桥不要。
+- **目录分离**：`access/` → `automation/a11y/`，`rpc/` → `automation/rpc/`，automator/query/commands/input/notification 各归其位；Manifest 类名、COMPONENT 常量、IME id 同步改。
+- **关系查询引擎**（`automation/query/`）：`Query.kt` 关系查询（row/below/above/left_of/right_of/has/inside/bounds）、`Matcher.kt`（clickableAncestor/editableTarget）、`SelectorParser.kt` 链式 DSL + 对象 JSON 双入口、`AutomationError.kt` 11 种结构化错误码。
+- **执行器**（`automation/commands/`）：Ui/Device/Input/FileMedia/Notification 五类，共 66 条命令；纯 Java 找色去 OpenCV（`ColorDetector`/`ColorFinder`）。
+- **RPC + SDK**：手写 ServerSocket HTTP server（Android 无 com.sun.net.httpserver），监听 `0.0.0.0`、默认端口 **15161**（支持局域网/VNT 连入，非 127.0.0.1 随机端口）；`/exec` 端点 67 命令白名单 + token 鉴权；Python SDK 补 ~60 语义化方法 + Vision（找图/OCR）。
+
+### 脉络2 · 管理后台「自动化调试台」（阶段①探查工具补全，v0.2.39）
+
+- 此前阶段①只做了 B3「复制选择器」，B1 截图高亮/B2 可视化选坐标留待后续；本次补齐为完整可视化探查台（独立页面，对标 Appium Inspector）。
+- 三栏布局：左控件树（`ui_dump` 解析+搜索+折叠）、中截图 canvas（叠加 bounds 高亮框，点树/点框双向联动）、右属性+操作（复制选择器/参数 JSON、点击/长按/输入测试、5s 自动刷新）。
+- 复用「命令下发 + WS 回执 + media 截图」现有链路，手机端/服务端零改动，纯后台新增页面。
+
+### 关键经验沉淀
+
+- **底层执行器与上层交互解耦**：能力先备齐（66 命令），再补给人用的交互外壳（调试台），两层共用一套执行器，避免「调试时通过、脚本里行为不一致」。
+- **Android 无障碍截屏 + 控件树 bounds 联动完全可行**：`/screenshot` 返回 JPEG、`ui_dump` 节点带 `bounds`，无需改手机端即可做截图高亮。
+
+---
+
+## 2026-11-02 · 🌐 v0.2.38 VNT 断线自动重连 + SSH 终端/SFTP 完整主线
+
+**节点意义**：两条主线同日收敛——① 用户实测 VNT 切网/断网恢复后不自动组网，只能手动点「开始组网」；根因是移植官方 1.x 时删掉 `START_STICKY` 恢复链后未补应用层替代，以**进程内监督重连**根治。② SSH 内嵌 sshd（MINA SSHD）从 v0.2.34 上线后，经五轮真机迭代把「能连」收敛成「终端/SFTP 能用」。**最新客户端 v0.2.38。**
+
+### 脉络1 · VNT 断线自动重连（问题 → 根因 → 收敛）
+
+- **根因链**：网络切换 → native 1.x 回调 `ErrorInfo(Disconnect)` → 旧 worker 一见错误即 `throw` → `onError("组网失败：Disconnect")` → 释放 native/TUN 并 `stopSelf()` → 全链路无补偿（`vnt/` 包无 NetworkCallback，冷启动自动组网也不会触发）。
+- **为什么官方能恢复**：官方 VntApp = `START_STICKY + null intent` 自动拉回；v0.2.30 为「退出即整体结束」删掉 STICKY 时，漏了这条断线自恢复路径。
+- **修复（进程内监督重连，不恢复 STICKY）**：`VntVpnService` worker 改为监督重连循环——可重试失败**不 stopSelf**、释放本轮实例后退避重建（2/4/8/16/30/60s 封顶，成功过一次即重置）+ `registerDefaultNetworkCallback` 网络恢复立即重试；`TokenError`/`InvalidIp`/VPN 授权被抢（establish 返回 null）仍判致命转 ERROR，不无限重试。进程内重建天然绕开 Android 12+ 后台启动前台服务限制（不新增 FGS 义务点）。
+- **新增 `RECONNECTING` 状态**：UI 橙色「断线，正在自动重连…（第 N 次）」、主按钮仍显示「停止组网」；`vnt_start` 幂等守卫、`VntAutoStart` 守卫、admin `VNT_STATE_RULES`/`parseVntStatus`/详情弹窗全链路登记（避免「unknown 一律禁用」误禁）。
+- **竞态防护**：generation 校验 + `running` 重入判定 + AtomicReference 跨线程可见性，防 stop→快速 start 时旧 worker 误关新连接。
+
+### 脉络2 · SSH 内嵌 sshd 终端/SFTP（v0.2.34 → v0.2.38）
+
+- **v0.2.34 集成**：MINA SSHD 内嵌，SFTP 文件管理 + 远程终端；`ssh/` 包（Service/Controller/Prefs/HostKeyStore/AutoStart/BootReceiver）+ `SshPages` + `ssh_start/ssh_stop/ssh_status` 三条命令 + admin `SshResultDetailDialog`。
+- **v0.2.35 启动修复**：真机首验 sshd 静态初始化失败——`PathUtils user.home` 为 null（Android 无 user.home 属性）→ 显式传 home 目录 + `setAndroid` 签名。
+- **v0.2.36 五层真机迭代（当日）**：① exec 通道卡死（sshd 2.20 `ProcessShellFactory.resolveEffectiveCommand` 无视传入 elements、非 Windows 硬编码 `/bin/sh -c`）→ 绕开 OS 推断直接 `InvertedShellWrapper(ProcessShell(...))`；② 终端无回显（管道无 PTY、行规程缺失）→ 自研 `SshLineDiscipline`；③ 行规程与泵死锁（`available()` 整行缓冲时恒 0）→ 改推送式泵 + OS 层合并 stderr；④ mksh `-i` 拿到整行不执行 → 放弃 `-i`、`sh -c` 读取-执行循环；⑤ 输出阶梯缩进 + SFTP/终端落点 `/`（无 PTY 缺 ONLCR；`defaultDir=进程工作目录` 在 Android 恒 `/`）→ 补 `\r` + `HomeSftpSubsystemFactory` 钉到 `/sdcard`。
+- **v0.2.37 快捷目录语义（用户拍板）**：补设 HOME 环境变量（cd ~ / 裸 cd 原先失效），裸 cd → App 私有目录、cd ~ → /sdcard、cd - → 上一目录。
+- **v0.2.38 内置美化**：彩色路径提示符、常用 alias、h 帮助；不引入 zsh/oh-my-zsh 等不可行依赖。
 
 **关键经验沉淀**：
-- **删掉系统的自动恢复机制时，必须同步补上应用层替代**：STICKY 不是唯一方案，但「错误 → 自停 → 无人拉起」这种半成品移植会在网络抖动场景必现。
+- **删掉系统的自动恢复机制时，必须同步补上应用层替代**：STICKY 不是唯一方案，但「错误 → 自停 → 无人拉起」的半成品移植会在网络抖动场景必现。
 - **重连循环放服务 worker 内比反复 startService 更稳**：进程内重建天然绕开 Android 12+ 后台启动前台服务限制，也更容易做退避、错误分类和竞态防护。
+- **无 PTY 的伪终端要自己补行规程与换行转换**：管道拿到的字节缺内核 PTY 的回显/`\r`→`\n`/ONLCR/退格处理，`available()` 判断会因整行缓冲而饿死泵；`/bin/sh -c` 读取-执行循环比 mksh `-i` 从管道取整行更可靠。
+- **Android 上 Java 标准库的 `user.home` 可能为 null、`File("").toAbsolutePath()` 恒为 `/`**：依赖这两者推导「家目录 / 初始目录」的第三方库（sshd、SftpSubsystem）都要显式覆写，否则 SFTP/终端落点会钉死在根目录。
 
 ---
 

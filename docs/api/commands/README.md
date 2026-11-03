@@ -72,6 +72,32 @@
 | `ssh_stop` | 停止 SSH 服务 | [system.md#ssh_stop-停止-ssh-服务](system.md#ssh_stop-停止-ssh-服务) |
 | `ssh_status` | SSH 服务状态 | [system.md#ssh_status-ssh-服务状态](system.md#ssh_status-ssh-服务状态) |
 
+## 🖱️ ui（界面自动化）→ [ui.md](ui.md)
+
+> **v0.2.40 起 ui 分类扩展到 66 条命令**。全量命令清单与语义见
+> `docs/research/droidline-feature-inventory.md`，使用方式见 `docs/guides/automation.md`。
+> 下表仅列出有独立实现文档章节的命令，其余命令以 `—` 标记（语义以 inventory/guides 为准）。
+
+| 命令 | 中文名 | 文档 |
+|---|---|---|
+| `ui_dump` | 导出界面结构 | [ui.md#ui_dump-导出界面结构](ui.md#ui_dump-导出界面结构) |
+| `ui_find` | 查找控件 | [ui.md#ui_find-查找控件](ui.md#ui_find-查找控件) |
+| `ui_click` | 点击控件 | [ui.md#ui_click-点击控件](ui.md#ui_click-点击控件) |
+| `ui_set_text` | 输入文本 | [ui.md#ui_set_text-输入文本](ui.md#ui_set_text-输入文本) |
+| `ui_gesture` | 手势操作 | [ui.md#ui_gesture-手势操作](ui.md#ui_gesture-手势操作) |
+| `ui_back` | 返回 | [ui.md#ui_back--ui_home-全局动作](ui.md#ui_back--ui_home-全局动作) |
+| `ui_home` | 回桌面 | [ui.md#ui_back--ui_home-全局动作](ui.md#ui_back--ui_home-全局动作) |
+| `rpc_start` | 启动 RPC 服务 | [ui.md#python-rpcrpc_start--rpc_stop--rpc_status](ui.md#python-rpcrpc_start--rpc_stop--rpc_status) |
+| `rpc_stop` | 停止 RPC 服务 | [ui.md#python-rpcrpc_start--rpc_stop--rpc_status](ui.md#python-rpcrpc_start--rpc_stop--rpc_status) |
+| `rpc_status` | RPC 服务状态 | [ui.md#python-rpcrpc_start--rpc_stop--rpc_status](ui.md#python-rpcrpc_start--rpc_stop--rpc_status) |
+| `ui_long_click` / `ui_clear` / `ui_sendkey` / `ui_scroll_to` / `ui_wait_idle` / `ui_wait_gone` / `ui_exists` / `ui_get_text` / `ui_checked` / `ui_enabled` / `ui_selected` / `ui_count` / `ui_which` / `ui_in_app` / `ui_keyboard_shown` / `ui_last_toast` / `ui_color` / `ui_recents` / `ui_open_notifications` / `ui_quick_settings` | 元素动作/全局动作 | —（见 inventory/guides） |
+| `ui_launch` / `ui_open_url` / `ui_intent` / `ui_apps` / `ui_installed` / `ui_launch_app` / `ui_package_name` / `ui_app_name` / `ui_open_app_setting` | 应用命令 | — |
+| `ui_screen_on` / `ui_locked` / `ui_wake` / `ui_orientation` / `ui_info` / `ui_set_brightness` / `ui_get_brightness` / `ui_get_mem` / `ui_is_charging` | 设备命令 | — |
+| `ui_find_color` / `ui_find_multi_colors` / `ui_sensors` | 找色/传感器 | — |
+| `ui_file_read` / `ui_file_write` / `ui_file_append` / `ui_file_exists` / `ui_file_list` / `ui_file_copy` / `ui_file_move` / `ui_file_remove` | 文件命令 | — |
+| `ui_media_seek` / `ui_media_volume` / `ui_media_position` / `ui_media_duration` / `ui_media_state` | 媒体命令 | — |
+| `ui_notifications` / `ui_has_notification` / `ui_notification_reply` / `ui_notification_click` / `ui_notification_dismiss` / `ui_clipboard` | 通知/剪贴板 | — |
+
 ---
 
 ## 维护规则

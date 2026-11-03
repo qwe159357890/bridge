@@ -48,7 +48,7 @@ import my.bridge.com.interact.TtsSpeaker
 import my.bridge.com.location.LocationHelper
 import my.bridge.com.media.MediaCaptureService
 import my.bridge.com.media.ProjectionConsentActivity
-import my.bridge.com.access.BridgeAccessibilityService
+import my.bridge.com.automation.a11y.BridgeAccessibilityService
 import my.bridge.com.media.ScreenCaptureHolder
 import my.bridge.com.media.MusicPlayer
 import my.bridge.com.vnt.VntMeshController
@@ -246,7 +246,227 @@ object CommandModule {
         Command.SSH_STATUS to CommandExecutor { command ->
             executeSshStatus(context, command)
         },
-        )
+        // ---- 界面自动化（v0.2.39：无障碍控件读取/操作，对标 autox）----
+        Command.UI_DUMP to CommandExecutor { command ->
+            executeUiDump(command)
+        },
+        Command.UI_FIND to CommandExecutor { command ->
+            executeUiFind(command)
+        },
+        Command.UI_CLICK to CommandExecutor { command ->
+            executeUiClick(command)
+        },
+        Command.UI_SET_TEXT to CommandExecutor { command ->
+            executeUiSetText(context, command)
+        },
+        Command.UI_GESTURE to CommandExecutor { command ->
+            executeUiGesture(command)
+        },
+        Command.UI_BACK to CommandExecutor { command ->
+            executeUiBack(command)
+        },
+        Command.UI_HOME to CommandExecutor { command ->
+            executeUiHome(command)
+        },
+        // ---- Python RPC（v0.2.39：手机内嵌 HTTP/REST 服务，供 Python 脚本驱动）----
+        Command.RPC_START to CommandExecutor { command ->
+            executeRpcStart(command)
+        },
+        Command.RPC_STOP to CommandExecutor { command ->
+            executeRpcStop(command)
+        },
+        Command.RPC_STATUS to CommandExecutor { command ->
+            executeRpcStatus(command)
+        },
+        // ---- 界面自动化增强（v0.2.40：委托 automation/commands 执行器）----
+        Command.UI_LONG_CLICK to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.longClick(command)
+        },
+        Command.UI_SCROLL_TO to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.scrollTo(command)
+        },
+        Command.UI_WAIT_IDLE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.waitIdle(command)
+        },
+        Command.UI_WAIT_GONE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.waitGone(command)
+        },
+        Command.UI_CLEAR to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.clear(context, command)
+        },
+        Command.UI_SENDKEY to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.sendKey(context, command)
+        },
+        Command.UI_EXISTS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.exists(command)
+        },
+        Command.UI_GET_TEXT to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.getText(command)
+        },
+        Command.UI_CHECKED to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.flag(command) { it.checked() }
+        },
+        Command.UI_ENABLED to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.flag(command) { it.enabled() }
+        },
+        Command.UI_SELECTED to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.flag(command) { it.selected() }
+        },
+        Command.UI_COUNT to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.count(command)
+        },
+        Command.UI_WHICH to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.which(command)
+        },
+        Command.UI_IN_APP to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.inApp(command)
+        },
+        Command.UI_KEYBOARD_SHOWN to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.keyboardShown(command)
+        },
+        Command.UI_LAST_TOAST to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.lastToast(command)
+        },
+        Command.UI_COLOR to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.color(context, command)
+        },
+        Command.UI_RECENTS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.global(command, "recents")
+        },
+        Command.UI_OPEN_NOTIFICATIONS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.global(command, "notifications")
+        },
+        Command.UI_QUICK_SETTINGS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.UiCommandExecutors.global(command, "quick_settings")
+        },
+        // ---- 设备 + 应用命令（v0.2.40）----
+        Command.UI_LAUNCH to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.launch(context, command)
+        },
+        Command.UI_OPEN_URL to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.openUrl(context, command)
+        },
+        Command.UI_INTENT to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.intent(context, command)
+        },
+        Command.UI_APPS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.apps(context, command)
+        },
+        Command.UI_INSTALLED to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.installed(context, command)
+        },
+        Command.UI_SCREEN_ON to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.screenOn(context, command)
+        },
+        Command.UI_LOCKED to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.locked(context, command)
+        },
+        Command.UI_WAKE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.wake(context, command)
+        },
+        Command.UI_ORIENTATION to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.orientation(context, command)
+        },
+        Command.UI_INFO to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.info(context, command)
+        },
+        Command.UI_LAUNCH_APP to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.launchApp(context, command)
+        },
+        Command.UI_PACKAGE_NAME to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.packageName(context, command)
+        },
+        Command.UI_APP_NAME to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.appName(context, command)
+        },
+        Command.UI_OPEN_APP_SETTING to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.openAppSetting(context, command)
+        },
+        Command.UI_SET_BRIGHTNESS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.setBrightness(context, command)
+        },
+        Command.UI_GET_BRIGHTNESS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.getBrightness(context, command)
+        },
+        Command.UI_GET_MEM to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.getMem(context, command)
+        },
+        Command.UI_IS_CHARGING to CommandExecutor { command ->
+            my.bridge.com.automation.commands.DeviceCommandExecutors.isCharging(context, command)
+        },
+        // ---- 图像找色 + 传感器（v0.2.40）----
+        Command.UI_FIND_COLOR to CommandExecutor { command ->
+            my.bridge.com.automation.commands.InputCommandExecutors.findColor(context, command)
+        },
+        Command.UI_FIND_MULTI_COLORS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.InputCommandExecutors.findMultiColors(context, command)
+        },
+        Command.UI_SENSORS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.InputCommandExecutors.sensors(context, command)
+        },
+        // ---- 文件 + 媒体（v0.2.40）----
+        Command.UI_FILE_READ to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileRead(context, command)
+        },
+        Command.UI_FILE_WRITE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileWrite(context, command, false)
+        },
+        Command.UI_FILE_APPEND to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileWrite(context, command, true)
+        },
+        Command.UI_FILE_EXISTS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileExists(context, command)
+        },
+        Command.UI_FILE_LIST to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileList(context, command)
+        },
+        Command.UI_FILE_COPY to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileCopyMove(context, command, false)
+        },
+        Command.UI_FILE_MOVE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileCopyMove(context, command, true)
+        },
+        Command.UI_FILE_REMOVE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.fileRemove(context, command)
+        },
+        Command.UI_MEDIA_SEEK to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.mediaControl(context, command, "seek")
+        },
+        Command.UI_MEDIA_VOLUME to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.mediaControl(context, command, "volume")
+        },
+        Command.UI_MEDIA_POSITION to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.mediaControl(context, command, "position")
+        },
+        Command.UI_MEDIA_DURATION to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.mediaControl(context, command, "duration")
+        },
+        Command.UI_MEDIA_STATE to CommandExecutor { command ->
+            my.bridge.com.automation.commands.FileMediaCommandExecutors.mediaControl(context, command, "state")
+        },
+        // ---- 通知子域 + 剪贴板（v0.2.40）----
+        Command.UI_NOTIFICATIONS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.NotificationCommandExecutors.notifications(command)
+        },
+        Command.UI_HAS_NOTIFICATION to CommandExecutor { command ->
+            my.bridge.com.automation.commands.NotificationCommandExecutors.hasNotification(command)
+        },
+        Command.UI_NOTIFICATION_REPLY to CommandExecutor { command ->
+            my.bridge.com.automation.commands.NotificationCommandExecutors.notificationReply(command)
+        },
+        Command.UI_NOTIFICATION_CLICK to CommandExecutor { command ->
+            my.bridge.com.automation.commands.NotificationCommandExecutors.notificationClick(command)
+        },
+        Command.UI_NOTIFICATION_DISMISS to CommandExecutor { command ->
+            my.bridge.com.automation.commands.NotificationCommandExecutors.notificationDismiss(command)
+        },
+        Command.UI_CLIPBOARD to CommandExecutor { command ->
+            my.bridge.com.automation.commands.NotificationCommandExecutors.clipboard(context, command)
+        },
+        ).also { executors ->
+            // 把命令执行器表注入 RPC 控制器，让 RPC 复用同一套执行器（动作层零重复）
+            my.bridge.com.automation.rpc.RpcServerController.bind(executors, context)
+        }
     }
 
     private suspend fun executeUploadLog(
@@ -1999,4 +2219,420 @@ object CommandModule {
     /** 客户端音乐缓存目录：App 私有 music/（无外置存储时回退内部存储）。 */
     private fun musicCacheDir(context: Context): File =
         context.getExternalFilesDir("music") ?: File(context.filesDir, "music")
+
+    // ------------------------------------------------------------------
+    // 界面自动化命令（v0.2.39：无障碍控件读取/操作，对标 autox）
+    //
+    // 依赖 BridgeAccessibilityService（无障碍）开启，且 XML 已声明
+    // canRetrieveWindowContent + canPerformGestures。
+    // 耗电红线：全部「按命令拉取、零常驻轮询」，选择器查找仅在命令触发时遍历一次控件树。
+    // ------------------------------------------------------------------
+
+    /** 无障碍服务未开启时的统一回执。 */
+    private fun uiNotReady(command: Command): CommandResult =
+        CommandResult(
+            command.commandId, command.command, false,
+            "无障碍服务未开启：请在设备「设置 → 无障碍 → Bridge 辅助服务」开启后重试",
+        )
+
+    /**
+     * 极简选择器 DSL 解析：把 autox 风格的链式表达式解析为 UiGlobalSelector。
+     * 支持 text/textContains/textStartsWith/textEndsWith/textMatches、
+     * id/idContains/desc/descContains/className/classNameContains/packageName、
+     * clickable/enabled/scrollable/editable（布尔，可带 true/false）等。
+     * 例：text("登录")、textContains("确定").clickable()、className("Button")
+     */
+    private fun parseSelector(expr: String): my.bridge.com.automation.automator.UiGlobalSelector {
+        val s = my.bridge.com.automation.automator.UiGlobalSelector()
+        // 按 .methodName(args) 逐段匹配；忽略空白与末尾多余字符
+        val regex = Regex("""(\w+)\s*\(([^)]*)\)""")
+        var applied = false
+        for (m in regex.findAll(expr)) {
+            val name = m.groupValues[1]
+            val raw = m.groupValues[2].trim()
+            val arg = raw.trim('"', '\'', ' ')
+            fun boolArg(): Boolean = arg.isEmpty() || arg.equals("true", true)
+            when (name) {
+                "text" -> s.text(arg)
+                "textContains" -> s.textContains(arg)
+                "textStartsWith" -> s.textStartsWith(arg)
+                "textEndsWith" -> s.textEndsWith(arg)
+                "textMatches" -> s.textMatches(arg)
+                "id" -> s.id(arg)
+                "idContains" -> s.idContains(arg)
+                "desc" -> s.desc(arg)
+                "descContains" -> s.descContains(arg)
+                "className" -> s.className(arg)
+                "classNameContains" -> s.classNameContains(arg)
+                "packageName" -> s.packageName(arg)
+                "clickable" -> s.clickable(boolArg())
+                "enabled" -> s.enabled(boolArg())
+                "scrollable" -> s.scrollable(boolArg())
+                "editable" -> s.editable(boolArg())
+                "longClickable" -> s.longClickable(boolArg())
+                "checkable" -> s.checkable(boolArg())
+                "checked" -> s.checked(boolArg())
+                "focusable" -> s.focusable(boolArg())
+                "focused" -> s.focused(boolArg())
+                "selected" -> s.selected(boolArg())
+                "visibleToUser" -> s.visibleToUser(boolArg())
+                "password" -> s.password(boolArg())
+                "depth" -> s.depth(arg.toIntOrNull() ?: 0)
+                else -> throw IllegalArgumentException("不支持的选择器方法：$name")
+            }
+            applied = true
+        }
+        if (!applied) throw IllegalArgumentException("选择器解析失败：$expr")
+        return s
+    }
+
+    /** 取根节点；未就绪返回 null（调用方回执）。 */
+    private fun uiRootOrNull(): my.bridge.com.automation.automator.UiObject? =
+        BridgeAccessibilityService.currentRoot()
+
+    /** 把 UiObject 转成 JSON 描述（供回执展示）。 */
+    private fun nodeToJson(n: my.bridge.com.automation.automator.UiObject, depth: Int = -1): String {
+        val b = n.bounds()
+        val bp = n.boundsInParent()
+        return buildString {
+            append("{")
+            // 基础标识
+            append("\"text\":").append(jsonStr(n.text()))
+            append(",\"desc\":").append(jsonStr(n.desc() ?: ""))
+            append(",\"id\":").append(jsonStr(n.id() ?: ""))
+            append(",\"className\":").append(jsonStr(n.className() ?: ""))
+            append(",\"package\":").append(jsonStr(n.packageName() ?: ""))
+            // 坐标（屏幕 / 父容器）
+            append(",\"bounds\":[").append(b.left).append(',').append(b.top)
+                .append(',').append(b.right).append(',').append(b.bottom).append("]")
+            append(",\"boundsInParent\":[").append(bp.left).append(',').append(bp.top)
+                .append(',').append(bp.right).append(',').append(bp.bottom).append("]")
+            // 布尔状态
+            append(",\"clickable\":").append(n.clickable())
+            append(",\"longClickable\":").append(n.longClickable())
+            append(",\"checkable\":").append(n.checkable())
+            append(",\"checked\":").append(n.checked())
+            append(",\"focusable\":").append(n.focusable())
+            append(",\"focused\":").append(n.focused())
+            append(",\"selected\":").append(n.selected())
+            append(",\"enabled\":").append(n.enabled())
+            append(",\"editable\":").append(n.editable())
+            append(",\"scrollable\":").append(n.scrollable())
+            append(",\"visibleToUser\":").append(n.visibleToUser())
+            append(",\"accessibilityFocused\":").append(n.accessibilityFocused())
+            append(",\"password\":").append(n.password())
+            append(",\"contentInvalid\":").append(n.isContentInvalid)
+            append(",\"screenReaderFocusable\":").append(n.isScreenReaderFocusable)
+            append(",\"dismissable\":").append(n.isDismissable)
+            append(",\"multiLine\":").append(n.isMultiLine)
+            append(",\"importantForAccessibility\":").append(n.isImportantForAccessibility)
+            // 层级
+            append(",\"childCount\":").append(n.childCount())
+            append(",\"depth\":").append(depth)
+            append(",\"drawingOrder\":").append(n.drawingOrder())
+            append(",\"windowId\":").append(n.windowId)
+            // 集合信息（列表/网格）
+            append(",\"row\":").append(n.row())
+            append(",\"column\":").append(n.column())
+            append(",\"rowSpan\":").append(n.rowSpan())
+            append(",\"columnSpan\":").append(n.columnSpan())
+            append(",\"rowCount\":").append(n.rowCount())
+            append(",\"columnCount\":").append(n.columnCount())
+            // 输入相关
+            append(",\"maxTextLength\":").append(n.maxTextLength)
+            append(",\"textSelectionStart\":").append(n.textSelectionStart)
+            append(",\"textSelectionEnd\":").append(n.textSelectionEnd)
+            append(",\"inputType\":").append(n.inputType)
+            append(",\"error\":").append(jsonStr(n.error?.toString() ?: ""))
+            append(",\"hintText\":").append(jsonStr(n.hintText?.toString() ?: ""))
+            append(",\"tooltipText\":").append(jsonStr(n.tooltipText?.toString() ?: ""))
+            append(",\"paneTitle\":").append(jsonStr(n.paneTitle?.toString() ?: ""))
+            // 其它
+            append(",\"liveRegion\":").append(n.liveRegion)
+            append(",\"movementGranularities\":").append(n.movementGranularities)
+            // 可执行动作列表（id + 名称，便于后台/脚本判断能否执行某动作）
+            append(",\"actions\":[")
+            var firstAction = true
+            for (a in n.actionList) {
+                if (!firstAction) append(',')
+                append("{\"id\":").append(a.id).append(",\"label\":").append(jsonStr(a.label?.toString() ?: "")).append("}")
+                firstAction = false
+            }
+            append("]")
+            append("}")
+        }
+    }
+
+    private fun jsonStr(s: String): String {
+        val sb = StringBuilder("\"")
+        for (c in s) {
+            when (c) {
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> if (c < ' ') sb.append("\\u%04x".format(c.code)) else sb.append(c)
+            }
+        }
+        sb.append("\"")
+        return sb.toString()
+    }
+
+    /** ui_dump：导出当前窗口控件树（DFS，限制节点数与深度）。 */
+    private fun executeUiDump(command: Command): CommandResult {
+        val root = uiRootOrNull() ?: return uiNotReady(command)
+        val maxNodes = command.intParam("max_nodes", 500, 1, 2000)
+        val maxDepth = command.intParam("max_depth", 20, 1, 50)
+        return try {
+            val sb = StringBuilder("[")
+            var count = 0
+            fun walk(n: my.bridge.com.automation.automator.UiObject, depth: Int) {
+                if (count >= maxNodes || depth > maxDepth) return
+                if (count > 0) sb.append(',')
+                sb.append(nodeToJson(n, depth))
+                count++
+                for (i in 0 until n.childCount()) {
+                    if (count >= maxNodes) break
+                    val c = n.child(i) ?: continue
+                    walk(c, depth + 1)
+                }
+            }
+            walk(root, 0)
+            sb.append("]")
+            root.recycle()
+            CommandResult(command.commandId, command.command, true, sb.toString())
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_dump 执行失败")
+            runCatching { root.recycle() }
+            CommandResult(command.commandId, command.command, false, "导出界面结构失败：${e.message}")
+        }
+    }
+
+    /** ui_find：按选择器查找控件，返回匹配节点 JSON 列表。支持 timeout 等待出现。 */
+    private fun executeUiFind(command: Command): CommandResult {
+        val max = command.intParam("max_results", 20, 1, 200)
+        val timeoutMs = command.intParam("timeout_ms", 0, 0, 60000)
+        val selectorText = command.strParam("selector", "")
+        return try {
+            val selector = parseSelector(selectorText)
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs
+            var result: List<my.bridge.com.automation.automator.UiObject> = emptyList()
+            // 等待出现：timeout>0 时轮询查找（间隔 300ms，零常驻，仅命令期间轮询）
+            while (true) {
+                val root = uiRootOrNull()
+                if (root != null) {
+                    result = selector.findAndReturnList(root, max)
+                    root.recycle()
+                    if (result.isNotEmpty()) break
+                }
+                if (SystemClock.elapsedRealtime() >= deadline) break
+                Thread.sleep(300)
+            }
+            val sb = StringBuilder("[")
+            result.forEachIndexed { i, n ->
+                if (i > 0) sb.append(',')
+                sb.append(nodeToJson(n))
+            }
+            sb.append("]")
+            if (result.isEmpty()) {
+                CommandResult(command.commandId, command.command, false, "未找到匹配控件（selector=$selectorText）")
+            } else {
+                CommandResult(
+                    command.commandId, command.command, true,
+                    "匹配 ${result.size} 个控件：$sb",
+                )
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_find 执行失败")
+            CommandResult(command.commandId, command.command, false, "查找失败：${e.message}")
+        }
+    }
+
+    /** ui_click：优先按选择器点击，否则按坐标。带三级降级（节点→祖先→坐标手势）。 */
+    private fun executeUiClick(command: Command): CommandResult {
+        val selectorText = command.strParam("selector", "")
+        val index = command.intParam("index", 0, 0, 200)
+        return try {
+            if (selectorText.isNotEmpty()) {
+                val root = uiRootOrNull() ?: return uiNotReady(command)
+                val selector = parseSelector(selectorText)
+                val list = selector.findAndReturnList(root, index + 1)
+                val target = list.getOrNull(index)
+                root.recycle()
+                if (target == null) {
+                    CommandResult(command.commandId, command.command, false, "未找到匹配控件（index=$index）")
+                } else {
+                    // 三级降级：节点 ACTION_CLICK → 最近可点击祖先 → bounds 中心坐标手势
+                    val (ok, strategy) = target.clickWithFallback()
+                    if (ok) {
+                        CommandResult(command.commandId, command.command, true, "已点击控件（$strategy）：${nodeToJson(target)}")
+                    } else {
+                        val b = target.bounds()
+                        val cx = b.centerX()
+                        val cy = b.centerY()
+                        if (BridgeAccessibilityService.click(cx, cy)) {
+                            CommandResult(command.commandId, command.command, true, "已点击控件（坐标手势 ($cx,$cy)）：${nodeToJson(target)}")
+                        } else {
+                            CommandResult(command.commandId, command.command, false, "点击失败：控件及其祖先均不可点击，坐标手势也未成功")
+                        }
+                    }
+                }
+            } else {
+                val x = command.params.get("x")?.takeIf { it.isJsonPrimitive }?.asInt
+                val y = command.params.get("y")?.takeIf { it.isJsonPrimitive }?.asInt
+                if (x == null || y == null) {
+                    CommandResult(command.commandId, command.command, false, "请提供 selector 或 x/y 坐标")
+                } else if (BridgeAccessibilityService.click(x, y)) {
+                    CommandResult(command.commandId, command.command, true, "已点击坐标 ($x,$y)")
+                } else {
+                    CommandResult(command.commandId, command.command, false, "坐标点击失败（无障碍未就绪或手势被取消）")
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_click 执行失败")
+            CommandResult(command.commandId, command.command, false, "点击失败：${e.message}")
+        }
+    }
+
+    /** ui_set_text：向可编辑控件写入文本。带 IME 兜底（ACTION_SET_TEXT → IME commitText）。 */
+    private fun executeUiSetText(context: Context, command: Command): CommandResult {
+        val root = uiRootOrNull() ?: return uiNotReady(command)
+        val index = command.intParam("index", 0, 0, 200)
+        return try {
+            val selector = parseSelector(command.strParam("selector", ""))
+            val text = command.strParam("text", "")
+            if (text.isEmpty()) {
+                root.recycle()
+                return CommandResult(command.commandId, command.command, false, "文本内容不能为空")
+            }
+            val list = selector.findAndReturnList(root, index + 1)
+            val target = list.getOrNull(index)
+            root.recycle()
+            if (target == null) {
+                CommandResult(command.commandId, command.command, false, "未找到匹配输入框（index=$index）")
+            } else {
+                // 第一级：直接 ACTION_SET_TEXT（要求控件 editable）
+                if (target.editable() && target.setText(text)) {
+                    CommandResult(command.commandId, command.command, true, "已输入文本（ACTION_SET_TEXT）：${nodeToJson(target)}")
+                } else {
+                    // 第二级：IME 兜底（先点击聚焦，再切 BridgeKeyboard commitText）
+                    val b = target.bounds()
+                    val cx = b.centerX()
+                    val cy = b.centerY()
+                    BridgeAccessibilityService.click(cx, cy) // 聚焦目标输入框
+                    Thread.sleep(150)
+                    if (BridgeAccessibilityService.imeCommitText(context, text)) {
+                        CommandResult(command.commandId, command.command, true, "已输入文本（IME 兜底）：${nodeToJson(target)}")
+                    } else {
+                        CommandResult(
+                            command.commandId, command.command, false,
+                            "输入失败：ACTION_SET_TEXT 无效且 IME 兜底未成功（请在「设置→语言与输入法」启用 Bridge 输入辅助）",
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_set_text 执行失败")
+            runCatching { root.recycle() }
+            CommandResult(command.commandId, command.command, false, "输入失败：${e.message}")
+        }
+    }
+
+    /** ui_gesture：坐标手势（滑动/点击/长按）。 */
+    private fun executeUiGesture(command: Command): CommandResult {
+        val action = command.strParam("action", "swipe")
+        val duration = command.intParam("duration_ms", 300, 1, 60000).toLong()
+        return try {
+            val x1 = command.params.get("x1")?.takeIf { it.isJsonPrimitive }?.asInt
+            val y1 = command.params.get("y1")?.takeIf { it.isJsonPrimitive }?.asInt
+            if (x1 == null || y1 == null) {
+                return CommandResult(command.commandId, command.command, false, "缺少起点坐标 x1/y1")
+            }
+            val ok = when (action) {
+                "click" -> BridgeAccessibilityService.click(x1, y1)
+                "long_click" -> BridgeAccessibilityService.longClick(x1, y1)
+                else -> {
+                    val x2 = command.params.get("x2")?.takeIf { it.isJsonPrimitive }?.asInt
+                    val y2 = command.params.get("y2")?.takeIf { it.isJsonPrimitive }?.asInt
+                    if (x2 == null || y2 == null) {
+                        return CommandResult(command.commandId, command.command, false, "滑动手势缺少终点坐标 x2/y2")
+                    }
+                    BridgeAccessibilityService.swipe(x1, y1, x2, y2, duration)
+                }
+            }
+            CommandResult(
+                command.commandId, command.command, ok,
+                if (ok) "手势执行成功（$action）" else "手势执行失败（无障碍未就绪或手势被取消）",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_gesture 执行失败")
+            CommandResult(command.commandId, command.command, false, "手势失败：${e.message}")
+        }
+    }
+
+    /** ui_back：模拟返回键。 */
+    private fun executeUiBack(command: Command): CommandResult =
+        if (BridgeAccessibilityService.back()) {
+            CommandResult(command.commandId, command.command, true, "已触发返回键")
+        } else {
+            uiNotReady(command)
+        }
+
+    /** ui_home：模拟主页键回桌面。 */
+    private fun executeUiHome(command: Command): CommandResult =
+        if (BridgeAccessibilityService.home()) {
+            CommandResult(command.commandId, command.command, true, "已触发主页键")
+        } else {
+            uiNotReady(command)
+        }
+
+    // ------------------------------------------------------------------
+    // Python RPC（v0.2.39：手机内嵌 HTTP/REST 服务，供 Python 脚本驱动）
+    // 状态联动 + 幂等守卫：rpc_start 重复下发时若已在运行则回执「已在运行」；
+    // rpc_stop 未运行时直接收状态。token 鉴权是安全红线。
+    // ------------------------------------------------------------------
+
+    /** rpc_start：拉起手机内嵌 HTTP/REST 服务（监听 0.0.0.0，默认端口 15161），生成 token。 */
+    private fun executeRpcStart(command: Command): CommandResult {
+        val port = command.intParam("port", 15161, 0, 65535)
+        return try {
+            if (my.bridge.com.automation.rpc.RpcServerController.isRunning()) {
+                val s = my.bridge.com.automation.rpc.RpcServerController.state
+                CommandResult(
+                    command.commandId, command.command, true,
+                    "RPC 服务已在运行 · 端口 ${s.port} · token ${s.token}（重复下发被忽略）",
+                )
+            } else if (my.bridge.com.automation.rpc.RpcServerController.start(port)) {
+                val s = my.bridge.com.automation.rpc.RpcServerController.state
+                CommandResult(
+                    command.commandId, command.command, true,
+                    "RPC 服务已启动 · 端口 ${s.port} · token ${s.token}（可经 127.0.0.1 / 局域网 / VNT 虚拟网连入）",
+                )
+            } else {
+                CommandResult(command.commandId, command.command, false, "RPC 服务启动失败")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 rpc_start 执行失败")
+            CommandResult(command.commandId, command.command, false, "RPC 启动失败：${e.message}")
+        }
+    }
+
+    /** rpc_stop：停止 RPC 服务，释放端口与线程池。 */
+    private fun executeRpcStop(command: Command): CommandResult =
+        try {
+            if (!my.bridge.com.automation.rpc.RpcServerController.isRunning()) {
+                CommandResult(command.commandId, command.command, true, "RPC 服务未运行（无需停止）")
+            } else {
+                my.bridge.com.automation.rpc.RpcServerController.stop()
+                CommandResult(command.commandId, command.command, true, "RPC 服务已停止")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 rpc_stop 执行失败")
+            CommandResult(command.commandId, command.command, false, "RPC 停止失败：${e.message}")
+        }
+
+    /** rpc_status：只读本地快照，不触发网络操作。 */
+    private fun executeRpcStatus(command: Command): CommandResult =
+        CommandResult(command.commandId, command.command, true, my.bridge.com.automation.rpc.RpcServerController.statusText())
 }

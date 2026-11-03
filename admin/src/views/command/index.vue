@@ -309,6 +309,9 @@
     <!-- SSH 三条命令的「查看详情」弹窗（v0.2.34，同款分治约定） -->
     <SshResultDetailDialog ref="sshDetail" :device-names="deviceNameMap" />
 
+    <!-- UI 两条命令的「查看详情」弹窗（v0.2.39：ui_dump 树形可视化 / ui_find 匹配列表） -->
+    <UiResultDetailDialog ref="uiDetail" :device-names="deviceNameMap" />
+
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -370,13 +373,13 @@
               >
                 查看
               </el-button>
-              <!-- v0.2.33+：VNT / SSH 命令的回执单独设计详情弹窗；pending 行不显示 -->
+              <!-- v0.2.33+：VNT / SSH / UI 命令的回执单独设计详情弹窗；pending 行不显示 -->
               <el-button
-                v-if="canViewVntDetail(row) || canViewSshDetail(row)"
+                v-if="canViewVntDetail(row) || canViewSshDetail(row) || canViewUiDetail(row)"
                 size="small"
                 type="primary"
                 link
-                @click="canViewVntDetail(row) ? vntDetail?.show(row) : sshDetail?.show(row)"
+                @click="openDetail(row)"
               >
                 查看详情
               </el-button>
@@ -436,6 +439,7 @@ import { parseVolumeMessage, volumeCurrentText, type VolumeSnapshot } from '@/ut
 import StreamPlayerCard from '@/components/StreamPlayerCard.vue'
 import VntResultDetailDialog from '@/components/VntResultDetailDialog.vue'
 import SshResultDetailDialog from '@/components/SshResultDetailDialog.vue'
+import UiResultDetailDialog from '@/components/UiResultDetailDialog.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -462,6 +466,21 @@ const SSH_DETAIL_COMMANDS = ['ssh_status', 'ssh_start', 'ssh_stop']
 const sshDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
 function canViewSshDetail(row: CommandRecord): boolean {
   return SSH_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
+}
+
+// UI 两条命令的「查看详情」（v0.2.39）：ui_dump 树形可视化 + ui_find 匹配列表，
+// 见 UiResultDetailDialog.vue。
+const UI_DETAIL_COMMANDS = ['ui_dump', 'ui_find']
+const uiDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
+function canViewUiDetail(row: CommandRecord): boolean {
+  return UI_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
+}
+
+// 「查看详情」统一入口：按命令族分流到对应弹窗。
+function openDetail(row: CommandRecord) {
+  if (canViewVntDetail(row)) vntDetail.value?.show(row)
+  else if (canViewSshDetail(row)) sshDetail.value?.show(row)
+  else if (canViewUiDetail(row)) uiDetail.value?.show(row)
 }
 
 // ---------------------------------------------------------------------------

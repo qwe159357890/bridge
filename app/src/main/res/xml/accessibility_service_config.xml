@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Bridge 辅助服务配置：canTakeScreenshot 是 takeScreenshot() 的硬性要求（API 30+），
-     缺少会抛 SecurityException「Services don't have the capability of taking the screenshot」；
-     不订阅窗口内容（canRetrieveWindowContent=false），纯动作型服务，最小权限原则。 -->
+<!-- Bridge 辅助服务配置（v0.2.39 起丰富无障碍能力，对标 autox）：
+     - canTakeScreenshot：takeScreenshot() 的硬性要求（API 30+），缺少会抛
+       SecurityException「Services don't have the capability of taking the screenshot」。
+     - canRetrieveWindowContent=true：读取控件树（UiObject/UiGlobalSelector 的前提）。
+     - canPerformGestures=true：手势注入（dispatchGesture 点击/滑动/长按）。
+     - 事件只订阅 typeWindowStateChanged（窗口切换，低频）用于缓存根节点；
+       **刻意不订阅** typeViewScrolled / typeWindowContentChanged（高频，会频繁唤醒进程，
+       违反「按命令拉取、零常驻轮询」的耗电红线，见 docs/research/accessibility-enrichment.md §二）。
+     - flagReportViewIds：getViewIdResourceName() 的前提，否则 id() 选择器失效。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeNotificationStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:notificationTimeout="100"
-    android:canRetrieveWindowContent="false"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
     android:canTakeScreenshot="true"
     android:summary="@string/accessibility_service_summary"
     android:description="@string/accessibility_service_desc" />

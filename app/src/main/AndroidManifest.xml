@@ -256,7 +256,7 @@
              + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。
              用户在系统设置 → 无障碍中开启；命令路径见 CommandModule 的降级链。 -->
         <service
-            android:name="my.bridge.com.access.BridgeAccessibilityService"
+            android:name="my.bridge.com.automation.a11y.BridgeAccessibilityService"
             android:exported="true"
             android:label="@string/accessibility_service_summary"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -266,6 +266,34 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Bridge 极简输入法（IME，v0.2.39）：ui_set_text 的 ACTION_SET_TEXT 失效时
+             的文本输入兜底（密码框/自定义输入框/WebView）。无软键盘 UI，切到它时
+             不弹键盘，输入完切回原输入法。需用户在「设置 → 语言与输入法」启用。 -->
+        <service
+            android:name="my.bridge.com.automation.a11y.BridgeKeyboard"
+            android:exported="true"
+            android:label="@string/bridge_keyboard_label"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/bridge_keyboard_method" />
+        </service>
+
+        <!-- Bridge 通知监听（v0.2.40）：通知域自动化（列表/回复/点开/清除），
+             验证码自动读取等场景。需用户在「设置 → 通知使用权」手动授权。 -->
+        <service
+            android:name="my.bridge.com.automation.notification.BridgeNotificationListener"
+            android:exported="true"
+            android:label="@string/bridge_notification_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
 
         <!-- 投屏授权透明页：系统强制要求经 Activity 弹授权框，用户点「立即开始」 -->

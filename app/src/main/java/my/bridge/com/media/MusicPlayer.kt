@@ -183,4 +183,59 @@ object MusicPlayer {
         state = State.IDLE
         currentSource = null
     }
+
+    // ------------------------------------------------------------------
+    // 播放增强（v0.2.40：seek / volume / position / duration，对标 AutoX Media）
+    // ------------------------------------------------------------------
+
+    /** 跳转到指定位置（毫秒）。空闲时忽略返回 false。 */
+    fun seekTo(positionMs: Int): Boolean {
+        synchronized(this) {
+            val mp = player ?: return false
+            return try {
+                mp.seekTo(positionMs)
+                true
+            } catch (e: IllegalStateException) {
+                false
+            }
+        }
+    }
+
+    /** 设置音量（0~100，映射到 0.0~1.0）。空闲时忽略返回 false。 */
+    fun setVolume(percent: Int): Boolean {
+        synchronized(this) {
+            val mp = player ?: return false
+            return try {
+                val v = percent.coerceIn(0, 100) / 100f
+                mp.setVolume(v, v)
+                true
+            } catch (e: IllegalStateException) {
+                false
+            }
+        }
+    }
+
+    /** 当前播放位置（毫秒）；空闲返回 -1。 */
+    fun currentPosition(): Int {
+        synchronized(this) {
+            val mp = player ?: return -1
+            return try {
+                mp.currentPosition
+            } catch (e: IllegalStateException) {
+                -1
+            }
+        }
+    }
+
+    /** 总时长（毫秒）；空闲返回 -1。 */
+    fun duration(): Int {
+        synchronized(this) {
+            val mp = player ?: return -1
+            return try {
+                mp.duration
+            } catch (e: IllegalStateException) {
+                -1
+            }
+        }
+    }
 }

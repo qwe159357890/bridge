@@ -61,6 +61,10 @@
           <el-icon><Connection /></el-icon>
           <span>连接监控</span>
         </el-menu-item>
+        <el-menu-item index="/automation" title="自动化调试台">
+          <el-icon><Monitor /></el-icon>
+          <span>自动化调试台</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 

@@ -16,6 +16,7 @@
 ### 模块使用文档（guides/）
 | 文档 | 说明 |
 |---|---|
+| [automation.md](guides/automation.md) | **自动化模块使用文档**（面向小白：这是什么、一次性授权配置、连接手机三步、Hello World、能力全景、能做与不能做、配置项、FAQ；功能怎么用见本文，怎么实现见 research/） |
 | [ssh-server.md](guides/ssh-server.md) | **SSH 服务器使用文档**（SFTP 文件管理 + 远程终端：启动方式、连接参数、快捷目录/内置 alias、存储档、能做与不能做（含为何装不了 zsh/oh-my-zsh）、配置项、FAQ） |
 
 ### 架构类（architecture/）
@@ -66,6 +67,13 @@
 | [vnt-mesh-integration.md](research/vnt-mesh-integration.md) | **VNT 组网（虚拟局域网 / SD-WAN）集成调研**（三仓库全景 + 2.x `com.vnt` / 当前 1.x `top.wherewego.vnt.jni` 绑定 API 面与调用时序 + Android VPN 硬约束 + **官方预编译 so 产物方案与校验** + 运行期刷新机制源码实锤 + Bridge 现状对照 + 方案对比（推荐 JNI 内嵌）+ 落地设计/坑清单/9 项决策/开工核对清单；**v0.2.30 曾实现 2.x（已作废，见 §十三）**：`com/vnt/*.java` + `my/bridge/com/vnt/` + `ui/VntPages.kt` + 主页第 5 Tab + `vnt_start/vnt_stop/vnt_status` 三条命令；**★ v0.2.32 起核心整体替换为 1.x（官方 VntApp v1.2.9 Java JNI 版），当前实现以 §十三 为准**；§十二 的 v0.2.31 修订（universal 三套 ABI / 关于页滚动 / 自动组网记忆 / v2.0.11 地址规则）因「自建 VNTS + 存量客户端全 1.x、必须互通、服务端不能升级」**仅作历史记录**；**真机互通验证待做**，原型见 `assets/design/ui-mockup-vnt-mesh.html`，改前留档见 `docs/dev/vnt-integration-change-ledger.md`） |
 | [center-server-wechat-integration.md](research/center-server-wechat-integration.md) | **微信中心服务器（center-server）前端集成调研**（参考项目结构/前端真实功能与实例账号上下文/REST+WS 契约实锤/与 Bridge 现状对照与保活·工具箱取舍/推荐 `wechat/` 包与「主页·微信·销售·设置」导航方案/风险与分期；**已拍板形态：微信页沉浸 + 页内底部二级 Tab + 状态条仅断线显示 + 账号选择移入输入栏 + 后台常驻收消息（进程级连接、不新增前台服务）+ 工具箱占位 + 附件存 `/sdcard/bridge/wechat/` + 提示音与通知**；**已实现 v0.2.20**：`app/.../wechat/` 全套（进程级常驻连接/通知与提示音/富媒体与下载器）+ `ui/WechatPages.kt` + `ui/WechatMedia.kt` + 底部导航「主页·微信·销售·设置」；仅**真机验证待做**，交互原型见 `assets/design/ui-mockup-wechat-page.html`） |
 | [sshd-integration.md](research/sshd-integration.md) | **客户端 SSH 服务器（sshd）集成调研**（需求=SFTP 文件管理+远程终端、UI 开关+命令体系控制；平台硬约束盘点（minSdk 24 vs NIO2 API 26、BC provider、W^X、scoped storage、Doze）；四方案对比——**推荐方案 A：Apache MINA SSHD 2.20.x 纯 Java 内嵌 + sshd-mina 传输层**（零 NDK 零安装），Dropbear NDK / Termux 搬运 / Go gomobile 作废或备选；替代协议对照（FTP/WebDAV/SMB/ADB over WiFi）SFTP 全优；落地设计：`ssh/` 包 + `specialUse` 前台服务（照 VNT 模式）+ `ssh_start/stop/status` 三命令（v0.2.33 状态联动全套）+ VNT 虚拟网协同 + 双档存储暴露面 + 11 条坑清单 + 分期 P0/P1/P2 + 决策清单；**决策已全部拍板（2026-11-02）**：端口 8022 / 首启随机密码可改可持久化 / P0 直接申请全盘 / P0 完整 sh / `ssh_start,ssh_stop,ssh_status`；交互原型见 `assets/design/ui-mockup-ssh-page.html`；**未实现，可开工**） |
+| [accessibility-enrichment.md](research/accessibility-enrichment.md) | **无障碍能力丰富化调研：对标 AutoX.js**（动作层移植 + 耗电评估 + 实施方案；**已落地**：`access/automator/` 24 文件 + `BridgeAccessibilityService` + `BridgeKeyboard` + 7 条 ui_* 命令） |
+| [automation-benchmark.md](research/automation-benchmark.md) | **流程自动化对比评估：Droidline vs AutoX.js**（两者分别是什么流程自动化 + 工程能力借鉴优先级 P0/P1/P2） |
+| [automation-roadmap.md](research/automation-roadmap.md) | **自动化平台两阶段路线图**（① 控件探查工具 + ② Python RPC；**已实施 A/C 阶段**：点击三级降级/选择器 DSL/IME 兜底 + rpc_start/stop/status + 10 端点 HTTP server + token 鉴权 + Python SDK） |
+| [droidline-feature-inventory.md](research/droidline-feature-inventory.md) | **自动化功能全量清单（Droidline + AutoX 逐行梳理）**（逐行读两个项目源码：Droidline 48 主源码文件 + AutoX runtime/api + inputevent + image 全能力；Droidline「脑+神经+眼睛」全收、AutoX「手+感官」补缺（devices/APP/按键模拟/图像找色/Shell/Media/Files/Sensors）；~100 项能力全景 + 明确取舍；自动化模块实施总蓝本。**已按本清单实施 v0.2.40**） |
+| [automation-directory-separation.md](research/automation-directory-separation.md) | **自动化模块目录分离方案**（第一步：三端自动化代码收敛到 `com/automation` 包，11 子包 a11y/automator/query/input/device/notification/rpc/commands；服务端/前端拆分 + 迁移步骤 + 命名约定 + ColorFinder 去 OpenCV 坑。**批次 0 已迁移完成**） |
+| [automation-implementation-plan.md](research/automation-implementation-plan.md) | **自动化模块实施路线**（第三步：批次 0 目录分离 → 批次 1 关系查询+错误码 → 批次 2 动作层 ~30 命令 → 批次 3 设备+应用 → 批次 4 输入+找色+传感器+文件+媒体 → 批次 5 通知子域+RPC 端点 → 批次 6 SDK 视觉 → 批次 7 P2 后置。**批次 0-6 已实施（v0.2.40），批次 7 P2 暂不做**） |
+| [automation-summary.md](research/automation-summary.md) | **自动化模块阶段性总结**（已交付物总览、能力全景、与 Droidline/AutoX 对照结论、待真机验证清单 §五、遗留 TODO、下一步；功能怎么用见 `guides/automation.md`） |
 
 ### 管理后台（admin/）
 | 文档 | 说明 |

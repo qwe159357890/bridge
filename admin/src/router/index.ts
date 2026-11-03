@@ -77,6 +77,12 @@ const router = createRouter({
           component: () => import('@/views/connection/index.vue'),
           meta: { title: '连接监控' },
         },
+        {
+          path: 'automation',
+          name: 'automation',
+          component: () => import('@/views/automation/index.vue'),
+          meta: { title: '自动化调试台' },
+        },
       ],
     },
   ],

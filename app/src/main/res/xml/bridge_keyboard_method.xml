@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bridge 极简输入法配置：无软键盘 UI（不显示键盘），仅作文本提交兜底。
+     isDefault=false 表示不是默认输入法，仅由 ui_set_text 命令按需切换。 -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:isDefault="false" />
