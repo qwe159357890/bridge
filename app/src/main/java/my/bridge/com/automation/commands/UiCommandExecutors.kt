@@ -82,11 +82,12 @@ object UiCommandExecutors {
 
     /** 节点坐标长按（三级降级）。 */
     private fun longClickVia(n: UiObject, ms: Long): String? {
+        // 三级降级：节点 longClickable → 祖先 longClickable → 坐标手势（用真实时长 ms 按压）
         if (n.longClickable() && n.enabled() && n.longClick()) return "node"
         Matcher.longClickableAncestor(n)?.let { if (it.longClick()) return "parent" }
         val b = n.bounds()
         if (!b.isEmpty) {
-            if (BridgeAccessibilityService.longClick(b.centerX(), b.centerY())) return "gesture"
+            if (BridgeAccessibilityService.longClick(b.centerX(), b.centerY(), ms)) return "gesture"
         }
         return null
     }

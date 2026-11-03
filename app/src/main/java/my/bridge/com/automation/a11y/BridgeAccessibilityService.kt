@@ -168,6 +168,10 @@ class BridgeAccessibilityService : AccessibilityService() {
         /** 坐标长按。 */
         fun longClick(x: Int, y: Int): Boolean = automator()?.longClick(x, y) == true
 
+        /** 坐标长按（指定按压时长 ms）。 */
+        fun longClick(x: Int, y: Int, durationMs: Long): Boolean =
+            automator()?.longClick(x, y, durationMs) == true
+
         /** 坐标滑动（durationMs 为时长）。 */
         fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): Boolean =
             automator()?.swipe(x1, y1, x2, y2, durationMs) == true

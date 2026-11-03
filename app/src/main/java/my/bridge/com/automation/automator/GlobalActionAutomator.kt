@@ -107,7 +107,18 @@ class GlobalActionAutomator(private val serviceProvider: () -> AccessibilityServ
 
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun longClick(x: Int, y: Int): Boolean =
-        gesture(0, (ViewConfiguration.getLongPressTimeout() + 200).toLong(), intArrayOf(x, y))
+        longClick(x, y, (ViewConfiguration.getLongPressTimeout() + 200).toLong())
+
+    /**
+     * 坐标长按，可指定按压时长（ms）。
+     *
+     * 说明：系统长按阈值 `getLongPressTimeout()`（约 500ms）只是「触发」阈值，
+     * 手动长按时手指会持续按到触发后再多按一会。故代码注入手势必须显式用真实
+     * 时长按压（duration），否则表现比手动短、部分需持续按住的长按菜单/拖动会失效。
+     */
+    @RequiresApi(api = Build.VERSION_CODES.N)
+    fun longClick(x: Int, y: Int, durationMs: Long): Boolean =
+        gesture(0, durationMs, intArrayOf(x, y))
 
     @RequiresApi(api = Build.VERSION_CODES.N)
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, delay: Long): Boolean =

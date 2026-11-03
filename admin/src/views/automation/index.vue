@@ -40,12 +40,13 @@
             <template #prefix><span>🔍</span></template>
           </el-input>
         </div>
-        <div class="tree-scroll">
+        <div ref="treeScrollRef" class="tree-scroll">
           <div v-if="!nodes.length" class="empty-hint">
             选择设备后点「刷新」，或从上方工具栏操作
           </div>
           <div v-else v-for="n in filteredNodes" :key="n.key"
                class="tree-node"
+               :data-key="n.key"
                :class="{ selected: n.key === selectedKey, dim: !n.visibleToUser }"
                :style="{ paddingLeft: (n.depth * 14 + 6) + 'px' }"
                @click="selectNode(n)">
@@ -141,7 +142,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { Device } from '@/types'
 import DevicePicker from '@/components/DevicePicker.vue'
@@ -190,6 +191,7 @@ const screenH = ref(0)
 const shotImg = ref<HTMLImageElement | null>(null)
 const shotCanvas = ref<HTMLCanvasElement | null>(null)
 const shotWrap = ref<HTMLDivElement | null>(null)
+const treeScrollRef = ref<HTMLDivElement | null>(null)
 
 const refreshing = ref(false)
 const autoRefresh = ref(false)
@@ -404,6 +406,49 @@ function toggle(n: UiNode) {
 function selectNode(n: UiNode) {
   selectedKey.value = n.key
   drawHighlight()
+  // 展开该节点所有被折叠的祖先，否则节点被折叠隐藏、无法滚动定位
+  expandAncestors(n)
+  // 等 DOM 更新后，滚动到选中节点可见
+  nextTick(() => scrollToNode(n.key))
+}
+
+// 展开节点所有祖先（祖先处于折叠态则节点被隐藏）
+function expandAncestors(n: UiNode) {
+  const ancestors = new Set<number>()
+  const idx = nodes.value.indexOf(n)
+  if (idx < 0) return
+  const stack: number[] = []
+  for (let i = 0; i < idx; i++) {
+    const cur = nodes.value[i]
+    while (stack.length && nodes.value[stack[stack.length - 1]].depth >= cur.depth) stack.pop()
+    stack.push(i)
+  }
+  stack.forEach((p) => ancestors.add(p))
+  const toRemove: string[] = []
+  collapsed.value.forEach((k) => {
+    const node = nodes.value.find((x) => x.key === k)
+    if (node && ancestors.has(nodes.value.indexOf(node))) toRemove.push(k)
+  })
+  if (toRemove.length) {
+    const s = new Set(collapsed.value)
+    toRemove.forEach((k) => s.delete(k))
+    collapsed.value = s
+  }
+}
+
+// 滚动控件树，让选中节点进入可视区
+function scrollToNode(key: string) {
+  const scrollEl = treeScrollRef.value
+  if (!scrollEl) return
+  const el = scrollEl.querySelector(`[data-key="${key}"]`) as HTMLElement | null
+  if (!el) return
+  const scrollRect = scrollEl.getBoundingClientRect()
+  const elRect = el.getBoundingClientRect()
+  // 若节点在可视区外（上方或下方），滚动使其居中
+  if (elRect.top < scrollRect.top || elRect.bottom > scrollRect.bottom) {
+    const targetTop = el.offsetTop - (scrollEl.clientHeight - el.clientHeight) / 2
+    scrollEl.scrollTop = Math.max(0, targetTop)
+  }
 }
 
 // ============ 选择器生成（可多选组合） ============
