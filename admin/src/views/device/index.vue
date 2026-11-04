@@ -105,6 +105,13 @@
             >
               踢下线
             </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="handleDelete(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
         <template #empty>
@@ -337,6 +344,7 @@ import { Refresh, Search, Monitor, Connection, CircleClose } from '@element-plus
 import {
   listDevices,
   disconnectDevice,
+  deleteDevice,
   adbEnableAccessibility,
   adbWifiEnableAccessibility,
   getDeviceNetInfo,
@@ -405,6 +413,31 @@ async function handleDisconnect(device: Device) {
   }
   await disconnectDevice(device.device_id)
   ElMessage.success('已踢下线')
+  load()
+}
+
+async function handleDelete(device: Device) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除设备「${device.device_name}」（${device.device_id}）吗？`,
+      '删除设备',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        confirmButtonClass: 'el-button--danger',
+        message: (
+          '仅从设备列表移除，历史数据（位置轨迹、短信、通话记录等）会完整保留。' +
+          (device.online
+            ? '该设备当前在线，删除后其重连时可能重新出现在列表。'
+            : '')
+        ),
+      },
+    )
+  } catch {
+    return
+  }
+  await deleteDevice(device.device_id)
+  ElMessage.success('已删除设备（历史数据保留）')
   load()
 }
 
