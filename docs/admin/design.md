@@ -164,6 +164,24 @@ admin/
 4. 给 `/api/devices` `/api/commands` `/api/logs` `/api/push` `/api/connections` 加依赖校验（`Depends` 注入 admin token 校验）。✅ 已实现
 5. （可选）管理侧 WebSocket 通道，命令回执实时推送给管理后台。✅ 已实现（用 WebSocket `WS /api/admin/ws`）
 
+### 5.4 前端「记住账号 / 自动登录」（类 QQ 登录，纯前端）
+
+> 2026-11-04 用户需求：登录页支持记住多组账号密码（下拉选择、可删除）+ 自动登录；
+> **手动退出后不得再自动登录**，否则退不出去。均为前端 localStorage 实现，后端零改动。
+
+- **账号记忆**（`admin/src/utils/accountMemory.ts`）：
+  - `bridge_admin_accounts`：JSON 数组 `[{username, password(base64 混淆), ts}]`，多组账号、按最近使用排序。
+  - `bridge_admin_auto_login`：'1'/'0'，自动登录开关。
+  - `bridge_admin_last_user`：上次登录用户名，登录页预填。
+  - 密码用 base64 **混淆**（非加密），仅防「随手一瞥」，内网运维工具够用；强安全需另议。
+- **自动登录触发**：登录页 `onMounted` 时若开关开启且能取到密码，静默 `login` 换新 token 跳 dashboard；
+  失败（密码错/token 失效）则关闭开关、回填账号密码停留手动登录。**token 默认 24h 过期后** 401 跳登录页，
+  此时自动登录会无感续期。
+- **退出即关自动登录**（关键）：`auth store` 的 `logout()` 里额外 `setAutoLogin(false)`——
+  手动退出后下次不再自动登录；但记住的账号仍在，下拉可选、密码可回填，用户重新勾选即可恢复。
+- **交互**：账号输入框改为可搜索下拉（`el-select` filterable allow-create），选中已记住账号自动带密码；
+  「记住密码」「自动登录」两个勾选（勾自动登录强制勾记住密码）；下拉每项可点 ✕ 删除该账号。
+
 ---
 
 ## 六、开发与环境
