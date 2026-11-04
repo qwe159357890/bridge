@@ -103,7 +103,7 @@ admin/
 |---|---|---|
 | **登录** | 管理员账号密码登录，token 持久化，路由守卫 | `POST /api/admin/login`（需补） |
 | **仪表盘** | 在线设备数、注册总数、运行时长、连接趋势 | `GET /health` + `GET /api/devices` |
-| **设备管理** | 设备列表（昵称/ID/在线状态/注册时间）、搜索、踢下线 | `GET /api/devices`、`POST /api/devices/{id}/disconnect` |
+| **设备管理** | 设备列表（昵称/ID/在线状态/注册时间）、搜索、踢下线、删除 | `GET /api/devices`、`POST /api/devices/{id}/disconnect`、`DELETE /api/devices/{id}` |
 | **命令下发** | 挑设备下发命令、命令历史、回执状态 | `POST /api/commands`、`GET /api/commands`、`GET /api/commands/{id}` |
 | **日志查看** | 列出有日志设备、查看某设备日志、清除 | `GET /api/logs`、`GET /api/logs/{id}`、`DELETE /api/logs/{id}` |
 | **消息推送** | 向一个/多个设备推送消息 | `POST /api/push` |
@@ -117,8 +117,12 @@ admin/
 
 **设备管理（Device）**
 - 表格列：设备昵称、device_id、在线状态（标签）、注册时间、操作。
-- 操作：下发命令（跳转命令页并预选设备）、踢下线、查看日志（跳转日志页）。
+- 操作：下发命令（跳转命令页并预选设备）、踢下线、查看日志（跳转日志页）、**删除**。
 - 支持按昵称/ID/状态筛选。
+- **删除设备**（2026-11-04）：仅移除设备注册记录（内存 + `device_tokens` 表），
+  **历史数据（位置轨迹、短信、通话、命令、日志等）各自独立存储、完整保留**；
+  删除在线设备会顺带断开其活跃连接。注意客户端有「连接前自动注册 + 4004 自动重注册」机制，
+  故删除**离线**设备才彻底；删除在线设备后其重连会重新注册回来（列表重现）。
 
 **命令下发（Command）**
 - 命令表单：选择设备（仅在线设备可选）+ 命令类型（当前仅 `upload_log`）。
@@ -163,6 +167,27 @@ admin/
 3. 新增 `api/v1/admin.py`（`POST /api/admin/login`）。✅ 已实现
 4. 给 `/api/devices` `/api/commands` `/api/logs` `/api/push` `/api/connections` 加依赖校验（`Depends` 注入 admin token 校验）。✅ 已实现
 5. （可选）管理侧 WebSocket 通道，命令回执实时推送给管理后台。✅ 已实现（用 WebSocket `WS /api/admin/ws`）
+
+### 5.4 前端「记住账号 / 自动登录」（类 QQ 登录，纯前端）
+
+> 2026-11-04 用户需求：登录页支持记住多组账号密码（下拉选择、可删除）+ 自动登录；
+> **手动退出后「本次」不自动登录（否则退不出去），但「自动登录」勾选偏好保持不变**。
+> 均为前端 localStorage 实现，后端零改动。
+
+- **账号记忆**（`admin/src/utils/accountMemory.ts`）：
+  - `bridge_admin_accounts`：JSON 数组 `[{username, password(base64 混淆), ts}]`，多组账号、按最近使用排序。
+  - `bridge_admin_auto_login`：'1'/'0'，自动登录**持久偏好**（退出登录不改动）。
+  - `bridge_admin_last_user`：上次登录用户名，登录页预填。
+  - `bridge_admin_skip_auto_login`：一次性跳过标记，退出登录时置位、登录页加载后清除。
+  - 密码用 base64 **混淆**（非加密），仅防「随手一瞥」，内网运维工具够用；强安全需另议。
+- **自动登录触发**：登录页 `onMounted` 时若开关开启且能取到密码，静默 `login` 换新 token 跳 dashboard；
+  失败（密码错/token 失效）则关闭开关、回填账号密码停留手动登录。**token 默认 24h 过期后** 401 跳登录页，
+  此时自动登录会无感续期。
+- **退出与自动登录的关系**（关键）：`auth store` 的 `logout()` 里调用 `markSkipAutoLoginOnce()` 打一次性跳过标记，
+  登录页本次加载不自动登录（先 `consumeSkipAutoLoginOnce()` 并清除标记），**「自动登录」勾选偏好原样保留**——
+  用户退出后跳到登录页，账号密码已回填、两个勾选仍勾着，可直接手动登回；下次打开页面又恢复自动登录。
+- **交互**：账号输入框改为可搜索下拉（`el-select` filterable allow-create），选中已记住账号自动带密码；
+  「记住密码」「自动登录」两个勾选（勾自动登录强制勾记住密码）；下拉每项可点 ✕ 删除该账号。
 
 ---
 
