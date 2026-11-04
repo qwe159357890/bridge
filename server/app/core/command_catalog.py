@@ -450,6 +450,11 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("ssh_status", "SSH 服务状态", "system", "🔎",
          "查询内嵌 SSH 服务器状态（运行状态 / 端口 / 用户名 / 活动会话数 / 存储暴露档）；"
          "只读本地快照，不触发网络操作"),
+    # 特殊「跳转」命令：不下发给设备，管理后台点击后在新标签打开服务器二维码下载页
+    # （GET /download），供用户扫码下载安装最新 APK。前端 selectCommand 识别此名直接跳转。
+    _cmd("open_download_page", "扫码下载APP", "system", "📲",
+         "打开服务器上的二维码下载页（新标签页），用户扫码即可下载并安装最新 Bridge 客户端；"
+         "本命令不下发给设备，仅作为后台快捷入口", []),
 
     # ---- 界面自动化（v0.2.38 引入，对标 autox 无障碍引擎）----
     # 依赖设备开启「Bridge 辅助服务」（无障碍），且须为 canRetrieveWindowContent + canPerformGestures。
@@ -529,8 +534,8 @@ COMMANDS: list[dict[str, Any]] = [
                  description="支持链式 DSL 或对象 JSON（关系查询）"),
           _param("nth", "匹配序号", PARAM_TYPE_NUMBER, default=0,
                  placeholder="默认 0", description="多个匹配时选第几个（0 起）"),
-          _param("duration_ms", "长按时长", PARAM_TYPE_NUMBER, default=800,
-                 placeholder="默认 800", description="长按持续毫秒")]),
+          _param("duration_ms", "长按时长", PARAM_TYPE_NUMBER, default=550,
+                 placeholder="默认 550（约等于系统长按阈值，过长会触发拖动）", description="长按持续毫秒")]),
     _cmd("ui_scroll_to", "滚动至控件", "ui", "📜",
          "滚动列表/页面直到目标控件可见（signature 死循环保护）",
          [_param("selector", "选择器", PARAM_TYPE_TEXT, required=True,
