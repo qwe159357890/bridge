@@ -16,6 +16,14 @@ export function disconnectDevice(deviceId: string): Promise<{ status: string; de
   })
 }
 
+/** 删除设备（仅从列表移除注册记录，历史数据保留）。 */
+export function deleteDevice(deviceId: string): Promise<{ deleted: boolean; device_id: string }> {
+  return request({
+    url: `/api/devices/${deviceId}`,
+    method: 'delete',
+  })
+}
+
 /** 设备音乐播放状态（playing/paused/idle/unknown）。 */
 export interface MusicState {
   device_id: string
