@@ -80,6 +80,30 @@ def test_device_register_no_auth_required(client):
     assert resp.status_code == 201
 
 
+def test_device_delete_requires_auth(client):
+    """删除设备接口应要求管理鉴权。"""
+    resp = client.delete("/api/devices/dev-x")
+    assert resp.status_code == 401
+
+
+def test_device_delete_removes_from_list(client, admin_headers):
+    """删除设备后从列表消失；不存在的设备返回 404。"""
+    client.post("/api/devices/register", json={"device_id": "dev-del", "device_name": "待删"})
+    before = client.get("/api/devices", headers=admin_headers).json()
+    assert any(d["device_id"] == "dev-del" for d in before)
+
+    resp = client.delete("/api/devices/dev-del", headers=admin_headers)
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+
+    after = client.get("/api/devices", headers=admin_headers).json()
+    assert all(d["device_id"] != "dev-del" for d in after)
+
+    # 重复删除不存在的设备 → 404
+    resp2 = client.delete("/api/devices/dev-del", headers=admin_headers)
+    assert resp2.status_code == 404
+
+
 def test_log_upload_no_auth_required(client):
     """日志上传接口不应要求管理鉴权（客户端调用）。"""
     resp = client.post("/api/logs", json={"device_id": "dev-x", "content": "hello"})
