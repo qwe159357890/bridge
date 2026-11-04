@@ -139,6 +139,14 @@ class UpdatesConfig(BaseModel):
         description="更新 APK 目录，相对路径相对 server 根目录（绝对路径原样使用）",
     )
 
+    # 「扫码下载」二维码里用的服务器公网地址（v0.2.44 新增）。
+    # 空串 = 下载页运行时用「请求的 Host 头」自动推导（同 WiFi 下扫码即可用）。
+    # 需要跨网/公网扫码时，在此填真实可达地址，如 http://192.168.31.5:15160 或 https://app.example.com
+    public_base_url: str = Field(
+        default="",
+        description="扫码下载页对外可达的服务器地址（含协议与端口）；空 = 用请求 Host 头推导",
+    )
+
 
 class MySQLConfig(BaseModel):
     """MySQL 连接配置（位置持久化存储用）。"""

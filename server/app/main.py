@@ -238,6 +238,13 @@ def create_app() -> FastAPI:
     # 挂载全部路由（WebSocket + REST v1），由 api_router 统一聚合
     app.include_router(api_router)
 
+    # 挂载静态资源（扫码下载落地页引用的 qrcode.js）
+    from fastapi.staticfiles import StaticFiles
+
+    _static_dir = _Path(__file__).resolve().parent / "static"
+    if _static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
     @app.get("/health")
     async def health() -> dict:
         """健康检查 + 运行统计。"""

@@ -23,6 +23,16 @@ export default defineConfig({
         target: 'http://localhost:15160',
         changeOrigin: true,
       },
+      // 扫码下载落地页及其二维码静态库：开发态访问 /download、/static 也代理到后端，
+      // 否则 5173/download 会落到 Vite dev server 返回空白。
+      '/download': {
+        target: 'http://localhost:15160',
+        changeOrigin: true,
+      },
+      '/static': {
+        target: 'http://localhost:15160',
+        changeOrigin: true,
+      },
     },
   },
 })

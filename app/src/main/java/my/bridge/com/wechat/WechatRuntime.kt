@@ -139,6 +139,23 @@ object WechatRuntime : WechatWsClient.Listener {
     }
 
     /**
+     * APP 整体切到后台（按 Home / 锁屏 / 切其它 App，Activity onStop）。
+     *
+     * 与 [onPageLeave] 互补：后者只覆盖「切底部 Tab 到其它页」这一种离开方式（Compose 组合销毁
+     * 才触发 DisposableEffect）；而「按 Home 键离开微信页」时微信页组合仍在、Activity 仅 onStop，
+     * 不会触发 onPageLeave ⇒ 开关打开时微信仍常驻在线。
+     *
+     * 因此这里在 Activity 切后台时补一道：仅当「当前正停在微信页」且「离开即释放」开关开启时，
+     * 才等同离开页面释放全部资源（默认关闭 = 进程级常驻，后台照常收消息，实时性不受影响）。
+     */
+    fun onAppBackground() {
+        val ctx = app ?: return
+        if (pageActive && WechatPrefs.releaseOnLeave(ctx)) {
+            onPageLeave()
+        }
+    }
+
+    /**
      * 释放微信占用的全部资源：WS 连接、重连任务、HTTP 连接池与线程池、语音播放、内存数据。
      *
      * 两种触发：①用户主动「退出微信」；②开启「离开微信页立即释放」后离开页面。

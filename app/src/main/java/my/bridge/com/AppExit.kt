@@ -75,7 +75,13 @@ object AppExit {
 
             override fun onActivityStopped(activity: Activity) {
                 foregroundCount = (foregroundCount - 1).coerceAtLeast(0)
-                if (foregroundCount == 0) onBackground(application)
+                if (foregroundCount == 0) {
+                    onBackground(application)
+                    // v0.2.43：APP 切后台 = 可能「离开了微信页」（按 Home/锁屏/切 App）。
+                    // 「微信离开后立即结束」开关开启时，若正停在微信页，释放微信资源
+                    // （补 onPageLeave 只覆盖「切底部 Tab」的缺口，见 WechatRuntime.onAppBackground）。
+                    my.bridge.com.wechat.WechatRuntime.onAppBackground()
+                }
             }
 
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
@@ -104,6 +110,15 @@ object AppExit {
         Timber.i("结束整个进程：$reason")
 
         val app = context.applicationContext
+
+        // 0) 同步取消保活兜底定时器（AlarmManager + JobScheduler）。
+        //    ⚠️ 不能只依赖 stopService → onDestroy → ResourceHolder.releaseAll 这条异步链：
+        //    stopService 是异步的，onDestroy 在主线程 Looper 排队，而 300ms 后 killProcess 可能
+        //    抢先执行——此时兜底定时器尚未取消，进程被杀后 Alarm/Job 到点把 KeepAliveService
+        //    重新拉起（startedAt 重置 = 运行时长变长，但组网不自动起），正是「退出后几秒又复活」的根因。
+        //    这里显式同步 releaseAll（public、幂等）先取消兜底，再走后续 stopService/killProcess。
+        runCatching { my.bridge.com.keepalive.ResourceHolder.releaseAll(app) }
+            .onFailure { Timber.w(it, "取消保活兜底失败") }
 
         // 1) 显式停掉自己拉起的（sticky）服务——不做这步，杀进程后会被系统重新拉起
         runCatching { app.stopService(Intent(app, KeepAliveService::class.java)) }

@@ -99,24 +99,46 @@
             该分类下暂无命令
           </div>
           <div v-else class="command-grid">
-            <!-- 描述悬停显示（卡片只留图标+名称，避免长说明挤爆卡片） -->
-            <el-tooltip
-              v-for="cmd in filteredCommands"
-              :key="cmd.name"
-              :content="cmd.description"
-              placement="top"
-              :show-after="250"
-              popper-class="cmd-desc-tip"
-            >
-              <div
-                class="command-card"
-                :class="{ active: selectedCommand?.name === cmd.name, blocked: isBlocked(cmd) }"
-                @click="selectCommand(cmd)"
+            <!-- 「扫码下载」卡片：悬停放大二维码，点击跳转铺满窗口二维码页；
+                 其余命令卡片：悬停显示描述说明 -->
+            <template v-for="cmd in filteredCommands" :key="cmd.name">
+              <el-popover
+                v-if="cmd.name === 'open_download_page'"
+                placement="top"
+                trigger="hover"
+                :show-after="150"
+                :width="240"
+                popper-class="qr-hover-pop"
               >
-                <div class="command-icon">{{ cmd.icon }}</div>
-                <div class="command-name">{{ cmd.label }}</div>
-              </div>
-            </el-tooltip>
+                <template #reference>
+                  <div class="command-card" @click="selectCommand(cmd)">
+                    <!-- 微型二维码图标（真实二维码 SVG，内容=落地页地址） -->
+                    <div class="command-icon qr-icon" v-html="qrIconSvg"></div>
+                    <div class="command-name">{{ cmd.label }}</div>
+                  </div>
+                </template>
+                <div class="qr-hover-body">
+                  <div class="qr-hover-img" v-html="qrHoverSvg"></div>
+                  <div class="qr-hover-tip">手机扫码，直接下载 APK 安装包</div>
+                </div>
+              </el-popover>
+              <el-tooltip
+                v-else
+                :content="cmd.description"
+                placement="top"
+                :show-after="250"
+                popper-class="cmd-desc-tip"
+              >
+                <div
+                  class="command-card"
+                  :class="{ active: selectedCommand?.name === cmd.name, blocked: isBlocked(cmd) }"
+                  @click="selectCommand(cmd)"
+                >
+                  <div class="command-icon">{{ cmd.icon }}</div>
+                  <div class="command-name">{{ cmd.label }}</div>
+                </div>
+              </el-tooltip>
+            </template>
           </div>
 
           <!-- 参数 + 下发按钮（右区底部） -->
@@ -423,7 +445,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { deviceCount, getMusicState, listDevices } from '@/api/devices'
 import type { MusicState } from '@/api/devices'
-import { clearCommands, listCommands, sendCommand, getCommandCatalog } from '@/api/commands'
+import { clearCommands, listCommands, sendCommand, getCommandCatalog, getDownloadInfo } from '@/api/commands'
 import { listMedia, mediaFileUrl } from '@/api/media'
 import type { MediaItem } from '@/api/media'
 import { getDeviceSims } from '@/api/data'
@@ -452,6 +474,64 @@ const devices = ref<Device[]>([])
 const commands = ref<CommandRecord[]>([])
 const loading = ref(false)
 const sending = ref(false)
+
+// ---------------------------------------------------------------------------
+// 「扫码下载 APP」卡片：二维码三态（微型图标 / 悬停放大 / 点击铺满窗口）。
+// 二维码生成复用 admin/public/qrcode.js（MIT，qrcode-generator），挂 window.qrcode。
+// ---------------------------------------------------------------------------
+interface QrcodeLib {
+  (typeNumber: number, errorCorrectionLevel: string): {
+    addData(data: string, mode?: string): void
+    make(): void
+    getModuleCount(): number
+    createSvgTag(opts: { cellSize?: number; margin?: number }): string
+  }
+}
+declare global {
+  interface Window {
+    qrcode?: QrcodeLib
+  }
+}
+
+// 「扫码下载」对外地址：由后端 /api/download/info 用 public_base_url 权威推导，
+// 前端不自行拼 host（拼不出来 public_base_url，会跳错到 5173）。
+const downloadApkUrl = ref<string>('') // 短链直下 APK（如 http://039039.xyz:15160/d）
+const downloadPageUrl = ref<string>('') // 二维码落地页（如 http://039039.xyz:15160/download）
+
+/** 用 window.qrcode 生成指定 cellSize 的二维码 SVG 字符串（内容为 APK 短链）。 */
+function renderQrSvg(cellSize: number): string {
+  const qr = window.qrcode
+  if (!qr || !downloadApkUrl.value) return ''
+  try {
+    const inst = qr(0, 'M')
+    inst.addData(downloadApkUrl.value, 'Byte')
+    inst.make()
+    return inst.createSvgTag({ cellSize, margin: 0 })
+  } catch {
+    return ''
+  }
+}
+
+/** 卡片图标：微型二维码 SVG（内容=APK 短链，视觉即二维码，不要求可扫）。 */
+const qrIconSvg = ref<string>('')
+/** 悬停放大的二维码 SVG（~200px，可扫，扫码直接下载 APK）。 */
+const qrHoverSvg = ref<string>('')
+
+/** 拉取对外下载地址并生成二维码 SVG（图标 + 悬停放大）。 */
+async function ensureQrSvg() {
+  if (qrHoverSvg.value) return
+  try {
+    const info = await getDownloadInfo()
+    downloadApkUrl.value = info.apk_url
+    downloadPageUrl.value = info.page_url
+  } catch {
+    // 后端不可达时退化为相对地址（开发态走 Vite 代理）
+    downloadApkUrl.value = `${window.location.origin}/d`
+    downloadPageUrl.value = `${window.location.origin}/download`
+  }
+  qrHoverSvg.value = renderQrSvg(5) // cellSize 5 → 约 5×(count+0) 大小，接近可扫
+  qrIconSvg.value = renderQrSvg(1) // 微型图标
+}
 
 // VNT 三条命令的「查看详情」：每条单独设计弹窗（见 VntResultDetailDialog.vue）。
 // 只在 VNT 三条、且已有回执时显示，pending 行点开没有内容。
@@ -1306,6 +1386,15 @@ async function stopActiveCapture() {
 }
 
 function selectCommand(cmd: CommandDef) {
+  // 特殊「跳转」命令：不下发设备，点击即在新标签打开服务器二维码下载页
+  // （GET /download，扫码下载最新 APK）。不设 selectedCommand、不渲染参数、不记录历史。
+  if (cmd.name === 'open_download_page') {
+    // 点击跳转铺满窗口的二维码下载页（新标签），不设选中、不渲染参数、不下发。
+    // 地址可能尚未拉取完成，此时兜底用相对 /download（开发态走 Vite 代理）。
+    const url = downloadPageUrl.value || `${window.location.origin}/download`
+    window.open(url, '_blank', 'noopener,noreferrer')
+    return
+  }
   selectedCommand.value = cmd
   // 选中卡片按浏览器记忆（2026-10-28 用户需求）：下次进页自动恢复选中
   try {
@@ -1457,6 +1546,8 @@ async function loadCatalog() {
     const catalog = await getCommandCatalog()
     categories.value = catalog.categories
     commandDefs.value = catalog.commands
+    // 预生成「扫码下载」卡片的二维码 SVG（微型图标 + 悬停放大的可扫二维码）
+    void ensureQrSvg()
     // 恢复该浏览器上次浏览的分类与选中的命令卡片（2026-10-28 用户需求，
     // localStorage 按浏览器隔离）；无记忆/记忆失效回退默认（第一个分类）
     try {
@@ -1929,11 +2020,45 @@ onBeforeRouteLeave(() => {
   font-size: 30px;
   margin-bottom: 8px;
 }
+/* 扫码下载卡片：微型二维码图标（真实二维码 SVG，内容=落地页地址） */
+.command-icon.qr-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+}
+.command-icon.qr-icon :deep(svg) {
+  width: 30px;
+  height: 30px;
+  display: block;
+}
 .command-name {
   font-size: 14px;
   font-weight: 600;
   color: #303133;
   margin-bottom: 4px;
+}
+/* 悬停放大的二维码弹层（el-popover 内容） */
+.qr-hover-body {
+  text-align: center;
+}
+.qr-hover-img {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: #fff;
+  border-radius: 8px;
+}
+.qr-hover-img :deep(svg) {
+  width: 200px;
+  height: 200px;
+  display: block;
+}
+.qr-hover-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
 }
 .empty-commands {
   text-align: center;

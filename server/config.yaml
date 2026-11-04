@@ -41,6 +41,13 @@ adb:
   # 此处显式指向它；换机部署时按实际路径调整
   path: "../tools/adb/platform-tools/adb.exe"
 
+updates:
+  dir: "data/updates"            # 更新 APK 目录（check_update 命令服务器目录版）
+  # 「扫码下载」二维码里用的对外地址（含协议+端口）。留空 = 下载页运行时用请求的
+  # Host 头自动推导（同一 WiFi 下扫码即可）。跨网/公网扫码时填真实可达地址，
+  # 例如 http://192.168.31.5:15160 或 https://app.example.com
+  public_base_url: "http://039039.xyz:15160"
+
 music:
   dir: "data/music"              # 音乐共享目录（play_music 裸文件名音源）
                                  # 相对路径相对 server 根目录，管理员把音乐文件放入即可下发
