@@ -69,13 +69,23 @@
           <span class="panel-title">屏幕截图</span>
           <span class="panel-count">{{ screenW }}×{{ screenH }}</span>
         </div>
-        <div ref="shotWrap" class="shot-wrap" @click="onShotClick">
+        <div class="shot-toolbar">
+          <span class="shot-tool-label">截图操作工具：</span>
+          <el-radio-group v-model="coordTool" size="small">
+            <el-radio-button v-for="o in coordToolOptions" :key="o.value" :value="o.value">{{ o.label }}</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div ref="shotWrap" class="shot-wrap"
+             @mousedown="onShotMouseDown"
+             @mousemove="onShotMouseMove"
+             @mouseup="onShotMouseUp"
+             @mouseleave="onShotMouseLeave">
           <div v-if="!shotUrl" class="empty-hint">暂无截图，点「刷新」获取</div>
           <img v-show="false" ref="shotImg" :src="shotUrl" @load="onImgLoad" />
           <canvas ref="shotCanvas" class="shot-canvas"></canvas>
         </div>
         <div class="shot-tips">
-          点击截图选中控件 · 悬停高亮 · 拖拽绘制手势坐标
+          {{ coordToolTip }}
         </div>
       </div>
 
@@ -125,6 +135,7 @@
               <el-button size="small" @click="copyNodeJson">复制 JSON</el-button>
               <el-button size="small" type="primary" plain @click="doClick">点击测试</el-button>
               <el-button size="small" plain @click="doLongClick">长按测试</el-button>
+              <el-button size="small" plain @click="openSwipeDialog">滑动测试</el-button>
               <el-button size="small" plain @click="openInputDialog">输入测试</el-button>
             </div>
           </div>
@@ -140,6 +151,38 @@
         <el-button type="primary" @click="doSetText">写入</el-button>
       </template>
     </el-dialog>
+
+    <!-- 控件滑动对话框：基于选中控件 bounds 生成起终点 -->
+    <el-dialog v-model="swipeVisible" title="滑动测试（控件）" width="480px" append-to-body>
+      <div class="swipe-form">
+        <div class="swipe-row">
+          <span class="swipe-k">方向</span>
+          <el-radio-group v-model="swipeDirection" size="small" @change="recalcSwipe">
+            <el-radio-button value="up">上滑</el-radio-button>
+            <el-radio-button value="down">下滑</el-radio-button>
+            <el-radio-button value="left">左滑</el-radio-button>
+            <el-radio-button value="right">右滑</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="swipe-row">
+          <span class="swipe-k">滑动距离</span>
+          <el-input-number v-model="swipeDistance" :min="10" :max="3000" :step="50" size="small" @change="recalcSwipe" />
+          <span class="swipe-unit">像素</span>
+        </div>
+        <div class="swipe-row">
+          <span class="swipe-k">时长</span>
+          <el-input-number v-model="swipeForm.durationMs" :min="50" :max="60000" :step="50" size="small" />
+          <span class="swipe-unit">毫秒</span>
+        </div>
+        <div class="swipe-preview">
+          起点 ({{ swipeForm.x1 }}, {{ swipeForm.y1 }}) → 终点 ({{ swipeForm.x2 }}, {{ swipeForm.y2 }})
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="swipeVisible = false">取消</el-button>
+        <el-button type="primary" @click="doSwipe">执行滑动</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -153,6 +196,7 @@ import { sendCommand } from '@/api/commands'
 import { listMedia, mediaFileUrl } from '@/api/media'
 import { getToken } from '@/api/request'
 import { wsUrl } from '@/utils/base'
+import { useTargetDeviceStore } from '@/stores/targetDevice'
 
 // ============ 节点模型 ============
 interface UiNode {
@@ -181,7 +225,12 @@ interface UiNode {
 
 // ============ 状态 ============
 const devices = ref<Device[]>([])
-const deviceId = ref('')
+// 目标设备接全局 store：跨页面保持、刷新不丢（localStorage 持久化）
+const targetStore = useTargetDeviceStore()
+const deviceId = computed({
+  get: () => targetStore.deviceId,
+  set: (v: string) => targetStore.set(v),
+})
 const nodes = ref<UiNode[]>([])
 const selectedKey = ref('')
 const collapsed = ref<Set<string>>(new Set())
@@ -208,6 +257,26 @@ const intervalOptions = [
 const inputVisible = ref(false)
 const inputText = ref('')
 const longPressMs = ref(550)
+
+// ============ 坐标工具（截图区直接对坐标操作，不依赖控件） ============
+// 'select' 选中控件（原行为）；'click'/'long_click'/'swipe' 对任意坐标操作
+const coordTool = ref<'select' | 'click' | 'long_click' | 'swipe'>('select')
+const coordToolOptions = [
+  { label: '选中控件', value: 'select' },
+  { label: '坐标点击', value: 'click' },
+  { label: '坐标长按', value: 'long_click' },
+  { label: '坐标滑动', value: 'swipe' },
+]
+// 截图区按下/拖拽的起点（屏幕坐标），用于坐标滑动
+let dragStart: { x: number; y: number } | null = null
+
+// 控件滑动对话框
+const swipeVisible = ref(false)
+const swipeForm = ref({
+  x1: 0, y1: 0, x2: 0, y2: 0, durationMs: 300,
+})
+const swipeDirection = ref('up')
+const swipeDistance = ref(400)
 
 // 右栏「控件属性 / 选择器」上下比例（属性区占比 %，默认 45%）
 const propPanelRatio = ref(45)
@@ -595,6 +664,86 @@ function onShotClick(ev: MouseEvent) {
   if (best) selectNode(best)
 }
 
+// ============ 坐标工具（截图区直接对坐标操作） ============
+const coordToolTip = computed(() => {
+  switch (coordTool.value) {
+    case 'click': return '坐标点击：单击截图任意位置，即向该坐标下发点击（不依赖控件选中）'
+    case 'long_click': return `坐标长按：单击截图任意位置，即向该坐标下发长按（时长 ${longPressMs.value}ms，可调）`
+    case 'swipe': return '坐标滑动：在截图上按住拖拽，松开后按起终点方向滑动'
+    default: return '选中控件：单击截图选中控件 · 点击左侧树/截图框选中 · 右侧执行操作'
+  }
+})
+
+// 将鼠标事件换算为屏幕坐标
+function screenPoint(ev: MouseEvent): { x: number; y: number } | null {
+  const canvas = shotCanvas.value
+  if (!canvas || !screenW.value) return null
+  const rect = canvas.getBoundingClientRect()
+  const x = Math.round((ev.clientX - rect.left) * (screenW.value / rect.width))
+  const y = Math.round((ev.clientY - rect.top) * (screenH.value / rect.height))
+  return { x, y }
+}
+
+function onShotMouseDown(ev: MouseEvent) {
+  if (coordTool.value !== 'swipe') return
+  const p = screenPoint(ev)
+  if (p) dragStart = p
+}
+
+function onShotMouseMove(ev: MouseEvent) {
+  if (coordTool.value !== 'swipe' || !dragStart) return
+  const p = screenPoint(ev)
+  if (!p) return
+  // 拖拽中重绘高亮 + 临时滑动箭头
+  drawHighlight()
+  const ctx = shotCanvas.value?.getContext('2d')
+  if (ctx && shotCanvas.value) {
+    const s = scaleOf()
+    ctx.strokeStyle = '#ff9500'
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(dragStart.x * s, dragStart.y * s)
+    ctx.lineTo(p.x * s, p.y * s)
+    ctx.stroke()
+    // 终点画圆点
+    ctx.fillStyle = '#ff9500'
+    ctx.beginPath()
+    ctx.arc(p.x * s, p.y * s, 5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
+function onShotMouseUp(ev: MouseEvent) {
+  if (coordTool.value === 'select') {
+    onShotClick(ev)
+    return
+  }
+  if (coordTool.value === 'swipe') {
+    if (dragStart) {
+      const p = screenPoint(ev)
+      if (p) {
+        doCoordSwipe(dragStart.x, dragStart.y, p.x, p.y)
+      }
+    }
+    dragStart = null
+    drawHighlight()
+    return
+  }
+  // click / long_click：单击即触发
+  const p = screenPoint(ev)
+  if (!p) return
+  if (coordTool.value === 'click') doCoordClick(p.x, p.y)
+  else if (coordTool.value === 'long_click') doCoordLongClick(p.x, p.y)
+}
+
+// 鼠标移出截图区：仅清理拖拽状态（swipe），不触发任何操作
+function onShotMouseLeave() {
+  if (dragStart) {
+    dragStart = null
+    drawHighlight()
+  }
+}
+
 // ============ 数据获取 ============
 async function refreshTree() {
   if (!deviceId.value) return
@@ -701,6 +850,65 @@ function doSetText() {
   inputVisible.value = false
 }
 
+// ============ 坐标级操作（不依赖控件，任意坐标可点/长按/滑动） ============
+function doCoordClick(x: number, y: number) {
+  if (!deviceId.value) { ElMessage.warning('请先选择设备'); return }
+  sendCommand(deviceId.value, 'ui_click', { x, y })
+  ElMessage.info(`已下发坐标点击 (${x}, ${y})`)
+}
+
+function doCoordLongClick(x: number, y: number) {
+  if (!deviceId.value) { ElMessage.warning('请先选择设备'); return }
+  // ui_gesture 的 long_click 走坐标长按并带时长（精确控制按压时间）
+  sendCommand(deviceId.value, 'ui_gesture', {
+    action: 'long_click', x1: x, y1: y, duration_ms: longPressMs.value,
+  })
+  ElMessage.info(`已下发坐标长按 (${x}, ${y})，时长 ${longPressMs.value}ms`)
+}
+
+function doCoordSwipe(x1: number, y1: number, x2: number, y2: number) {
+  if (!deviceId.value) { ElMessage.warning('请先选择设备'); return }
+  sendCommand(deviceId.value, 'ui_gesture', {
+    action: 'swipe', x1, y1, x2, y2, duration_ms: swipeForm.value.durationMs,
+  })
+  ElMessage.info(`已下发坐标滑动 (${x1},${y1}) → (${x2},${y2})`)
+}
+
+// ============ 控件滑动（基于选中控件 bounds 生成起终点） ============
+function openSwipeDialog() {
+  if (!selectedNode.value) { ElMessage.warning('请先选中控件'); return }
+  recalcSwipe()
+  swipeVisible.value = true
+}
+
+function recalcSwipe() {
+  const n = selectedNode.value
+  if (!n) return
+  const [l, t, r, b] = n.bounds
+  const cx = Math.round((l + r) / 2)
+  const cy = Math.round((t + b) / 2)
+  const d = swipeDistance.value
+  swipeForm.value.x1 = cx
+  swipeForm.value.y1 = cy
+  switch (swipeDirection.value) {
+    case 'up': swipeForm.value.x2 = cx; swipeForm.value.y2 = Math.max(0, cy - d); break
+    case 'down': swipeForm.value.x2 = cx; swipeForm.value.y2 = cy + d; break
+    case 'left': swipeForm.value.x2 = Math.max(0, cx - d); swipeForm.value.y2 = cy; break
+    case 'right': swipeForm.value.x2 = cx + d; swipeForm.value.y2 = cy; break
+  }
+}
+
+function doSwipe() {
+  if (!deviceId.value || !selectedNode.value) return
+  sendCommand(deviceId.value, 'ui_gesture', {
+    action: 'swipe',
+    x1: swipeForm.value.x1, y1: swipeForm.value.y1,
+    x2: swipeForm.value.x2, y2: swipeForm.value.y2,
+    duration_ms: swipeForm.value.durationMs,
+  })
+  swipeVisible.value = false
+}
+
 // ============ WS 回执订阅 ============
 function connectWS() {
   const token = getToken()
@@ -747,6 +955,10 @@ onMounted(() => {
 async function loadDevices() {
   try {
     devices.value = await listDevices()
+    // 已记忆目标设备（全局 store）→ 自动载入，无需每次重新选择
+    if (deviceId.value && !nodes.value.length && !shotUrl.value) {
+      refreshAll()
+    }
   } catch { /* ignore */ }
 }
 
@@ -840,6 +1052,14 @@ onBeforeUnmount(() => {
 
 /* 截图 */
 .shot-panel { display: flex; flex-direction: column; }
+.shot-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.shot-tool-label { font-size: 12px; color: #666; }
 .shot-wrap {
   flex: 1;
   position: relative;
@@ -899,4 +1119,18 @@ onBeforeUnmount(() => {
 .selector-mode-hint { font-size: 11px; color: #b0b0b0; margin-top: 4px; }
 .action-sec { font-size: 12px; color: #999; margin-top: 4px; }
 .action-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 滑动对话框 */
+.swipe-form { display: flex; flex-direction: column; gap: 14px; }
+.swipe-row { display: flex; align-items: center; gap: 8px; }
+.swipe-k { width: 64px; color: #666; font-size: 13px; flex-shrink: 0; }
+.swipe-unit { font-size: 12px; color: #999; }
+.swipe-preview {
+  font-size: 12px;
+  color: #b8860b;
+  background: #fdf6e3;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: monospace;
+}
 </style>

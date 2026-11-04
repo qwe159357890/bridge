@@ -2573,7 +2573,7 @@ object CommandModule {
             }
             val ok = when (action) {
                 "click" -> BridgeAccessibilityService.click(x1, y1)
-                "long_click" -> BridgeAccessibilityService.longClick(x1, y1)
+                "long_click" -> BridgeAccessibilityService.longClick(x1, y1, duration)
                 else -> {
                     val x2 = command.params.get("x2")?.takeIf { it.isJsonPrimitive }?.asInt
                     val y2 = command.params.get("y2")?.takeIf { it.isJsonPrimitive }?.asInt
