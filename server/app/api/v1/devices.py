@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.v1.admin import require_admin
@@ -64,6 +64,39 @@ async def list_devices(request: Request) -> list[DeviceListItem]:
             )
         )
     return result
+
+
+@router.delete("/{device_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(require_admin)])
+async def delete_device(device_id: str, request: Request) -> dict:
+    """删除设备（仅从设备列表移除注册记录，**不删除历史数据**）。
+
+    只清 DeviceRegistry 里的注册记录（内存 + device_tokens 表）；位置/短信/通话/
+    命令/日志等历史数据各自独立存储、按 device_id 关联，均不受影响、完整保留。
+
+    注意：客户端存在「连接前自动注册 + 4004 自动重注册」机制，故删除**在线**设备后，
+    其重连时会自动重新注册回来（列表重现）；删除**离线**设备则彻底移除。若设备在线，
+    会顺带断开其活跃连接，保证本次列表刷新后立即消失。
+    """
+    registry = _get_registry(request)
+    manager = _get_manager(request)
+
+    existed = registry.get(device_id) is not None
+    if not existed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="设备不存在")
+
+    registry.remove(device_id)
+
+    # 若在线，断开活跃连接（否则列表消失但连接仍在，状态割裂）
+    conn = manager.get(device_id)
+    if conn is not None and conn.is_active:
+        try:
+            await manager.notify_replaced(conn, "device_deleted")
+        except Exception:
+            pass
+        await manager.unregister(device_id, conn)
+
+    logger.info("设备已删除：%s（历史数据保留）", device_id)
+    return {"deleted": True, "device_id": device_id}
 
 
 @router.get("/{device_id}/music-state", dependencies=[Depends(require_admin)])
