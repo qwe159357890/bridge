@@ -14,6 +14,7 @@ from fastapi import APIRouter
 
 from app.api import ws
 from app.api.v1.router import router as v1_router
+from app.api.v1.updates import public_router as download_public_router
 
 api_router = APIRouter()
 
@@ -22,5 +23,8 @@ api_router.include_router(ws.router)
 
 # REST 接口 v1（/api/*）
 api_router.include_router(v1_router)
+
+# 「扫码下载」公共路由（/download 落地页 + /api/download/app 免鉴权下载）
+api_router.include_router(download_public_router)
 
 __all__ = ["api_router"]
