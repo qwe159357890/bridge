@@ -95,6 +95,7 @@ import {
   setLastUser,
   isAutoLogin,
   setAutoLogin,
+  consumeSkipAutoLoginOnce,
   type SavedAccount,
 } from '@/utils/accountMemory'
 
@@ -156,6 +157,8 @@ async function handleLogin() {
 
 // 自动登录：页面加载时若开关开启且能取到密码，静默换新 token
 async function tryAutoLogin() {
+  // 手动退出后的一次性跳过：本次不自动登录（勾选偏好保持不变），清除标记下次恢复
+  if (consumeSkipAutoLoginOnce()) return
   if (!isAutoLogin()) return
   const username = getLastUser()
   const pwd = username ? getPassword(username) : null

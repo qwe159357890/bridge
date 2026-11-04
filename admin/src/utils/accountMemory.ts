@@ -3,8 +3,9 @@
  *
  * 设计要点：
  * 1. 记住多组账号密码（localStorage 持久化），登录页下拉选择、可删除。
- * 2. 「自动登录」是独立开关：勾选后下次打开管理后台自动用记住的密码换新 token；
- *    **手动点「退出登录」时清除该开关**，否则用户永远退不出去。
+ * 2. 「自动登录」是**持久偏好**，用户勾了就长期保持——**退出登录不改动它**。
+ *    为避免「退出后下次打开又自动登回、退不出去」，用「一次性跳过标记」：
+ *    退出登录时打标记，登录页本次加载不自动登录并清除标记，下次打开恢复正常。
  * 3. 密码不落明文——用 base64 做轻量混淆（非加密）。管理后台为内网运维工具，
  *    此处仅为「防止随手一瞥看到明文」，无法抵御本机恶意读取；如需强安全应改用
  *    系统凭据/后端会话而非前端记忆。
@@ -13,6 +14,8 @@
 const ACCOUNTS_KEY = 'bridge_admin_accounts'
 const AUTO_LOGIN_KEY = 'bridge_admin_auto_login'
 const LAST_USER_KEY = 'bridge_admin_last_user'
+// 一次性跳过标记：退出登录时置位，登录页本次加载跳过自动登录后清除
+const SKIP_AUTO_LOGIN_KEY = 'bridge_admin_skip_auto_login'
 
 export interface SavedAccount {
   username: string
@@ -92,6 +95,25 @@ export function isAutoLogin(): boolean {
 export function setAutoLogin(on: boolean) {
   if (on) localStorage.setItem(AUTO_LOGIN_KEY, '1')
   else localStorage.removeItem(AUTO_LOGIN_KEY)
+}
+
+// ---------- 一次性跳过自动登录（退出登录专用） ----------
+/** 退出登录时调用：打一次性跳过标记，让登录页本次不自动登录。 */
+export function markSkipAutoLoginOnce() {
+  try {
+    localStorage.setItem(SKIP_AUTO_LOGIN_KEY, '1')
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 登录页加载时调用：若存在跳过标记，则本次跳过自动登录并清除标记。返回是否需要跳过。 */
+export function consumeSkipAutoLoginOnce(): boolean {
+  if (localStorage.getItem(SKIP_AUTO_LOGIN_KEY) === '1') {
+    localStorage.removeItem(SKIP_AUTO_LOGIN_KEY)
+    return true
+  }
+  return false
 }
 
 // ---------- 上次登录用户 ----------

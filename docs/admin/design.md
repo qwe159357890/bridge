@@ -167,18 +167,21 @@ admin/
 ### 5.4 前端「记住账号 / 自动登录」（类 QQ 登录，纯前端）
 
 > 2026-11-04 用户需求：登录页支持记住多组账号密码（下拉选择、可删除）+ 自动登录；
-> **手动退出后不得再自动登录**，否则退不出去。均为前端 localStorage 实现，后端零改动。
+> **手动退出后「本次」不自动登录（否则退不出去），但「自动登录」勾选偏好保持不变**。
+> 均为前端 localStorage 实现，后端零改动。
 
 - **账号记忆**（`admin/src/utils/accountMemory.ts`）：
   - `bridge_admin_accounts`：JSON 数组 `[{username, password(base64 混淆), ts}]`，多组账号、按最近使用排序。
-  - `bridge_admin_auto_login`：'1'/'0'，自动登录开关。
+  - `bridge_admin_auto_login`：'1'/'0'，自动登录**持久偏好**（退出登录不改动）。
   - `bridge_admin_last_user`：上次登录用户名，登录页预填。
+  - `bridge_admin_skip_auto_login`：一次性跳过标记，退出登录时置位、登录页加载后清除。
   - 密码用 base64 **混淆**（非加密），仅防「随手一瞥」，内网运维工具够用；强安全需另议。
 - **自动登录触发**：登录页 `onMounted` 时若开关开启且能取到密码，静默 `login` 换新 token 跳 dashboard；
   失败（密码错/token 失效）则关闭开关、回填账号密码停留手动登录。**token 默认 24h 过期后** 401 跳登录页，
   此时自动登录会无感续期。
-- **退出即关自动登录**（关键）：`auth store` 的 `logout()` 里额外 `setAutoLogin(false)`——
-  手动退出后下次不再自动登录；但记住的账号仍在，下拉可选、密码可回填，用户重新勾选即可恢复。
+- **退出与自动登录的关系**（关键）：`auth store` 的 `logout()` 里调用 `markSkipAutoLoginOnce()` 打一次性跳过标记，
+  登录页本次加载不自动登录（先 `consumeSkipAutoLoginOnce()` 并清除标记），**「自动登录」勾选偏好原样保留**——
+  用户退出后跳到登录页，账号密码已回填、两个勾选仍勾着，可直接手动登回；下次打开页面又恢复自动登录。
 - **交互**：账号输入框改为可搜索下拉（`el-select` filterable allow-create），选中已记住账号自动带密码；
   「记住密码」「自动登录」两个勾选（勾自动登录强制勾记住密码）；下拉每项可点 ✕ 删除该账号。
 
