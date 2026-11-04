@@ -45,3 +45,12 @@ export function clearCommands(deviceId?: string): Promise<{ deleted: number }> {
 export function getCommandCatalog(): Promise<CommandCatalog> {
   return request<CommandCatalog>({ url: '/api/commands/meta', method: 'get' })
 }
+
+// 扫码下载的对外地址（后端用 public_base_url 权威推导，前端不自行拼 host）
+export interface DownloadInfo {
+  apk_url: string
+  page_url: string
+}
+export function getDownloadInfo(): Promise<DownloadInfo> {
+  return request<DownloadInfo>({ url: '/api/download/info', method: 'get' })
+}
