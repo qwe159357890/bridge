@@ -504,6 +504,7 @@ admin:
 | GET | `/api/connections` | 活跃连接列表 + 数量（含 uptime_seconds 进程运行时长） |
 | GET | `/api/connections/log` | 设备上下线记录（时间倒序，可按 device_id 过滤） |
 | POST | `/api/devices/{id}/disconnect` | 强制断开指定设备（服务端踢下线） |
+| DELETE | `/api/devices/{device_id}` | 删除设备（仅移除注册记录，历史数据保留；在线设备顺带断开连接） |
 | GET | `/api/devices/count` | 已注册设备总数 |
 | GET | `/api/devices/{device_id}/music-state` | 查询设备音乐播放状态（playing/paused/idle/unknown，见 api/commands/control.md 状态上报节） |
 | POST | `/api/logs` | 上传日志（客户端上报诊断日志） |
