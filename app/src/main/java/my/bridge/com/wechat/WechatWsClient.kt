@@ -107,6 +107,10 @@ class WechatWsClient {
     @Volatile
     private var socket: WebSocket? = null
 
+    /** 是否已完成 WS 握手（onOpen 已触发、尚未 onClosed/onFailure）。 */
+    @Volatile
+    private var opened = false
+
     @Volatile
     private var generation = 0L
 
@@ -132,19 +136,19 @@ class WechatWsClient {
             return false
         }
         intentionalClose = false
+        opened = false
         val gen = ++generation
         DiagLog.i(TAG, "连接 WS：$url")
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (gen != generation) return
+                opened = true
                 DiagLog.i(TAG, "WS 已连接，发送 register")
                 // 5 秒内必须 register
                 sendRegister(deviceId, deviceName)
                 scheduleHeartbeat()
-                handler.post {
-                    listener?.onConnected("")
-                }
+                listener?.onConnected("")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -173,7 +177,14 @@ class WechatWsClient {
         teardown()
     }
 
-    fun isConnected(): Boolean = socket != null
+    /**
+     * 是否已真正建立 WS 连接（握手完成）。
+     *
+     * ⚠️ 用 [opened]（onOpen 已触发）而非 `socket != null`：
+     * `socket` 在 `newWebSocket()` 返回后立即非 null，但握手可能尚未完成/已失败，
+     * 用 `socket != null` 会误判「已连接」，导致重连循环提前退出、状态卡在「连接中」。
+     */
+    fun isConnected(): Boolean = opened && socket != null
 
     // ------------------------------------------------------------------
     // 发送
@@ -285,6 +296,7 @@ class WechatWsClient {
         pongWatchdog?.let { handler.removeCallbacks(it) }
         pongWatchdog = null
         generation++
+        opened = false
         try {
             socket?.cancel()
         } catch (e: Exception) {
