@@ -66,6 +66,61 @@ class BridgeAccessibilityService : AccessibilityService() {
             }
 
         /**
+         * 程序内自动开启本无障碍服务（v0.2.47，退出后可无感恢复）。
+         *
+         * 直写 `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` 追加本组件（保留其他 App
+         * 的无障碍服务），并保证 `accessibility_enabled` 总开关为 1。系统随即**自动绑定**
+         * 本服务，无需用户到系统设置手动开启。
+         *
+         * 前提：App 已一次性授予 `android.permission.WRITE_SECURE_SETTINGS`（经 adb
+         * `pm grant`，重启不掉，仅卸载重装才需重做；见 docs/server/design.md §20）。
+         * 未授权时静默失败（记日志），不抛异常——由设置页引导用户手动开启兜底。
+         */
+        fun enableInSettings(context: Context) {
+            runCatching {
+                val cr = context.contentResolver
+                val existing = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                    ?: ""
+                val set = existing.split(':').filter { it.isNotBlank() }.toMutableSet()
+                if (set.add(COMPONENT)) {
+                    Settings.Secure.putString(
+                        cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                        set.joinToString(":"),
+                    )
+                }
+                // 无障碍总开关：仅当需要时写 1（避免无谓重写）
+                if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) {
+                    Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                }
+                Timber.i("已自动开启 Bridge 无障碍服务")
+            }.onFailure { Timber.w(it, "自动开启无障碍失败（可能未授予 WRITE_SECURE_SETTINGS）") }
+        }
+
+        /**
+         * 程序内关闭本无障碍服务（v0.2.47，退出应用前调用）。
+         *
+         * 从 `ENABLED_ACCESSIBILITY_SERVICES` 移除本组件（保留其他 App 的无障碍服务）。
+         * 目的：无障碍服务是系统级绑定角色，进程被杀后系统会**强制重启进程**恢复它，
+         * 导致「退出应用」退不掉。退出前先移除绑定，进程才能真正被杀掉。
+         *
+         * 同样需 WRITE_SECURE_SETTINGS，未授权时静默失败（此时退出后进程仍会被无障碍
+         * 复活，属预期降级——比无法退出更可接受）。
+         */
+        fun disableInSettings(context: Context) {
+            runCatching {
+                val cr = context.contentResolver
+                val existing = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                    ?: ""
+                val set = existing.split(':').filter { it.isNotBlank() && it != COMPONENT }.toMutableSet()
+                Settings.Secure.putString(
+                    cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                    set.joinToString(":"),
+                )
+                Timber.i("已自动关闭 Bridge 无障碍服务")
+            }.onFailure { Timber.w(it, "自动关闭无障碍失败（可能未授予 WRITE_SECURE_SETTINGS）") }
+        }
+
+        /**
          * 模拟电源键锁屏（API 28+）。返回是否成功发起（发起即生效）。
          */
         fun lockScreen(): Boolean {

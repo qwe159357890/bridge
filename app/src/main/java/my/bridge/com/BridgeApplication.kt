@@ -59,6 +59,11 @@ class BridgeApplication : Application() {
         // 一旦所有 Activity 都 stop 就结束整个进程（AppExit）。默认关闭，这里只装监听不杀进程。
         AppExit.install(this)
 
+        // v0.2.47：自动恢复无障碍服务。退出应用时（AppExit.kill）为真正杀进程会先
+        // disableInSettings 移除无障碍绑定；此处冷启动时无感恢复（系统自动绑定，无需用户
+        // 手动到系统设置开启）。未授予 WRITE_SECURE_SETTINGS 时静默跳过（降级为手动开启）。
+        my.bridge.com.automation.a11y.BridgeAccessibilityService.enableInSettings(this)
+
         // 无条件拉起常驻保活服务
         KeepAliveService.start(this)
 
