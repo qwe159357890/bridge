@@ -98,6 +98,41 @@ async def _handle_dialog_click(app, device_id: str, data: dict) -> None:
         logger.exception("处理弹窗点击回传失败（忽略）")
 
 
+async def _handle_jikong_state(app, device_id: str, data: dict) -> None:
+    """处理客户端上报的极空 BMS 状态（WS ``message`` 通道，event=jikong_state）。
+
+    存储最新状态快照并经 SSE 广播 ``jikong_state`` 事件给管理后台实时展示；
+    空状态忽略。客户端仅在连接极空保护板并读到数据后上报，断连/断开 BLE 时
+    上报 connected=false 快照，管理后台据此显示离线。
+    """
+    status = data.get("status")
+    store = app.state.jikong_store
+    if store.set(device_id, status if isinstance(status, dict) else {}):
+        try:
+            bus = app.state.admin_event_bus
+            await bus.publish("jikong_state", {
+                "device_id": device_id,
+                "status": status,
+            })
+        except Exception:
+            logger.exception("发布极空状态事件失败（忽略）")
+    else:
+        logger.debug("device %s 非法极空状态上报，忽略", device_id)
+
+
+async def _clear_jikong_state(app, device_id: str) -> None:
+    """断连时清除设备极空状态，并通知管理侧。"""
+    try:
+        app.state.jikong_store.clear(device_id)
+        bus = app.state.admin_event_bus
+        await bus.publish("jikong_state", {
+            "device_id": device_id,
+            "status": None,
+        })
+    except Exception:
+        logger.exception("清除极空状态失败（忽略）")
+
+
 async def _handle_command_progress(app, device_id: str, data: dict) -> None:
     """处理命令执行进度上报（WS ``message`` 通道，event=command_progress）。
 
@@ -430,6 +465,8 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                     await _handle_command_progress(ws.app, device_id, data)
                 elif data.get("event") == "media_stream":
                     await _handle_media_stream(ws.app, device_id, data)
+                elif data.get("event") == "jikong_state":
+                    await _handle_jikong_state(ws.app, device_id, data)
                 else:
                     logger.debug("device %s 业务消息：%s", device_id, envelope.data)
             elif envelope.type == "command_result":
@@ -482,6 +519,8 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
                 logger.exception("发布设备下线流结束事件失败（忽略）")
             # 5.2 音乐状态随断连失效：清除记录（查询端点此后返回 unknown）并通知管理侧
             await _clear_music_state(ws.app, device_id)
+            # 5.3 极空 BMS 状态随断连失效：清除记录并通知管理侧
+            await _clear_jikong_state(ws.app, device_id)
         # 6. 清理：从映射表移除（仅当映射仍指向本连接时）
         await manager.unregister(device_id, conn)
 

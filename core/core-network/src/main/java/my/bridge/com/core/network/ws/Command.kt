@@ -148,6 +148,14 @@ data class Command(
         const val RPC_START = "rpc_start"
         const val RPC_STOP = "rpc_stop"
         const val RPC_STATUS = "rpc_status"
+        // ---- 极空 BMS 保护板（v0.2.55：BLE 连接 + 状态上报 + 远程控制）----
+        const val JIKONG_SCAN = "jikong_scan"
+        const val JIKONG_CONNECT = "jikong_connect"
+        const val JIKONG_DISCONNECT = "jikong_disconnect"
+        const val JIKONG_STATUS = "jikong_status"
+        const val JIKONG_MOS = "jikong_mos"
+        const val JIKONG_BALANCE = "jikong_balance"
+        const val JIKONG_WRITE_PARAM = "jikong_write_param"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

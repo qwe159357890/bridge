@@ -108,6 +108,18 @@
 | `ui_media_seek` / `ui_media_volume` / `ui_media_position` / `ui_media_duration` / `ui_media_state` | 媒体命令 | — |
 | `ui_notifications` / `ui_has_notification` / `ui_notification_reply` / `ui_notification_click` / `ui_notification_dismiss` / `ui_clipboard` | 通知/剪贴板 | — |
 
+## 🔋 jikong（极空保护板）→ [jikong.md](jikong.md)
+
+| 命令 | 中文名 | 文档 |
+|---|---|---|
+| `jikong_scan` | 扫描极空设备 | [jikong.md#jikong_scan-扫描极空设备](jikong.md#jikong_scan-扫描极空设备) |
+| `jikong_connect` | 连接极空设备 | [jikong.md#jikong_connect-连接极空设备](jikong.md#jikong_connect-连接极空设备) |
+| `jikong_disconnect` | 断开极空设备 | [jikong.md#jikong_disconnect-断开极空设备](jikong.md#jikong_disconnect-断开极空设备) |
+| `jikong_status` | 极空状态 | [jikong.md#jikong_status-极空状态](jikong.md#jikong_status-极空状态) |
+| `jikong_mos` | 极空 MOS 控制 | [jikong.md#jikong_mos-极空-mos-控制](jikong.md#jikong_mos-极空-mos-控制) |
+| `jikong_balance` | 极空均衡控制 | [jikong.md#jikong_balance-极空均衡控制](jikong.md#jikong_balance-极空均衡控制) |
+| `jikong_write_param` | 极空写参数 | [jikong.md#jikong_write_param-极空写参数](jikong.md#jikong_write_param-极空写参数) |
+
 ---
 
 ## 维护规则

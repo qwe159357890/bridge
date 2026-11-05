@@ -34,6 +34,7 @@ from app.core.sim_store import build_sim_store
 from app.core.media_store import build_media_store
 from app.core.log_store import LogStore, build_log_store
 from app.core.music_state_store import MusicStateStore
+from app.core.jikong_store import JikongStore
 from app.core.stream_hub import StreamHub
 from app.core.report_config_store import ReportConfigStore
 from app.models.connection import Connection
@@ -147,6 +148,8 @@ def create_app() -> FastAPI:
 
     music_state_store = MusicStateStore()
 
+    jikong_store = JikongStore()
+
     # 媒体流转发中心（流式录像/录音 → 管理后台专用流 WS 实时播放）
     stream_hub = StreamHub()
 
@@ -188,6 +191,7 @@ def create_app() -> FastAPI:
     app.state.admin_auth = admin_auth
     app.state.admin_event_bus = admin_event_bus
     app.state.music_state_store = music_state_store
+    app.state.jikong_store = jikong_store
     app.state.stream_hub = stream_hub
     app.state.ts_to_flv_converters = ts_to_flv_converters
     app.state.flv_aligners = flv_aligners

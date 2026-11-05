@@ -99,6 +99,7 @@ CATEGORIES: list[dict[str, Any]] = [
     _cat("interact", "交互", "💬", "弹窗、语音播报、震动、Toast 等交互反馈"),
     _cat("system", "系统", "⚙️", "诊断日志、重启、锁屏等系统级命令"),
     _cat("ui", "界面自动化", "🖱️", "读取屏幕控件、模拟点击/输入/手势（基于无障碍服务，对标 autox）"),
+    _cat("jikong", "极空保护板", "🔋", "极空（JK BMS）保护板：BLE 连接、状态查询、远程控制"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -497,6 +498,39 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("open_download_page", "扫码下载APP", "system", "📲",
          "打开服务器上的二维码下载页（新标签页），用户扫码即可下载并安装最新 Bridge 客户端；"
          "本命令不下发给设备，仅作为后台快捷入口", []),
+
+    # ---- 极空 BMS 保护板（v0.2.55 引入：BLE 连接 + 状态上报 + 远程控制）----
+    _cmd("jikong_scan", "扫描极空设备", "jikong", "🔍",
+         "让客户端扫描周边极空（JK BMS）保护板 BLE 设备，返回设备列表（名称/地址/信号强度）；"
+         "需设备已开蓝牙并授予定位/BLE 权限", []),
+    _cmd("jikong_connect", "连接极空设备", "jikong", "🔌",
+         "让客户端连接指定地址的极空保护板（BLE），连接成功后自动开始周期读取并上报状态",
+         [_param("address", "设备地址", PARAM_TYPE_TEXT, required=True,
+                 placeholder="AA:BB:CC:DD:EE:FF",
+                 description="极空保护板 BLE MAC 地址（可先用「扫描极空设备」获取）")]),
+    _cmd("jikong_disconnect", "断开极空设备", "jikong", "⏹️",
+         "让客户端断开极空保护板 BLE 连接并停止状态上报"),
+    _cmd("jikong_status", "极空状态", "jikong", "📊",
+         "查询客户端当前极空保护板连接状态 + 实时数据快照（总压/电流/SOC/单体电压/温度/保护/MOS）；"
+         "只读本地缓存，不触发 BLE 操作"),
+    _cmd("jikong_mos", "极空 MOS 控制", "jikong", "⚡",
+         "远程控制极空保护板充放电 MOS 开关（写保护板，请谨慎操作）",
+         [_param("charge", "含充电 MOS", PARAM_TYPE_SWITCH, default=True),
+          _param("discharge", "含放电 MOS", PARAM_TYPE_SWITCH, default=True),
+          _param("on", "开/关", PARAM_TYPE_SELECT, default="on",
+                 options=[{"value": "on", "label": "开启"},
+                          {"value": "off", "label": "关闭"}])]),
+    _cmd("jikong_balance", "极空均衡控制", "jikong", "⚖️",
+         "远程控制极空保护板主动均衡开关",
+         [_param("on", "开/关", PARAM_TYPE_SELECT, default="on",
+                 options=[{"value": "on", "label": "开启"},
+                          {"value": "off", "label": "关闭"}])]),
+    _cmd("jikong_write_param", "极空写参数", "jikong", "✏️",
+         "远程写入极空保护板参数（保护阈值/限流等，需设备密码），请谨慎操作",
+         [_param("param_id", "参数编号", PARAM_TYPE_NUMBER, required=True,
+                 placeholder="1~255", description="参数编号（见极空协议文档参数表）"),
+          _param("value", "参数值", PARAM_TYPE_NUMBER, required=True,
+                 placeholder="整数", description="原始参数值（单位由参数类型决定）")]),
 
     # ---- 界面自动化（v0.2.38 引入，对标 autox 无障碍引擎）----
     # 依赖设备开启「Bridge 辅助服务」（无障碍），且须为 canRetrieveWindowContent + canPerformGestures。

@@ -314,6 +314,28 @@ object CommandModule {
         Command.RPC_STATUS to CommandExecutor { command ->
             executeRpcStatus(command)
         },
+        // ---- 极空 BMS 保护板（v0.2.55）----
+        Command.JIKONG_SCAN to CommandExecutor { command ->
+            executeJikongScan(context, command)
+        },
+        Command.JIKONG_CONNECT to CommandExecutor { command ->
+            executeJikongConnect(context, command)
+        },
+        Command.JIKONG_DISCONNECT to CommandExecutor { command ->
+            executeJikongDisconnect(command)
+        },
+        Command.JIKONG_STATUS to CommandExecutor { command ->
+            executeJikongStatus(command)
+        },
+        Command.JIKONG_MOS to CommandExecutor { command ->
+            executeJikongMos(command)
+        },
+        Command.JIKONG_BALANCE to CommandExecutor { command ->
+            executeJikongBalance(command)
+        },
+        Command.JIKONG_WRITE_PARAM to CommandExecutor { command ->
+            executeJikongWriteParam(command)
+        },
         // ---- 界面自动化增强（v0.2.40：委托 automation/commands 执行器）----
         Command.UI_LONG_CLICK to CommandExecutor { command ->
             my.bridge.com.automation.commands.UiCommandExecutors.longClick(command)
@@ -2966,4 +2988,134 @@ object CommandModule {
     /** rpc_status：只读本地快照，不触发网络操作。 */
     private fun executeRpcStatus(command: Command): CommandResult =
         CommandResult(command.commandId, command.command, true, my.bridge.com.automation.rpc.RpcServerController.statusText())
+
+    // ------------------------------------------------------------------
+    // 极空 BMS 保护板（v0.2.55：BLE 连接 + 状态上报 + 远程控制）
+    // 管理后台「命令下发」页可下发 jikong_* 命令，客户端经 BLE 转成帧发给保护板。
+    // ------------------------------------------------------------------
+
+    /** jikong_scan：扫描周边极空 BLE 设备。 */
+    private suspend fun executeJikongScan(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val devices = my.bridge.com.jikong.JikongBleClient.scan(context, durationMs = 8000)
+            if (devices.isEmpty()) {
+                CommandResult(id, name, true, "未扫描到极空设备（请确认已开蓝牙并靠近设备）")
+            } else {
+                val sb = StringBuilder("扫描到 ${devices.size} 个设备：\n")
+                devices.forEach { d ->
+                    sb.append("· ${d.name}  ${d.address}  信号 ${d.rssi} dBm\n")
+                }
+                CommandResult(id, name, true, sb.toString())
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_scan 执行失败")
+            CommandResult(id, name, false, "扫描失败：${e.message}")
+        }
+    }
+
+    /** jikong_connect：连接指定地址的极空保护板。 */
+    private suspend fun executeJikongConnect(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val address = command.params.get("address")?.asString
+            ?: return CommandResult(id, name, false, "缺少参数 address（极空设备 BLE 地址）")
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.connect(context, address)
+            if (ok) {
+                CommandResult(id, name, true, "已连接极空设备 $address，开始周期读取并上报状态")
+            } else {
+                CommandResult(id, name, false, "连接失败（请确认设备地址正确、已开蓝牙、设备在附近且未被他端占用）")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_connect 执行失败")
+            CommandResult(id, name, false, "连接失败：${e.message}")
+        }
+    }
+
+    /** jikong_disconnect：断开极空保护板。 */
+    private fun executeJikongDisconnect(command: Command): CommandResult {
+        return try {
+            my.bridge.com.jikong.JikongController.instance.disconnect()
+            CommandResult(command.commandId, command.command, true, "已断开极空设备连接")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_disconnect 执行失败")
+            CommandResult(command.commandId, command.command, false, "断开失败：${e.message}")
+        }
+    }
+
+    /** jikong_status：只读本地状态快照。 */
+    private fun executeJikongStatus(command: Command): CommandResult {
+        val s = my.bridge.com.jikong.JikongController.instance.status
+        val msg = if (!s.connected) {
+            "极空设备未连接"
+        } else {
+            buildString {
+                append("已连接 ").append(s.deviceName).append("（").append(s.deviceAddress).append("）\n")
+                append("总压 ").append(fmt2(s.totalVoltage)).append("V｜电流 ").append(fmt2(s.current))
+                    .append("A｜SOC ").append(s.soc).append("%\n")
+                append("压差 ").append(fmt2(s.diffVoltage)).append("V｜温差 ").append(fmt2(s.tempDiff)).append("℃\n")
+                append("充电MOS ").append(if (s.chargeMosOn) "开" else "关")
+                    .append("｜放电MOS ").append(if (s.dischargeMosOn) "开" else "关")
+                    .append("｜均衡 ").append(if (s.balanceOn) "开" else "关")
+                if (s.cellVoltages.isNotEmpty()) {
+                    append("\n单体：").append(s.cellVoltages.joinToString(" / ") { fmt2(it) }).append("V")
+                }
+                if (s.temperatures.isNotEmpty()) {
+                    append("\n温度：").append(s.temperatures.joinToString(" / ") { fmt2(it) }).append("℃")
+                }
+            }
+        }
+        return CommandResult(command.commandId, command.command, true, msg)
+    }
+
+    /** jikong_mos：控制充放电 MOS。 */
+    private suspend fun executeJikongMos(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val charge = command.params.get("charge")?.asBoolean ?: true
+        val discharge = command.params.get("discharge")?.asBoolean ?: true
+        val on = command.params.get("on")?.asString != "off"
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.setMos(charge, discharge, on)
+            CommandResult(id, name, ok, if (ok) "MOS 已${if (on) "开启" else "关闭"}（充=$charge 放=$discharge）" else "MOS 控制失败（未连接或写帧失败）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_mos 执行失败")
+            CommandResult(id, name, false, "MOS 控制失败：${e.message}")
+        }
+    }
+
+    /** jikong_balance：控制主动均衡。 */
+    private suspend fun executeJikongBalance(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val on = command.params.get("on")?.asString != "off"
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.setBalance(on)
+            CommandResult(id, name, ok, if (ok) "均衡已${if (on) "开启" else "关闭"}" else "均衡控制失败（未连接或写帧失败）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_balance 执行失败")
+            CommandResult(id, name, false, "均衡控制失败：${e.message}")
+        }
+    }
+
+    /** jikong_write_param：写保护参数。 */
+    private suspend fun executeJikongWriteParam(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val paramId = command.params.get("param_id")?.asInt
+            ?: return CommandResult(id, name, false, "缺少参数 param_id")
+        val value = command.params.get("value")?.asInt
+            ?: return CommandResult(id, name, false, "缺少参数 value")
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.writeParam(paramId, value)
+            CommandResult(id, name, ok, if (ok) "参数 $paramId 已写入 $value" else "写参数失败（未连接或写帧失败）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_write_param 执行失败")
+            CommandResult(id, name, false, "写参数失败：${e.message}")
+        }
+    }
+
+    private fun fmt2(v: Float): String = if (kotlin.math.abs(v) >= 100) "%.1f".format(v) else "%.2f".format(v)
 }
