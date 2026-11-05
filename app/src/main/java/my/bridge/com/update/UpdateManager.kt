@@ -346,10 +346,16 @@ object UpdateManager {
 
     /** 深度优先遍历控件树，命中已知安装按钮文案即坐标点击；返回是否点击成功。 */
     private fun findAndClickInstallButton(node: my.bridge.com.automation.automator.UiObject, candidates: List<String>): Boolean {
-        // 优先匹配带点击能力的节点（Button/可点击文本），再退化为任意文本命中
         val text = runCatching { node.text() }.getOrDefault("")
         val desc = runCatching { node.desc() }.getOrNull() ?: ""
-        val hit = candidates.any { it.equals(text, true) || it.equals(desc, true) }
+        // ★ 否定词排除（v0.2.54 修复）：系统安装页常有「取消安装」「不再提醒」「暂不」「稍后」
+        // 等按钮，其文本也含「安装」/「继续」等候选词，绝不能误点。先排除，再匹配确认按钮。
+        val negate = listOf("取消", "不再", "暂不", "稍后", "跳过", "退出", "关闭")
+        val negHit = negate.any { text.contains(it) || desc.contains(it) }
+        // ★ contains 匹配（v0.2.54 修复）：改前用 equals 精确全等，导致「继续安装」这种
+        // 组合词（含「安装」但不等于「安装」）匹配不上。改为包含匹配后「继续安装」「立即安装」
+        // 「同意并继续」等都能命中。安装确认按钮文案：继续安装 / 安装 / 继续 / 下一步 / 确定…
+        val hit = !negHit && candidates.any { text.contains(it, true) || desc.contains(it, true) }
         if (hit) {
             val b = runCatching { node.bounds() }.getOrNull()
             if (b != null && !b.isEmpty) {

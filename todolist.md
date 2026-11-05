@@ -43,7 +43,7 @@
 - 关闭开关按「pageActive + 亮屏」双条件决定是否立即 `stopAll`（采纳建议默认值「双条件」）。
 - 管理后台 `WECHAT_RELEASE_STATE_RULES` 状态联动。
 
-### 任务五：无界面模式（儿童锁 / 防误触）✅
+### ✅任务五：无界面模式（儿童锁 / 防误触）✅
 
 - 采用「方案 B 全屏遮挡层」（采纳建议默认值）：`UiLockController`（Compose state + Prefs 持久化）
   + `MainScreen` 顶层 `UiLockOverlay`（锁图标 + 提示，BackHandler 吞返回键防误触）。

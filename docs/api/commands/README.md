@@ -35,7 +35,7 @@
 | `get_sim_info` | 获取SIM卡信息 | [data.md#get_sim_info-获取sim卡信息](data.md#get_sim_info-获取sim卡信息) |
 | `get_network` | 获取网络状态 | [data.md#get_network-获取网络状态](data.md#get_network-获取网络状态) |
 | `get_battery` | 获取电量 | [data.md#get_battery-获取电量](data.md#get_battery-获取电量) |
-| `get_device_stats` | 设备统计（电量+活跃时长+流量） | [data.md#get_device_stats-设备统计](data.md#get_device_stats-设备统计) |
+| `get_device_stats` | 电/流量统计（电量+活跃时长+流量） | [data.md#get_device_stats-电流量统计](data.md#get_device_stats-电流量统计) |
 
 ## 🎬 media（音视频）→ [media.md](media.md)
 

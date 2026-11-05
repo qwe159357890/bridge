@@ -198,28 +198,31 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
 
 ---
 
-## get_device_stats 设备统计
+## get_device_stats 电/流量统计
 
-一次性获取设备统计（电量 + 活跃时长 + 流量，v0.2.51）。核心
+一次性获取电量与流量统计（电量 + 活跃时长 + 流量，v0.2.51）。核心
 `app/.../data/DeviceStatsReporter.kt`。**全部下发时读一次，零持续后台开销。**
 
-- **参数**：无。**结果去向**：仅命令回执。
+- **参数**：无。**结果去向**：仅命令回执（管理后台命令历史回执列可点「查看详情」看结构化弹窗）。
 - **四段内容**：
   1. **电量**：复用 `BatteryReporter`（百分比/充电/温度/电压/健康度），零权限。
   2. **本 App 活跃时长**：`UsageStatsManager.queryUsageStats` 系统已归档的
      `totalTimeInForeground` / `totalTimeVisible`，直读不计算；需「使用情况访问权」
      （复用 `ForegroundAppReader.hasUsageAccess` 探测），未授权该项省略。
      **明确非耗电值**，仅活跃度参考（Android 无第三方可用的「App 耗电 mAh」API）。
-  3. **本 App 流量（开机累计）**：`TrafficStats.getUidRxBytes/TxBytes` 零权限；
-     分 WiFi/移动需 `NetworkStatsManager.querySummary`（需使用情况访问权），未授权回退仅总量。
-  4. **本 App 流量（本月）**：`NetworkStatsManager.querySummary`（自然月），需使用情况访问权。
-  5. **整机流量（开机累计）**：`TrafficStats.getMobile*/getTotal*` 零权限。
-- **口径**：`TrafficStats` = 本次开机累计（断电清零）；`NetworkStatsManager` = 系统按自然月归档。
+  3. **本 App 流量（开机累计）**：`TrafficStats.getUidRxBytes/TxBytes` 零权限，
+     **真·断电清零的开机累计，不分接口**（系统不提供「分接口的开机以来流量」，
+     `NetworkStatsManager` 按自然日归档、无「本次开机」时间锚点）。
+  4. **本 App 流量（本月）**：`NetworkStatsManager.querySummary`（自然月，分 WiFi/移动），
+     需使用情况访问权。
+  5. **整机流量（开机累计）**：`TrafficStats.getMobile*/getTotal*` 零权限（分移动/WiFi）。
+- **口径**：`TrafficStats` = 本次开机累计（断电清零，本 App 不分接口、整机可分移动/WiFi）；
+  `NetworkStatsManager` = 系统按自然月归档（本 App 本月分 WiFi/移动）。
 - **未授权项**：回执明确标注「需使用情况访问权」，不阻断其它项。
 - 示例回执（多行）：
   ```
   【电量】85%（充电中·USB）｜温度：28.5℃｜电压：4.32V｜健康度：良好
-  【本 App 流量（开机累计）】上行 12.3MB／下行 45.6MB｜WiFi 50.2MB｜移动 7.7MB（本次开机累计）
+  【本 App 流量（开机累计）】上行 12.3MB／下行 45.6MB｜合计 57.9MB（本次开机累计，不分接口）
   【本 App 流量（本月）】WiFi 120.5MB｜移动 30.1MB（自然月累计）
   【整机流量（开机累计）】移动 1.2GB｜WiFi 3.4GB（本次开机累计）
   ```

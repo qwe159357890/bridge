@@ -345,6 +345,9 @@
     <!-- UI 两条命令的「查看详情」弹窗（v0.2.39：ui_dump 树形可视化 / ui_find 匹配列表） -->
     <UiResultDetailDialog ref="uiDetail" :device-names="deviceNameMap" />
 
+    <!-- 电/流量统计命令的「查看详情」弹窗（v0.2.54：电量环形图 + 流量卡片） -->
+    <DeviceStatsResultDialog ref="deviceStatsDetail" :device-names="deviceNameMap" />
+
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -406,9 +409,9 @@
               >
                 查看
               </el-button>
-              <!-- v0.2.33+：VNT / SSH / UI 命令的回执单独设计详情弹窗；pending 行不显示 -->
+              <!-- v0.2.33+：VNT / SSH / UI / 电流量统计命令的回执单独设计详情弹窗；pending 行不显示 -->
               <el-button
-                v-if="canViewVntDetail(row) || canViewSshDetail(row) || canViewUiDetail(row)"
+                v-if="canViewVntDetail(row) || canViewSshDetail(row) || canViewUiDetail(row) || canViewDeviceStatsDetail(row)"
                 size="small"
                 type="primary"
                 link
@@ -473,6 +476,7 @@ import StreamPlayerCard from '@/components/StreamPlayerCard.vue'
 import VntResultDetailDialog from '@/components/VntResultDetailDialog.vue'
 import SshResultDetailDialog from '@/components/SshResultDetailDialog.vue'
 import UiResultDetailDialog from '@/components/UiResultDetailDialog.vue'
+import DeviceStatsResultDialog from '@/components/DeviceStatsResultDialog.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -567,11 +571,20 @@ function canViewUiDetail(row: CommandRecord): boolean {
   return UI_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
 }
 
+// 电/流量统计命令的「查看详情」（v0.2.54）：电量环形图 + 四块流量卡片，
+// 见 DeviceStatsResultDialog.vue。
+const DEVICE_STATS_DETAIL_COMMANDS = ['get_device_stats']
+const deviceStatsDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
+function canViewDeviceStatsDetail(row: CommandRecord): boolean {
+  return DEVICE_STATS_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
+}
+
 // 「查看详情」统一入口：按命令族分流到对应弹窗。
 function openDetail(row: CommandRecord) {
   if (canViewVntDetail(row)) vntDetail.value?.show(row)
   else if (canViewSshDetail(row)) sshDetail.value?.show(row)
   else if (canViewUiDetail(row)) uiDetail.value?.show(row)
+  else if (canViewDeviceStatsDetail(row)) deviceStatsDetail.value?.show(row)
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,8 @@ import timber.log.Timber
  * - 活跃时长：`UsageStatsManager.queryUsageStats` 系统已归档的
  *   `totalTimeInForeground` / `totalTimeVisible`，直读不计算；需「使用情况访问权」
  *   （复用 [ForegroundAppReader.hasUsageAccess] 探测，未授权回执提示、不阻断其它项）。
- * - 流量（开机累计）：`TrafficStats` 零权限精确到字节。
+ * - 流量（开机累计，不分接口）：`TrafficStats` 零权限精确到字节（真·断电清零的开机累计；
+ *   系统不提供「分接口的开机以来流量」，分接口口径由「本月」表达）。
  * - 流量（本月 + 分 WiFi/移动）：`NetworkStatsManager` 系统按自然月归档，直读；
  *   需「使用情况访问权」，未授权回执提示。
  *
@@ -71,31 +72,25 @@ object DeviceStatsReporter {
         }
     }
 
-    /** 本 App 开机累计流量（分 WiFi/移动，需使用情况访问权；无权限回退仅总量）。 */
+    /**
+     * 本 App 开机累计流量（真·开机累计，零权限）。
+     *
+     * ★ v0.2.54 修复：改前用 NetworkStatsManager.querySummary 回看 365 天冒充「开机累计」，
+     * 导致数值 = 近一年流量（用户昨天开机却显示 13GB），且分接口把 UID_ALL 整机也混入。
+     * 系统并不提供「分 WiFi/移动 的开机以来流量」（NetworkStatsManager 按自然日归档、
+     * 无「本次开机」时间锚点）。故「开机累计」只用 TrafficStats（断电清零的真开机累计，
+     * 不分接口）；分接口的口径交给「本月」去表达。
+     */
     private fun appTrafficText(context: Context): String {
         val uid = Process.myUid()
         val rx = TrafficStats.getUidRxBytes(uid)
         val tx = TrafficStats.getUidTxBytes(uid)
         val total = if (rx >= 0 && tx >= 0) rx + tx else -1L
-
-        // 分接口需 NetworkStatsManager（使用情况访问权）
-        if (ForegroundAppReader.hasUsageAccess(context)) {
-            val byIf = uidTrafficByInterface(context, uid)
-            if (byIf != null) {
-                val wifi = byIf.first
-                val mobile = byIf.second
-                return buildString {
-                    append("上行 ").append(formatBytes(tx)).append("／下行 ").append(formatBytes(rx))
-                    if (wifi >= 0) append("｜WiFi ").append(formatBytes(wifi))
-                    if (mobile >= 0) append("｜移动 ").append(formatBytes(mobile))
-                    append("（本次开机累计）")
-                }
-            }
-        }
-
         return buildString {
-            append("上行 ").append(formatBytes(tx)).append("／下行 ").append(formatBytes(rx))
-            append("（本次开机累计，分 WiFi/移动需「使用情况访问权」）")
+            append("上行 ").append(formatBytes(tx))
+            append("／下行 ").append(formatBytes(rx))
+            if (total >= 0) append("｜合计 ").append(formatBytes(total))
+            append("（本次开机累计，不分接口）")
         }
     }
 
@@ -105,7 +100,7 @@ object DeviceStatsReporter {
             return "需「使用情况访问权」才能统计本月流量（未授权）"
         }
         val uid = Process.myUid()
-        val byIf = uidTrafficByInterface(context, uid, monthOnly = true)
+        val byIf = uidTrafficByInterface(context, uid)
         if (byIf == null) return "本月流量统计失败（设备网络统计服务异常）"
         val wifi = byIf.first
         val mobile = byIf.second
@@ -132,21 +127,19 @@ object DeviceStatsReporter {
     }
 
     /**
-     * 按 uid 分接口统计流量（NetworkStatsManager，需使用情况访问权）。
-     * @param monthOnly true = 只统计自然月；false = 开机累计。
+     * 按 uid 分接口统计「本月」流量（NetworkStatsManager，需使用情况访问权）。
      * @return Pair(wifi, mobile)，某类拿不到时为 -1；整体失败返回 null。
      */
     private fun uidTrafficByInterface(
         context: Context,
         uid: Int,
-        monthOnly: Boolean = false,
     ): Pair<Long, Long>? {
         return try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
             val nsm = context.getSystemService(Context.NETWORK_STATS_SERVICE) as? NetworkStatsManager
                 ?: return null
-            val wifi = sumUidForNetwork(nsm, uid, ConnectivityManager.TYPE_WIFI, monthOnly)
-            val mobile = sumUidForNetwork(nsm, uid, ConnectivityManager.TYPE_MOBILE, monthOnly)
+            val wifi = sumUidForNetwork(nsm, uid, ConnectivityManager.TYPE_WIFI)
+            val mobile = sumUidForNetwork(nsm, uid, ConnectivityManager.TYPE_MOBILE)
             wifi to mobile
         } catch (e: Exception) {
             Timber.w(e, "按接口统计流量失败（可能未授权使用情况访问权）")
@@ -155,19 +148,20 @@ object DeviceStatsReporter {
     }
 
     /**
-     * 汇总某 uid 在指定网络类型下的流量（-1 表示拿不到/无数据）。
-     * 统一用 querySummary（返回 NetworkStats，遍历其 Bucket）：
-     * 本月 = 自然月起始至今；开机累计 = 回看足够长的区间。
+     * 汇总某 uid 在指定网络类型下「本月」流量（-1 表示拿不到/无数据）。
+     * 用 querySummary（返回按 uid 聚合的 NetworkStats，遍历其 Bucket）。
+     *
+     * ★ v0.2.54 修复：改前 `if (bUid == uid || bUid == UID_ALL)` 会把 UID_ALL（整机）也
+     * 累加进「本 App」，导致数值虚高；现已只认 `bUid == uid`。
      */
     @RequiresApi(Build.VERSION_CODES.M)
     private fun sumUidForNetwork(
         nsm: NetworkStatsManager,
         uid: Int,
         networkType: Int,
-        monthOnly: Boolean,
     ): Long {
         val now = System.currentTimeMillis()
-        val start = if (monthOnly) monthStartMs(now) else now - BOOT_LOOKBACK_MS
+        val start = monthStartMs(now)
         return try {
             val stats = nsm.querySummary(networkType, null, start, now)
             val bucket = android.app.usage.NetworkStats.Bucket()
@@ -175,8 +169,7 @@ object DeviceStatsReporter {
             var hasData = false
             while (stats.hasNextBucket()) {
                 stats.getNextBucket(bucket)
-                val bUid = bucket.uid
-                if (bUid == uid || bUid == android.app.usage.NetworkStats.Bucket.UID_ALL) {
+                if (bucket.uid == uid) {
                     sum += bucket.rxBytes + bucket.txBytes
                     hasData = true
                 }
@@ -217,5 +210,4 @@ object DeviceStatsReporter {
     }
 
     private const val ACTIVE_LOOKBACK_MS = 7L * 24 * 60 * 60 * 1000 // 活跃时长回看 7 天
-    private const val BOOT_LOOKBACK_MS = 365L * 24 * 60 * 60 * 1000 // 开机累计回看（足够覆盖单次开机）
 }
