@@ -75,21 +75,40 @@ class JikongController private constructor() {
     private var pollJob: Job? = null
     private var lastReportedJson: String = ""
 
+    // ---- 扫描结果暂存（进程级，切页不丢失；刷新才重新扫描）----
+    @Volatile
+    var cachedDevices: List<BleDevice> = emptyList()
+        private set
+
+    @Volatile
+    var lastScanAt: Long = 0L
+        private set
+
+    /** 暂存扫描结果（扫描完成后调用）。 */
+    fun cacheScanResult(devices: List<BleDevice>) {
+        cachedDevices = devices
+        lastScanAt = System.currentTimeMillis()
+    }
+
     init {
-        // 连接状态变化时同步 status.connected 并上报
+        // 连接状态变化时同步 status.connected 并上报（Binder 线程回调，任何异常都吞掉）
         JikongBleClient.onConnectionChanged = { connected ->
-            val s = status
-            s.connected = connected
-            s.deviceName = JikongBleClient.connectedDeviceName
-            s.deviceAddress = JikongBleClient.connectedDeviceAddress
-            s.lastUpdateAt = System.currentTimeMillis()
-            if (!connected) {
-                // 断开时复位实时数据，避免管理后台看到陈旧数值
-                s.totalVoltage = 0f; s.current = 0f; s.soc = 0
-                s.cellVoltages = emptyList(); s.temperatures = emptyList()
+            try {
+                val s = status
+                s.connected = connected
+                s.deviceName = JikongBleClient.connectedDeviceName
+                s.deviceAddress = JikongBleClient.connectedDeviceAddress
+                s.lastUpdateAt = System.currentTimeMillis()
+                if (!connected) {
+                    // 断开时复位实时数据，避免管理后台看到陈旧数值
+                    s.totalVoltage = 0f; s.current = 0f; s.soc = 0
+                    s.cellVoltages = emptyList(); s.temperatures = emptyList()
+                }
+                reportStatus()
+                Timber.i(TAG, "连接状态变化：connected=$connected")
+            } catch (e: Exception) {
+                Timber.w(e, "连接状态回调异常（已忽略）")
             }
-            reportStatus()
-            Timber.i(TAG, "连接状态变化：connected=$connected")
         }
         // 收到通知字节 → 解码进状态
         JikongBleClient.onDataReceived = { bytes ->
@@ -151,10 +170,20 @@ class JikongController private constructor() {
         runCatching { JikongBleClient.write(JikongProtocol.buildDdRead(JikongProtocol.DD_CMD_ALARM)) }
     }
 
-    /** 处理收到的原始字节：尝试解码并合并进状态。 */
+    /** 处理收到的原始字节：尝试解码并合并进状态。任何异常都吞掉，绝不崩溃。 */
     private fun handleData(bytes: ByteArray) {
-        val frame = JikongProtocol.decode(bytes) ?: return
-        scope.launch { mergeFrame(frame) }
+        try {
+            val frame = JikongProtocol.decode(bytes) ?: return
+            scope.launch {
+                try {
+                    mergeFrame(frame)
+                } catch (e: Exception) {
+                    Timber.w(e, "合并极空帧失败（已忽略，不影响运行）")
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "解码极空数据失败（已忽略，不影响运行）")
+        }
     }
 
     private fun mergeFrame(frame: JikongFrame) {
@@ -261,17 +290,21 @@ class JikongController private constructor() {
 
     // ==================== 上报 ====================
 
-    /** 状态变化时上报服务端（去重：仅变化时发送）。 */
+    /** 状态变化时上报服务端（去重：仅变化时发送）。任何异常都吞掉，不影响运行。 */
     private fun reportStatus() {
-        val json = status.toJson().toString()
-        if (json == lastReportedJson) return
-        lastReportedJson = json
-        val ws = _webSocketClient ?: return
-        val data = JsonObject().apply {
-            addProperty("event", "jikong_state")
-            add("status", status.toJson())
+        try {
+            val json = status.toJson().toString()
+            if (json == lastReportedJson) return
+            lastReportedJson = json
+            val ws = _webSocketClient ?: return
+            val data = JsonObject().apply {
+                addProperty("event", "jikong_state")
+                add("status", status.toJson())
+            }
+            ws.sendBusinessMessage(data)
+        } catch (e: Exception) {
+            Timber.w(e, "极空状态上报失败（已忽略）")
         }
-        ws.sendBusinessMessage(data)
     }
 
     /** 强制立即上报一次（服务端查询/重连对齐时调用）。 */
@@ -282,13 +315,16 @@ class JikongController private constructor() {
 
     // ==================== 工具 ====================
 
-    private fun readU16(d: ByteArray, off: Int): Int =
-        ((d[off].toInt() and 0xFF) shl 8) or (d[off + 1].toInt() and 0xFF)
+    private fun readU16(d: ByteArray, off: Int): Int {
+        if (off < 0 || off + 1 >= d.size) return 0
+        return ((d[off].toInt() and 0xFF) shl 8) or (d[off + 1].toInt() and 0xFF)
+    }
 
-    private fun readI16(d: ByteArray, off: Int): Int =
-        ((d[off].toInt() and 0xFF) shl 8) or (d[off + 1].toInt() and 0xFF).let {
-            if (it and 0x8000 != 0) it - 0x10000 else it
-        }
+    private fun readI16(d: ByteArray, off: Int): Int {
+        if (off < 0 || off + 1 >= d.size) return 0
+        val v = ((d[off].toInt() and 0xFF) shl 8) or (d[off + 1].toInt() and 0xFF)
+        return if (v and 0x8000 != 0) v - 0x10000 else v
+    }
 
     private fun recomputeExtremes(s: JikongStatus) {
         if (s.cellVoltages.isNotEmpty()) {

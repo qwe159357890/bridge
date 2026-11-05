@@ -12,7 +12,9 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import java.util.UUID
@@ -65,6 +67,20 @@ object JikongBleClient {
     private val CLIENT_CHAR_UUID =
         "00002902-0000-1000-8000-00805f9b34fb"
 
+    // ---- 极空 BMS 广播 service UUID 白名单（用于扫描过滤）----
+    // 反编译官方 APK 实证：官方扫描时按 service UUID 过滤广播，而非按设备名
+    // （极空设备广播名常为数字串，如 "123456"，不能靠名字识别）。
+    // 这些 16bit UUID 会展开成 128bit 完整 UUID 作为 ScanFilter 条件。
+    private val JK_SCAN_SERVICE_UUIDS = listOf(
+        "0000fe59-0000-1000-8000-00805f9b34fb",
+        "0000ff01-0000-1000-8000-00805f9b34fb",
+        "0000ff10-0000-1000-8000-00805f9b34fb",
+        "0000ffe0-0000-1000-8000-00805f9b34fb",
+        "0000ff80-0000-1000-8000-00805f9b34fb",
+        "0000ff20-0000-1000-8000-00805f9b34fb",
+        "0000fff0-0000-1000-8000-00805f9b34fb",
+    )
+
     // ---- 连接状态 ----
     @Volatile
     var connected: Boolean = false
@@ -112,15 +128,19 @@ object JikongBleClient {
 
     /**
      * 扫描周边 BLE 设备，返回设备列表（按信号强度降序）。
+     *
+     * 与官方 APP 对齐：默认按极空 BMS 的 service UUID 白名单过滤广播，
+     * 只返回广播中带极空 service UUID 的设备（极空设备名常为数字串，不能靠名字识别）。
+     *
      * @param durationMs 扫描时长，默认 8 秒。
-     * @param nameFilter 名称过滤（极空设备名常含 "JK"/"BMS"/"JK-BMS"/"jk" 等），
-     *                   为空则不过滤。极空设备广播名通常形如 "JK_B2A8S20P"。
+     * @param filterByUuid true=仅返回带极空 service UUID 的设备（官方行为）；
+     *                     false=不过滤，返回全部（降级：真机 UUID 不匹配时用）。
      */
     @SuppressLint("MissingPermission")
     suspend fun scan(
         context: Context,
         durationMs: Long = 8000,
-        nameFilter: String? = null,
+        filterByUuid: Boolean = true,
     ): List<BleDevice> = suspendCancellableCoroutine { cont ->
         val a = ensureAdapter(context)
         val leScanner = a?.bluetoothLeScanner
@@ -139,14 +159,30 @@ object JikongBleClient {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val dev = result.device
                 val name = safeName(dev) ?: ""
-                if (nameFilter != null && !name.contains(nameFilter, true)) return
                 results[dev.address] = BleDevice(dev.address, name.ifBlank { "未知设备" }, result.rssi)
             }
             override fun onScanFailed(errorCode: Int) {
                 Timber.w(TAG, "BLE 扫描失败 errorCode=$errorCode")
             }
         }
-        leScanner.startScan(cb)
+
+        // 官方行为：用 ScanFilter 按 service UUID 过滤（硬件层过滤，省电且精准）。
+        // 若真机极空设备广播里没带这些 UUID，会扫不到 → 此时切 filterByUuid=false 兜底。
+        val filters = if (filterByUuid) {
+            JK_SCAN_SERVICE_UUIDS.map { uuid ->
+                ScanFilter.Builder().setServiceUuid(android.os.ParcelUuid(UUID.fromString(uuid))).build()
+            }
+        } else {
+            null
+        }
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        if (filters != null) {
+            leScanner.startScan(filters, settings, cb)
+        } else {
+            leScanner.startScan(cb)
+        }
         // 定时停止
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             runCatching { leScanner.stopScan(cb) }

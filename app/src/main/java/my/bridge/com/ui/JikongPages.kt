@@ -96,10 +96,11 @@ fun JikongPage() {
     // 二级 Tab：实时 / 单体 / 温度 / 保护 / 参数 / 控制
     var tab by remember { mutableIntStateOf(0) }
 
-    // 扫描结果 / 扫描中 / 连接中
-    var devices by remember { mutableStateOf<List<BleDevice>>(emptyList()) }
+    // 扫描结果：从 controller 读进程级暂存（切页不丢失）；扫描中/连接中为页面级瞬态
     var scanning by remember { mutableStateOf(false) }
     var connecting by remember { mutableStateOf(false) }
+    // 「显示全部设备」降级开关：默认按极空 UUID 过滤（官方行为）；真机 UUID 不匹配时切全部
+    var showAll by remember { mutableStateOf(false) }
 
     // 权限：BLE 扫描需要定位权限（Android 12+ 需要 BLUETOOTH_SCAN，12- 需要定位）
     val permLauncher = rememberLauncherForActivityResult(
@@ -136,21 +137,31 @@ fun JikongPage() {
         }
         scanning = true
         kotlinx.coroutines.GlobalScope.launch {
-            val result = JikongBleClient.scan(context, durationMs = 8000)
-            devices = result
-            scanning = false
+            try {
+                val result = JikongBleClient.scan(context, durationMs = 8000, filterByUuid = !showAll)
+                controller.cacheScanResult(result)
+            } catch (e: Exception) {
+                android.util.Log.w("Jikong", "扫描失败", e)
+            } finally {
+                scanning = false
+            }
         }
     }
 
     fun doConnect(dev: BleDevice) {
         connecting = true
         kotlinx.coroutines.GlobalScope.launch {
-            val ok = controller.connect(context, dev.address)
+            val ok = try {
+                controller.connect(context, dev.address)
+            } catch (e: Exception) {
+                android.util.Log.w("Jikong", "连接失败", e)
+                false
+            }
             connecting = false
-            if (ok) {
-                Toast.makeText(context, "已连接 ${dev.name}", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "连接失败，请靠近设备重试", Toast.LENGTH_SHORT).show()
+            // Toast 必须在主线程（GlobalScope.launch 默认后台线程无 Looper，直接 Toast 会 NPE 崩溃）
+            val msg = if (ok) "已连接 ${dev.name}" else "连接失败，请靠近设备重试"
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -181,11 +192,14 @@ fun JikongPage() {
         )
 
         if (!controller.status.connected) {
-            // 未连接：扫描/连接界面
+            // 未连接：扫描/连接界面（扫描结果读 controller 进程级暂存，切页不丢失）
             ScanConnectView(
-                devices = devices,
+                devices = controller.cachedDevices,
                 scanning = scanning,
                 connecting = connecting,
+                lastScanAt = controller.lastScanAt,
+                showAll = showAll,
+                onShowAllChange = { showAll = it },
                 onScan = { doScan() },
                 onConnect = { doConnect(it) },
             )
@@ -247,6 +261,9 @@ private fun ScanConnectView(
     devices: List<BleDevice>,
     scanning: Boolean,
     connecting: Boolean,
+    lastScanAt: Long,
+    showAll: Boolean,
+    onShowAllChange: (Boolean) -> Unit,
     onScan: () -> Unit,
     onConnect: (BleDevice) -> Unit,
 ) {
@@ -271,18 +288,34 @@ private fun ScanConnectView(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "极空保护板通常命名为 JK-xxx / JK_B2A8Sxx。扫描前请先开启蓝牙，并靠近设备（10 米内）。",
+            "扫描前请先开启蓝牙并靠近设备（10 米内）。仅显示极空保护板，如需查看其它蓝牙设备请勾选下方选项。",
             color = JkGray,
             fontSize = 12.sp,
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(4.dp))
+        // 降级开关：显示全部蓝牙设备
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.Checkbox(
+                checked = showAll,
+                onCheckedChange = onShowAllChange,
+            )
+            Text("显示全部蓝牙设备（不按极空过滤）", fontSize = 12.sp, color = JkGray)
+        }
+        Spacer(Modifier.height(4.dp))
+        // 上次扫描时间提示
+        if (lastScanAt > 0 && devices.isNotEmpty()) {
+            val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                .format(java.util.Date(lastScanAt))
+            Text("上次扫描 $fmt（点「扫描极空设备」刷新）", fontSize = 11.sp, color = JkGray)
+        }
+        Spacer(Modifier.height(8.dp))
 
         if (devices.isEmpty() && !scanning) {
             Box(
                 modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("暂未扫描到设备", color = JkGray, fontSize = 14.sp)
+                Text("暂未扫描到极空设备", color = JkGray, fontSize = 14.sp)
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -611,7 +644,13 @@ private fun ParamView(controller: JikongController) {
 }
 
 private fun launchWrite(controller: JikongController, block: suspend () -> Boolean) {
-    kotlinx.coroutines.GlobalScope.launch { block() }
+    kotlinx.coroutines.GlobalScope.launch {
+        try {
+            block()
+        } catch (e: Exception) {
+            android.util.Log.w("Jikong", "写参数失败", e)
+        }
+    }
 }
 
 @Composable
@@ -662,13 +701,22 @@ private fun ControlView(controller: JikongController) {
         Spacer(Modifier.height(12.dp))
 
         ControlCard("充电 MOS", s.chargeMosOn) { on ->
-            kotlinx.coroutines.GlobalScope.launch { controller.setMos(charge = true, discharge = null, on = on) }
+            kotlinx.coroutines.GlobalScope.launch {
+                try { controller.setMos(charge = true, discharge = null, on = on) }
+                catch (e: Exception) { android.util.Log.w("Jikong", "充电 MOS 控制失败", e) }
+            }
         }
         ControlCard("放电 MOS", s.dischargeMosOn) { on ->
-            kotlinx.coroutines.GlobalScope.launch { controller.setMos(charge = null, discharge = true, on = on) }
+            kotlinx.coroutines.GlobalScope.launch {
+                try { controller.setMos(charge = null, discharge = true, on = on) }
+                catch (e: Exception) { android.util.Log.w("Jikong", "放电 MOS 控制失败", e) }
+            }
         }
         ControlCard("主动均衡", s.balanceOn) { on ->
-            kotlinx.coroutines.GlobalScope.launch { controller.setBalance(on) }
+            kotlinx.coroutines.GlobalScope.launch {
+                try { controller.setBalance(on) }
+                catch (e: Exception) { android.util.Log.w("Jikong", "均衡控制失败", e) }
+            }
         }
     }
 }
