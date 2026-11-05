@@ -13,7 +13,7 @@
 > 术语遵循 `docs/architecture/terminology.md`（客户端 / 服务端 / 管理后台）。
 > 实现要点见下方各任务「✅ 已实现」段；详细回执契约见 `docs/api/commands/system.md`。
 
-### 任务一：管理后台新增「无障碍」命令（开启/关闭/检查状态）✅
+### ✅任务一：管理后台新增「无障碍」命令（开启/关闭/检查状态）✅
 
 - 客户端 `BridgeAccessibilityService` 新增 `canWriteSecureSettings()`（探测 WRITE_SECURE_SETTINGS），
   `enableInSettings`/`disableInSettings` 改为返回布尔结果（可如实回执）。
@@ -21,7 +21,7 @@
 - 管理后台 `ACCESSIBILITY_STATE_RULES` 状态联动（unknown 禁用 + 强制下发二次确认）。
 - 关闭无障碍敏感操作已纳入状态联动 + 二次确认（采纳建议默认值「是」）。
 
-### 任务二：首次安装权限盘点 + 管理后台「ADB 一键全量授权」✅
+### ✅任务二：首次安装权限盘点 + 管理后台「ADB 一键全量授权」✅
 
 - 盘点出三类权限：`pm grant` 危险权限（41 项，定位/相机/麦克风/蓝牙/通讯录/短信/通话/日历/体感/媒体/通知）、
   `pm grant` 特殊权限（WRITE_SECURE_SETTINGS）、`appops` 特殊路径（6 项：写设置/悬浮窗/装未知应用/使用情况/管理存储/忽略电池优化）。
@@ -36,7 +36,7 @@
   「安装/继续/下一步/确定/Install/Next/OK」按钮，10 次 + 30s 护栏）。
 - 前置校验：无无障碍时先尝试 `enableInSettings()` 自动开启，无法开启则回执引导手动/ADB 开。
 
-### 任务四：管理后台控制「微信离开后立即结束」开关 ✅
+### ✅任务四：管理后台控制「微信离开后立即结束」开关 ✅
 
 - `WechatRuntime` 加 `isPageActive()`/`isStopped()` 只读访问器。
 - 新增命令 `wechat_release_status`/`wechat_release_enable`/`wechat_release_disable`。
@@ -112,7 +112,7 @@
 
 ---
 
-## 2026-11-05 · 无界面模式「首次配置破局 + PIN 自愈」（已对时，待落地）
+## ✅2026-11-05 · 无界面模式「首次配置破局 + PIN 自愈」（已对时，待落地）
 
 > 用户拍板三点：① PIN **服务端权威**，客户端首次连上后**向服务端读取并本地缓存**，此后**只在本地判断**（离线可解锁）；
 > ② 无界面模式开关**两处都放**（首次配置引导页 + 设置页）；③ 解锁入口 = **连续点 5 次锁图标**。

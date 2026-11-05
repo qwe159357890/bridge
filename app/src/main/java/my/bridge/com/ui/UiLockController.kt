@@ -41,10 +41,6 @@ object UiLockController {
     var lockedMessage by mutableStateOf("")
         private set
 
-    /** 临时解锁令牌（PIN 校验通过后置 true，允许进设置页改服务器；重进无界面即失效）。 */
-    var pinUnlocked by mutableStateOf(false)
-        private set
-
     /**
      * 解锁 PIN 的本地缓存（服务端权威，客户端首连成功后向服务端读取并缓存，此后只在本地判断）。
      * 本地无缓存（从未连上过服务器）时无法用 PIN 解锁，只能走首次配置 / 后台下发。
@@ -70,15 +66,17 @@ object UiLockController {
         return cached == input.trim()
     }
 
-    /** PIN 校验通过后临时解锁（允许进设置页）；重新进入无界面时清零。 */
-    fun grantPinUnlock() {
-        pinUnlocked = true
-        DiagLog.i(TAG, "PIN 校验通过，临时解锁进设置页")
-    }
-
-    /** 清除临时解锁态（离开无界面 / 重新锁定 / 进设置页改完地址后调用）。 */
-    fun clearPinUnlock() {
-        pinUnlocked = false
+    /**
+     * PIN 校验通过后**真正解锁**（等同「设备端临时解除无界面模式」）：
+     * 写 Prefs + 置 locked=false，界面恢复为完整正常界面（底部导航齐全、页面可自由切换）。
+     * 与 [unlock] 的区别仅在于触发入口（本地 PIN 自愈 vs 管理后台下发），结果一致、
+     * 均持久化，冷启动/进程重建后保持解锁。
+     */
+    fun grantPinUnlock(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY, false).apply()
+        locked = false
+        lockedMessage = ""
+        DiagLog.i(TAG, "PIN 校验通过，设备端解除无界面模式，界面恢复正常")
     }
 
     /** 持久化读取（进程启动 / MainScreen 组合前调用）。 */

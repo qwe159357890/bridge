@@ -44,7 +44,7 @@ adb:
 ui_lock:
   # 无界面模式（儿童锁）解锁 PIN：服务端权威，客户端首次连上后拉取并本地缓存，
   # 此后只在本地判断（服务器改地址连不上时仍可离线输 PIN 临时解锁进设置页）
-  pin: "123456"
+  pin: "qwe951753"
 
 updates:
   dir: "data/updates"            # 更新 APK 目录（check_update 命令服务器目录版）

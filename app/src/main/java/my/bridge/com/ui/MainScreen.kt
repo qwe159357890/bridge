@@ -204,27 +204,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
     ) {
         // 无界面模式（v0.2.51）：锁定态渲染全屏遮挡层，不组合任何页面（页面级资源随组合
         // 销毁自动释放），并吞掉返回键防误触退出。主 WS / 保活 / 组网均不受影响。
-        // PIN 临时解锁（v0.2.51）：校验通过后 pinUnlocked=true，仅放行「设置页」让用户改服务器地址。
+        // PIN 自愈（v0.2.52）：连续点 5 次锁图标 → 校验本地 PIN → grantPinUnlock 真正解锁
+        // （写 Prefs + locked=false），此处判断自然为 false，直接落到下方完整界面渲染。
         if (UiLockController.locked) {
-            if (UiLockController.pinUnlocked) {
-                // PIN 解锁后：只显示设置页（selectedBottom 强制 3），改完地址重连。
-                SettingsPage(
-                    currentTab = 0,
-                    homeTabOrder = homeTabOrder,
-                    homeTabNames = homeTabNames,
-                    onHomeTabOrderChange = { order ->
-                        homeTabOrder = order
-                        TabOrderPrefs.save(context, order)
-                    },
-                    onHomeTabNameChange = { names ->
-                        homeTabNames = names
-                        TabOrderPrefs.saveNames(context, names)
-                    },
-                    onTabChange = { /* PIN 解锁态固定留在设置页首 tab */ },
-                )
-            } else {
-                UiLockOverlay(message = UiLockController.lockedMessage)
-            }
+            UiLockOverlay(message = UiLockController.lockedMessage)
             return@Column
         }
         // 内容区：根据底部导航显示对应页面（占据剩余全部空间）
@@ -590,7 +573,7 @@ private fun UiLockOverlay(message: String) {
             onDismiss = { showPinDialog = false },
             onVerified = {
                 showPinDialog = false
-                UiLockController.grantPinUnlock()
+                UiLockController.grantPinUnlock(context)
             },
         )
     }
