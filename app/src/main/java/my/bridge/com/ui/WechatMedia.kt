@@ -114,7 +114,7 @@ fun WechatAvatar(wxid: String, name: String, size: Dp = 40.dp, radius: Dp = 5.dp
     if (bmp == null && url.isNotBlank()) {
         LaunchedEffect(url) {
             withContext(Dispatchers.IO) {
-                val loaded = WechatImageLoader.load(url, bearer = bearer, maxEdge = 160)
+                val loaded = WechatImageLoader.load(url, bearer = bearer, maxEdge = 160, kind = "avatars")
                 // 加载失败保持 null ⇒ 继续显示首字母色块；成功则覆盖，触发重组
                 if (loaded != null) bmp = loaded
             }
