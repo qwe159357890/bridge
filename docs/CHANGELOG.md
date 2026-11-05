@@ -22,6 +22,36 @@
 
 ---
 
+## 2026-11-05 · 🩸 v0.2.48→v0.2.50 微信页流量大户根治 + 磁盘缓存 + 连接状态一致性收敛
+
+**节点意义**：两条独立主线并行——①微信页 ~200 KB/s 流量大户的最终根治（根因在 center-server 的 uvicorn Ping 风暴，不在客户端）；②客户端磁盘缓存落地 + 连接状态一致性的两次连发修复。前者是服务器端一行修复（用户手动），后者是三个客户端版本递进收敛。
+
+### 脉络1 · 微信页 200 KB/s 流量大户根治（center-server Ping 风暴，无 APK 版本）
+
+- **根因（决定性质证）**：`center-server/main.py` 为「关掉 uvicorn 层 ping」写了 `ws_ping_interval=0.0`，但 websockets 16.0 判断是 `is not None`（`0.0 is not None`=True）⇒ 启动 keepalive 死循环，`sleep(0.0 - latency)` = `sleep(0)` 零延迟疯狂发 Ping 帧（每秒几百个），经 VNT 封装 6 字节→90 字节 UDP（15 倍放大），手机 wlan0 呈现 ~200 KB/s，center-server CPU 99.7% 满载。
+- **修复**：`ws_ping_interval=0.0` → `None`（uvicorn 官方类型 `float | None` 支持 None 关闭；None 时 `is not None`=False 不启动 keepalive，既无风暴也不触发 10-29 的 `_drain_helper` 断言 bug）。**用户手动改服务器并重启**。
+- **验证**：修复后实测「主 WS + VNT + 微信后台」稳态 1364 B/s，与「无微信」基线 1363 B/s 几乎一致（差 <1 B/s），Ping 风暴彻底消失。详见 `docs/dev/traffic-measurement.md` §六/§七。
+
+### 脉络2 · 客户端磁盘缓存 + 小 bug（v0.2.48）
+
+- **磁盘缓存落地**：`WechatImageLoader` 从「仅内存 LRU」升级为三级缓存（内存→磁盘→服务器）。磁盘目录 `getExternalFilesDir(null)/bridge/wechat/cache/{avatars,media}`（App 私有，无需权限/不污染相册/卸载自动清）；缓存 key = URL 的 SHA-256（换 token 也命中）；失败去重 30min TTL；pending 去重（同 URL 并发只下一次）；过期清理 7 天（惰性，照 pc-client cleanup_manager）。头像走 `avatars`、缩略图/封面走 `media`。
+- **Emoji 乱码**：`WechatEmoji.kt` `"[汗]" to "�"`（U+FFFD 坏字符，源数据 emoji_data.py 本身就是坏字符）→ `"[汗]" to "💦"`。
+- **连接池泄漏**：`WechatRuntime` 高频渲染路径 `attachmentUrl`/`avatarUrl`/`apiKey` 及低频业务动作原每次 `new WechatApiClient(context)`（建 OkHttpClient 线程池用完不 close 泄漏），统一改 `(api ?: WechatApiClient(context))` 复用进程级单例。
+
+### 脉络3 · 连接状态一致性连发修复（v0.2.49 → v0.2.50）
+
+- **v0.2.49 · 状态卡「连接中」**：`WechatWsClient.isConnected()` 用 `socket != null` 冒充「已连接」（`newWebSocket` 后立即非 null，握手尚未完成），导致重连循环提前退出、`scheduleReconnect` 被 `isActive` 竞态跳过、状态永久卡 CONNECTING。**修复**：新增 `opened` 标记（握手成功才置 true），`isConnected() = opened && socket != null`；`onConnected`/`onDisconnected` 状态更新无条件执行；重连循环 `try/finally` 退出时清空 `reconnectJob`。
+- **v0.2.50 · 会话列表不刷新**：连接状态能刷新了，但会话列表仍不刷新——`refreshSessions()` 的防重入 `if (loadingSessions) return` 在「首拉因服务器不可达挂起 8s」期间卡为 true，连接恢复触发的刷新被挡住，且失败路径无重试。**修复**：`refreshSessions(force=true)` 突破防重入；`onConnected` 里 `refreshAgents() + refreshSessions(force=true)` 强制刷新。
+
+### 关键经验沉淀
+
+- **websockets 16.0 关 ping 必须传 `None`，传 `0.0` 反而触发 keepalive 死循环**——判断是 `is not None` 而非 `> 0`；凡「想关掉某个 keepalive/ping」都先查库的判空写法，别用 `0`/`0.0` 兜底。
+- **「已连接」不能用 `socket != null` 判断**——异步库的句柄在握手完成前就非 null；连接状态必须用明确的 `onOpen`/`onClosed` 回调维护标志位，否则重连/防重入逻辑全在握手窗口上出竞态。
+- **防重入 flag 会卡死数据刷新**——「首拉因网络不可达挂起」会把 `loading` 卡 true，后续所有刷新被挡；关键时机（重连成功）必须给「强制刷新」入口突破防重入，且失败路径要么重试、要么保证有下一次触发。
+- **流量定位要分清「服务器→客户端透传」与「客户端主动下载」**——微信后台只被动收 WS 推送 JSON（文字全量、图片只含 attachment 元数据），媒体下载只在 UI 渲染时发生；判断「某流量来自谁」先追推送链路的原样透传点（`agent.py:204`）。
+
+---
+
 ## 2026-11-04 · ✨ v0.2.43 自动化调试台坐标级操作 + 滑动 + 设备记忆
 
 **节点意义**：真机反馈调试台「只针对控件、没有针对坐标」——有些图标无 `longClickable` 标记（长按灰）无法调试，但手动在任意坐标本来就能点/长按；且控件和坐标都没有滑动；目标设备每次刷新/切页都要重选。三条一并补齐，让调试台还原「手动在屏幕上的任意操作」。
