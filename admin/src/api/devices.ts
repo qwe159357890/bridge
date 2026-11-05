@@ -114,6 +114,33 @@ export function adbWifiEnableAccessibility(
   })
 }
 
+/** ADB 一键全量授权（首次安装）：pm grant + appops + 需手动确认清单。 */
+export interface AdbGrantAllResult {
+  success: boolean
+  serial?: string
+  device_ips?: string[]
+  adb_devices?: {
+    serial: string
+    ip?: string | null
+    conn_type?: 'usb' | 'wifi' | 'wifi_mdns'
+  }[]
+  granted?: { name: string; ok: boolean; detail?: string }[]
+  appops?: { name: string; ok: boolean; detail?: string }[]
+  manual?: { name: string; reason: string }[]
+  error?: string
+}
+
+export function adbGrantAll(
+  deviceId: string,
+  ip?: string,
+): Promise<AdbGrantAllResult> {
+  return request<AdbGrantAllResult>({
+    url: `/api/devices/${deviceId}/adb-grant-all`,
+    method: 'post',
+    data: ip ? { ip } : {},
+  })
+}
+
 // ---------------------------------------------------------------------------
 // 主动上报配置（周期位置上报 / 新短信即推，双开关默认开）
 // ---------------------------------------------------------------------------

@@ -52,12 +52,23 @@
                 🔐 SSH：{{ sshStateText }}
               </el-tag>
             </el-tooltip>
+            <!-- v0.2.51：无障碍状态徽标（accessibility_status 回执快照，悬停看完整回执） -->
+            <el-tooltip
+              v-if="form.deviceId"
+              :content="a11ySnapshot?.message || '尚未取得无障碍状态，点右侧刷新按钮查询'"
+              placement="top"
+              :show-after="300"
+            >
+              <el-tag :type="a11yTagType" size="small" class="music-tag">
+                ♿ 无障碍：{{ a11yStateText }}
+              </el-tag>
+            </el-tooltip>
             <el-button
               v-if="form.deviceId"
               :icon="Refresh"
               size="small"
               circle
-              title="刷新设备状态（播放 / 组网 / SSH）"
+              title="刷新设备状态（播放 / 组网 / SSH / 无障碍）"
               @click="refreshDeviceStates"
             />
           </div>
@@ -1007,11 +1018,12 @@ function refreshVntStatus() {
   })
 }
 
-/** 顶栏刷新按钮：同时刷新播放状态、组网状态与 SSH 状态。 */
+/** 顶栏刷新按钮：同时刷新播放状态、组网状态、SSH 状态与无障碍状态。 */
 function refreshDeviceStates() {
   loadMusicState()
   refreshVntStatus()
   refreshSshStatus()
+  refreshA11yStatus()
 }
 
 // 选中「开始/停止组网」或切换设备时自动探测一次（与音量 get_volume 同款范式）
@@ -1124,6 +1136,256 @@ watch(sshAutoKey, (key) => {
   refreshSshStatus()
 })
 
+// ---------------------------------------------------------------------------
+// 无障碍状态联动（v0.2.51）：完全对照 VNT/SSH 联动范式。
+// 状态来源 = accessibility_status 回执快照，按设备缓存；unknown 一律禁用下发。
+// 客户端 accessibility_status 回执固定前缀（CommandModule.executeAccessibilityStatus）：
+//   '无障碍状态：已开启；…' / '无障碍状态：未开启；…'
+// ---------------------------------------------------------------------------
+
+type A11yState = 'enabled' | 'disabled' | 'unknown'
+
+/** 需要按无障碍状态限制下发的命令 → 允许的设备状态。accessibility_status 自身不受限。 */
+const A11Y_STATE_RULES: Record<string, A11yState[]> = {
+  accessibility_enable: ['disabled'],
+  accessibility_disable: ['enabled'],
+}
+
+const A11Y_STATE_LABELS: Record<A11yState, string> = {
+  enabled: '已开启',
+  disabled: '未开启',
+  unknown: '未知',
+}
+
+interface A11ySnapshot {
+  state: A11yState
+  message: string
+  at: number
+}
+
+const a11ySnapshots = ref<Record<string, A11ySnapshot>>({})
+const a11ySnapshot = computed<A11ySnapshot | null>(() => a11ySnapshots.value[form.deviceId] ?? null)
+const a11yState = computed<A11yState>(() => a11ySnapshot.value?.state ?? 'unknown')
+const a11yStateText = computed(() => {
+  const snap = a11ySnapshot.value
+  if (!snap) return '未查询'
+  if (snap.state === 'unknown') return snap.message ? `未知（${snap.message}）` : '未知'
+  return A11Y_STATE_LABELS[snap.state]
+})
+const a11yTagType = computed(() => {
+  switch (a11yState.value) {
+    case 'enabled':
+      return 'success'
+    case 'disabled':
+      return 'warning'
+    default:
+      return 'info'
+  }
+})
+
+/** 解析 accessibility_status 回执的固定前缀；无法解析一律 unknown。 */
+function parseA11yStatus(message: string): A11yState {
+  const m = message || ''
+  if (m.startsWith('无障碍状态：已开启')) return 'enabled'
+  if (m.startsWith('无障碍状态：未开启')) return 'disabled'
+  return 'unknown'
+}
+
+function setA11ySnapshot(deviceId: string, state: A11yState, message: string) {
+  a11ySnapshots.value = { ...a11ySnapshots.value, [deviceId]: { state, message, at: Date.now() } }
+}
+
+/** 下发 accessibility_status 探测。800ms 防抖，silent=true 不入历史。 */
+let lastA11yProbeAt = 0
+function refreshA11yStatus() {
+  if (!form.deviceId) return
+  const now = Date.now()
+  if (now - lastA11yProbeAt < 800) return
+  lastA11yProbeAt = now
+  sendCommand(form.deviceId, 'accessibility_status', {}, false, true).catch(() => {
+    setA11ySnapshot(form.deviceId, 'unknown', '无障碍状态查询下发失败')
+  })
+}
+
+// 选中「开启/关闭无障碍」或切换设备时自动探测一次
+let a11yQueryKey = ''
+const a11yAutoKey = computed(() => {
+  const name = selectedCommand.value?.name
+  return name && A11Y_STATE_RULES[name] && form.deviceId ? `${form.deviceId}:${name}` : ''
+})
+watch(a11yAutoKey, (key) => {
+  if (!key || key === a11yQueryKey) return
+  a11yQueryKey = key
+  refreshA11yStatus()
+})
+
+// ---------------------------------------------------------------------------
+// 微信离开即释放开关状态联动（v0.2.51）：对照 VNT/SSH/无障碍范式。
+// 状态来源 = wechat_release_status 回执快照，按设备缓存；unknown 一律禁用下发。
+// 客户端回执固定前缀（executeWechatReleaseStatus）：'微信离开即释放：已开启/已关闭；…'
+// ---------------------------------------------------------------------------
+
+type WechatReleaseState = 'enabled' | 'disabled' | 'unknown'
+
+/** 需要按开关状态限制下发的命令 → 允许的设备状态。wechat_release_status 自身不受限。 */
+const WECHAT_RELEASE_STATE_RULES: Record<string, WechatReleaseState[]> = {
+  wechat_release_enable: ['disabled'],
+  wechat_release_disable: ['enabled'],
+}
+
+const WECHAT_RELEASE_LABELS: Record<WechatReleaseState, string> = {
+  enabled: '已开启',
+  disabled: '已关闭',
+  unknown: '未知',
+}
+
+interface WechatReleaseSnapshot {
+  state: WechatReleaseState
+  message: string
+  at: number
+}
+
+const wechatReleaseSnapshots = ref<Record<string, WechatReleaseSnapshot>>({})
+const wechatReleaseSnapshot = computed<WechatReleaseSnapshot | null>(
+  () => wechatReleaseSnapshots.value[form.deviceId] ?? null,
+)
+const wechatReleaseState = computed<WechatReleaseState>(
+  () => wechatReleaseSnapshot.value?.state ?? 'unknown',
+)
+const wechatReleaseStateText = computed(() => {
+  const snap = wechatReleaseSnapshot.value
+  if (!snap) return '未查询'
+  if (snap.state === 'unknown') return snap.message ? `未知（${snap.message}）` : '未知'
+  return WECHAT_RELEASE_LABELS[snap.state]
+})
+const wechatReleaseTagType = computed(() => {
+  switch (wechatReleaseState.value) {
+    case 'enabled':
+      return 'success'
+    case 'disabled':
+      return 'info'
+    default:
+      return 'warning'
+  }
+})
+
+function parseWechatReleaseStatus(message: string): WechatReleaseState {
+  const m = message || ''
+  if (m.startsWith('微信离开即释放：已开启')) return 'enabled'
+  if (m.startsWith('微信离开即释放：已关闭')) return 'disabled'
+  return 'unknown'
+}
+
+function setWechatReleaseSnapshot(deviceId: string, state: WechatReleaseState, message: string) {
+  wechatReleaseSnapshots.value = {
+    ...wechatReleaseSnapshots.value,
+    [deviceId]: { state, message, at: Date.now() },
+  }
+}
+
+let lastWechatReleaseProbeAt = 0
+function refreshWechatReleaseStatus() {
+  if (!form.deviceId) return
+  const now = Date.now()
+  if (now - lastWechatReleaseProbeAt < 800) return
+  lastWechatReleaseProbeAt = now
+  sendCommand(form.deviceId, 'wechat_release_status', {}, false, true).catch(() => {
+    setWechatReleaseSnapshot(form.deviceId, 'unknown', '微信离开即释放状态查询下发失败')
+  })
+}
+
+let wechatReleaseQueryKey = ''
+const wechatReleaseAutoKey = computed(() => {
+  const name = selectedCommand.value?.name
+  return name && WECHAT_RELEASE_STATE_RULES[name] && form.deviceId
+    ? `${form.deviceId}:${name}`
+    : ''
+})
+watch(wechatReleaseAutoKey, (key) => {
+  if (!key || key === wechatReleaseQueryKey) return
+  wechatReleaseQueryKey = key
+  refreshWechatReleaseStatus()
+})
+
+// ---------------------------------------------------------------------------
+// 无界面模式状态联动（v0.2.51）：对照 VNT/SSH/无障碍/微信开关范式。
+// 状态来源 = ui_lock_status 回执快照，按设备缓存；unknown 一律禁用下发。
+// 客户端回执固定前缀（executeUiLockStatus）：'无界面模式：已开启/未开启'
+// ---------------------------------------------------------------------------
+
+type UiLockState = 'locked' | 'unlocked' | 'unknown'
+
+/** 需要按无界面模式状态限制下发的命令 → 允许的设备状态。ui_lock_status 自身不受限。 */
+const UI_LOCK_STATE_RULES: Record<string, UiLockState[]> = {
+  ui_lock_start: ['unlocked'],
+  ui_lock_stop: ['locked'],
+}
+
+const UI_LOCK_LABELS: Record<UiLockState, string> = {
+  locked: '已锁定',
+  unlocked: '未锁定',
+  unknown: '未知',
+}
+
+interface UiLockSnapshot {
+  state: UiLockState
+  message: string
+  at: number
+}
+
+const uiLockSnapshots = ref<Record<string, UiLockSnapshot>>({})
+const uiLockSnapshot = computed<UiLockSnapshot | null>(() => uiLockSnapshots.value[form.deviceId] ?? null)
+const uiLockState = computed<UiLockState>(() => uiLockSnapshot.value?.state ?? 'unknown')
+const uiLockStateText = computed(() => {
+  const snap = uiLockSnapshot.value
+  if (!snap) return '未查询'
+  if (snap.state === 'unknown') return snap.message ? `未知（${snap.message}）` : '未知'
+  return UI_LOCK_LABELS[snap.state]
+})
+const uiLockTagType = computed(() => {
+  switch (uiLockState.value) {
+    case 'locked':
+      return 'danger'
+    case 'unlocked':
+      return 'info'
+    default:
+      return 'warning'
+  }
+})
+
+function parseUiLockStatus(message: string): UiLockState {
+  const m = message || ''
+  if (m.startsWith('无界面模式：已开启')) return 'locked'
+  if (m.startsWith('无界面模式：未开启')) return 'unlocked'
+  return 'unknown'
+}
+
+function setUiLockSnapshot(deviceId: string, state: UiLockState, message: string) {
+  uiLockSnapshots.value = { ...uiLockSnapshots.value, [deviceId]: { state, message, at: Date.now() } }
+}
+
+let lastUiLockProbeAt = 0
+function refreshUiLockStatus() {
+  if (!form.deviceId) return
+  const now = Date.now()
+  if (now - lastUiLockProbeAt < 800) return
+  lastUiLockProbeAt = now
+  sendCommand(form.deviceId, 'ui_lock_status', {}, false, true).catch(() => {
+    setUiLockSnapshot(form.deviceId, 'unknown', '无界面模式状态查询下发失败')
+  })
+}
+
+let uiLockQueryKey = ''
+const uiLockAutoKey = computed(() => {
+  const name = selectedCommand.value?.name
+  return name && UI_LOCK_STATE_RULES[name] && form.deviceId ? `${form.deviceId}:${name}` : ''
+})
+watch(uiLockAutoKey, (key) => {
+  if (!key || key === uiLockQueryKey) return
+  uiLockQueryKey = key
+  refreshUiLockStatus()
+})
+
 /** 控制类命令允许下发的设备状态（播放音乐不受限，设备在线即可）。 */
 const MUSIC_STATE_RULES: Record<string, string[]> = {
   pause_music: ['playing'],
@@ -1146,6 +1408,9 @@ const showForceSend = computed(() => {
   // 状态未知 / 不匹配时下发按钮均被禁用，强制下发是唯一出口（需二次确认）
   if (VNT_STATE_RULES[cmd.name] !== undefined) return true
   if (SSH_STATE_RULES[cmd.name] !== undefined) return true
+  if (A11Y_STATE_RULES[cmd.name] !== undefined) return true
+  if (WECHAT_RELEASE_STATE_RULES[cmd.name] !== undefined) return true
+  if (UI_LOCK_STATE_RULES[cmd.name] !== undefined) return true
   if (MUSIC_STATE_RULES[cmd.name] !== undefined) return true
   // 采集互斥场景：目标设备有采集命令在途时，提供强制下发出口
   return CAPTURE_COMMANDS.includes(cmd.name) && !!pendingCapture.value
@@ -1161,6 +1426,18 @@ const forceSendTip = computed(() => {
   if (name && SSH_STATE_RULES[name] !== undefined) {
     if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
     return '开启后忽略后台记录的 SSH 状态，直接下发启动/停止 SSH 命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
+  }
+  if (name && A11Y_STATE_RULES[name] !== undefined) {
+    if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
+    return '开启后忽略后台记录的无障碍状态，直接下发开启/关闭无障碍命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
+  }
+  if (name && WECHAT_RELEASE_STATE_RULES[name] !== undefined) {
+    if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
+    return '开启后忽略后台记录的开关状态，直接下发微信离开即释放开/关命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
+  }
+  if (name && UI_LOCK_STATE_RULES[name] !== undefined) {
+    if (forceSendDisabled.value) return '当前命令可直接下发，无需强制下发'
+    return '开启后忽略后台记录的无界面模式状态，直接下发开启/关闭无界面模式命令（需二次确认）；设备端仍按真实状态执行或忽略重复命令'
   }
   return '开启后忽略播放状态限制，音乐控制命令直接下发，由设备按真实状态执行（状态不匹配会回执失败原因）'
 })
@@ -1206,7 +1483,10 @@ function isStateBlocked(cmd: CommandDef): boolean {
   const musicAllowed = MUSIC_STATE_RULES[cmd.name]
   const vntAllowed = VNT_STATE_RULES[cmd.name]
   const sshAllowed = SSH_STATE_RULES[cmd.name]
-  if (!musicAllowed && !vntAllowed && !sshAllowed) return false
+  const a11yAllowed = A11Y_STATE_RULES[cmd.name]
+  const wechatReleaseAllowed = WECHAT_RELEASE_STATE_RULES[cmd.name]
+  const uiLockAllowed = UI_LOCK_STATE_RULES[cmd.name]
+  if (!musicAllowed && !vntAllowed && !sshAllowed && !a11yAllowed && !wechatReleaseAllowed && !uiLockAllowed) return false
   if (!form.deviceId) return true
   if (musicAllowed) {
     const state = musicState.value?.state ?? 'unknown'
@@ -1216,7 +1496,10 @@ function isStateBlocked(cmd: CommandDef): boolean {
   // 状态规则表不含 unknown ⇒ includes() 为 false ⇒ 返回 true（禁用）。
   // 出口由「强制下发」承担：命令被禁用时 forceSendDisabled=false，开关可勾选 + 二次确认。
   if (vntAllowed) return !vntAllowed.includes(vntState.value)
-  return !sshAllowed!.includes(sshState.value)
+  if (sshAllowed) return !sshAllowed.includes(sshState.value)
+  if (a11yAllowed) return !a11yAllowed.includes(a11yState.value)
+  if (wechatReleaseAllowed) return !wechatReleaseAllowed.includes(wechatReleaseState.value)
+  return !uiLockAllowed!.includes(uiLockState.value)
 }
 
 /** 命令当前是否被设备状态禁用（卡片置灰 + 下发按钮禁用）。强制模式下绕过状态限制。 */
@@ -1234,7 +1517,11 @@ const forceSendDisabled = computed(() => {
   const cmd = selectedCommand.value
   if (!cmd) return false
   const isStateCommand =
-    VNT_STATE_RULES[cmd.name] !== undefined || SSH_STATE_RULES[cmd.name] !== undefined
+    VNT_STATE_RULES[cmd.name] !== undefined ||
+    SSH_STATE_RULES[cmd.name] !== undefined ||
+    A11Y_STATE_RULES[cmd.name] !== undefined ||
+    WECHAT_RELEASE_STATE_RULES[cmd.name] !== undefined ||
+    UI_LOCK_STATE_RULES[cmd.name] !== undefined
   if (!isStateCommand) return false
   return !isStateBlocked(cmd)
 })
@@ -1293,6 +1580,51 @@ const blockHint = computed(() => {
     }
     return `设备当前「${label}」，无需停止 SSH 服务（重复下发不改变自恢复意愿）；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
   }
+  // v0.2.51：无障碍状态联动提示（同款范式）
+  if (A11Y_STATE_RULES[selectedCommand.value.name]) {
+    if (forceSend.value) {
+      return '强制模式：将忽略后台记录的无障碍状态直接下发（已二次确认），设备端仍按真实状态执行或忽略重复命令'
+    }
+    if (a11yState.value === 'unknown') {
+      return '尚未取得设备无障碍状态（从未查询 / 回执超时 / 解析失败）：下发按钮已禁用，请先点「刷新状态」；确需直接下发可勾选「强制下发」（需二次确认）'
+    }
+    if (!commandBlocked.value) return ''
+    const label = A11Y_STATE_LABELS[a11yState.value]
+    if (selectedCommand.value.name === 'accessibility_enable') {
+      return `设备无障碍当前「${label}」，无需再次开启；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+    }
+    return `设备无障碍当前「${label}」，无需关闭（关闭会连带停用静默截屏/锁屏/UI 自动化）；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+  }
+  // v0.2.51：微信离开即释放状态联动提示（同款范式）
+  if (WECHAT_RELEASE_STATE_RULES[selectedCommand.value.name]) {
+    if (forceSend.value) {
+      return '强制模式：将忽略后台记录的开关状态直接下发（已二次确认），设备端仍按真实状态执行或忽略重复命令'
+    }
+    if (wechatReleaseState.value === 'unknown') {
+      return '尚未取得设备「微信离开即释放」开关状态（从未查询 / 回执超时 / 解析失败）：下发按钮已禁用，请先点「刷新状态」；确需直接下发可勾选「强制下发」（需二次确认）'
+    }
+    if (!commandBlocked.value) return ''
+    const label = WECHAT_RELEASE_LABELS[wechatReleaseState.value]
+    if (selectedCommand.value.name === 'wechat_release_enable') {
+      return `开关当前「${label}」，无需再次开启；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+    }
+    return `开关当前「${label}」，无需关闭；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+  }
+  // v0.2.51：无界面模式状态联动提示（同款范式）
+  if (UI_LOCK_STATE_RULES[selectedCommand.value.name]) {
+    if (forceSend.value) {
+      return '强制模式：将忽略后台记录的无界面模式状态直接下发（已二次确认），设备端仍按真实状态执行或忽略重复命令'
+    }
+    if (uiLockState.value === 'unknown') {
+      return '尚未取得设备无界面模式状态（从未查询 / 回执超时 / 解析失败）：下发按钮已禁用，请先点「刷新状态」；确需直接下发可勾选「强制下发」（需二次确认）'
+    }
+    if (!commandBlocked.value) return ''
+    const label = UI_LOCK_LABELS[uiLockState.value]
+    if (selectedCommand.value.name === 'ui_lock_start') {
+      return `无界面模式当前「${label}」，无需再次开启；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+    }
+    return `无界面模式当前「${label}」，无需关闭；若状态不准请点「刷新状态」，确认后仍要下发可勾选「强制下发」（需二次确认）`
+  }
   if (!MUSIC_STATE_RULES[selectedCommand.value.name]) return ''
   if (forceSend.value) {
     return '强制模式：命令将直接下发，由设备按真实状态执行，状态不匹配会回执失败'
@@ -1330,6 +1662,9 @@ watch(
     forceSend.value = false // 切换目标设备时重置强制下发，防止残留开启误操作
     vntQueryKey = '' // v0.2.33：换设备后允许重新自动探测组网状态
     sshQueryKey = '' // v0.2.34：换设备后允许重新自动探测 SSH 状态
+    a11yQueryKey = '' // v0.2.51：换设备后允许重新自动探测无障碍状态
+    wechatReleaseQueryKey = '' // v0.2.51：换设备后允许重新自动探测微信离开即释放状态
+    uiLockQueryKey = '' // v0.2.51：换设备后允许重新自动探测无界面模式状态
     pendingLocationCommandId = '' // 切换设备后旧的定位回执不再触发地图
     locationCard.value?.hide()
     volumeCard.value?.hide() // 音量卡片随设备切换关闭（新设备需重新获取）
@@ -1585,10 +1920,21 @@ async function handleSend() {
   }
   // v0.2.33+：VNT / SSH 命令的「强制下发」必须二次确认。状态是快照，强制下发会绕过
   // 按钮禁用，需让用户明确看到后台记录的状态并自行核对设备真实状态。
-  if (forceSend.value && (VNT_STATE_RULES[cmd.name] !== undefined || SSH_STATE_RULES[cmd.name] !== undefined)) {
+  if (forceSend.value && (VNT_STATE_RULES[cmd.name] !== undefined || SSH_STATE_RULES[cmd.name] !== undefined || A11Y_STATE_RULES[cmd.name] !== undefined || WECHAT_RELEASE_STATE_RULES[cmd.name] !== undefined || UI_LOCK_STATE_RULES[cmd.name] !== undefined)) {
     const isVnt = VNT_STATE_RULES[cmd.name] !== undefined
-    const stateText = isVnt ? vntStateText.value : sshStateText.value
-    const stateName = isVnt ? '组网' : 'SSH'
+    const isSsh = SSH_STATE_RULES[cmd.name] !== undefined
+    const isA11y = A11Y_STATE_RULES[cmd.name] !== undefined
+    const isWechatRelease = WECHAT_RELEASE_STATE_RULES[cmd.name] !== undefined
+    const stateText = isVnt
+      ? vntStateText.value
+      : isSsh
+        ? sshStateText.value
+        : isA11y
+          ? a11yStateText.value
+          : isWechatRelease
+            ? wechatReleaseStateText.value
+            : uiLockStateText.value
+    const stateName = isVnt ? '组网' : isSsh ? 'SSH' : isA11y ? '无障碍' : isWechatRelease ? '微信离开即释放开关' : '无界面模式'
     try {
       await ElMessageBox.confirm(
         `后台记录的${stateName}状态为「${stateText}」。本次将忽略该状态直接下发「${cmd.label}」。` +
@@ -1752,6 +2098,69 @@ function connectWS() {
             if (form.deviceId === dev) {
               lastSshProbeAt = 0 // 绕过防抖，确保这次探测一定发出
               refreshSshStatus()
+            }
+          }, 1500)
+        }
+        // v0.2.51：accessibility_status 回执 → 解析并缓存无障碍状态，驱动开启/关闭按钮联动
+        if (
+          msg.data.command === 'accessibility_status' &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const state = msg.data.success ? parseA11yStatus(msg.data.message || '') : 'unknown'
+          setA11ySnapshot(msg.data.device_id, state, msg.data.message || '')
+        }
+        // 开启/关闭无障碍回执后自动重新探测（与 VNT 同款 1.5s 延迟重查）
+        if (
+          (msg.data.command === 'accessibility_enable' || msg.data.command === 'accessibility_disable') &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const dev = msg.data.device_id as string
+          window.setTimeout(() => {
+            if (form.deviceId === dev) {
+              lastA11yProbeAt = 0
+              refreshA11yStatus()
+            }
+          }, 1500)
+        }
+        // v0.2.51：wechat_release_status 回执 → 解析并缓存开关状态
+        if (
+          msg.data.command === 'wechat_release_status' &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const state = msg.data.success ? parseWechatReleaseStatus(msg.data.message || '') : 'unknown'
+          setWechatReleaseSnapshot(msg.data.device_id, state, msg.data.message || '')
+        }
+        // 开/关开关回执后自动重新探测（与 VNT 同款 1.5s 延迟重查）
+        if (
+          (msg.data.command === 'wechat_release_enable' || msg.data.command === 'wechat_release_disable') &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const dev = msg.data.device_id as string
+          window.setTimeout(() => {
+            if (form.deviceId === dev) {
+              lastWechatReleaseProbeAt = 0
+              refreshWechatReleaseStatus()
+            }
+          }, 1500)
+        }
+        // v0.2.51：ui_lock_status 回执 → 解析并缓存无界面模式状态
+        if (
+          msg.data.command === 'ui_lock_status' &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const state = msg.data.success ? parseUiLockStatus(msg.data.message || '') : 'unknown'
+          setUiLockSnapshot(msg.data.device_id, state, msg.data.message || '')
+        }
+        // 开启/关闭无界面模式回执后自动重新探测（与 VNT 同款 1.5s 延迟重查）
+        if (
+          (msg.data.command === 'ui_lock_start' || msg.data.command === 'ui_lock_stop') &&
+          msg.data.device_id === form.deviceId
+        ) {
+          const dev = msg.data.device_id as string
+          window.setTimeout(() => {
+            if (form.deviceId === dev) {
+              lastUiLockProbeAt = 0
+              refreshUiLockStatus()
             }
           }, 1500)
         }

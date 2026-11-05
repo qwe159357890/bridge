@@ -35,6 +35,7 @@
 | `get_sim_info` | 获取SIM卡信息 | [data.md#get_sim_info-获取sim卡信息](data.md#get_sim_info-获取sim卡信息) |
 | `get_network` | 获取网络状态 | [data.md#get_network-获取网络状态](data.md#get_network-获取网络状态) |
 | `get_battery` | 获取电量 | [data.md#get_battery-获取电量](data.md#get_battery-获取电量) |
+| `get_device_stats` | 设备统计（电量+活跃时长+流量） | [data.md#get_device_stats-设备统计](data.md#get_device_stats-设备统计) |
 
 ## 🎬 media（音视频）→ [media.md](media.md)
 
@@ -71,6 +72,15 @@
 | `ssh_start` | 启动 SSH 服务 | [system.md#ssh_start-启动-ssh-服务](system.md#ssh_start-启动-ssh-服务) |
 | `ssh_stop` | 停止 SSH 服务 | [system.md#ssh_stop-停止-ssh-服务](system.md#ssh_stop-停止-ssh-服务) |
 | `ssh_status` | SSH 服务状态 | [system.md#ssh_status-ssh-服务状态](system.md#ssh_status-ssh-服务状态) |
+| `accessibility_status` | 无障碍状态 | [system.md#accessibility_status-无障碍状态](system.md#accessibility_status-无障碍状态) |
+| `accessibility_enable` | 开启无障碍 | [system.md#accessibility_enable-开启无障碍](system.md#accessibility_enable-开启无障碍) |
+| `accessibility_disable` | 关闭无障碍 | [system.md#accessibility_disable-关闭无障碍](system.md#accessibility_disable-关闭无障碍) |
+| `wechat_release_status` | 微信离开即释放·状态 | [system.md#wechat_release_status-微信离开即释放状态](system.md#wechat_release_status-微信离开即释放状态) |
+| `wechat_release_enable` | 微信离开即释放·开 | [system.md#微信离开即释放开关命令v0251-引入](system.md#微信离开即释放开关命令v0251-引入) |
+| `wechat_release_disable` | 微信离开即释放·关 | [system.md#微信离开即释放开关命令v0251-引入](system.md#微信离开即释放开关命令v0251-引入) |
+| `ui_lock_start` | 开启无界面模式 | [system.md#无界面模式命令v0251-引入儿童锁--防误触](system.md#无界面模式命令v0251-引入儿童锁--防误触) |
+| `ui_lock_stop` | 关闭无界面模式 | [system.md#无界面模式命令v0251-引入儿童锁--防误触](system.md#无界面模式命令v0251-引入儿童锁--防误触) |
+| `ui_lock_status` | 无界面模式状态 | [system.md#ui_lock_status-无界面模式状态](system.md#ui_lock_status-无界面模式状态) |
 
 ## 🖱️ ui（界面自动化）→ [ui.md](ui.md)
 

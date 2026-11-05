@@ -59,15 +59,26 @@ class ConnectionViewModel @Inject constructor(
     private val _uploadResult = MutableStateFlow<String?>(null)
     val uploadResult: StateFlow<String?> = _uploadResult.asStateFlow()
 
+    /** 是否首次运行（从未配置过服务器地址）——首次配置引导页据此强制展示。 */
+    private val _isFirstRun = MutableStateFlow(false)
+    val isFirstRun: StateFlow<Boolean> = _isFirstRun.asStateFlow()
+
     init {
         viewModelScope.launch {
             val id = deviceStore.deviceId()
             _deviceId.value = id
             _deviceName.value = deviceStore.deviceName() ?: id
             // 服务地址：优先读持久化值，否则用默认
-            _serverHost.value = deviceStore.serverHost() ?: WsConfig.HOST_DEFAULT
+            val savedHost = deviceStore.serverHost()
+            _isFirstRun.value = savedHost == null
+            _serverHost.value = savedHost ?: WsConfig.HOST_DEFAULT
             _serverPort.value = deviceStore.serverPort() ?: WsConfig.PORT_DEFAULT
         }
+    }
+
+    /** 首次配置完成后清除 first-run 标记。 */
+    fun markConfigured() {
+        _isFirstRun.value = false
     }
 
     /** 保存昵称（空则回退 device_id），并更新缓存 + 触发重连，让新昵称上报服务端。 */
@@ -109,6 +120,41 @@ class ConnectionViewModel @Inject constructor(
     /** 清除服务地址校验错误提示。 */
     fun clearServerAddressError() {
         _serverAddressError.value = null
+    }
+
+    /**
+     * 测试服务器连接（首次配置引导页用）：校验格式 → 用临时地址探测 REST 可达性 → 成功后持久化 + 触发重连。
+     * 回调在任意线程执行（协程），UI 侧据此更新状态。
+     */
+    fun testServerConnection(host: String, port: String, onResult: (Boolean, String) -> Unit) {
+        val h = host.trim()
+        val p = port.trim()
+        val error = ServerAddress.validate(h, p)
+        if (error != null) {
+            onResult(false, error)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                // 临时设置地址，调 registerDevice 探测可达性（返回 token 即成功）
+                val oldHost = ServerAddress.host()
+                val oldPort = ServerAddress.port()
+                ServerAddress.set(h, p)
+                val id = deviceStore.deviceId()
+                val token = apiClient.registerDevice(id)
+                // 成功：持久化 + 更新状态 + 触发重连
+                deviceStore.saveToken(token)
+                identity.token = token
+                deviceStore.saveServerAddress(h, p)
+                _serverHost.value = h
+                _serverPort.value = p
+                Timber.i("首次配置连接成功：$h:$p")
+                onResult(true, "连接成功")
+            } catch (e: Exception) {
+                Timber.w(e, "首次配置连接测试失败：$h:$p")
+                onResult(false, "连接失败：${e.message ?: "服务器不可达，请检查地址与端口"}")
+            }
+        }
     }
 
     /** 手动上传诊断日志。 */

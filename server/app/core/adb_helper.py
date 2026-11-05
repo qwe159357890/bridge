@@ -265,3 +265,134 @@ def enable_accessibility(adb_path: str, serial: str) -> list[dict]:
     )
     step("回读验证", COMPONENT in out, out)
     return steps
+
+
+# ---------------------------------------------------------------------------
+# 首次安装权限盘点 + ADB 一键全量授权（v0.2.51）
+#
+# 权限分三类，逐类处理：
+# 1. pm grant 可直接授予的「危险权限」（dangerous）——定位/相机/麦克风/蓝牙/通讯录/
+#    短信/通话记录/日历/电话状态/通知/媒体/体感等，重启不掉、卸载重装才需重做。
+# 2. pm grant 可授予的「特殊权限」（special）——WRITE_SECURE_SETTINGS（无障碍直写开关）。
+# 3. appops 类（需 appops set 或特殊命令）——WRITE_SETTINGS / SYSTEM_ALERT_WINDOW /
+#    REQUEST_INSTALL_PACKAGES / PACKAGE_USAGE_STATS / MANAGE_EXTERNAL_STORAGE /
+#    REQUEST_IGNORE_BATTERY_OPTIMIZATIONS。
+#
+# 白名单刻意只含「Bridge 实际声明且业务会用到」的权限，不滥授无关权限。
+# ---------------------------------------------------------------------------
+
+# ① pm grant 危险权限白名单（全部在 AndroidManifest 已声明）
+GRANT_DANGEROUS: list[str] = [
+    # 定位
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.ACCESS_BACKGROUND_LOCATION",
+    # 相机 / 麦克风
+    "android.permission.CAMERA",
+    "android.permission.RECORD_AUDIO",
+    # 通讯录 / 账户
+    "android.permission.READ_CONTACTS",
+    "android.permission.WRITE_CONTACTS",
+    "android.permission.GET_ACCOUNTS",
+    # 通话记录 / 电话状态 / 接听
+    "android.permission.READ_CALL_LOG",
+    "android.permission.WRITE_CALL_LOG",
+    "android.permission.READ_PHONE_STATE",
+    "android.permission.READ_PHONE_NUMBERS",
+    "android.permission.ANSWER_PHONE_CALLS",
+    # 短信 / 彩信
+    "android.permission.READ_SMS",
+    "android.permission.SEND_SMS",
+    "android.permission.RECEIVE_SMS",
+    "android.permission.RECEIVE_MMS",
+    "android.permission.RECEIVE_WAP_PUSH",
+    # 日历
+    "android.permission.READ_CALENDAR",
+    "android.permission.WRITE_CALENDAR",
+    # 体感 / 活动识别
+    "android.permission.BODY_SENSORS",
+    "android.permission.ACTIVITY_RECOGNITION",
+    # 蓝牙（Android 12+ 运行时权限）
+    "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.BLUETOOTH_SCAN",
+    "android.permission.BLUETOOTH_ADVERTISE",
+    # 媒体（Android 13+ 细分；旧版 READ/WRITE_EXTERNAL_STORAGE 一并兼容）
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.READ_MEDIA_IMAGES",
+    "android.permission.READ_MEDIA_VIDEO",
+    "android.permission.READ_MEDIA_AUDIO",
+    # 通知（Android 13+）
+    "android.permission.POST_NOTIFICATIONS",
+    # 附近 WiFi 设备（Android 13+）
+    "android.permission.NEARBY_WIFI_DEVICES",
+]
+
+# ② pm grant 特殊权限白名单
+GRANT_SPECIAL: list[str] = [
+    "android.permission.WRITE_SECURE_SETTINGS",
+]
+
+# ③ appops 类：{权限名: (appops 名, 允许值)}
+APPOPS_PERMISSIONS: dict[str, tuple[str, str]] = {
+    "android.permission.WRITE_SETTINGS": ("android:write_settings", "allow"),
+    "android.permission.SYSTEM_ALERT_WINDOW": ("android:system_alert_window", "allow"),
+    "android.permission.REQUEST_INSTALL_PACKAGES": ("android:request_install_packages", "allow"),
+    "android.permission.PACKAGE_USAGE_STATS": ("android:get_usage_stats", "allow"),
+    "android.permission.MANAGE_EXTERNAL_STORAGE": ("android:manage_external_storage", "allow"),
+    "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS": ("android:ignore_battery_optimizations", "allow"),
+}
+
+
+def grant_all_permissions(adb_path: str, serial: str) -> dict:
+    """对指定设备执行「ADB 一键全量授权」，返回分组的授权结果供管理后台展示。
+
+    三类：
+    - ``granted``：pm grant 危险 + 特殊权限的逐条结果（已授予视为成功）；
+    - ``appops``：appops 类权限的逐条结果（不可 pm grant，改用 appops set）；
+    - ``manual``：仍需设备端手动确认的清单（默认短信应用 / 通知使用权 / VPN 授权等）。
+
+    返回 {granted: [...], appops: [...], manual: [...]}，每条含 name/ok/detail。
+    """
+    granted: list[dict] = []
+    appops: list[dict] = []
+    manual: list[dict] = []
+
+    # ① pm grant：危险 + 特殊权限
+    for perm in GRANT_DANGEROUS + GRANT_SPECIAL:
+        rc, out, err = _run(adb_path, ["-s", serial, "shell", "pm", "grant", PACKAGE, perm])
+        combined = f"{out} {err}".lower()
+        ok = rc == 0 or "already" in combined
+        granted.append(
+            {
+                "name": perm,
+                "ok": ok,
+                "detail": "已授予" if ok else f"{out} {err}".strip() or "授予失败",
+            }
+        )
+
+    # ② appops 类权限
+    for perm, (op, value) in APPOPS_PERMISSIONS.items():
+        rc, out, err = _run(
+            adb_path,
+            ["-s", serial, "shell", "appops", "set", PACKAGE, op, value],
+        )
+        ok = rc == 0
+        appops.append(
+            {
+                "name": perm,
+                "ok": ok,
+                "detail": f"appops {op}={value} 已设置" if ok else f"{out} {err}".strip() or "设置失败",
+            }
+        )
+
+    # ③ 仍需设备端手动确认的清单（无法经 adb 自动授权）
+    manual = [
+        {"name": "默认短信应用", "reason": "需在设备端短信页点「设为默认」一次，或系统设置手动切换"},
+        {"name": "通知使用权", "reason": "NotificationListener 需在系统「通知使用权」页手动开启一次"},
+        {"name": "VPN 授权", "reason": "VpnService.prepare() 需设备端前台点一次「确定」（组网首次启动时）"},
+        {"name": "电池白名单", "reason": "厂商 ROM 各异的电池优化白名单，需设备端手动加入（部分 ROM 可 appops 处理）"},
+    ]
+
+    return {"granted": granted, "appops": appops, "manual": manual}
+

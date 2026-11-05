@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import my.bridge.com.core.common.DiagLog
 
 // 品牌色 / 未选中色（与界面原型 ui-mockup.html 对齐）
@@ -76,6 +77,19 @@ private val WechatTabGreen = Color(0xFF07C160)
 @Composable
 fun MainScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    // 首次配置引导（v0.2.51）：从未配置过服务器地址时强制进入引导页，测试连接成功才放行；
+    // 本页不受无界面模式拦截（属「初始化」而非「无界面」），解决「默认无界面 + 连不上」的死循环。
+    val setupViewModel: ConnectionViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val isFirstRun by setupViewModel.isFirstRun.collectAsStateWithLifecycle()
+    if (isFirstRun) {
+        FirstRunSetupScreen(
+            onDone = { setupViewModel.markConfigured() },
+        )
+        return
+    }
+    // 无界面模式（v0.2.51）：组合时读一次持久化锁定状态（冷启动/进程重建后仍保持锁定）。
+    // load 内部仅在 Prefs=true 时才覆盖内存态，避免每次重组重复写。
+    remember { UiLockController.load(context) }
     // 通知点击「微信消息」进来时直接落在微信页并打开对应会话（deep link）
     var openWechatSession by rememberSaveable { mutableStateOf<String?>(null) }
     /**
@@ -188,6 +202,31 @@ fun MainScreen(modifier: Modifier = Modifier) {
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
+        // 无界面模式（v0.2.51）：锁定态渲染全屏遮挡层，不组合任何页面（页面级资源随组合
+        // 销毁自动释放），并吞掉返回键防误触退出。主 WS / 保活 / 组网均不受影响。
+        // PIN 临时解锁（v0.2.51）：校验通过后 pinUnlocked=true，仅放行「设置页」让用户改服务器地址。
+        if (UiLockController.locked) {
+            if (UiLockController.pinUnlocked) {
+                // PIN 解锁后：只显示设置页（selectedBottom 强制 3），改完地址重连。
+                SettingsPage(
+                    currentTab = 0,
+                    homeTabOrder = homeTabOrder,
+                    homeTabNames = homeTabNames,
+                    onHomeTabOrderChange = { order ->
+                        homeTabOrder = order
+                        TabOrderPrefs.save(context, order)
+                    },
+                    onHomeTabNameChange = { names ->
+                        homeTabNames = names
+                        TabOrderPrefs.saveNames(context, names)
+                    },
+                    onTabChange = { /* PIN 解锁态固定留在设置页首 tab */ },
+                )
+            } else {
+                UiLockOverlay(message = UiLockController.lockedMessage)
+            }
+            return@Column
+        }
         // 内容区：根据底部导航显示对应页面（占据剩余全部空间）
         Box(
             modifier = Modifier
@@ -474,4 +513,149 @@ private fun BridgeTabRow(
             }
         }
     }
+}
+
+// ============ 无界面模式遮挡层（v0.2.51：儿童锁 / 防误触） ============
+
+/**
+ * 全屏遮挡层：锁定态下盖住一切内容，拦截所有交互，吞掉返回键防误触退出。
+ * 设备端无退出入口（靠管理后台 ui_lock_stop 解除）；但提供「连续点 5 次锁图标」
+ * 的隐蔽 PIN 自愈入口——服务器改地址连不上时，可输本地缓存 PIN 临时解锁进设置页改地址。
+ */
+@Composable
+private fun UiLockOverlay(message: String) {
+    val context = LocalContext.current
+    // 吞掉返回键：锁定态下设备端按返回/Home 都不解除（防误触；Home 只是切后台，
+    // 再次点图标仍回到遮挡层）。
+    BackHandler { /* 吞掉，不退出 */ }
+
+    var tapCount by remember { mutableIntStateOf(0) }
+    var lastTapAt by remember { mutableLongStateOf(0L) }
+    var showPinDialog by remember { mutableStateOf(false) }
+
+    // 连续点 5 次（间隔 < 2 秒）触发 PIN 输入
+    LaunchedEffect(tapCount) {
+        if (tapCount >= 5) {
+            showPinDialog = true
+            tapCount = 0
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // 锁图标（品牌蓝圆徽，与退出提醒冒泡风格一致）；连续点 5 次触发 PIN 自愈入口
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .background(Color(0xFF1A6EE8), CircleShape)
+                    .clickable {
+                        val now = System.currentTimeMillis()
+                        if (now - lastTapAt > 2000) tapCount = 0
+                        lastTapAt = now
+                        tapCount++
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "🔒",
+                    fontSize = 32.sp,
+                )
+            }
+            Spacer(Modifier.height(20.dp))
+            Text(
+                text = message.ifBlank { "界面已锁定" },
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "当前设备处于无界面模式，操作已暂停\n如需恢复请通过管理后台解除",
+                color = Color(0xFF8A919F),
+                fontSize = 13.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                lineHeight = 20.sp,
+            )
+        }
+    }
+
+    // PIN 输入弹窗（自愈入口）
+    if (showPinDialog) {
+        UiLockPinDialog(
+            onDismiss = { showPinDialog = false },
+            onVerified = {
+                showPinDialog = false
+                UiLockController.grantPinUnlock()
+            },
+        )
+    }
+}
+
+/** PIN 输入弹窗：本地校验（读缓存 PIN，不依赖服务端在线）。 */
+@Composable
+private fun UiLockPinDialog(
+    onDismiss: () -> Unit,
+    onVerified: () -> Unit,
+) {
+    val context = LocalContext.current
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+    val hasCachedPin = remember { UiLockController.cachedPin(context).isNotBlank() }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("解锁设备") },
+        text = {
+            Column {
+                Text(
+                    text = if (hasCachedPin) {
+                        "请输入解锁 PIN（用于临时进入设置页修改服务器地址）"
+                    } else {
+                        "本设备尚未缓存解锁 PIN（从未成功连接过服务器）。\n请先通过首次配置或管理后台解除无界面模式。"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (hasCachedPin) {
+                    Spacer(Modifier.height(12.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = pin,
+                        onValueChange = {
+                            pin = it
+                            error = false
+                        },
+                        label = { Text("PIN") },
+                        singleLine = true,
+                        isError = error,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                        ),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (hasCachedPin) {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        if (UiLockController.verifyPin(context, pin)) {
+                            onVerified()
+                        } else {
+                            error = true
+                        }
+                    },
+                ) { Text("解锁") }
+            } else {
+                androidx.compose.material3.TextButton(onClick = onDismiss) { Text("知道了") }
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }

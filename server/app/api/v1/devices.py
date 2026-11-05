@@ -215,6 +215,66 @@ async def adb_enable_accessibility(
     }
 
 
+@router.post("/{device_id}/adb-grant-all", dependencies=[Depends(require_admin)])
+async def adb_grant_all(
+    device_id: str, request: Request, body: Optional[AdbDirectRequest] = None
+) -> dict:
+    """ADB 一键全量授权（首次安装场景）：pm grant 危险+特殊权限、appops 特殊路径、
+    列出仍需设备端手动确认的清单。
+
+    定位逻辑与「ADB 开无障碍」一致（单台直连 / 多台按上报 IP 匹配 / 可手填 IP 兜底）。
+    返回 {success, serial?, device_ips?, granted?, appops?, manual?, error?}。
+    """
+    manager = _get_manager(request)
+    conn = manager.get(device_id)
+    candidates: list[str] = []
+    if body and body.ip and body.ip.strip():
+        candidates.append(body.ip.strip())
+    if conn is not None:
+        candidates.extend(conn.ips)
+        if conn.ip:
+            candidates.append(conn.ip)
+    seen: set[str] = set()
+    candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+
+    adb_path = adb_helper.resolve_adb_path(request.app.state.settings.adb.path)
+
+    def _adb_devices_safe() -> list[dict]:
+        try:
+            return adb_helper.list_devices_with_ips(adb_path)
+        except AdbError:
+            return []
+
+    if not candidates:
+        return {
+            "success": False,
+            "device_ips": [],
+            "adb_devices": _adb_devices_safe(),
+            "error": "无法确定手机 IP（设备不在线且未手工填写），请在弹窗中填写手机 IP",
+        }
+    try:
+        serial = adb_helper.find_serial_for_ips(adb_path, candidates)
+    except AdbError as e:
+        return {
+            "success": False,
+            "device_ips": candidates,
+            "adb_devices": _adb_devices_safe(),
+            "error": str(e),
+        }
+    result = adb_helper.grant_all_permissions(adb_path, serial)
+    # 授权成功以「pm grant 无失败 + appops 无失败」判定（manual 清单不阻断成功）
+    granted_all_ok = all(item["ok"] for item in result["granted"])
+    appops_all_ok = all(item["ok"] for item in result["appops"])
+    return {
+        "success": granted_all_ok and appops_all_ok,
+        "serial": serial,
+        "device_ips": candidates,
+        "granted": result["granted"],
+        "appops": result["appops"],
+        "manual": result["manual"],
+    }
+
+
 class AdbWifiSetupRequest(BaseModel):
     """WiFi adb 一条龙请求：可选配对（首次）+ 连接端口（无线调试主界面显示）。"""
 

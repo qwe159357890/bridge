@@ -335,6 +335,7 @@ async def _ws_endpoint(ws: WebSocket, manager, settings) -> None:
     # 3.2 握手后下发该设备的上报配置（客户端离线期间错过的 config_update 在此兜底）
     try:
         cfg = ws.app.state.report_config_store.get(device_id)
+        cfg["ui_pin"] = settings.ui_lock.pin
         await manager.send_to_device(
             device_id,
             Envelope.make("message", {"event": "config_update", **cfg}).to_json(),

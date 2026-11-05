@@ -1347,6 +1347,12 @@ fun ConnectionSettings() {
         item {
             SshSettingsSection()
         }
+
+        // ===== 无界面模式分区（v0.2.51：儿童锁 / 防误触，本机手动开关）=====
+        item { SectionTitle("无界面模式") }
+        item {
+            UiLockSettingsSection()
+        }
     }
 
     // 昵称编辑弹窗
@@ -1896,4 +1902,38 @@ private fun RelayDeviceSelectDialog(
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
         },
     )
+}
+
+// ============ 无界面模式设置分区（v0.2.51） ============
+
+/**
+ * 无界面模式（儿童锁 / 防误触）本机开关。
+ * 开启后全屏遮挡、仅管理后台或 PIN 自愈可解除；关闭恢复。状态持久化到 Prefs。
+ */
+@Composable
+fun UiLockSettingsSection() {
+    val context = LocalContext.current
+    var locked by remember { mutableStateOf(UiLockController.isLocked()) }
+
+    SettingCard {
+        SettingSwitchRow(
+            icon = "🔒",
+            title = "无界面模式",
+            checked = locked,
+            onCheckedChange = { on ->
+                if (on) {
+                    UiLockController.lock(context)
+                } else {
+                    UiLockController.unlock(context)
+                }
+                locked = UiLockController.isLocked()
+            },
+        )
+        Text(
+            text = "开启后界面锁定，防止误触；可通过管理后台或连续点 5 次锁图标输入 PIN 解除。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+        )
+    }
 }
