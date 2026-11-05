@@ -84,6 +84,10 @@ class ReportManager @Inject constructor(
                             ),
                         )
                         Timber.i("收到上报配置推送并生效：%s", saved)
+                        // v0.2.51：无界面模式解锁 PIN 随 config_update 下发，本地缓存（服务端权威）
+                        payload.get("ui_pin")?.asString?.takeIf { it.isNotBlank() }?.let { pin ->
+                            my.bridge.com.ui.UiLockController.cachePin(appContext, pin)
+                        }
                     } catch (e: Exception) {
                         Timber.w(e, "应用 config_update 推送失败")
                     }

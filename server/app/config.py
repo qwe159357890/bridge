@@ -130,6 +130,21 @@ class AdbConfig(BaseModel):
     )
 
 
+class UiLockConfig(BaseModel):
+    """无界面模式（儿童锁 / 防误触）配置。
+
+    解锁 PIN 权威在服务端：客户端首次连接成功后从 config_update 拉取并本地缓存，
+    此后只在本地判断（离线也能解锁进设置页改服务器地址）。
+    """
+
+    pin: str = Field(
+        default="123456",
+        min_length=4,
+        max_length=16,
+        description="无界面模式解锁 PIN（服务端权威，客户端首连后本地缓存）",
+    )
+
+
 class UpdatesConfig(BaseModel):
     """应用更新目录配置（check_update 命令，服务器目录版）。"""
 
@@ -228,6 +243,7 @@ class Settings(BaseModel):
     connection_events: ConnectionEventsConfig = ConnectionEventsConfig()
     logs: LogsConfig = LogsConfig()
     adb: AdbConfig = AdbConfig()
+    ui_lock: UiLockConfig = UiLockConfig()
 
 
 def _env_overrides() -> dict:

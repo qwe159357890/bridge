@@ -99,6 +99,7 @@ CATEGORIES: list[dict[str, Any]] = [
     _cat("interact", "交互", "💬", "弹窗、语音播报、震动、Toast 等交互反馈"),
     _cat("system", "系统", "⚙️", "诊断日志、重启、锁屏等系统级命令"),
     _cat("ui", "界面自动化", "🖱️", "读取屏幕控件、模拟点击/输入/手势（基于无障碍服务，对标 autox）"),
+    _cat("jikong", "极空保护板", "🔋", "极空（JK BMS）保护板：BLE 连接、状态查询、远程控制"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -283,6 +284,13 @@ COMMANDS: list[dict[str, Any]] = [
          "获取客户端电池状态：电量百分比、充电状态与方式（AC/USB/无线）、"
          "电池技术、温度、电压、健康度",
          []),
+    _cmd("get_device_stats", "电/流量统计", "data", "📊",
+         "一次性获取客户端电量与流量统计：① 电量（百分比/充电/温度/电压/健康度）+ 本 App 活跃时长"
+         "（前后台/可见，非耗电值）；② 本 App 流量（开机累计，分 WiFi/移动）；"
+         "③ 本 App 本月流量（自然月，分 WiFi/移动）；④ 整机流量（开机累计，分移动/WiFi）。"
+         "全部下发时读一次，零持续后台开销；「本月/分接口流量」与「活跃时长」需设备授予"
+         "「使用情况访问权」，未授权项回执明确提示、不阻断其它项",
+         []),
 
     # ---- 音视频类 ----
     _cmd("screenshot", "截屏", "media", "📸",
@@ -406,13 +414,18 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("check_update", "检查更新", "system", "🔎",
          "让客户端检查应用更新（服务器 updates 目录版，不依赖 GitHub）；"
          "开发者把最新 APK（文件名含版本号，如 bridge-v0.1.32.apk，可选配 update.json "
-         "写更新说明）放到服务器 data/updates/ 目录即可",
+         "写更新说明）放到服务器 data/updates/ 目录即可；"
+         "「协助安装」模式在拉起安装页后自动点击「安装」按钮（需无障碍服务已开启，"
+         "无则尝试程序内自动开启）",
          [_param("mode", "检查模式", PARAM_TYPE_SELECT, default="auto_install",
                  options=[{"value": "auto_install", "label": "自动安装（发现新版直接下载并弹安装页）"},
+                          {"value": "assist_install", "label": "协助安装（下载后自动点击「安装」，需无障碍）"},
                           {"value": "check_only", "label": "仅检查（只回执是否需要更新，不下载）"}],
-                 description="仅检查模式适合巡检场景：只看设备版本是否落后，不触发下载"),
+                 description="协助安装 = 自动安装 + 无障碍自动点击安装页「安装」按钮（非真正静默，"
+                             "仍需系统安装器校验签名；无障碍未开启时尝试程序内自动开启，"
+                             "无法开启则回执引导手动/ADB 开）"),
           _param("force_download", "强制重新下载", PARAM_TYPE_SWITCH, default=False,
-                 description="忽略本地缓存强制重下（md5 校验删除污染缓存的自救手段，仅自动安装模式有效）")]),
+                 description="忽略本地缓存强制重下（md5 校验删除污染缓存的自救手段，仅自动安装/协助安装模式有效）")]),
 
     # ---- VNT 组网（v0.2.30 引入，v0.2.32 改为 1.x / VntApp v1.2.9 语义）----
     _cmd("vnt_start", "开始组网", "system", "🕸️",
@@ -450,11 +463,74 @@ COMMANDS: list[dict[str, Any]] = [
     _cmd("ssh_status", "SSH 服务状态", "system", "🔎",
          "查询内嵌 SSH 服务器状态（运行状态 / 端口 / 用户名 / 活动会话数 / 存储暴露档）；"
          "只读本地快照，不触发网络操作"),
+    _cmd("accessibility_status", "无障碍状态", "system", "♿",
+         "查询设备无障碍服务状态（是否已在设置开启 / 是否已绑定实例 / 是否持有 WRITE_SECURE_SETTINGS 权限）；"
+         "只读本地快照，不触发网络操作；后台据此禁用「开启/关闭」的重复下发"),
+    _cmd("accessibility_enable", "开启无障碍", "system", "♿",
+         "程序内自动开启 Bridge 无障碍服务（直写系统设置，系统随即自动绑定）；"
+         "需已持有 WRITE_SECURE_SETTINGS 权限（可在设备页用 ADB 一键授权）；"
+         "★ 状态联动：已开启时按钮不可用，确需绕过请用「强制下发」（需二次确认）；"
+         "设备端已开启时忽略重复下发（幂等守卫，不假装成功）"),
+    _cmd("accessibility_disable", "关闭无障碍", "system", "♿",
+         "程序内关闭 Bridge 无障碍服务（从系统设置移除绑定；静默截屏/锁屏/UI 自动化能力随之停用）；"
+         "★ 状态联动：未开启时按钮不可用；设备端未开启时忽略重复下发（幂等守卫，不假装成功）"),
+    _cmd("wechat_release_enable", "微信离开即释放·开", "system", "💬",
+         "打开「微信离开后立即结束」开关：离开微信页（切 Tab / 按 Home / 锁屏）时自动释放微信资源；"
+         "已开启时重复下发被忽略（幂等守卫）"),
+    _cmd("wechat_release_disable", "微信离开即释放·关", "system", "💬",
+         "关闭「微信离开后立即结束」开关；若当前正停在微信页且已切后台/灭屏，会立即释放微信资源"
+         "（等同「离开」）；若正亮屏停在微信页则不释放（用户正在使用）；"
+         "已关闭时重复下发被忽略（幂等守卫）"),
+    _cmd("wechat_release_status", "微信离开即释放·状态", "system", "💬",
+         "查询「微信离开后立即结束」开关状态（已开启/已关闭）+ 当前微信页停留/微信资源释放/亮屏状态；"
+         "只读本地快照，不触发网络操作"),
+    _cmd("ui_lock_start", "开启无界面模式", "system", "🔒",
+         "开启无界面模式（儿童锁/防误触）：设备端界面被全屏遮挡层盖住，禁止一切操作，"
+         "点图标进不去/看不到任何内容；主 WS 与保活不断（实时沟通）、组网常驻不动、"
+         "微信按「离开即释放」开关决定是否释放；只能通过 ui_lock_stop 解除（设备端无退出入口）"),
+    _cmd("ui_lock_stop", "关闭无界面模式", "system", "🔓",
+         "关闭无界面模式：解除遮挡层，界面恢复正常（各页重新进入时自动重连）；"
+         "已关闭时重复下发被忽略"),
+    _cmd("ui_lock_status", "无界面模式状态", "system", "🔒",
+         "查询无界面模式状态（已开启/未开启）；只读本地快照，不触发网络操作"),
     # 特殊「跳转」命令：不下发给设备，管理后台点击后在新标签打开服务器二维码下载页
     # （GET /download），供用户扫码下载安装最新 APK。前端 selectCommand 识别此名直接跳转。
     _cmd("open_download_page", "扫码下载APP", "system", "📲",
          "打开服务器上的二维码下载页（新标签页），用户扫码即可下载并安装最新 Bridge 客户端；"
          "本命令不下发给设备，仅作为后台快捷入口", []),
+
+    # ---- 极空 BMS 保护板（v0.2.55 引入：BLE 连接 + 状态上报 + 远程控制）----
+    _cmd("jikong_scan", "扫描极空设备", "jikong", "🔍",
+         "让客户端扫描周边极空（JK BMS）保护板 BLE 设备，返回设备列表（名称/地址/信号强度）；"
+         "需设备已开蓝牙并授予定位/BLE 权限", []),
+    _cmd("jikong_connect", "连接极空设备", "jikong", "🔌",
+         "让客户端连接指定地址的极空保护板（BLE），连接成功后自动开始周期读取并上报状态",
+         [_param("address", "设备地址", PARAM_TYPE_TEXT, required=True,
+                 placeholder="AA:BB:CC:DD:EE:FF",
+                 description="极空保护板 BLE MAC 地址（可先用「扫描极空设备」获取）")]),
+    _cmd("jikong_disconnect", "断开极空设备", "jikong", "⏹️",
+         "让客户端断开极空保护板 BLE 连接并停止状态上报"),
+    _cmd("jikong_status", "极空状态", "jikong", "📊",
+         "查询客户端当前极空保护板连接状态 + 实时数据快照（总压/电流/SOC/单体电压/温度/保护/MOS）；"
+         "只读本地缓存，不触发 BLE 操作"),
+    _cmd("jikong_mos", "极空 MOS 控制", "jikong", "⚡",
+         "远程控制极空保护板充放电 MOS 开关（写保护板，请谨慎操作）",
+         [_param("charge", "含充电 MOS", PARAM_TYPE_SWITCH, default=True),
+          _param("discharge", "含放电 MOS", PARAM_TYPE_SWITCH, default=True),
+          _param("on", "开/关", PARAM_TYPE_SELECT, default="on",
+                 options=[{"value": "on", "label": "开启"},
+                          {"value": "off", "label": "关闭"}])]),
+    _cmd("jikong_balance", "极空均衡控制", "jikong", "⚖️",
+         "远程控制极空保护板主动均衡开关",
+         [_param("on", "开/关", PARAM_TYPE_SELECT, default="on",
+                 options=[{"value": "on", "label": "开启"},
+                          {"value": "off", "label": "关闭"}])]),
+    _cmd("jikong_write_param", "极空写参数", "jikong", "✏️",
+         "远程写入极空保护板参数（保护阈值/限流等，需设备密码），请谨慎操作",
+         [_param("param_id", "参数编号", PARAM_TYPE_NUMBER, required=True,
+                 placeholder="1~255", description="参数编号（见极空协议文档参数表）"),
+          _param("value", "参数值", PARAM_TYPE_NUMBER, required=True,
+                 placeholder="整数", description="原始参数值（单位由参数类型决定）")]),
 
     # ---- 界面自动化（v0.2.38 引入，对标 autox 无障碍引擎）----
     # 依赖设备开启「Bridge 辅助服务」（无障碍），且须为 canRetrieveWindowContent + canPerformGestures。

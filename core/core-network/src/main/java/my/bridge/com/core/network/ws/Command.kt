@@ -25,6 +25,7 @@ data class Command(
         const val GET_CURRENT_PAGE = "get_current_page"
         const val GET_NETWORK = "get_network"
         const val GET_BATTERY = "get_battery"
+        const val GET_DEVICE_STATS = "get_device_stats"
         const val GET_CONTACTS = "get_contacts"
         const val GET_SMS = "get_sms"
         const val GET_CALL_LOG = "get_call_log"
@@ -58,6 +59,18 @@ data class Command(
         const val SSH_START = "ssh_start"
         const val SSH_STOP = "ssh_stop"
         const val SSH_STATUS = "ssh_status"
+        // ---- 无障碍服务（v0.2.51：开启/关闭/检查状态，复用 BridgeAccessibilityService）----
+        const val ACCESSIBILITY_ENABLE = "accessibility_enable"
+        const val ACCESSIBILITY_DISABLE = "accessibility_disable"
+        const val ACCESSIBILITY_STATUS = "accessibility_status"
+        // ---- 微信离开即释放开关（v0.2.51：管理后台控制，关闭时按当前状态决定是否立即释放）----
+        const val WECHAT_RELEASE_ENABLE = "wechat_release_enable"
+        const val WECHAT_RELEASE_DISABLE = "wechat_release_disable"
+        const val WECHAT_RELEASE_STATUS = "wechat_release_status"
+        // ---- 无界面模式（v0.2.51：儿童锁 / 防误触，全屏遮挡层，仅后台可解除）----
+        const val UI_LOCK_START = "ui_lock_start"
+        const val UI_LOCK_STOP = "ui_lock_stop"
+        const val UI_LOCK_STATUS = "ui_lock_status"
         // ---- 界面自动化（v0.2.39：无障碍控件读取/操作，对标 autox）----
         const val UI_DUMP = "ui_dump"
         const val UI_FIND = "ui_find"
@@ -135,6 +148,14 @@ data class Command(
         const val RPC_START = "rpc_start"
         const val RPC_STOP = "rpc_stop"
         const val RPC_STATUS = "rpc_status"
+        // ---- 极空 BMS 保护板（v0.2.55：BLE 连接 + 状态上报 + 远程控制）----
+        const val JIKONG_SCAN = "jikong_scan"
+        const val JIKONG_CONNECT = "jikong_connect"
+        const val JIKONG_DISCONNECT = "jikong_disconnect"
+        const val JIKONG_STATUS = "jikong_status"
+        const val JIKONG_MOS = "jikong_mos"
+        const val JIKONG_BALANCE = "jikong_balance"
+        const val JIKONG_WRITE_PARAM = "jikong_write_param"
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

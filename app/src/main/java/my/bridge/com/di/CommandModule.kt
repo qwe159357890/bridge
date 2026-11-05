@@ -30,6 +30,7 @@ import my.bridge.com.core.storage.DeviceStore
 import my.bridge.com.admin.BridgeAdminReceiver
 import my.bridge.com.data.BatteryReporter
 import my.bridge.com.data.CallLogReader
+import my.bridge.com.data.DeviceStatsReporter
 import my.bridge.com.data.ContactsReader
 import my.bridge.com.data.ForegroundAppReader
 import my.bridge.com.data.NetworkReporter
@@ -55,6 +56,8 @@ import my.bridge.com.vnt.VntMeshController
 import my.bridge.com.vnt.VntMeshPrefs
 import my.bridge.com.vnt.VntServerAddress
 import my.bridge.com.vnt.VntStatus
+import my.bridge.com.wechat.WechatController
+import my.bridge.com.wechat.WechatRuntime
 import my.bridge.com.ssh.SshPrefs
 import my.bridge.com.ssh.SshServerController
 import my.bridge.com.ssh.SshStatus
@@ -151,6 +154,9 @@ object CommandModule {
         Command.GET_BATTERY to CommandExecutor { command ->
             executeGetBattery(context, command)
         },
+        Command.GET_DEVICE_STATS to CommandExecutor { command ->
+            executeGetDeviceStats(context, command)
+        },
         Command.GET_CONTACTS to CommandExecutor { command ->
             executeGetContacts(context, deviceStore, apiClient, command)
         },
@@ -246,6 +252,36 @@ object CommandModule {
         Command.SSH_STATUS to CommandExecutor { command ->
             executeSshStatus(context, command)
         },
+        // ---- 无障碍服务（v0.2.51：开启/关闭/检查状态）----
+        Command.ACCESSIBILITY_ENABLE to CommandExecutor { command ->
+            executeAccessibilityEnable(context, command)
+        },
+        Command.ACCESSIBILITY_DISABLE to CommandExecutor { command ->
+            executeAccessibilityDisable(context, command)
+        },
+        Command.ACCESSIBILITY_STATUS to CommandExecutor { command ->
+            executeAccessibilityStatus(context, command)
+        },
+        // ---- 微信离开即释放开关（v0.2.51）----
+        Command.WECHAT_RELEASE_ENABLE to CommandExecutor { command ->
+            executeWechatReleaseEnable(context, command)
+        },
+        Command.WECHAT_RELEASE_DISABLE to CommandExecutor { command ->
+            executeWechatReleaseDisable(context, command)
+        },
+        Command.WECHAT_RELEASE_STATUS to CommandExecutor { command ->
+            executeWechatReleaseStatus(context, command)
+        },
+        // ---- 无界面模式（v0.2.51：ui_lock 儿童锁）----
+        Command.UI_LOCK_START to CommandExecutor { command ->
+            executeUiLockStart(context, command)
+        },
+        Command.UI_LOCK_STOP to CommandExecutor { command ->
+            executeUiLockStop(context, command)
+        },
+        Command.UI_LOCK_STATUS to CommandExecutor { command ->
+            executeUiLockStatus(command)
+        },
         // ---- 界面自动化（v0.2.39：无障碍控件读取/操作，对标 autox）----
         Command.UI_DUMP to CommandExecutor { command ->
             executeUiDump(command)
@@ -277,6 +313,28 @@ object CommandModule {
         },
         Command.RPC_STATUS to CommandExecutor { command ->
             executeRpcStatus(command)
+        },
+        // ---- 极空 BMS 保护板（v0.2.55）----
+        Command.JIKONG_SCAN to CommandExecutor { command ->
+            executeJikongScan(context, command)
+        },
+        Command.JIKONG_CONNECT to CommandExecutor { command ->
+            executeJikongConnect(context, command)
+        },
+        Command.JIKONG_DISCONNECT to CommandExecutor { command ->
+            executeJikongDisconnect(command)
+        },
+        Command.JIKONG_STATUS to CommandExecutor { command ->
+            executeJikongStatus(command)
+        },
+        Command.JIKONG_MOS to CommandExecutor { command ->
+            executeJikongMos(command)
+        },
+        Command.JIKONG_BALANCE to CommandExecutor { command ->
+            executeJikongBalance(command)
+        },
+        Command.JIKONG_WRITE_PARAM to CommandExecutor { command ->
+            executeJikongWriteParam(command)
         },
         // ---- 界面自动化增强（v0.2.40：委托 automation/commands 执行器）----
         Command.UI_LONG_CLICK to CommandExecutor { command ->
@@ -715,6 +773,258 @@ object CommandModule {
             )
         } catch (e: Exception) {
             Timber.e(e, "命令 ssh_status 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 无障碍服务命令（v0.2.51：开启/关闭/检查状态）
+    //
+    // 复用 BridgeAccessibilityService 现有能力，补齐「能否程序内自动切换」的探测：
+    // - 已绑定实例（isReady）→ 无障碍真正在跑；
+    // - 已在设置开启（isEnabledInSettings）→ 系统配置层面已开（可能未绑定）；
+    // - 持有 WRITE_SECURE_SETTINGS（canWriteSecureSettings）→ 可程序内直写开关。
+    // 幂等守卫放最前（对齐 vnt/ssh 约定）：重复下发不假装成功。
+    // ------------------------------------------------------------------
+
+    /** accessibility_enable：程序内开启无障碍。幂等守卫放最前。 */
+    private fun executeAccessibilityEnable(context: Context, command: Command): CommandResult {
+        return try {
+            if (BridgeAccessibilityService.isEnabledInSettings(context)) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：无障碍已在设置中开启" +
+                        if (BridgeAccessibilityService.isReady()) "（服务已绑定，正在运行）" else "（但服务尚未绑定实例，请稍候或检查）",
+                )
+            }
+            if (!BridgeAccessibilityService.canWriteSecureSettings(context)) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "无法程序内开启：未持有 WRITE_SECURE_SETTINGS 权限。" +
+                        "请在管理后台「设备」页用 ADB 一键授权（或设备端 设置→权限管理）后重试",
+                )
+            }
+            val ok = BridgeAccessibilityService.enableInSettings(context)
+            CommandResult(
+                command.commandId, command.command, ok,
+                if (ok) {
+                    "已程序内开启无障碍（写入系统设置，系统将自动绑定服务）"
+                } else {
+                    "开启失败：写入系统设置失败（可能权限被撤销或 ROM 限制），请改用 ADB 授权"
+                },
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 accessibility_enable 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** accessibility_disable：程序内关闭无障碍。未开启时幂等忽略。 */
+    private fun executeAccessibilityDisable(context: Context, command: Command): CommandResult {
+        return try {
+            if (!BridgeAccessibilityService.isEnabledInSettings(context)) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：无障碍当前未在设置中开启，无需关闭",
+                )
+            }
+            if (!BridgeAccessibilityService.canWriteSecureSettings(context)) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "无法程序内关闭：未持有 WRITE_SECURE_SETTINGS 权限。" +
+                        "请在管理后台「设备」页用 ADB 一键授权后重试",
+                )
+            }
+            val ok = BridgeAccessibilityService.disableInSettings(context)
+            CommandResult(
+                command.commandId, command.command, ok,
+                if (ok) {
+                    "已程序内关闭无障碍（从系统设置移除本服务绑定；静默截屏/锁屏/UI 自动化能力将随之停用）"
+                } else {
+                    "关闭失败：写入系统设置失败（可能权限被撤销或 ROM 限制），请改用 ADB 或设备端手动关闭"
+                },
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 accessibility_disable 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** accessibility_status：只读快照，返回三项关键状态。 */
+    private fun executeAccessibilityStatus(context: Context, command: Command): CommandResult {
+        return try {
+            val enabled = BridgeAccessibilityService.isEnabledInSettings(context)
+            val ready = BridgeAccessibilityService.isReady()
+            val canWrite = BridgeAccessibilityService.canWriteSecureSettings(context)
+            val sb = StringBuilder()
+            sb.append("无障碍状态：").append(if (enabled) "已开启" else "未开启")
+            sb.append("；实例绑定：").append(if (ready) "已绑定（运行中）" else "未绑定")
+            sb.append("；WRITE_SECURE_SETTINGS 权限：").append(if (canWrite) "已授予（可程序内自动切换）" else "未授予（只能 ADB/手动切换）")
+            CommandResult(command.commandId, command.command, true, sb.toString())
+        } catch (e: Exception) {
+            Timber.e(e, "命令 accessibility_status 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 微信离开即释放开关命令（v0.2.51）
+    //
+    // 开关存储于 WechatPrefs.releaseOnLeave（默认 false），设置页「保活设置」里也有
+    // 同款开关。语义（用户原话对时）：
+    // - 打开：只写 Prefs=true，无需额外动作（下次离开微信页才释放，符合语义）。
+    // - 关闭：写 Prefs=false 后，若当前「正离开微信页」或「正停在微信页但已切后台/灭屏」
+    //   → 立即 stopAll 释放资源（等同「离开」）；若正亮屏停在微信页 → 不释放，
+    //   交给用户离开时 onPageLeave 自动关闭（用户正在使用，离开后自动关闭）。
+    // ------------------------------------------------------------------
+
+    /** 读取屏幕是否亮起（isInteractive）。 */
+    private fun isScreenInteractive(context: Context): Boolean =
+        try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            pm.isInteractive
+        } catch (e: Exception) {
+            true // 读不到按亮屏处理（保守：不误释放用户正在用的微信）
+        }
+
+    /** wechat_release_enable：打开「离开后立即结束」。 */
+    private fun executeWechatReleaseEnable(context: Context, command: Command): CommandResult {
+        return try {
+            val wasOn = WechatController.releaseOnLeave(context)
+            if (wasOn) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：「离开后立即结束」已是开启状态",
+                )
+            }
+            WechatController.setReleaseOnLeave(context, true)
+            CommandResult(
+                command.commandId, command.command, true,
+                "已开启「微信离开后立即结束」：离开微信页（切 Tab / 按 Home / 锁屏）时将自动释放微信资源；" +
+                    "当前正在使用中不受影响",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 wechat_release_enable 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** wechat_release_disable：关闭开关，并按当前状态决定是否立即释放微信资源。 */
+    private fun executeWechatReleaseDisable(context: Context, command: Command): CommandResult {
+        return try {
+            val wasOn = WechatController.releaseOnLeave(context)
+            if (!wasOn) {
+                return CommandResult(
+                    command.commandId, command.command, false,
+                    "重复下发被忽略：「离开后立即结束」已是关闭状态",
+                )
+            }
+            // 记录关闭前状态，供回执说明「是否触发了立即释放」
+            val wasPageActive = WechatRuntime.isPageActive()
+            val wasStopped = WechatRuntime.isStopped()
+            val screenOn = isScreenInteractive(context)
+
+            // 写关闭开关
+            WechatController.setReleaseOnLeave(context, false)
+
+            // 判断是否需要立即释放：
+            // ① 不在微信页（pageActive=false）→ 原本就是「离开即释放」状态下，开关开着时
+            //    微信已被释放（isStopped=true），关闭开关无需额外动作；
+            // ② 正停在微信页 + 亮屏 → 用户正在使用，不释放，交给离开时自动关闭（但现在
+            //    开关已关，离开时也不会释放了——这正是用户要的「关闭开关」效果）；
+            // ③ 正停在微信页 + 灭屏/后台 → 立即释放（等同「离开」），避免后台空挂连接。
+            val releasedNow = wasPageActive && !screenOn && !wasStopped
+            if (releasedNow) {
+                WechatRuntime.stopAll("后台关闭「离开后立即释放」")
+                WechatStateProxy.requestExitToHomeIfNeeded()
+            }
+            val note = when {
+                !wasPageActive -> "当前不在微信页，无需立即释放（微信本就处于释放状态）"
+                screenOn -> "当前正亮屏停在微信页，不释放（用户正在使用，关闭开关后离开也不会自动释放）"
+                releasedNow -> "当前微信页已切后台/灭屏，已立即释放微信资源"
+                else -> "微信资源此前已释放，无需重复释放"
+            }
+            CommandResult(
+                command.commandId, command.command, true,
+                "已关闭「微信离开后立即释放」：$note",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 wechat_release_disable 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** 关闭开关时若触发立即释放，通知 UI 切回主页（避免「回来还在微信页」）。 */
+    private object WechatStateProxy {
+        fun requestExitToHomeIfNeeded() {
+            try {
+                my.bridge.com.wechat.WechatState.requestExitToHome()
+            } catch (e: Exception) {
+                Timber.w(e, "切回主页令牌请求失败（忽略）")
+            }
+        }
+    }
+
+    /** wechat_release_status：只读快照，返回开关值 + 当前微信页/释放状态。 */
+    private fun executeWechatReleaseStatus(context: Context, command: Command): CommandResult {
+        return try {
+            val on = WechatController.releaseOnLeave(context)
+            val pageActive = WechatRuntime.isPageActive()
+            val stopped = WechatRuntime.isStopped()
+            val screenOn = isScreenInteractive(context)
+            val sb = StringBuilder()
+            sb.append("微信离开即释放：").append(if (on) "已开启" else "已关闭")
+            sb.append("；当前微信页：").append(if (pageActive) "停留中" else "未停留")
+            sb.append("；微信资源：").append(if (stopped) "已释放" else "常驻在线")
+            sb.append("；屏幕：").append(if (screenOn) "亮屏" else "灭屏")
+            CommandResult(command.commandId, command.command, true, sb.toString())
+        } catch (e: Exception) {
+            Timber.e(e, "命令 wechat_release_status 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 无界面模式命令（v0.2.51：ui_lock 儿童锁 / 防误触）
+    //
+    // UiLockController 管理锁定状态（Compose 可观察 + Prefs 持久化），
+    // 锁定后 MainScreen 顶层渲染全屏遮挡层，不组合各页 → 页面级资源随组合销毁自动释放；
+    // 微信按「离开即释放」开关决定；组网/主 WS/保活不动（硬约束）。
+    // ------------------------------------------------------------------
+
+    /** ui_lock_start：开启无界面模式。 */
+    private fun executeUiLockStart(context: Context, command: Command): CommandResult {
+        return try {
+            val msg = my.bridge.com.ui.UiLockController.lock(context)
+            CommandResult(command.commandId, command.command, true, msg)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_lock_start 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** ui_lock_stop：关闭无界面模式。 */
+    private fun executeUiLockStop(context: Context, command: Command): CommandResult {
+        return try {
+            val msg = my.bridge.com.ui.UiLockController.unlock(context)
+            CommandResult(command.commandId, command.command, true, msg)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_lock_stop 执行失败")
+            CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
+        }
+    }
+
+    /** ui_lock_status：只读快照。 */
+    private fun executeUiLockStatus(command: Command): CommandResult {
+        return try {
+            val locked = my.bridge.com.ui.UiLockController.isLocked()
+            CommandResult(
+                command.commandId, command.command, true,
+                if (locked) "无界面模式：已开启（界面已锁定，仅后台可解除）"
+                else "无界面模式：未开启",
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "命令 ui_lock_status 执行失败")
             CommandResult(command.commandId, command.command, false, "执行失败：${e.message}")
         }
     }
@@ -1526,6 +1836,23 @@ object CommandModule {
         }
     }
 
+    /**
+     * 执行 get_device_stats：聚合电量 + 活跃时长 + 流量（见 [DeviceStatsReporter]）。
+     * 全部下发时读一次，零持续后台开销。
+     */
+    private fun executeGetDeviceStats(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val message = DeviceStatsReporter.read(context)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_device_stats 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取设备统计失败")
+        }
+    }
+
     // ------------------------------------------------------------------
     // 媒体采集类命令（screenshot / record_screen / take_photo）
     //
@@ -2127,14 +2454,18 @@ object CommandModule {
     ): CommandResult {
         val id = command.commandId
         val name = command.command
-        val autoInstall = command.strParam("mode", "auto_install") != "check_only"
+        val mode = command.strParam("mode", "auto_install")
+        val autoInstall = mode != "check_only"
+        val assistInstall = mode == "assist_install"
         val forceDownload = command.boolParam("force_download")
         if (forceDownload && !autoInstall) {
             return CommandResult(id, name, false, "「强制重新下载」仅在自动安装模式下有意义，请把检查模式改为自动安装")
         }
         return try {
-            val message = my.bridge.com.update.UpdateManager.checkAndInstall(context, autoInstall, forceDownload)
-            Timber.i("命令 check_update（autoInstall=%s force=%s）：%s", autoInstall, forceDownload, message)
+            val message = my.bridge.com.update.UpdateManager.checkAndInstall(
+                context, autoInstall, forceDownload, assistInstall,
+            )
+            Timber.i("命令 check_update（mode=%s force=%s）：%s", mode, forceDownload, message)
             CommandResult(id, name, true, message)
         } catch (e: Exception) {
             Timber.e(e, "命令 check_update 执行失败")
@@ -2657,4 +2988,134 @@ object CommandModule {
     /** rpc_status：只读本地快照，不触发网络操作。 */
     private fun executeRpcStatus(command: Command): CommandResult =
         CommandResult(command.commandId, command.command, true, my.bridge.com.automation.rpc.RpcServerController.statusText())
+
+    // ------------------------------------------------------------------
+    // 极空 BMS 保护板（v0.2.55：BLE 连接 + 状态上报 + 远程控制）
+    // 管理后台「命令下发」页可下发 jikong_* 命令，客户端经 BLE 转成帧发给保护板。
+    // ------------------------------------------------------------------
+
+    /** jikong_scan：扫描周边极空 BLE 设备。 */
+    private suspend fun executeJikongScan(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val devices = my.bridge.com.jikong.JikongBleClient.scan(context, durationMs = 8000)
+            if (devices.isEmpty()) {
+                CommandResult(id, name, true, "未扫描到极空设备（请确认已开蓝牙并靠近设备）")
+            } else {
+                val sb = StringBuilder("扫描到 ${devices.size} 个设备：\n")
+                devices.forEach { d ->
+                    sb.append("· ${d.name}  ${d.address}  信号 ${d.rssi} dBm\n")
+                }
+                CommandResult(id, name, true, sb.toString())
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_scan 执行失败")
+            CommandResult(id, name, false, "扫描失败：${e.message}")
+        }
+    }
+
+    /** jikong_connect：连接指定地址的极空保护板。 */
+    private suspend fun executeJikongConnect(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val address = command.params.get("address")?.asString
+            ?: return CommandResult(id, name, false, "缺少参数 address（极空设备 BLE 地址）")
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.connect(context, address)
+            if (ok) {
+                CommandResult(id, name, true, "已连接极空设备 $address，开始周期读取并上报状态")
+            } else {
+                CommandResult(id, name, false, "连接失败（请确认设备地址正确、已开蓝牙、设备在附近且未被他端占用）")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_connect 执行失败")
+            CommandResult(id, name, false, "连接失败：${e.message}")
+        }
+    }
+
+    /** jikong_disconnect：断开极空保护板。 */
+    private fun executeJikongDisconnect(command: Command): CommandResult {
+        return try {
+            my.bridge.com.jikong.JikongController.instance.disconnect()
+            CommandResult(command.commandId, command.command, true, "已断开极空设备连接")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_disconnect 执行失败")
+            CommandResult(command.commandId, command.command, false, "断开失败：${e.message}")
+        }
+    }
+
+    /** jikong_status：只读本地状态快照。 */
+    private fun executeJikongStatus(command: Command): CommandResult {
+        val s = my.bridge.com.jikong.JikongController.instance.status
+        val msg = if (!s.connected) {
+            "极空设备未连接"
+        } else {
+            buildString {
+                append("已连接 ").append(s.deviceName).append("（").append(s.deviceAddress).append("）\n")
+                append("总压 ").append(fmt2(s.totalVoltage)).append("V｜电流 ").append(fmt2(s.current))
+                    .append("A｜SOC ").append(s.soc).append("%\n")
+                append("压差 ").append(fmt2(s.diffVoltage)).append("V｜温差 ").append(fmt2(s.tempDiff)).append("℃\n")
+                append("充电MOS ").append(if (s.chargeMosOn) "开" else "关")
+                    .append("｜放电MOS ").append(if (s.dischargeMosOn) "开" else "关")
+                    .append("｜均衡 ").append(if (s.balanceOn) "开" else "关")
+                if (s.cellVoltages.isNotEmpty()) {
+                    append("\n单体：").append(s.cellVoltages.joinToString(" / ") { fmt2(it) }).append("V")
+                }
+                if (s.temperatures.isNotEmpty()) {
+                    append("\n温度：").append(s.temperatures.joinToString(" / ") { fmt2(it) }).append("℃")
+                }
+            }
+        }
+        return CommandResult(command.commandId, command.command, true, msg)
+    }
+
+    /** jikong_mos：控制充放电 MOS。 */
+    private suspend fun executeJikongMos(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val charge = command.params.get("charge")?.asBoolean ?: true
+        val discharge = command.params.get("discharge")?.asBoolean ?: true
+        val on = command.params.get("on")?.asString != "off"
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.setMos(charge, discharge, on)
+            CommandResult(id, name, ok, if (ok) "MOS 已${if (on) "开启" else "关闭"}（充=$charge 放=$discharge）" else "MOS 控制失败（未连接或写帧失败）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_mos 执行失败")
+            CommandResult(id, name, false, "MOS 控制失败：${e.message}")
+        }
+    }
+
+    /** jikong_balance：控制主动均衡。 */
+    private suspend fun executeJikongBalance(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val on = command.params.get("on")?.asString != "off"
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.setBalance(on)
+            CommandResult(id, name, ok, if (ok) "均衡已${if (on) "开启" else "关闭"}" else "均衡控制失败（未连接或写帧失败）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_balance 执行失败")
+            CommandResult(id, name, false, "均衡控制失败：${e.message}")
+        }
+    }
+
+    /** jikong_write_param：写保护参数。 */
+    private suspend fun executeJikongWriteParam(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val paramId = command.params.get("param_id")?.asInt
+            ?: return CommandResult(id, name, false, "缺少参数 param_id")
+        val value = command.params.get("value")?.asInt
+            ?: return CommandResult(id, name, false, "缺少参数 value")
+        return try {
+            val ok = my.bridge.com.jikong.JikongController.instance.writeParam(paramId, value)
+            CommandResult(id, name, ok, if (ok) "参数 $paramId 已写入 $value" else "写参数失败（未连接或写帧失败）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_write_param 执行失败")
+            CommandResult(id, name, false, "写参数失败：${e.message}")
+        }
+    }
+
+    private fun fmt2(v: Float): String = if (kotlin.math.abs(v) >= 100) "%.1f".format(v) else "%.2f".format(v)
 }

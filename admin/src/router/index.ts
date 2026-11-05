@@ -83,6 +83,12 @@ const router = createRouter({
           component: () => import('@/views/automation/index.vue'),
           meta: { title: '自动化调试台' },
         },
+        {
+          path: 'jikong',
+          name: 'jikong',
+          component: () => import('@/views/jikong/index.vue'),
+          meta: { title: '极空保护板' },
+        },
       ],
     },
   ],

@@ -98,6 +98,15 @@
             </el-button>
             <el-button
               size="small"
+              type="success"
+              plain
+              :disabled="!row.online"
+              @click="handleAdbGrantAll(row)"
+            >
+              ADB一键授权
+            </el-button>
+            <el-button
+              size="small"
               type="danger"
               plain
               :disabled="!row.online"
@@ -297,6 +306,120 @@
       </template>
     </el-dialog>
 
+    <!-- ADB 一键全量授权弹窗（首次安装：pm grant 危险+特殊权限 + appops 特殊路径） -->
+    <el-dialog
+      v-model="grantAllVisible"
+      :title="`ADB 一键授权 — ${grantAllDevice?.device_name || ''}`"
+      width="640px"
+    >
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 14px">
+        <p style="margin: 0">
+          经服务端 adb 一次性授予<b>定位 / 相机 / 麦克风 / 蓝牙 / 通讯录 / 短信 / 通话记录 /
+          通知 / 媒体 / 日历 / 体感</b>等危险权限与特殊权限，<b>成功一次永久有效</b>
+          （重启不掉，仅卸载重装才需重做）。个别权限仍需设备端手动确认（见结果清单）。
+        </p>
+      </el-alert>
+
+      <!-- IP 对照确认 -->
+      <div v-if="grantAllNetInfo" class="adb-netinfo">
+        <div class="adb-netinfo-title">
+          设备确认
+          <el-tag
+            v-if="grantAllIpMatched !== null"
+            :type="grantAllIpMatched ? 'success' : 'warning'"
+            size="small"
+            style="margin-left: 6px"
+          >
+            {{ grantAllIpMatched ? '✓ IP 已对上，可放心执行' : 'IP 未对上（手机可能走公网连接）' }}
+          </el-tag>
+        </div>
+        <div class="adb-netinfo-row">
+          <span class="adb-netinfo-label">本设备上报 IP：</span>
+          <span>{{ grantAllNetInfo.device_ips.length ? grantAllNetInfo.device_ips.join('、') : '未知' }}</span>
+        </div>
+        <div class="adb-netinfo-row">
+          <span class="adb-netinfo-label">adb 已连设备：</span>
+          <span v-if="grantAllNetInfo.adb_devices.length">
+            <span v-for="(d, i) in grantAllNetInfo.adb_devices" :key="d.serial">
+              {{ i > 0 ? '；' : '' }}{{ d.serial
+              }}<template v-if="d.ip">（{{ d.ip }}</template
+              ><template v-if="d.conn_type"
+                > · {{ CONN_TYPE_LABEL[d.conn_type] || d.conn_type }}</template
+              ><template v-if="d.ip || d.conn_type">）</template>
+            </span>
+          </span>
+          <span v-else class="adb-hint">未检测到（未装 adb / 无设备连接——数据线或 WiFi adb 任一即可）</span>
+        </div>
+      </div>
+
+      <el-form label-width="140px">
+        <el-form-item label="手机 IP（可选）">
+          <el-input
+            v-model="grantAllIp"
+            placeholder="仅连接多台手机需要区分时填写"
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+
+      <!-- 执行结果（分组，限高滚动） -->
+      <template v-if="grantAllResult">
+        <el-divider content-position="left">执行结果</el-divider>
+        <div class="adb-result">
+          <el-result
+            v-if="grantAllResult.success"
+            icon="success"
+            title="全部授权成功"
+            sub-title="危险/特殊权限已全量授予，appops 特殊路径已设置"
+          />
+          <el-alert
+            v-else
+            type="warning"
+            :closable="false"
+            title="部分权限授权未完成，见下方清单"
+            style="margin-bottom: 10px"
+          />
+
+          <div v-if="grantAllResult.granted?.length" class="grant-group-title">
+            pm grant 权限（{{ grantAllResult.granted.filter((g) => g.ok).length }}/{{ grantAllResult.granted.length }}）
+          </div>
+          <div v-for="(g, i) in grantAllResult.granted || []" :key="'g' + i" class="adb-step">
+            {{ g.ok ? '✅' : '❌' }} <b>{{ g.name.replace('android.permission.', '') }}</b>
+            <span v-if="!g.ok && g.detail" class="adb-step-detail">{{ g.detail }}</span>
+          </div>
+
+          <div v-if="grantAllResult.appops?.length" class="grant-group-title">
+            appops 特殊路径（{{ grantAllResult.appops.filter((a) => a.ok).length }}/{{ grantAllResult.appops.length }}）
+          </div>
+          <div v-for="(a, i) in grantAllResult.appops || []" :key="'a' + i" class="adb-step">
+            {{ a.ok ? '✅' : '❌' }} <b>{{ a.name.replace('android.permission.', '') }}</b>
+            <span v-if="!a.ok && a.detail" class="adb-step-detail">{{ a.detail }}</span>
+          </div>
+
+          <div v-if="grantAllResult.manual?.length" class="grant-group-title">仍需设备端手动确认</div>
+          <div v-for="(m, i) in grantAllResult.manual || []" :key="'m' + i" class="adb-step">
+            ⚠️ <b>{{ m.name }}</b>
+            <div class="adb-step-detail">{{ m.reason }}</div>
+          </div>
+
+          <el-alert
+            v-if="grantAllResult.error"
+            type="error"
+            :closable="false"
+            :title="grantAllResult.error"
+            style="margin-top: 8px"
+          />
+        </div>
+      </template>
+
+      <template #footer>
+        <el-button @click="grantAllVisible = false">关闭</el-button>
+        <el-button type="success" :loading="grantAllRunning" @click="runGrantAll">
+          {{ grantAllRunning ? '授权中…' : '一键授权' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 上报设置弹窗：周期位置上报 / 新短信即推（保存后经 WS 实时下发客户端） -->
     <el-dialog
       v-model="reportVisible"
@@ -347,11 +470,12 @@ import {
   deleteDevice,
   adbEnableAccessibility,
   adbWifiEnableAccessibility,
+  adbGrantAll,
   getDeviceNetInfo,
   getReportConfig,
   saveReportConfig,
 } from '@/api/devices'
-import type { AdbEnableAccessibilityResult, DeviceNetInfo, ReportConfig } from '@/api/devices'
+import type { AdbEnableAccessibilityResult, AdbGrantAllResult, DeviceNetInfo, ReportConfig } from '@/api/devices'
 import { CONN_TYPE_LABEL } from '@/api/devices'
 import DeviceStatusTag from '@/components/DeviceStatusTag.vue'
 import LocationDialog from '@/components/LocationDialog.vue'
@@ -587,6 +711,59 @@ async function runAdb() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ADB 一键全量授权（首次安装）：pm grant + appops + 需手动确认清单
+// ---------------------------------------------------------------------------
+
+const grantAllVisible = ref(false)
+const grantAllDevice = ref<Device | null>(null)
+const grantAllIp = ref('')
+const grantAllRunning = ref(false)
+const grantAllResult = ref<AdbGrantAllResult | null>(null)
+const grantAllNetInfo = ref<DeviceNetInfo | null>(null)
+
+const grantAllIpMatched = computed(() => {
+  const info = grantAllNetInfo.value
+  if (!info) return null
+  const deviceIps = new Set(info.device_ips)
+  return info.adb_devices.some((d) => d.ip && deviceIps.has(d.ip))
+})
+
+function handleAdbGrantAll(device: Device) {
+  grantAllDevice.value = device
+  grantAllIp.value = ''
+  grantAllResult.value = null
+  grantAllVisible.value = true
+  grantAllNetInfo.value = null
+  try {
+    getDeviceNetInfo(device.device_id).then((info) => {
+      grantAllNetInfo.value = info
+    })
+  } catch {
+    /* 拉取失败不打断流程 */
+  }
+}
+
+async function runGrantAll() {
+  const device = grantAllDevice.value
+  if (!device) return
+  grantAllRunning.value = true
+  grantAllResult.value = null
+  try {
+    const res = await adbGrantAll(device.device_id, grantAllIp.value.trim() || undefined)
+    grantAllResult.value = res
+    if (res.success) {
+      ElMessage.success('已全量授权：危险/特殊权限已授予，appops 特殊路径已设置')
+    } else {
+      ElMessage.warning('授权完成但部分权限未授予，请查看结果清单')
+    }
+  } catch (e) {
+    ElMessage.error(`请求失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    grantAllRunning.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -651,6 +828,12 @@ onMounted(load)
   word-break: break-all;
   white-space: pre-wrap;
   padding-left: 22px;
+}
+.grant-group-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 10px 0 4px;
+  color: #303133;
 }
 .card-header {
   display: flex;

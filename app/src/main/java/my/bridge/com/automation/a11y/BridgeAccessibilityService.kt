@@ -66,6 +66,21 @@ class BridgeAccessibilityService : AccessibilityService() {
             }
 
         /**
+         * 是否持有 WRITE_SECURE_SETTINGS 权限（能否程序内直写无障碍开关）。
+         *
+         * 权限经 adb `pm grant` 一次性授予后重启不掉、仅卸载重装才需重做。
+         * 探测方式：`checkSelfPermission` 对 signature|privileged 权限会如实返回
+         * 授权状态（区别于「读设置值碰运气」，不会受 ROM 兼容性影响误判）。
+         */
+        fun canWriteSecureSettings(context: Context): Boolean =
+            try {
+                android.content.pm.PackageManager.PERMISSION_GRANTED ==
+                    context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+            } catch (e: Exception) {
+                false
+            }
+
+        /**
          * 程序内自动开启本无障碍服务（v0.2.47，退出后可无感恢复）。
          *
          * 直写 `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` 追加本组件（保留其他 App
@@ -76,7 +91,7 @@ class BridgeAccessibilityService : AccessibilityService() {
          * `pm grant`，重启不掉，仅卸载重装才需重做；见 docs/server/design.md §20）。
          * 未授权时静默失败（记日志），不抛异常——由设置页引导用户手动开启兜底。
          */
-        fun enableInSettings(context: Context) {
+        fun enableInSettings(context: Context): Boolean =
             runCatching {
                 val cr = context.contentResolver
                 val existing = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
@@ -93,8 +108,9 @@ class BridgeAccessibilityService : AccessibilityService() {
                     Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
                 }
                 Timber.i("已自动开启 Bridge 无障碍服务")
+                true
             }.onFailure { Timber.w(it, "自动开启无障碍失败（可能未授予 WRITE_SECURE_SETTINGS）") }
-        }
+                .getOrDefault(false)
 
         /**
          * 程序内关闭本无障碍服务（v0.2.47，退出应用前调用）。
@@ -106,7 +122,7 @@ class BridgeAccessibilityService : AccessibilityService() {
          * 同样需 WRITE_SECURE_SETTINGS，未授权时静默失败（此时退出后进程仍会被无障碍
          * 复活，属预期降级——比无法退出更可接受）。
          */
-        fun disableInSettings(context: Context) {
+        fun disableInSettings(context: Context): Boolean =
             runCatching {
                 val cr = context.contentResolver
                 val existing = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
@@ -117,8 +133,9 @@ class BridgeAccessibilityService : AccessibilityService() {
                     set.joinToString(":"),
                 )
                 Timber.i("已自动关闭 Bridge 无障碍服务")
+                true
             }.onFailure { Timber.w(it, "自动关闭无障碍失败（可能未授予 WRITE_SECURE_SETTINGS）") }
-        }
+                .getOrDefault(false)
 
         /**
          * 模拟电源键锁屏（API 28+）。返回是否成功发起（发起即生效）。

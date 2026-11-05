@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import dagger.hilt.EntryPoint
@@ -84,12 +85,16 @@ object UpdateManager {
      *                    false = 只检查不下载，回执告知是否有新版本（命令「仅检查」模式）。
      * @param forceDownload true = 忽略本地缓存强制重新下载（命令「强制重新下载」参数，
      *                      用于本地缓存被污染——如假 44 实为 43——时的自救）。
+     * @param assistInstall true = 下载后「无障碍协助安装」：前置校验无障碍状态，
+     *                       无则尝试自动开启；有无障碍则拉起安装页后自动点击「安装」按钮
+     *                       （走完系统安装流程，非真正静默，仍需系统安装器校验签名）。
      * @return 给用户看的结果说明（成功=已弹安装页 / 已是最新 / 忙 / 失败原因）
      */
     suspend fun checkAndInstall(
         context: Context,
         autoInstall: Boolean = true,
         forceDownload: Boolean = false,
+        assistInstall: Boolean = false,
     ): String {
         // 原子锁：下载/安装中再次触发直接拒绝（防连点、防重复下发并发下载）
         if (!busy.compareAndSet(false, true)) {
@@ -190,6 +195,8 @@ object UpdateManager {
             }
 
             // ④ 拉起系统安装页（用户点一次「安装」完成；无法静默安装是系统设计）
+            //    assistInstall=true 时：前置校验无障碍，无则尝试自动开启；有无障碍则自动点击
+            //    「安装」按钮走完流程（仍非真正静默，只是省去用户手点那一下）。
             phase = Phase.WAITING_INSTALL
             val launched = try {
                 launchInstaller(context, target)
@@ -200,11 +207,16 @@ object UpdateManager {
             }
             phase = Phase.IDLE
             cancelProgressNotification(context)
-            return if (launched) {
-                "已下载 v${latest.version} 并弹出安装页，请在设备上点击「安装」完成更新"
-            } else {
-                "更新包已下载到 ${target.name}，但拉起安装页失败：请在文件管理器中手动安装"
+            if (!launched) {
+                return "更新包已下载到 ${target.name}，但拉起安装页失败：请在文件管理器中手动安装"
             }
+            // 无障碍协助安装：安装页已拉起，自动点击「安装」
+            if (assistInstall) {
+                val assist = autoClickInstall(context, latest.version)
+                return "已下载 v${latest.version} 并弹出安装页" +
+                    if (assist) "，已自动点击「安装」完成协助安装" else "，但自动点击安装未成功：请手动点击「安装」"
+            }
+            return "已下载 v${latest.version} 并弹出安装页，请在设备上点击「安装」完成更新"
         } finally {
             busy.set(false)
         }
@@ -277,6 +289,92 @@ object UpdateManager {
             Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
         }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+    }
+
+    // ------------------------------------------------------------------
+    // 无障碍协助安装（v0.2.51：自动点击安装页「安装」按钮）
+    //
+    // 前提：无障碍服务已开启（isReady）且能取到当前窗口根节点。
+    // 系统安装页的「安装」按钮因 ROM 而异：text 可能是「安装」「继续」「下一步」
+    // 「确定」「Install」等。策略：轮询窗口，命中任一已知文案即坐标点击，
+    // 最多 [maxAttempts] 次、总时长 [timeoutMs] 上限，防形态差异死循环。
+    // ------------------------------------------------------------------
+
+    /** 无障碍自动点击安装页「安装/继续/下一步/确定」按钮（带 N 次 + 超时护栏）。 */
+    private fun autoClickInstall(context: Context, version: String): Boolean {
+        val maxAttempts = 10
+        val timeoutMs = 30_000L
+        // 已知安装按钮文案（按 ROM 常见度排序；含英文兜底）
+        val candidates = listOf("安装", "继续", "下一步", "确定", "Install", "Next", "OK")
+        val start = SystemClock.elapsedRealtime()
+        var attempts = 0
+        while (attempts < maxAttempts && SystemClock.elapsedRealtime() - start < timeoutMs) {
+            attempts++
+            // 无障碍未就绪：尝试程序内自动开启（需 WRITE_SECURE_SETTINGS），再等它绑定
+            if (!my.bridge.com.automation.a11y.BridgeAccessibilityService.isReady()) {
+                if (my.bridge.com.automation.a11y.BridgeAccessibilityService.canWriteSecureSettings(context)) {
+                    my.bridge.com.automation.a11y.BridgeAccessibilityService.enableInSettings(context)
+                }
+                // 给系统绑定时间；超时仍未就绪则放弃
+                Thread.sleep(1000)
+                continue
+            }
+            val root = try {
+                my.bridge.com.automation.a11y.BridgeAccessibilityService.currentRoot()
+            } catch (e: Exception) {
+                null
+            }
+            if (root == null) {
+                Thread.sleep(500)
+                continue
+            }
+            try {
+                // 遍历当前窗口控件树，命中已知安装按钮文案即点击其坐标
+                val clicked = findAndClickInstallButton(root, candidates)
+                if (clicked) {
+                    Timber.i("协助安装：已自动点击安装按钮（第 %d 次尝试，v%s）", attempts, version)
+                    return true
+                }
+            } finally {
+                root.recycle()
+            }
+            Thread.sleep(800)
+        }
+        Timber.w("协助安装：%d 次尝试内未命中安装按钮或超时（v%s）", attempts, version)
+        return false
+    }
+
+    /** 深度优先遍历控件树，命中已知安装按钮文案即坐标点击；返回是否点击成功。 */
+    private fun findAndClickInstallButton(node: my.bridge.com.automation.automator.UiObject, candidates: List<String>): Boolean {
+        val text = runCatching { node.text() }.getOrDefault("")
+        val desc = runCatching { node.desc() }.getOrNull() ?: ""
+        // ★ 否定词排除（v0.2.54 修复）：系统安装页常有「取消安装」「不再提醒」「暂不」「稍后」
+        // 等按钮，其文本也含「安装」/「继续」等候选词，绝不能误点。先排除，再匹配确认按钮。
+        val negate = listOf("取消", "不再", "暂不", "稍后", "跳过", "退出", "关闭")
+        val negHit = negate.any { text.contains(it) || desc.contains(it) }
+        // ★ contains 匹配（v0.2.54 修复）：改前用 equals 精确全等，导致「继续安装」这种
+        // 组合词（含「安装」但不等于「安装」）匹配不上。改为包含匹配后「继续安装」「立即安装」
+        // 「同意并继续」等都能命中。安装确认按钮文案：继续安装 / 安装 / 继续 / 下一步 / 确定…
+        val hit = !negHit && candidates.any { text.contains(it, true) || desc.contains(it, true) }
+        if (hit) {
+            val b = runCatching { node.bounds() }.getOrNull()
+            if (b != null && !b.isEmpty) {
+                if (my.bridge.com.automation.a11y.BridgeAccessibilityService.click(b.centerX(), b.centerY())) {
+                    return true
+                }
+            }
+            // 坐标点击失败再试节点动作
+            runCatching {
+                if (node.clickable() && node.enabled() && node.click()) return true
+            }
+        }
+        // 递归子节点（限深防止异常深的树）
+        val childCount = runCatching { node.childCount() }.getOrDefault(0)
+        for (i in 0 until childCount) {
+            val child = runCatching { node.child(i) }.getOrNull() ?: continue
+            if (findAndClickInstallButton(child, candidates)) return true
+        }
+        return false
     }
 
     // ------------------------------------------------------------------

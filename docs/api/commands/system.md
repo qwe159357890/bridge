@@ -1,4 +1,4 @@
-# 系统类命令（check_update / vnt_start / vnt_stop / vnt_status / ssh_start / ssh_stop / ssh_status）
+# 系统类命令（check_update / vnt_start / vnt_stop / vnt_status / ssh_start / ssh_stop / ssh_status / accessibility_status / accessibility_enable / accessibility_disable / wechat_release_status / wechat_release_enable / wechat_release_disable / ui_lock_start / ui_lock_stop / ui_lock_status）
 
 > 命令定义单一事实来源：`server/app/core/command_catalog.py` 的 `system` 分类。
 > `upload_log` 见 [../ws-client.md](../ws-client.md) §五/§七。
@@ -34,10 +34,30 @@
 
 | 参数 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `mode` | select | `auto_install` | `auto_install`=自动安装（发现新版直接下载并弹安装页）；`check_only`=仅检查（只回执是否需要更新，不下载，适合巡检场景） |
-| `force_download` | switch | `false` | 强制重新下载：忽略本地缓存删掉重下（仅自动安装模式有效；check_only 下拒绝执行） |
+| `mode` | select | `auto_install` | `auto_install`=自动安装（发现新版直接下载并弹安装页）；`assist_install`=协助安装（下载后无障碍自动点击「安装」）；`check_only`=仅检查（只回执是否需要更新，不下载，适合巡检场景） |
+| `force_download` | switch | `false` | 强制重新下载：忽略本地缓存删掉重下（仅自动安装/协助安装模式有效；check_only 下拒绝执行） |
 
 注：设备「关于」页的「检查更新」按钮固定走自动安装模式，不受该参数影响。
+
+### 无障碍协助安装（v0.2.51，`mode=assist_install`）
+
+历史结论「Android 不允许真正静默安装」仍然成立（非系统应用 / 非 root 只能弹系统
+安装页），但此前舍弃的「无障碍自动点击」现在底座齐全（无障碍服务 `isReady` +
+控件树读取 + 坐标点击），故新增「协助安装」——**不是真静默**，只是省去用户手点
+「安装」那一下，仍由系统安装器校验签名/提示。
+
+流程（下载 APK 后）：
+
+1. 拉起系统安装页（同 auto_install）；
+2. **自动点击安装按钮**：轮询窗口控件树，命中已知按钮文案（`安装`/`继续`/`下一步`/
+   `确定`/`Install`/`Next`/`OK`，因 ROM 而异）即坐标点击，走完安装流程；
+3. **护栏**：最多 10 次尝试、总时长 30s 上限，防安装页形态差异导致死循环；
+4. **无障碍前置**：若无障碍未开启，先尝试 `enableInSettings()` 程序内自动开启
+   （需 WRITE_SECURE_SETTINGS，可在设备页 ADB 一键授权）；无法开启则回执明示
+   「自动点击未成功，请手动点击安装」，不假装成功。
+
+配合任务一的无障碍命令：下发协助安装前，可先用 `accessibility_status` 确认无障碍
+状态（无则用 `accessibility_enable` 或设备页 ADB 开），再下发 `mode=assist_install`。
 
 ### 缓存健壮性（v0.1.45，防「假 44 实为 43」死循环）
 
@@ -309,3 +329,153 @@ PC 端 `known_hosts` 指纹变化即可判定重置 / 中间人。
 - **查看详情单独设计**（2026-11-02 分治约定）：`admin/src/components/SshResultDetailDialog.vue`——
   `ssh_status` 状态快照 KV（端口 / 用户名 / 活动会话 / 存储暴露）；`ssh_start` 结果分类解读 +
   从回执解析启动信息；`ssh_stop` 停止前状态 + 是否执行停止 + 自恢复意愿（已清除 / 保持不变）。
+
+---
+
+## 无障碍服务命令（v0.2.51 引入）
+
+复用客户端 `BridgeAccessibilityService` 现有能力，补齐「能否程序内自动切换」的探测。
+三条命令：`accessibility_status`（查状态）、`accessibility_enable`（开启）、
+`accessibility_disable`（关闭）。
+
+### accessibility_status 无障碍状态
+
+无参数。回执格式（`CommandModule.executeAccessibilityStatus` 固定前缀，后台解析契约）：
+
+```
+无障碍状态：已开启；实例绑定：已绑定（运行中）；WRITE_SECURE_SETTINGS 权限：已授予（可程序内自动切换）
+```
+
+三项状态含义：
+
+| 字段 | 值 | 说明 |
+|---|---|---|
+| 无障碍状态 | 已开启 / 未开启 | 读系统 `ENABLED_ACCESSIBILITY_SERVICES` 是否含本组件 |
+| 实例绑定 | 已绑定 / 未绑定 | `isReady()`，比「设置开启」更严格（服务真正在跑） |
+| WRITE_SECURE_SETTINGS 权限 | 已授予 / 未授予 | `canWriteSecureSettings()`，决定能否程序内直写开关 |
+
+### accessibility_enable 开启无障碍
+
+无参数。调用 `enableInSettings()`（直写系统设置 + 无障碍总开关置 1，系统随即自动绑定）。
+**幂等守卫放最前**：已开启回 `success=false`「重复下发被忽略」。未持有 WRITE_SECURE_SETTINGS
+时回执引导走 ADB 一键授权（见设备页）。
+
+### accessibility_disable 关闭无障碍
+
+无参数。调用 `disableInSettings()`（从系统设置移除本组件，保留其他 App 无障碍服务）。
+**副作用**：静默截屏 / 模拟锁屏 / UI 自动化（`ui_*`）能力随之停用——回执已如实说明。
+未开启时幂等忽略（不假装成功）。
+
+### 状态联动、幂等守卫与强制下发（v0.2.51，完全对照 VNT/SSH 范式）
+
+- 状态来源 = `accessibility_status` 按需查询回执（`silent=true` 静默探测不入历史），按设备缓存快照。
+  固定前缀解析：`无障碍状态：已开启`→enabled、`无障碍状态：未开启`→disabled，其余→**unknown**。
+- 自动探测时机：选中 `accessibility_enable`/`accessibility_disable` 卡片、切换目标设备、
+  顶栏「刷新设备状态」、这两条命令回执后 1.5s（800ms 防抖 + key 防重复）。
+- 禁用规则：`accessibility_enable` 仅 `disabled` 可用；`accessibility_disable` 仅 `enabled` 可用；
+  `accessibility_status` 不受限；**unknown 一律禁用**；命令本来可用时强制下发置灰。
+- **强制下发**：勾选 + 二次确认是唯一出口；设备端守卫照常按真实状态执行或忽略。
+- **查看详情**：无障碍三条回执均为纯文本状态描述（三项 KV 已含在 status 回执里），
+  无需单独分治弹窗，直接复用通用回执文本展示（与 SSH 的分治详情不同，无障碍无额外参数/布局语义）。
+
+---
+
+## 微信离开即释放开关命令（v0.2.51 引入）
+
+三条命令：`wechat_release_status`（查开关状态）、`wechat_release_enable`（打开）、
+`wechat_release_disable`（关闭）。控制客户端「保活设置」里的「微信离开后立即结束」开关。
+
+### 开关语义（用户原话对时）
+
+开关存于 `WechatPrefs.releaseOnLeave`（默认 false），设置页「保活设置」里是同款开关，
+**管理后台命令与设备端设置页写同一处 Prefs**，双向可见。
+
+- **打开（wechat_release_enable）**：只写 `Prefs=true`，无需额外动作——下次离开微信页
+  （切 Tab / 按 Home / 锁屏）时由 `WechatRuntime.onPageLeave/onAppBackground` 自动释放。
+- **关闭（wechat_release_disable）**：写 `Prefs=false` 后，按当前状态决定是否立即释放：
+  - 当前**正亮屏停在微信页**（`pageActive && isInteractive`）→ 不释放，用户正在使用，
+    关闭开关后离开也不会自动释放（这正是「关闭」要的效果）；
+  - 当前**停在微信页但已切后台/灭屏**（`pageActive && !isInteractive`）→ 立即 `stopAll`
+    释放 WS/HTTP/语音/内存（等同「离开」），避免后台空挂连接；
+  - 当前**不在微信页**（`!pageActive`）→ 微信本就处于释放状态，无需额外动作。
+
+### wechat_release_status 微信离开即释放状态
+
+无参数。回执格式（`executeWechatReleaseStatus` 固定前缀，后台解析契约）：
+
+```
+微信离开即释放：已开启；当前微信页：停留中；微信资源：常驻在线；屏幕：亮屏
+```
+
+### 状态联动、幂等守卫与强制下发（v0.2.51，完全对照 VNT/SSH 范式）
+
+- 状态来源 = `wechat_release_status` 按需查询回执（`silent=true` 静默探测不入历史），按设备缓存快照。
+  固定前缀解析：`微信离开即释放：已开启`→enabled、`微信离开即释放：已关闭`→disabled，其余→**unknown**。
+- 禁用规则：`wechat_release_enable` 仅 `disabled` 可用；`wechat_release_disable` 仅 `enabled` 可用；
+  `wechat_release_status` 不受限；**unknown 一律禁用**；命令本来可用时强制下发置灰。
+- **强制下发**：勾选 + 二次确认是唯一出口；设备端守卫照常按真实状态执行或忽略。
+- **查看详情**：三条回执均为纯文本状态描述，直接复用通用回执文本展示。
+
+---
+
+## 无界面模式命令（v0.2.51 引入，儿童锁 / 防误触）
+
+三条命令：`ui_lock_status`（查状态）、`ui_lock_start`（开启）、`ui_lock_stop`（关闭）。
+
+### 需求对时（用户原话要点 → 实现）
+
+1. **目标**：开启后用户点图标进不去 App 界面（或进入即被全屏遮挡层盖住），禁止一切操作，
+   类似「儿童模式」防误触；**随时可通过管理后台取消**。
+2. **硬约束**：**主 WS 不能断**（实时沟通，保活不释放）；组网服务级常驻不参与释放。
+3. **实现采用「方案 B：全屏遮挡层」**（`UiLockController` + `MainScreen` 顶层遮挡层，
+   比「拦截启动即退」可控性/可恢复性最好）：
+   - `locked=true` 时 `MainScreen` 直接渲染全屏遮挡层（锁图标 + 「界面已锁定」提示），
+     **不组合**主页/微信/销售/设置各页 ⇒ 各页面的 `DisposableEffect.onDispose`
+     自动释放（销售 `exitPage` / 智能控制 `stop` / 扫码 `release` / 音频中继 `stop`）。
+   - **防误触**：遮挡层 `BackHandler` 吞掉返回键，设备端无退出入口，纯靠后台解除。
+   - 状态持久化到 Prefs（`ui_prefs` 的 `ui_locked`），冷启动/进程重建后仍保持锁定。
+
+### 页面资源处置分层（用户原话对时）
+
+| 页面/资源 | 处置 |
+|---|---|
+| 智能家居（销售）、短信、音频中继、快递扫码 | **隐藏 + 释放**（页面组合销毁，DisposableEffect 自动 stop） |
+| 组网 | **不释放、不断连**；无界面模式下仍可后台 `vnt_start`/`vnt_stop` 开关 |
+| 微信 | **跟随「离开即释放」开关**：开 → `stopAll` 释放；关 → 同组网（常驻保留） |
+| 主 WS + 保活 | **不动**（硬约束） |
+
+### ui_lock_status 无界面模式状态
+
+无参数。回执格式（`executeUiLockStatus` 固定前缀，后台解析契约）：
+
+```
+无界面模式：已开启（界面已锁定，仅后台可解除）
+```
+
+### 状态联动、幂等守卫与强制下发（v0.2.51，完全对照 VNT/SSH 范式）
+
+- 状态来源 = `ui_lock_status` 按需查询回执（`silent=true` 静默探测不入历史），按设备缓存快照。
+  固定前缀解析：`无界面模式：已开启`→locked、`无界面模式：未开启`→unlocked，其余→**unknown**。
+- 禁用规则：`ui_lock_start` 仅 `unlocked` 可用；`ui_lock_stop` 仅 `locked` 可用；
+  `ui_lock_status` 不受限；**unknown 一律禁用**；命令本来可用时强制下发置灰。
+- **强制下发**：勾选 + 二次确认是唯一出口；设备端守卫照常按真实状态执行或忽略。
+- **查看详情**：三条回执均为纯文本状态描述，直接复用通用回执文本展示。
+
+### 首次配置引导页 + PIN 自愈（v0.2.51 补充）
+
+解决「默认无界面模式 + 不填服务器就连不上 + 连不上就进不了界面填服务器」的死循环，
+以及「服务器改地址后客户端连不上 → 又死循环」的二次问题。
+
+- **首次配置引导页**（`FirstRunSetupScreen.kt`）：`DeviceStore.serverHost()` 为 null
+  （从未配置）时强制进入，填服务器 host/port → **测试连接成功才放行**（失败留在本页）。
+  本页**不受无界面模式拦截**（属「初始化」而非「无界面」）。
+- **无界面模式本机开关**：连接设置 Tab（`UiLockSettingsSection`）提供手动开关，
+  调 `UiLockController.lock/unlock`，与后台命令读写同一份 Prefs。
+- **PIN 自愈**（服务端权威 + 本地缓存 + 本地判断）：
+  - PIN 存服务端 `config.yaml` 的 `ui_lock.pin`（默认 `123456`），握手后随
+    `config_update` 消息下发（`ws.py` 附带 `ui_pin` 字段）。
+  - 客户端首连成功后 `UiLockController.cachePin()` 本地缓存（Prefs `ui_pin`）。
+  - 此后解锁**只在本地判断**（`verifyPin` 读缓存，不依赖服务端在线）。
+  - 解锁入口：遮挡层「连续点 5 次锁图标」→ PIN 输入弹窗 → 本地校验 → 临时解锁
+    （`pinUnlocked=true`）仅显示设置页，供改服务器地址；重新进入无界面即失效。
+  - 本地无缓存（从未连上服务器）时无法 PIN 解锁，只能首次配置或后台下发。

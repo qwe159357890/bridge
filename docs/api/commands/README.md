@@ -35,6 +35,7 @@
 | `get_sim_info` | 获取SIM卡信息 | [data.md#get_sim_info-获取sim卡信息](data.md#get_sim_info-获取sim卡信息) |
 | `get_network` | 获取网络状态 | [data.md#get_network-获取网络状态](data.md#get_network-获取网络状态) |
 | `get_battery` | 获取电量 | [data.md#get_battery-获取电量](data.md#get_battery-获取电量) |
+| `get_device_stats` | 电/流量统计（电量+活跃时长+流量） | [data.md#get_device_stats-电流量统计](data.md#get_device_stats-电流量统计) |
 
 ## 🎬 media（音视频）→ [media.md](media.md)
 
@@ -71,6 +72,15 @@
 | `ssh_start` | 启动 SSH 服务 | [system.md#ssh_start-启动-ssh-服务](system.md#ssh_start-启动-ssh-服务) |
 | `ssh_stop` | 停止 SSH 服务 | [system.md#ssh_stop-停止-ssh-服务](system.md#ssh_stop-停止-ssh-服务) |
 | `ssh_status` | SSH 服务状态 | [system.md#ssh_status-ssh-服务状态](system.md#ssh_status-ssh-服务状态) |
+| `accessibility_status` | 无障碍状态 | [system.md#accessibility_status-无障碍状态](system.md#accessibility_status-无障碍状态) |
+| `accessibility_enable` | 开启无障碍 | [system.md#accessibility_enable-开启无障碍](system.md#accessibility_enable-开启无障碍) |
+| `accessibility_disable` | 关闭无障碍 | [system.md#accessibility_disable-关闭无障碍](system.md#accessibility_disable-关闭无障碍) |
+| `wechat_release_status` | 微信离开即释放·状态 | [system.md#wechat_release_status-微信离开即释放状态](system.md#wechat_release_status-微信离开即释放状态) |
+| `wechat_release_enable` | 微信离开即释放·开 | [system.md#微信离开即释放开关命令v0251-引入](system.md#微信离开即释放开关命令v0251-引入) |
+| `wechat_release_disable` | 微信离开即释放·关 | [system.md#微信离开即释放开关命令v0251-引入](system.md#微信离开即释放开关命令v0251-引入) |
+| `ui_lock_start` | 开启无界面模式 | [system.md#无界面模式命令v0251-引入儿童锁--防误触](system.md#无界面模式命令v0251-引入儿童锁--防误触) |
+| `ui_lock_stop` | 关闭无界面模式 | [system.md#无界面模式命令v0251-引入儿童锁--防误触](system.md#无界面模式命令v0251-引入儿童锁--防误触) |
+| `ui_lock_status` | 无界面模式状态 | [system.md#ui_lock_status-无界面模式状态](system.md#ui_lock_status-无界面模式状态) |
 
 ## 🖱️ ui（界面自动化）→ [ui.md](ui.md)
 
@@ -97,6 +107,18 @@
 | `ui_file_read` / `ui_file_write` / `ui_file_append` / `ui_file_exists` / `ui_file_list` / `ui_file_copy` / `ui_file_move` / `ui_file_remove` | 文件命令 | — |
 | `ui_media_seek` / `ui_media_volume` / `ui_media_position` / `ui_media_duration` / `ui_media_state` | 媒体命令 | — |
 | `ui_notifications` / `ui_has_notification` / `ui_notification_reply` / `ui_notification_click` / `ui_notification_dismiss` / `ui_clipboard` | 通知/剪贴板 | — |
+
+## 🔋 jikong（极空保护板）→ [jikong.md](jikong.md)
+
+| 命令 | 中文名 | 文档 |
+|---|---|---|
+| `jikong_scan` | 扫描极空设备 | [jikong.md#jikong_scan-扫描极空设备](jikong.md#jikong_scan-扫描极空设备) |
+| `jikong_connect` | 连接极空设备 | [jikong.md#jikong_connect-连接极空设备](jikong.md#jikong_connect-连接极空设备) |
+| `jikong_disconnect` | 断开极空设备 | [jikong.md#jikong_disconnect-断开极空设备](jikong.md#jikong_disconnect-断开极空设备) |
+| `jikong_status` | 极空状态 | [jikong.md#jikong_status-极空状态](jikong.md#jikong_status-极空状态) |
+| `jikong_mos` | 极空 MOS 控制 | [jikong.md#jikong_mos-极空-mos-控制](jikong.md#jikong_mos-极空-mos-控制) |
+| `jikong_balance` | 极空均衡控制 | [jikong.md#jikong_balance-极空均衡控制](jikong.md#jikong_balance-极空均衡控制) |
+| `jikong_write_param` | 极空写参数 | [jikong.md#jikong_write_param-极空写参数](jikong.md#jikong_write_param-极空写参数) |
 
 ---
 

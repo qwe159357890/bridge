@@ -65,6 +65,10 @@
           <el-icon><Monitor /></el-icon>
           <span>自动化调试台</span>
         </el-menu-item>
+        <el-menu-item index="/jikong" title="极空保护板">
+          <el-icon><Lightning /></el-icon>
+          <span>极空保护板</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 

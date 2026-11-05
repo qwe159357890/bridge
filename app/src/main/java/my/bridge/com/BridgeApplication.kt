@@ -40,6 +40,9 @@ class BridgeApplication : Application() {
     @Inject
     lateinit var bluetoothMediaButtonListener: my.bridge.com.media.BluetoothMediaButtonListener
 
+    @Inject
+    lateinit var webSocketClient: dagger.Lazy<my.bridge.com.core.network.ws.BridgeWebSocketClient>
+
     override fun onCreate() {
         super.onCreate()
 
@@ -90,6 +93,9 @@ class BridgeApplication : Application() {
         // 主动上报总管：周期位置上报（服务定时+WorkManager 兜底）+ 新短信即推 +
         // 接收服务端 config_update 推送（后台远程开关，默认双开）
         reportManager.start()
+
+        // 极空 BMS 控制器：注入 WS 客户端，供状态上报（jikong_state）与管理后台远程控制
+        my.bridge.com.jikong.JikongController.attach(webSocketClient.get())
 
         Timber.i("BridgeApplication 初始化完成")
     }
