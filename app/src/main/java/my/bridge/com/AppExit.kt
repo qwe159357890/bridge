@@ -120,8 +120,10 @@ object AppExit {
         runCatching { my.bridge.com.keepalive.ResourceHolder.releaseAll(app) }
             .onFailure { Timber.w(it, "取消保活兜底失败") }
 
-        // 1) 显式停掉自己拉起的（sticky）服务——不做这步，杀进程后会被系统重新拉起
-        runCatching { app.stopService(Intent(app, KeepAliveService::class.java)) }
+        // 1) 显式停掉自己拉起的（sticky）服务——不做这步，杀进程后会被系统重新拉起。
+        //    v0.2.46：保活服务改走 KeepAliveService.stop（ACTION_STOP），同步撤销前台 + sticky
+        //    重建义务（裸 stopService 只异步 onDestroy，300ms 后 killProcess 可能抢先 → 退不掉）。
+        runCatching { KeepAliveService.stop(app) }
             .onFailure { Timber.w(it, "停止保活服务失败") }
         runCatching { app.stopService(Intent(app, AudioRelayService::class.java)) }
             .onFailure { Timber.w(it, "停止音频中继服务失败") }
@@ -132,6 +134,21 @@ object AppExit {
         // 「退出应用 / 切后台立即结束」是最高优先级，组网作为 APP 的一部分一并结束。
         runCatching { app.stopService(Intent(app, VntVpnService::class.java)) }
             .onFailure { Timber.w(it, "停止组网服务失败") }
+
+        // v0.2.45：SSH 服务是 START_STICKY（SshServerService），进程被杀后系统会按 sticky
+        // 语义重建它（onStartCommand(null) → SshPrefs.enabled=true 时自动重启 sshd）→ 进程复活。
+        // 走 SshServerController.stop：未运行直接收状态（不新建僵尸服务），运行中发 ACTION_STOP
+        // 触发 shutdown() → stopSelf()，把 START_STICKY 的重建义务一起撤销。
+        runCatching { my.bridge.com.ssh.SshServerController.stop(app) }
+            .onFailure { Timber.w(it, "停止 SSH 服务失败") }
+
+        // v0.2.47：关闭无障碍服务绑定（真正退出）。无障碍是系统级绑定角色，进程被杀后系统
+        // 会强制重启进程恢复它——这是「退出后几秒内复活」的最终根因（无线 adb logcat 实锤：
+        // "Start proc ... for service {BridgeAccessibilityService}"）。退出前先从
+        // ENABLED_ACCESSIBILITY_SERVICES 移除本组件，进程才能真正被杀掉；
+        // 下次冷启动由 BridgeApplication.onCreate 调 enableInSettings 无感恢复。
+        runCatching { my.bridge.com.automation.a11y.BridgeAccessibilityService.disableInSettings(app) }
+            .onFailure { Timber.w(it, "关闭无障碍服务失败") }
 
         // 2) 释放微信进程级资源（WS 连接 / 60s 心跳 / 重连 / HTTP 客户端 / 内存数据）
         runCatching { my.bridge.com.wechat.WechatRuntime.stopAll(reason) }

@@ -146,7 +146,7 @@ object WechatController {
     /** 断开当前连接（保留配置）：Runtime 会自动 2s 重连。 */
     fun reconnectNow(context: Context) = WechatRuntime.onConfigChanged(context)
 
-    /** 清空本地图片缓存与语音缓存。 */
+    /** 清空本地图片缓存（内存 + 磁盘）与语音缓存。 */
     fun clearCache() {
         WechatImageLoader.clear()
         WechatVoicePlayer.stop()

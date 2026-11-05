@@ -1581,7 +1581,7 @@ private fun WechatSettingsPage() {
         }
         item {
             SettingsCard("本地缓存") {
-                Text("图片/语音缓存在内存与 App 缓存目录，不占用户可见空间。", fontSize = 11.sp, color = WechatSub)
+                Text("头像/缩略图/封面缓存到 App 私有目录（内存 + 磁盘），不占用户可见空间，7 天后自动清理。", fontSize = 11.sp, color = WechatSub)
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { WechatController.clearCache(); wechatToast(context, "已清空缓存") },

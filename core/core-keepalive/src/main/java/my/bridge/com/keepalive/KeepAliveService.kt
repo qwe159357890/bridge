@@ -38,6 +38,7 @@ class KeepAliveService : Service() {
          */
         const val CHANNEL_KEEP_ALIVE = "keep_alive_channel_v2"
         const val ACTION_REFRESH = "my.bridge.com.keepalive.action.REFRESH"
+        const val ACTION_STOP = "my.bridge.com.keepalive.action.STOP"
 
         @Volatile
         var startedAt: Long = 0L
@@ -74,6 +75,25 @@ class KeepAliveService : Service() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "刷新保活配置失败：${e.message}")
+            }
+        }
+
+        /**
+         * 显式停止（v0.2.46）：发送 ACTION_STOP，服务内部同步撤销前台 + stopSelf + 返回
+         * START_NOT_STICKY。与裸 stopService 的区别：stopService 只触发异步 onDestroy，
+         * sticky 重建义务的撤销依赖主线程排到 onDestroy，若紧接着 killProcess 可能抢先
+         * → 进程被杀后系统「几秒内」重建服务（退不掉）。这里走 startService 让
+         * onStartCommand 同步执行 ACTION_STOP 分支，彻底撤销 sticky 重建义务。
+         * 服务未运行时 startService 会新建它，但 onCreate→onStartCommand 立即走 STOP
+         * 分支自停（stopRequested=true → 返回 NOT_STICKY），不留僵尸前台服务。
+         */
+        fun stop(context: Context) {
+            val intent = Intent(context, KeepAliveService::class.java)
+                .setAction(ACTION_STOP)
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "停止保活服务失败：${e.message}")
             }
         }
 
@@ -131,7 +151,18 @@ class KeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (stopRequested) return START_NOT_STICKY
+        // v0.2.46：显式退出路径。收到 ACTION_STOP 立即同步撤销前台与 sticky 重建义务，
+        // 不等异步 stopService→onDestroy（AppExit.kill 300ms 后 killProcess 可能抢先，
+        // 导致 sticky 标记未撤销、进程被杀后系统「几秒内」重建服务 → 看起来退不掉）。
+        if (intent?.action == ACTION_STOP || stopRequested) {
+            stopRequested = true
+            DiagLog.i(TAG, "收到退出指令，撤销前台并自停")
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }.onFailure {
+                DiagLog.e(TAG, "stopForeground 失败", it)
+            }
+            runCatching { stopSelf() }.onFailure { DiagLog.e(TAG, "stopSelf 失败", it) }
+            return START_NOT_STICKY
+        }
         if (promoted) {
             // v0.2.01 关键修复：Android 12+ 要求**每一次** startForegroundService() 拉起
             // 都必须有对应的一次 startForeground()——即使服务已经在前台。服务运行中

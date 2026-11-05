@@ -79,6 +79,7 @@ object WechatRuntime : WechatWsClient.Listener {
         val appCtx = context.applicationContext
         app = appCtx
         if (api == null) api = WechatApiClient(appCtx)
+        WechatImageLoader.init(appCtx)  // 注入 application context（磁盘缓存用，v0.2.34）
         WechatState.initFromPrefs(
             configured = WechatPrefs.configured(appCtx),
             serverUrl = WechatPrefs.serverUrl(appCtx),
@@ -95,6 +96,15 @@ object WechatRuntime : WechatWsClient.Listener {
         registerNetworkCallback(appCtx)
         started = true
         DiagLog.i(TAG, "Runtime 启动：configured=${WechatPrefs.configured(appCtx)} url=${WechatPrefs.serverUrl(appCtx)}")
+
+        // v0.2.45：「离开微信页立即释放」开关打开时，冷启动/进程重建后**不连接微信服务器**
+        // （等同「离开微信」状态，不激活微信）。用户主动进入微信页时 [onPageEnter] 会恢复连接。
+        if (WechatPrefs.releaseOnLeave(appCtx)) {
+            stopped = true
+            WechatState.setReleased(true)
+            DiagLog.i(TAG, "「离开后立即释放」已开启，启动时不连接微信，等待进入微信页")
+            return
+        }
         connect()
         refreshAll()
     }
@@ -151,7 +161,12 @@ object WechatRuntime : WechatWsClient.Listener {
     fun onAppBackground() {
         val ctx = app ?: return
         if (pageActive && WechatPrefs.releaseOnLeave(ctx)) {
-            onPageLeave()
+            // 按 Home/锁屏/切 App 离开微信页：释放全部资源，并切回 APP 主页
+            // （与「切底部 Tab 到其它页」区分：后者本就在切页，无需额外跳转；
+            //  这里 Activity 仅 onStop、微信页组合仍在，需主动回主页避免「回来还在微信页」）。
+            pageActive = false
+            stopAll("按 Home 离开微信页（已开启离开即释放）")
+            WechatState.requestExitToHome()
         }
     }
 
@@ -226,15 +241,21 @@ object WechatRuntime : WechatWsClient.Listener {
     private fun scheduleReconnect() {
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
-            while (isActive && !ws.isConnected()) {
-                delay(RECONNECT_MS)
-                if (!ws.isConnected()) {
-                    // 连不上且不是「已在连接中」（如地址非法、未配置）：停止空转重试，
-                    // 等配置变更或网络恢复再触发——否则会 2s 一次无意义地打日志。
-                    // ⚠️ 只能用 break 退出本循环，绝不能调 cancel()——那会取消共享的
-                    // Runtime scope（SupervisorJob），把整个微信运行时一起干掉。
-                    if (!connect()) break
+            try {
+                while (isActive && !ws.isConnected()) {
+                    delay(RECONNECT_MS)
+                    if (!ws.isConnected()) {
+                        // 连不上且不是「已在连接中」（如地址非法、未配置）：停止空转重试，
+                        // 等配置变更或网络恢复再触发——否则会 2s 一次无意义地打日志。
+                        // ⚠️ 只能用 break 退出本循环，绝不能调 cancel()——那会取消共享的
+                        // Runtime scope（SupervisorJob），把整个微信运行时一起干掉。
+                        if (!connect()) break
+                    }
                 }
+            } finally {
+                // ★ 循环退出（无论 break 还是条件满足）后清空 job 引用，避免下一次
+                //   scheduleReconnect 误判「仍在重连中」而直接 return、导致永久不再重连。
+                reconnectJob = null
             }
         }
     }
@@ -269,16 +290,25 @@ object WechatRuntime : WechatWsClient.Listener {
     // ------------------------------------------------------------------
 
     override fun onConnected(clientId: String) {
-        val ctx = app ?: return
+        // ★ 状态更新无条件执行，不因 app==null 提前 return——否则「全新启动首连失败、
+        //   稍后服务器恢复、实际已能收消息」时，连接状态会永久卡在「连接中」不刷新。
         WechatState.setConnState(WechatConnState.CONNECTED)
         reconnectJob?.cancel()
-        if (clientId.isNotBlank()) WechatPrefs.setLocalClientId(ctx, clientId)
+        val ctx = app
+        if (ctx != null && clientId.isNotBlank()) WechatPrefs.setLocalClientId(ctx, clientId)
         DiagLog.i(TAG, "WS 已连接 clientId=$clientId")
         // 重连成功后校准一次未读，防止断线期间漏计
-        refreshAll()
+        if (ctx != null) {
+            refreshAgents()
+            // 重连成功必须「强制」刷新会话列表：突破 loadingSessions 防重入。
+            // 场景：全新启动首拉因服务器不可达挂起（loadingSessions 卡 true），
+            // 连接恢复时普通 refreshSessions 会被防重入挡住 → 会话列表永不刷新。
+            refreshSessions(force = true)
+        }
     }
 
     override fun onDisconnected(reason: String) {
+        // 同样无条件更新状态，保证 UI 一定看到「断开」，不会被遗留的 CONNECTING 卡住。
         WechatState.setConnState(WechatConnState.DISCONNECTED)
         DiagLog.w(TAG, "WS 断开：$reason")
         // 已主动释放（退出微信 / 离开即释放）：不要自动重连，否则退出会被重连机制立刻撤销
@@ -493,9 +523,12 @@ object WechatRuntime : WechatWsClient.Listener {
      * 修正：**按已加载条数取回**（`want = max(50, 当前条数)`，上限 [SESSION_MAX]），
      * 保证刷新前后列表长度不变；未读总数按当前模式过滤（见 [WechatUiState.unreadOf]）。
      */
-    fun refreshSessions() {
+    fun refreshSessions(force: Boolean = false) {
         val ctx = app ?: return
-        if (WechatState.state.loadingSessions) return
+        // force=true（重连成功等关键时机）时突破 loadingSessions 防重入：
+        // 否则「全新启动首拉因服务器不可达而挂起（loadingSessions 卡 true）」期间，
+        // 连接恢复触发的刷新会被 `if (loadingSessions) return` 挡住，导致会话列表永远不刷新。
+        if (WechatState.state.loadingSessions && !force) return
         WechatState.setLoadingSessions(true)
         // 已在内存里的条数（可能已翻过几页）：刷新要取回同样多，不能打回第 1 页
         val want = WechatState.state.sessions.size
@@ -648,7 +681,7 @@ object WechatRuntime : WechatWsClient.Listener {
         }
         ws.markRead(sessionWxid)
         scope.launch {
-            runCatching { WechatApiClient(context).markRead(sessionWxid) }
+            runCatching { (api ?: WechatApiClient(context)).markRead(sessionWxid) }
                 .onFailure { DiagLog.w(TAG, "标记已读失败：${it.message}") }
         }
     }
@@ -673,7 +706,7 @@ object WechatRuntime : WechatWsClient.Listener {
         }
         ws.clearSession(sessionWxid)
         scope.launch {
-            runCatching { WechatApiClient(context).clearSessionMessages(sessionWxid) }
+            runCatching { (api ?: WechatApiClient(context)).clearSessionMessages(sessionWxid) }
                 .onFailure { DiagLog.w(TAG, "清空聊天记录失败：${it.message}") }
         }
     }
@@ -681,14 +714,14 @@ object WechatRuntime : WechatWsClient.Listener {
     /** 删除单条消息（本地移除 + REST；服务端会广播，其它端自行同步）。 */
     suspend fun deleteMessage(context: Context, sessionWxid: String, msgId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            runCatching { WechatApiClient(context).deleteMessage(sessionWxid, msgId) }
+            runCatching { (api ?: WechatApiClient(context)).deleteMessage(sessionWxid, msgId) }
         }
 
     suspend fun sendText(context: Context, targetWxid: String, text: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             val wxid = WechatPrefs.currentWxid(context)
             if (wxid.isBlank()) return@withContext Result.failure(IllegalStateException("请先选择微信账号"))
-            runCatching { WechatApiClient(context).sendText(wxid, targetWxid, text) }
+            runCatching { (api ?: WechatApiClient(context)).sendText(wxid, targetWxid, text) }
         }
 
     suspend fun sendImage(context: Context, targetWxid: String, fileName: String, mime: String, bytes: ByteArray): Result<Unit> =
@@ -697,7 +730,7 @@ object WechatRuntime : WechatWsClient.Listener {
             if (wxid.isBlank()) return@withContext Result.failure(IllegalStateException("请先选择微信账号"))
             runCatching {
                 // 手机端只能走 multipart 上传：send_image 的参数是服务器文件路径
-                WechatApiClient(context).uploadAndSend(wxid, targetWxid, fileName, mime, bytes)
+                (api ?: WechatApiClient(context)).uploadAndSend(wxid, targetWxid, fileName, mime, bytes)
             }
         }
 
@@ -707,18 +740,18 @@ object WechatRuntime : WechatWsClient.Listener {
 
     suspend fun loadMessages(context: Context, sessionWxid: String, limit: Int = 50, offset: Int = 0): List<WechatMessage> =
         withContext(Dispatchers.IO) {
-            runCatching { WechatApiClient(context).messages(sessionWxid, limit = limit, offset = offset) }
+            runCatching { (api ?: WechatApiClient(context)).messages(sessionWxid, limit = limit, offset = offset) }
                 .getOrDefault(emptyList())
         }
 
     fun attachmentUrl(context: Context, objectName: String): String =
-        WechatApiClient(context).attachmentUrl(objectName)
+        (api ?: WechatApiClient(context)).attachmentUrl(objectName)
 
     /** 头像 URL（Bearer 鉴权，由 [WechatImageLoader] 带 key 请求）。 */
     fun avatarUrl(context: Context, wxid: String): String =
-        WechatApiClient(context).avatarUrl(wxid)
+        (api ?: WechatApiClient(context)).avatarUrl(wxid)
 
-    fun apiKey(context: Context): String = WechatApiClient(context).apiKeyValue()
+    fun apiKey(context: Context): String = (api ?: WechatApiClient(context)).apiKeyValue()
 
     /** 设置页展示用：实际 WS 端点（排查「REST 通但 WS 连不上」时第一手信息）。 */
     fun wsEndpoint(context: Context): String =
