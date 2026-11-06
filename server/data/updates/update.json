@@ -1,12 +1,12 @@
 {
-  "version": "0.2.86",
-  "versionCode": 286,
-  "url": "/updates/bridge-v0.2.86.apk",
+  "version": "0.2.87",
+  "versionCode": 287,
+  "url": "/updates/bridge-v0.2.87.apk",
   "notes": [
     "极空：状态上报附带时速仪表盘快照与本地设置；演示模式数据同步上报（后台可看演示画面）。"
   ],
-  "sha256": "",
-  "size": 46123195,
-  "released_at": "2026-11-06 21:26:00",
+  "sha256": "ee207633ba6aa385f5155f864fe63ba4975c58d6b5311c6f65fe86cc4933b2c2",
+  "size": 45956038,
+  "released_at": "2026-11-06 21:35:00",
   "min_supported": "0.2.60"
 }
