@@ -147,6 +147,20 @@ class BridgeApiClient(
     ).total
 
     /**
+     * 极空里程台账批量同步（统计页 v0.2.85）。
+     * 服务端按 (device_id, record_id) 幂等 upsert；失败抛异常，调用方保留待同步标记。
+     */
+    suspend fun syncOdometer(
+        deviceId: String,
+        token: String?,
+        records: List<BridgeApi.OdometerRecord>,
+    ): BridgeApi.OdometerSyncResponse = api().syncOdometer(
+        deviceId,
+        token,
+        BridgeApi.OdometerSyncRequest(records = records),
+    )
+
+    /**
      * 上传媒体文件（截屏/拍照/录屏产物）。失败抛异常，由调用方决定回执语义。
      * kind: "screenshot" / "photo" / "screen_record"。
      */

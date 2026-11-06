@@ -111,6 +111,24 @@ interface BridgeApi {
     /** 通话记录上报请求体（对应服务端 CallLogReportRequest，get_call_log 持久化）。 */
     data class CallLogReportRequest(val records: List<CallLogItem>)
 
+    // ---- 极空里程台账同步（统计页，v0.2.85；服务端 POST /api/jikong/odometer/sync） ----
+
+    /** 一条里程台账记录（deleted=true 时为删除墓碑，仅 record_id 有业务意义）。 */
+    data class OdometerRecord(
+        val record_id: String,
+        val ts: Long,
+        val odo_km: Double,
+        val cycle_ah: Double,
+        val volt: Double? = null,
+        val deleted: Boolean = false,
+    )
+
+    /** 里程台账批量同步请求体（服务端按 (device_id, record_id) 幂等 upsert）。 */
+    data class OdometerSyncRequest(val records: List<OdometerRecord>)
+
+    /** 里程台账同步响应体。 */
+    data class OdometerSyncResponse(val received: Int, val inserted: Int, val updated: Int)
+
     /** 一条通话记录（type: 1呼入 2呼出 3未接 4语音信箱 5拒接 6已拦截）。 */
     data class CallLogItem(
         val call_key: String,
@@ -204,6 +222,14 @@ interface BridgeApi {
         @Header("X-Device-Token") token: String?,
         @Body body: SimReportRequest,
     ): SnapshotReportResponse
+
+    /** 极空里程台账批量同步（统计页；服务端幂等 upsert，删除=墓碑行）。 */
+    @POST("api/jikong/odometer/sync")
+    suspend fun syncOdometer(
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+        @Body body: OdometerSyncRequest,
+    ): OdometerSyncResponse
 
     /**
      * 下载服务器共享目录里的音乐文件（404 = 服务器无此文件）。

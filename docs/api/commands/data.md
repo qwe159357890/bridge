@@ -283,3 +283,29 @@ get_location 成功后客户端在回执之外 fire-and-forget 上报
 | 服务端 | `app/core/report_config_store.py`、`api/v1/devices.py`（GET/PUT report-config）、`api/ws.py`（config_update 下发） |
 | 客户端 | `app/.../report/`（ReportPrefs / ReportManager / SmsPushObserver / LocationReportWorker）、`ui/SettingsPages.kt`（上报 Tab） |
 | 管理后台 | `views/device/index.vue`（上报设置弹窗）、`api/devices.ts`（getReportConfig/saveReportConfig） |
+
+## 极空里程台账同步（统计页，v0.2.85，非命令）
+
+极空「统计」页（底部导航第 3 位）的**设备→服务端**主动上报通道，非命令：
+用户在统计页手动录入三轮车里程，客户端快照保护板循环容量/总压记账，
+能耗计算全部在设备端完成，服务端只做 MySQL 留档。
+
+- **链路**：统计页录入 → `JikongStatsStore`（本机 SharedPreferences JSON 数组，
+  synced=false）→ `JikongStatsSync`（录入后静默自动一次 + 手动按钮兜底）→
+  `POST /api/jikong/odometer/sync`（`X-Device-Id/X-Device-Token` 设备头鉴权）→
+  MySQL `jk_mileage_records` 表（`core/odometer_store.py`，locations.mysql 同一配置）。
+- **本地为准**：服务端/MySQL 离线时录入照常成功，记录保留 synced=false；
+  失败原因（503「里程台账存储暂不可用」/ 401 鉴权失败）经手动同步 Toast 透传，
+  待同步标记保留、可无限次重试。
+- **幂等 upsert**：服务端按 `(device_id, record_id)` 唯一键
+  `ON DUPLICATE KEY UPDATE`，重复同步不产生重复行（record_id 设备端生成、录制后不变）。
+- **删除墓碑**：删「已同步」记录 → 本地删除 + record_id 进待删除队列 →
+  上行 `deleted=1` 墓碑行软删（保留审计痕迹）；删「未同步」记录仅动本地。
+- **电耗口径**：段电耗 Wh/km = Δ循环容量 × 平均电压 ÷ Δ里程；Δ容量≤0
+  （换电池/BMS 重置）该段标记无效不进曲线（纯设备端逻辑，服务端不参与计算）。
+- **服务端文件**：`core/odometer_store.py`（表自动创建/每操作独立连接）、
+  `api/v1/jikong.py`（`POST /jikong/odometer/sync` 端点 + 设备鉴权）、
+  `main.py`（odometer_store 装配/预连/关闭）。
+- **客户端文件**：`app/.../jikong/JikongStatsStore.kt`（本地台账）、
+  `JikongStatsSync.kt`（同步器）、`ui/JikongPages.kt`（StatsView/曲线/台账 UI）、
+  `core-network/.../BridgeApi.kt`（OdometerSync 接口）、`BridgeApplication.kt`（attach）。

@@ -11,6 +11,21 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.85 极空统计页（里程台账+能耗曲线+MySQL 留档）（2026-11-06 20:20 实施，已打包分发，待真机验证）
+
+| 项 | 内容 |
+|---|---|
+| **实施结果（改后回填，2026-11-06 20:45）** | 编译一次通过（compileDebugKotlin + assembleDebug 增量）；APK 实证 versionName=0.2.85（UTF-16 编码）+ JikongStatsStore/JikongStatsSync/StatsView 均在 dex；服务端 py_compile 通过；分发完成 `server/data/updates/bridge-v0.2.85.apk`（45,956,038 B）+ Downloads + update.json（0.2.85）。**真机未连 adb，待用户更新后验证**：①统计 Tab 位置/图标/亮暗主题；②录入→列表/概要/曲线联动；③同步成功与失败（可停服务端 MySQL 演示）Toast 与标记状态机；④删行联动 |
+
+| 项 | 内容 |
+|---|---|
+| **回退目标版本** | v0.2.84（已真机确认基线：无握手 + 时速仪表盘） |
+| **回退标记（git 快照）** | 提交 **`ae48fa9`**（`chore: 快照 v0.2.84（极空统计页功能实施前的回退锚点）`）——首次把 v0.2.84 全量工作区状态入库（含此前未跟踪的 SpeedDash.kt / 统计.svg / 原型 HTML），**本次改动前全部文件的原文以此提交为准** |
+| **回滚配方** | `git checkout ae48fa9 -- app/src/main/java/my/bridge/com/ui/JikongPages.kt app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/build.gradle.kts server/app/api/v1/router.py server/app/main.py server/data/updates/update.json`，另**手动删除**新增文件：`app/src/main/java/my/bridge/com/jikong/JikongStatsStore.kt`、`JikongStatsSync.kt`、`app/src/main/res/drawable/ic_jk_stats.xml`、`server/app/core/odometer_store.py`、`server/app/api/v1/odometer.py`（MySQL 表 jk_mileage_records 可留可删，无副作用） |
+| **触发回滚的信号** | ①统计页导致极空主流程异常（连接/状态上报/时速仪表盘被干扰）；②同步逻辑拖垮主 WS 或产生大量重复请求；③服务端 503 频发且 MySQL 正常（新表/SQL 问题）；④编译/打包失败 30 分钟内无法定位 |
+| **改动内容** | 客户端：底部导航第 3 位新增「统计」Tab（图标 `assets/icons/统计.svg` → `ic_jk_stats`，顺序 首页/实时状态/**统计**/参数设置）；`JikongStatsStore`（SharedPreferences JSON 数组：id/ts/odoKm/cycleAh/volt/synced + 待删除队列，org.json 范式）；统计页 UI（概要三卡=区间里程/总耗电/平均电耗、录入卡=里程输入+自动读取循环容量/总压、Canvas 能耗曲线、固定高度倒序台账含删除/未同步徽标/同步按钮+Toast、口径说明）。同步：录入成功后**静默自动同步一次** + 手动按钮兜底，失败保「待同步」标记可重试；服务端：`server/app/core/odometer_store.py`（MySQL 表 `jk_mileage_records`，按 device_id+record_id 幂等 upsert，删除=tombstone deleted=1）+ REST `POST /api/v1/odometer/sync`（X-Device-Id/X-Device-Token 鉴权，复用 locations.mysql 配置，无新配置项） |
+| **口径** | 段电耗 Wh/km = Δ循环容量(Ah) × 两记录平均电压(V) ÷ Δ里程(km)；循环容量只增不减，充电不影响；Δ容量≤0（BMS 重置/换电池）→ 该段标记无效不进曲线并重设基准；新里程须 > 上一条 |
+
 ### v0.2.84 回退握手改动（2026-11-06 18:55 实施；19:47 用户真机确认，**定为当前基线**）
 
 | 项 | 内容 |
@@ -82,5 +97,6 @@ git checkout 0b03027 -- \
 | 2026-11-06 | v0.2.82 | 对齐官方握手序列（见 §一） | 已回退到 `0b03027` = v0.2.81 |
 | 2026-11-06 | v0.2.83 | 时速仪表盘（SpeedDash + 首页卡片 + 设置页清空） | 回退到 `3342e91` = v0.2.82（已验证，无需回退） |
 | 2026-11-06 | v0.2.84 | 回退握手 3 文件至 v0.2.81 + 保留时速仪表盘；**用户真机确认定为当前基线**，握手链路暂存 | 基线本身即回退产物；再回退可用 `3342e91`（含握手）或 `0b03027`（无握手无仪表盘） |
+| 2026-11-06 | v0.2.85 | 统计页：里程台账/能耗曲线/同步按钮（本地为准+MySQL 留档），见 §一 | 回退到 `ae48fa9` = v0.2.84 |
 
 > 登记规则：今后极空相关每次改版，先在 §一 更新「当前生效的回退锚点」，把旧锚点移入 §二。

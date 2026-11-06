@@ -31,6 +31,7 @@ from app.core.contacts_store import build_contacts_store
 from app.core.sms_store import build_sms_store
 from app.core.calllog_store import build_calllog_store
 from app.core.sim_store import build_sim_store
+from app.core.odometer_store import build_odometer_store
 from app.core.media_store import build_media_store
 from app.core.log_store import LogStore, build_log_store
 from app.core.music_state_store import MusicStateStore
@@ -172,6 +173,9 @@ def create_app() -> FastAPI:
     calllog_store = build_calllog_store(settings.locations.mysql)
     sim_store = build_sim_store(settings.locations.mysql)
 
+    # 极空里程台账（统计页同步留档，MySQL 幂等 upsert，v0.2.85）
+    odometer_store = build_odometer_store(settings.locations.mysql)
+
     # 媒体文件存储：元数据走同一 MySQL，文件本体按 media.dir 落盘
     # （_Path 已在模块顶部导入：from pathlib import Path as _Path）
     _media_dir = _Path(settings.media.dir)
@@ -202,6 +206,7 @@ def create_app() -> FastAPI:
     app.state.calllog_store = calllog_store
     app.state.sim_store = sim_store
     app.state.media_store = media_store
+    app.state.odometer_store = odometer_store
 
     # 启动时预连位置存储（MySQL 不可达不阻塞启动，端点层报 503 兜底）
     @app.on_event("startup")
@@ -215,6 +220,7 @@ def create_app() -> FastAPI:
             calllog_store.connect()
             sim_store.connect()
             media_store.connect()
+            odometer_store.connect()
             admin_token_store.connect()
             log_store.connect()
             device_token_store.connect()
@@ -235,6 +241,7 @@ def create_app() -> FastAPI:
         calllog_store.close()
         sim_store.close()
         media_store.close()
+        odometer_store.close()
         admin_token_store.close()
         log_store.close()
         device_token_store.close()

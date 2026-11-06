@@ -97,6 +97,9 @@ class BridgeApplication : Application() {
         // 极空 BMS 控制器：注入 WS 客户端，供状态上报（jikong_state）与管理后台远程控制
         my.bridge.com.jikong.JikongController.attach(webSocketClient.get())
 
+        // 极空里程台账同步器（统计页 v0.2.85）：注入 REST 客户端 + 设备凭据
+        my.bridge.com.jikong.JikongStatsSync.attach(apiClient, deviceStore)
+
         Timber.i("BridgeApplication 初始化完成")
     }
 }
