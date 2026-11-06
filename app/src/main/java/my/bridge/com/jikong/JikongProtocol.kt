@@ -86,26 +86,6 @@ object JikongProtocol {
     /** 读设备信息。 */
     fun buildDeviceInfo(): ByteArray = buildCommand(CMD_DEVICE_INFO)
 
-    /**
-     * 官方 APP 连接后首发的 **21 字节握手帧**（v0.2.82 官方 APK 字节码逆向实证）。
-     *
-     * 官方在 CCCD 订阅成功后 40ms 发送：`AA 55 90 EB 97 00×15 11`。
-     * 与本方 20B 0x97 帧的差异 = 在 CRC 前多一个 0x00 填充（4+1+15+1=21B）；
-     * CRC = 前 20 字节累加和低 8 位 = 0x311 → 0x11（0 不参与累加，与 20B 帧 CRC 同值）。
-     *
-     * 推测语义：BMS 蓝牙模块休眠唤醒后的**应用层会话激活信号**——官方 APP 无任何
-     * 重连/重试机制却总能一次连接出数，而健康链路下我们 20B 帧也有效，故差异
-     * 最可能在此帧（2026-11-06 真机「闲置 10min 首连半死链」实证驱动）。
-     */
-    fun buildOfficialHandshake(): ByteArray {
-        val base = buildCommand(CMD_DEVICE_INFO)   // 20B：AA 55 90 EB 97 00×14 11
-        val f = ByteArray(21)
-        System.arraycopy(base, 0, f, 0, 19)        // AA 55 90 EB 97 + 14×00
-        f[19] = 0x00                               // 官方多出的一个 0 填充
-        f[20] = base[19]                           // CRC 不变（0x11）
-        return f
-    }
-
     /** 写密码（123456）。 */
     fun buildPassword(): ByteArray = buildCommand(CMD_PASSWORD, PASSWORD_VALUE)
 

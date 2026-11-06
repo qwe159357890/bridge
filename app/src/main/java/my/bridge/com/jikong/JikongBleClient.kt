@@ -21,7 +21,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import timber.log.Timber
@@ -252,15 +251,6 @@ object JikongBleClient {
 
     private var cccdRetries = 0
 
-    /** 官方握手帧是否已发（每条链路一次；STATE_CONNECTED 复位，v0.2.82）。 */
-    @Volatile
-    private var handshakeSent = false
-
-    /** 官方时序的握手回调执行域（CCCD 成功后 40ms 发握手帧 + 协商 MTU，v0.2.82）。 */
-    private val cbScope = kotlinx.coroutines.CoroutineScope(
-        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
-    )
-
     /** 通知 hex 日志预算（每会话前 3 条，防灌爆上传缓冲，v0.2.81）。 */
     @Volatile
     private var notifyLogBudget = 3
@@ -269,25 +259,26 @@ object JikongBleClient {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Timber.tag(TAG).i("GATT 已连接（对齐官方时序：HIGH 优先级 → 80ms → 发现服务）")
+                Timber.tag(TAG).i("GATT 已连接，先协商 MTU 再发现服务")
                 servicesRequested = false
                 cccdRetries = 0
-                handshakeSent = false
                 notifyLogBudget = 3
-                // v0.2.82 官方字节码实证：连接成功后立即 requestConnectionPriority(HIGH)
-                // （7.5ms 高优先级连接参数），再等 80ms 才 discoverServices。
-                // 我们旧时序（先 requestMtu(256) 再发现服务）是首连半死链的候选诱因之一。
-                runCatching {
-                    g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                // 请求更大 MTU（极空单帧超 20B，增大 MTU 减少分包，提升稳定性）。
+                // discoverServices 移到 onMtuChanged 里串行执行。
+                val requested = runCatching { g.requestMtu(256) }.getOrDefault(false)
+                if (!requested) {
+                    // 个别 ROM requestMtu 直接失败 → 立即降级发现服务
+                    servicesRequested = true
+                    runCatching { g.discoverServices() }
                 }
-                // 官方 80ms 延时（比旧 1.5s 兜底更快也更贴合官方；Handler 定时必然触发，
-                // 不存在旧 MTU 回调不来的不确定性，故无需第二重兜底）
+                // 兜底：MTU 回调 1.5s 内没来（个别 ROM 不回调）也要发现服务
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     if (!servicesRequested) {
                         servicesRequested = true
+                        Timber.tag(TAG).w("MTU 回调超时，兜底发起服务发现")
                         runCatching { g.discoverServices() }
                     }
-                }, 80)
+                }, 1500)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Timber.tag(TAG).i("GATT 已断开 status=$status")
                 lastDisconnectStatus = status
@@ -299,8 +290,6 @@ object JikongBleClient {
         @SuppressLint("MissingPermission")
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
             Timber.tag(TAG).i("MTU 协商完成 mtu=$mtu status=$status")
-            // v0.2.82：MTU 协商已挪到 CCCD 之后（官方时序），此回调到达时服务早已发现，
-            // servicesRequested 守卫保证不重复 discoverServices。
             if (!servicesRequested) {
                 servicesRequested = true
                 runCatching { g.discoverServices() }
@@ -358,35 +347,17 @@ object JikongBleClient {
             status: Int,
         ) {
             Timber.tag(TAG).d("descriptor 写回 status=$status")
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                // v0.2.79：CCCD 订阅失败会导致通知永远收不到（首连无数据的另一元凶），
-                // 旧代码只打日志不重试。失败时重新订阅（限 3 次，防风暴）。
-                if (cccdRetries < 3) {
-                    cccdRetries++
-                    Timber.tag(TAG).w("CCCD 订阅失败 status=$status，第 %d 次重试", cccdRetries)
-                    runCatching {
-                        notifyChar?.let { nc ->
-                            g.setCharacteristicNotification(nc, true)
-                            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            g.writeDescriptor(descriptor)
-                        }
+            // v0.2.79：CCCD 订阅失败会导致通知永远收不到（首连无数据的另一元凶），
+            // 旧代码只打日志不重试。失败时重新订阅（限 3 次，防风暴）。
+            if (status != BluetoothGatt.GATT_SUCCESS && cccdRetries < 3) {
+                cccdRetries++
+                Timber.tag(TAG).w("CCCD 订阅失败 status=$status，第 %d 次重试", cccdRetries)
+                runCatching {
+                    notifyChar?.let { nc ->
+                        g.setCharacteristicNotification(nc, true)
+                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        g.writeDescriptor(descriptor)
                     }
-                }
-                return
-            }
-            // v0.2.82 官方时序对齐（字节码逆向实证）：CCCD 订阅成功后 40ms 做两件事——
-            // ① 发官方 21B 握手帧 `AA 55 90 EB 97 00×15 11`（推测为 BMS 应用层会话激活
-            //    信号；官方无任何重连机制却总能一次连接出数，此帧是最大嫌疑）
-            // ② requestMtu(517)（官方是 CCCD 之后再协商 MTU，与我们旧时序相反）
-            if (!handshakeSent) {
-                handshakeSent = true
-                cbScope.launch {
-                    delay(40)
-                    if (!JikongBleClient.connected) return@launch
-                    val ok = runCatching { write(JikongProtocol.buildOfficialHandshake()) }
-                        .getOrDefault(false)
-                    Timber.tag(TAG).i("官方 21B 握手帧发送%s（CCCD+40ms）", if (ok) "成功" else "失败")
-                    runCatching { g.requestMtu(517) }
                 }
             }
         }
@@ -505,7 +476,6 @@ object JikongBleClient {
         // 清空挂起的连接等待，避免后续 GATT 回调 resume 一个已取消的 continuation
         connectWaiter = null
         rxBuffer.reset()
-        handshakeSent = false
         runCatching { gatt?.disconnect() }
         runCatching { gatt?.close() }
         gatt = null

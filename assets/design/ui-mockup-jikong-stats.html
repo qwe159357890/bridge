@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极空 · 统计页 原型（能耗台账）</title>
+<style>
+  :root {
+    --bg: #000000; --card: #26282B; --text: #E8EAED; --gray: #8A919F;
+    --divider: #33363A; --green: #00E050; --cyan: #00B8D4; --red: #E5484D;
+    --amber: #FFD60A; --blue: #4D8BF5; --track: #3A3D40;
+    --tabbar: #1A1C1F; --tabline: #222222; --page: #17181a; --onfill: #06210E;
+  }
+  body.light {
+    --bg: #EEF1F5; --card: #FFFFFF; --text: #17191D; --gray: #5D6672;
+    --divider: #DFE3E8; --green: #00A344; --cyan: #0097B8; --red: #D93036;
+    --amber: #B45309; --blue: #2F6FD8; --track: #D7DBE1;
+    --tabbar: #FFFFFF; --tabline: #E3E6EA; --page: #dfe3e9; --onfill: #FFFFFF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--page); font-family: "PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    color: var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding: 24px 12px 48px; transition: background .25s;
+  }
+  .toolbar { width:390px; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .toolbar .tip { font-size:12px; color:var(--gray); }
+  .theme-btn {
+    font-size:12px; padding:6px 14px; border-radius:16px; border:1px solid var(--divider);
+    background: var(--card); color: var(--text); cursor:pointer;
+  }
+  /* ---------- 手机框 ---------- */
+  .phone {
+    width:390px; height:844px; background:var(--bg); border-radius:36px;
+    border:1px solid var(--divider); box-shadow:0 18px 50px rgba(0,0,0,.45);
+    overflow:hidden; display:flex; flex-direction:column; transition: background .25s; position:relative;
+  }
+  .statusbar { height:30px; display:flex; justify-content:space-between; align-items:center;
+    padding:0 20px; font-size:11px; color:var(--gray); flex:none; }
+  .content { flex:1; overflow-y:auto; padding:4px 14px 14px; }
+  .content::-webkit-scrollbar { width:0; }
+  .pgtitle { display:flex; align-items:center; justify-content:space-between; padding:6px 2px 12px; }
+  .pgtitle h1 { font-size:20px; font-weight:700; letter-spacing:.5px; }
+  .conn { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--gray); }
+  .conn .dot { width:7px; height:7px; border-radius:50%; background:var(--green); }
+  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; transition: background .25s; }
+  .card h3 { font-size:13px; font-weight:600; color:var(--text); margin-bottom:10px; display:flex; align-items:center; gap:6px; }
+  .card h3 .sub { font-size:11px; font-weight:400; color:var(--gray); margin-left:auto; }
+  /* 概要 */
+  .summary { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .sum { background:var(--bg); border-radius:10px; padding:10px 6px; text-align:center; transition: background .25s; }
+  .sum .v { font-size:17px; font-weight:700; }
+  .sum .v small { font-size:10px; font-weight:400; color:var(--gray); margin-left:2px; }
+  .sum .k { font-size:10px; color:var(--gray); margin-top:3px; }
+  .sum.hl .v { color:var(--green); }
+  /* 录入 */
+  .in-row { display:flex; gap:8px; align-items:flex-end; }
+  .field { flex:1; }
+  .field label { font-size:11px; color:var(--gray); display:block; margin-bottom:5px; }
+  .field input {
+    width:100%; background:var(--bg); border:1px solid var(--divider); border-radius:9px;
+    color:var(--text); font-size:16px; padding:9px 10px; outline:none; font-weight:600;
+  }
+  .field input:focus { border-color:var(--green); }
+  .btn-rec {
+    flex:none; background:var(--green); color:var(--onfill); border:none; border-radius:9px;
+    font-size:14px; font-weight:700; padding:11px 18px; cursor:pointer;
+  }
+  .auto-read { display:flex; gap:14px; margin-top:10px; font-size:11px; color:var(--gray);
+    background:var(--bg); border-radius:9px; padding:8px 10px; transition: background .25s; }
+  .auto-read b { color:var(--cyan); font-weight:600; }
+  .auto-read .tag { margin-left:auto; color:var(--green); }
+  .hint { font-size:10px; color:var(--gray); margin-top:8px; line-height:1.6; }
+  /* 曲线 */
+  .legend { display:flex; gap:14px; font-size:10px; color:var(--gray); margin-bottom:4px; }
+  .legend i { display:inline-block; width:14px; height:3px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+  /* 记录列表 */
+  .rec-list { height: 262px; overflow-y: auto; }
+  .rec-list::-webkit-scrollbar { width: 0; }
+  /* 同步 */
+  .badge { display:inline-block; font-size:9px; color:var(--amber); border:1px solid var(--amber);
+    border-radius:4px; padding:0 3px; margin-top:2px; line-height:1.4; }
+  .syncbtn { margin-left:8px; font-size:10px; font-weight:600; background:var(--blue); color:#fff;
+    border:none; border-radius:6px; padding:4px 10px; cursor:pointer; flex:none; }
+  .syncbtn:disabled { opacity:.35; cursor:default; }
+  .toast { position:absolute; left:50%; bottom:78px; transform:translateX(-50%) translateY(8px);
+    background:var(--card); border:1px solid var(--divider); color:var(--text);
+    font-size:11px; padding:8px 14px; border-radius:10px; box-shadow:0 4px 14px rgba(0,0,0,.4);
+    opacity:0; transition:all .25s; pointer-events:none; white-space:nowrap; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  .rec { display:flex; align-items:center; padding:9px 0; border-bottom:1px solid var(--divider); font-size:12px; }
+  .rec:last-child { border-bottom:none; }
+  .rec .date { width:52px; color:var(--gray); font-size:10px; line-height:1.5; flex:none; }
+  .rec .odo { width:74px; font-weight:600; flex:none; }
+  .rec .odo small { display:block; font-size:10px; color:var(--gray); font-weight:400; }
+  .rec .delta { flex:1; color:var(--gray); font-size:10.5px; line-height:1.5; }
+  .rec .wh { width:74px; text-align:right; font-weight:700; font-size:13px; flex:none; }
+  .rec .wh small { display:block; font-size:9px; font-weight:400; color:var(--gray); }
+  .rec .wh.good { color:var(--green); } .rec .wh.bad { color:var(--amber); }
+  .rec.base .wh { color:var(--gray); font-weight:400; font-size:11px; }
+  .rec .del { width:20px; flex:none; text-align:center; color:var(--track); font-size:13px; cursor:pointer; }
+  .rec:hover .del { color:var(--red); }
+  .note { font-size:10px; color:var(--gray); line-height:1.7; }
+  .note b { color:var(--text); }
+  /* 底部导航 */
+  .navbar { flex:none; border-top:1px solid var(--tabline); background:var(--tabbar); display:flex; padding:6px 0 10px; transition: background .25s; }
+  .nav { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; }
+  .nav .ind { width:18px; height:2px; border-radius:1px; background:transparent; }
+  .nav.active .ind { background:var(--green); }
+  .nav svg { width:24px; height:24px; }
+  .nav .lb { font-size:9px; color:var(--gray); }
+  .nav.active .lb { color:var(--green); }
+  .nav svg { fill:var(--gray); } .nav.active svg { fill:var(--green); }
+  /* 设计说明 */
+  .doc { width:390px; margin-top:26px; background:var(--card); border-radius:14px; padding:16px; transition: background .25s; }
+  .doc h2 { font-size:14px; margin-bottom:10px; color:var(--text); }
+  .doc li { font-size:12px; color:var(--gray); line-height:1.9; margin-left:18px; }
+  .doc b { color:var(--text); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span class="tip">原型 · 极空新增「统计」Tab（位于 参数设置 之前）</span>
+  <span class="tip"><label><input type="checkbox" id="offline"> 模拟服务端离线</label></span>
+  <button class="theme-btn" onclick="document.body.classList.toggle('light')">切换亮/暗</button>
+</div>
+
+<script>
+function showToast(msg, ok) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.color = ok ? 'var(--green)' : 'var(--red)';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+function doSync() {
+  const b = document.getElementById('syncBtn');
+  b.disabled = true; b.textContent = '同步中…';
+  setTimeout(() => {
+    if (document.getElementById('offline').checked) {
+      b.disabled = false; b.textContent = '⇅ 同步 2 条';
+      showToast('同步失败：服务端不在线，记录仍保留在本机', false);
+    } else {
+      b.textContent = '已同步';
+      document.querySelectorAll('.badge').forEach(e => e.remove());
+      showToast('已同步 2 条记录到服务器', true);
+    }
+  }, 700);
+}
+</script>
+
+<div class="phone">
+  <div class="statusbar"><span>18:36</span><span>5G ▮▮▮ 87%</span></div>
+
+  <div class="content">
+    <div class="pgtitle">
+      <h1>统计</h1>
+      <div class="conn"><span class="dot"></span>已连接 · JK-BMS</div>
+    </div>
+
+    <!-- 概要 -->
+    <div class="card">
+      <div class="summary">
+        <div class="sum"><div class="v">260.0<small>km</small></div><div class="k">记录区间里程</div></div>
+        <div class="sum"><div class="v">9.25<small>kWh</small></div><div class="k">区间总耗电</div></div>
+        <div class="sum hl"><div class="v">35.5<small>Wh/km</small></div><div class="k">平均电耗</div></div>
+      </div>
+    </div>
+
+    <!-- 录入 -->
+    <div class="card">
+      <h3>📝 录入里程<span class="sub">手动输入 · 容量自动读取</span></h3>
+      <div class="in-row">
+        <div class="field">
+          <label>当前三轮车里程（km）</label>
+          <input value="11260.0" inputmode="decimal">
+        </div>
+        <button class="btn-rec">记一笔</button>
+      </div>
+      <div class="auto-read">
+        <span>循环容量 <b>885.6 Ah</b></span>
+        <span>总压 <b>73.6 V</b></span>
+        <span class="tag">● 已自动读取</span>
+      </div>
+      <div class="hint">每次录入 = 记一行（时间 + 里程 + 当时循环容量/电压）。里程须 ≥ 上一条；未连接保护板时容量栏显示「待连接后读取」。</div>
+    </div>
+
+    <!-- 曲线 -->
+    <div class="card">
+      <h3>能耗曲线<span class="sub">Wh/km · 按录入区间</span></h3>
+      <div class="legend">
+        <span><i style="background:var(--green)"></i>每段电耗</span>
+        <span><i style="background:var(--cyan)"></i>平均 35.5</span>
+      </div>
+      <svg viewBox="0 0 340 150" width="100%">
+        <!-- 网格 -->
+        <g stroke="var(--divider)" stroke-width="1">
+          <line x1="34" y1="18" x2="332" y2="18"/><line x1="34" y1="55" x2="332" y2="55"/>
+          <line x1="34" y1="92" x2="332" y2="92"/><line x1="34" y1="129" x2="332" y2="129"/>
+        </g>
+        <g font-size="9" fill="var(--gray)" text-anchor="end">
+          <text x="30" y="21">45</text><text x="30" y="58">38</text>
+          <text x="30" y="95">31</text><text x="30" y="132">24</text>
+        </g>
+        <g font-size="9" fill="var(--gray)" text-anchor="middle">
+          <text x="46" y="146">11042</text><text x="122" y="146">11090</text>
+          <text x="197" y="146">11177</text><text x="288" y="146">11260</text>
+          <text x="200" y="8" fill="var(--gray)">行驶里程 (km)</text>
+        </g>
+        <!-- 平均线 -->
+        <line x1="34" y1="63" x2="332" y2="63" stroke="var(--cyan)" stroke-width="1.5" stroke-dasharray="5 4" opacity=".85"/>
+        <!-- 折线 37.1/38.0/32.7/31.2/40.1/34.2 -->
+        <polyline fill="none" stroke="var(--green)" stroke-width="2.5" stroke-linejoin="round"
+          points="46,50 84,47 122,73 160,80 198,29 236,56"/>
+        <g fill="var(--bg)" stroke="var(--green)" stroke-width="2">
+          <circle cx="46" cy="50" r="3.5"/><circle cx="84" cy="47" r="3.5"/><circle cx="122" cy="73" r="3.5"/>
+          <circle cx="160" cy="80" r="3.5"/><circle cx="198" cy="29" r="3.5"/><circle cx="236" cy="56" r="3.5"/>
+        </g>
+        <!-- 最高/最低标注 -->
+        <g font-size="9" font-weight="700">
+          <text x="198" y="22" fill="var(--amber)" text-anchor="middle">40.1 ↑载重</text>
+          <text x="160" y="94" fill="var(--green)" text-anchor="middle">31.2 ↓</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- 记录列表（最新在最上，基准垫底；固定高度内部滑动） -->
+    <div class="card">
+      <h3>记录台账<span class="sub">7 条 · 新在上 · 存本机</span><button class="syncbtn" id="syncBtn" onclick="doSync()">⇅ 同步 2 条</button></h3>
+      <div class="rec-list">
+        <div class="rec">
+          <div class="date">11-13<br>17:36<br><span class="badge">未同步</span></div>
+          <div class="odo">11260.0<small>距上次 +41.8 km</small></div>
+          <div class="delta">Δ19.4 Ah · 73.6 V<br>1.43 kWh</div>
+          <div class="wh">34.2<small>Wh/km</small></div><div class="del">✕</div>
+        </div>
+        <div class="rec">
+          <div class="date">11-11<br>18:20<br><span class="badge">未同步</span></div>
+          <div class="odo">11218.2<small>距上次 +41.3 km</small></div>
+          <div class="delta">Δ22.4 Ah · 74.0 V<br>1.66 kWh</div>
+          <div class="wh bad">40.1<small>Wh/km</small></div><div class="del">✕</div>
+        </div>
+        <div class="rec">
+          <div class="date">11-09<br>17:55</div>
+          <div class="odo">11176.9<small>距上次 +46.5 km</small></div>
+          <div class="delta">Δ19.7 Ah · 73.7 V<br>1.45 kWh</div>
+          <div class="wh good">31.2<small>Wh/km</small></div><div class="del">✕</div>
+        </div>
+        <div class="rec">
+          <div class="date">11-07<br>16:30</div>
+          <div class="odo">11130.4<small>距上次 +40.8 km</small></div>
+          <div class="delta">Δ18.2 Ah · 73.4 V<br>1.34 kWh</div>
+          <div class="wh">32.7<small>Wh/km</small></div><div class="del">✕</div>
+        </div>
+        <div class="rec">
+          <div class="date">11-05<br>18:05</div>
+          <div class="odo">11089.6<small>距上次 +47.3 km</small></div>
+          <div class="delta">Δ24.4 Ah · 73.8 V<br>1.80 kWh</div>
+          <div class="wh bad">38.0<small>Wh/km</small></div><div class="del">✕</div>
+        </div>
+        <div class="rec">
+          <div class="date">11-03<br>17:42</div>
+          <div class="odo">11042.3<small>距上次 +42.3 km</small></div>
+          <div class="delta">Δ21.3 Ah · 73.6 V<br>1.57 kWh</div>
+          <div class="wh bad">37.1<small>Wh/km</small></div><div class="del">✕</div>
+        </div>
+        <div class="rec base">
+          <div class="date">11-02<br>08:10</div>
+          <div class="odo">11000.0<small>基准 · 容量 742.6Ah</small></div>
+          <div class="delta">第一条记录，作为后续电耗计算的起点</div>
+          <div class="wh">基准</div><div class="del"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 说明 -->
+    <div class="card">
+      <h3>口径说明</h3>
+      <div class="note">
+        电耗 = <b>Δ循环容量(Ah) × 平均电压(V) ÷ Δ里程(km)</b>，即行驶这段路电池实际放出的电能。<br>
+        循环容量由保护板累计（只增不减），充电不影响它；<b>换电池 / BMS 重置</b>会使容量回退，此时该段标记无效、不进曲线，重新以新容量为基准。
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast（同步结果演示） -->
+  <div class="toast" id="toast"></div>
+
+  <!-- 底部导航：首页 / 实时状态 / 统计（新）/ 参数设置 -->
+  <div class="navbar">
+    <div class="nav">
+      <div class="ind"></div>
+      <svg viewBox="0 0 24 24"><path d="M12 3l9 8h-3v9h-4v-6h-4v6H6v-9H3z"/></svg>
+      <div class="lb">首页</div>
+    </div>
+    <div class="nav">
+      <div class="ind"></div>
+      <svg viewBox="0 0 24 24"><path d="M4 20V10h3v10zm6.5 0V4h3v16zm6.5 0v-7h3v7z"/></svg>
+      <div class="lb">实时状态</div>
+    </div>
+    <div class="nav active">
+      <div class="ind"></div>
+      <!-- 用户提供的「统计」图标（1080x1024 原始 path） -->
+      <svg viewBox="-20 0 1120 1024">
+        <path d="M274.03 872.08H49.03a20.68 20.68 0 0 1-20.6-20.6V471.99a20.68 20.68 0 0 1 20.6-20.6H274.03a20.68 20.68 0 0 1 20.6 20.6v379.33a20.6 20.6 0 0 1-20.6 20.75zm-204.61-41.29h183.35V492.6H69.42zm579.34 41.29H424.27a20.68 20.68 0 0 1-20.6-20.6V325.18a20.68 20.68 0 0 1 20.6-20.6H648.9a20.68 20.68 0 0 1 20.6 20.6v526.14a20.53 20.53 0 0 1-20.6 20.75zm-204.03-41.29h183.35V346.08H444.88zm578.46 41.29H798.71a20.68 20.68 0 0 1-20.46-20.75V24.26a20.68 20.68 0 0 1 20.6-20.6h224.63a20.68 20.68 0 0 1 20.6 20.6V851.32a20.53 20.53 0 0 1-20.75 20.75zm-204.03-41.29h183.35V44.94h-183.2zm236.76 189.56H24.26a20.6 20.6 0 0 1 0-41.29h1031.67a20.6 20.6 0 1 1 0 41.29z"/>
+      </svg>
+      <div class="lb">统计</div>
+    </div>
+    <div class="nav">
+      <div class="ind"></div>
+      <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9.4 5.6l-2 .5a7.6 7.6 0 0 1-.8 1.9l1.1 1.8-1.9 1.9-1.8-1.1a7.6 7.6 0 0 1-1.9.8l-.5 2h-2.7l-.5-2a7.6 7.6 0 0 1-1.9-.8l-1.8 1.1-1.9-1.9 1.1-1.8a7.6 7.6 0 0 1-.8-1.9l-2-.5v-2.7l2-.5a7.6 7.6 0 0 1 .8-1.9L5.2 6.7l1.9-1.9 1.8 1.1a7.6 7.6 0 0 1 1.9-.8l.5-2h2.7l.5 2a7.6 7.6 0 0 1 1.9.8l1.8-1.1 1.9 1.9-1.1 1.8a7.6 7.6 0 0 1 .8 1.9l2 .5z"/></svg>
+      <div class="lb">参数设置</div>
+    </div>
+  </div>
+</div>
+
+<!-- 设计说明 -->
+<div class="doc">
+  <h2>设计说明（实现时照此做）</h2>
+  <li><b>页面位置</b>：底部导航第 3 位（首页 → 实时状态 → <b>统计</b> → 参数设置），复用提供的「统计」图标（SVG → VectorDrawable，tint 控制选中绿）。</li>
+  <li><b>数据来源零新增协议</b>：循环容量 cycleCapacity、总压 totalVoltage 在 0x02 实时帧里<b>已经解析好了</b>，录入瞬间快照即可。</li>
+  <li><b>一行记录 =</b> 时间 + 里程(用户输入) + 循环容量(Ah) + 总压(V)，存 DataStore JSON 列表（JikongPrefs 模式）；支持删除误录。</li>
+  <li><b>台账排序与高度</b>：<b>最新记录在最上</b>、基准垫底（倒序 LazyColumn）；卡片<b>固定高度</b>，条数多了内部向上滑动，不无限撑高页面。</li>
+  <li><b>电耗口径</b>：段电耗 Wh/km = ΔAh × 两条记录平均电压 ÷ Δkm；首页三卡 = 区间里程 / 区间总耗电 kWh / 平均电耗。</li>
+  <li><b>守卫</b>：新里程 ≥ 上一条（否则提示）；Δ容量 ≤ 0（BMS 重置/换电池）→ 该段标「无效」不进曲线，自动重设基准。</li>
+  <li><b>曲线</b>：X=里程，Y=Wh/km 折线 + 平均线；数据多后可追加月度均值视图。首条记录只做基准不出点。</li>
+  <li><b>省电</b>：纯录入型页面，无 GPS、无轮询；仅在点击「记一笔」时读一次当前状态。</li>
+  <li><b>同步机制（本地为准 + 远程 MySQL 留档）</b>：每条记录带 <b>synced 标记</b>与唯一 id，存本地 XML(JSON 数组)。录入永远本地成功（标「待同步」）；服务端/MySQL 离线不丢数据。台账标题右侧<b>同步按钮</b>：有待同步记录→可用（「同步 N 条」）；全部已同步→置灰。点击批量上传，成功 Toast + 标记翻转；失败 Toast 服务端错误原因、按钮仍可重试。服务端按 id <b>幂等入库</b>（MySQL 表，重复上传不重复插行）。</li>
+  <li><b>删除联动</b>：删「待同步」行仅删本地；删「已同步」行→本地删除+通知远端删，远端失败进待删除队列随下次同步处理。</li>
+  <li><b>后续可选</b>：管理后台查看台账/曲线（服务端已有 MySQL，可后置）。</li>
+</div>
+
+</body>
+</html>

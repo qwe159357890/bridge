@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -81,6 +82,7 @@ import my.bridge.com.jikong.BleDevice
 import my.bridge.com.jikong.JikongBleClient
 import my.bridge.com.jikong.JikongController
 import my.bridge.com.jikong.JikongPrefs
+import my.bridge.com.jikong.SpeedDash
 
 // 极空页配色（定档：assets/design/ui-mockup-jikong-home.html，深浅两套 CSS 变量 1:1 对应）
 private val JkBlue = Color(0xFF1A6EE8)    // 仅旧页面/按钮用
@@ -243,13 +245,30 @@ fun JikongPage() {
         }
     }
 
+    // v0.2.83 时速仪表盘开关（默认关）：开=页面可见时启动 GPS+积分；关=完全零成本。
+    // 状态化（主题切换同款经验）：改开关即时生效，UI 与 SpeedDash 生命周期同步联动。
+    // 注意：必须先于下方生命周期 DisposableEffect 声明（观察者闭包引用本状态）。
+    var dashEnabled by remember { mutableStateOf(JikongPrefs.dashEnabled(context)) }
+    val toggleDash: (Boolean) -> Unit = { on ->
+        dashEnabled = on
+        JikongPrefs.setDashEnabled(context, on)
+        if (on) SpeedDash.start(context) else SpeedDash.stop()
+    }
+
     // 页面可见性守卫：ON_RESUME 标记可见并开始轮询，ON_PAUSE 释放
     DisposableEffect(Unit) {
         controller.setPageVisible(true)
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> controller.setPageVisible(true)
-                Lifecycle.Event.ON_PAUSE -> controller.setPageVisible(false)
+                Lifecycle.Event.ON_RESUME -> {
+                    controller.setPageVisible(true)
+                    // v0.2.83：仪表盘跟随页面可见性（开关开 + 已连接才启动；stop/start 均幂等）
+                    if (dashEnabled && controller.status.connected) SpeedDash.start(context) else SpeedDash.stop()
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    controller.setPageVisible(false)
+                    SpeedDash.stop()   // 离开页面 → GPS 注销 + 积分暂停（零后台成本）
+                }
                 else -> {}
             }
         }
@@ -277,6 +296,8 @@ fun JikongPage() {
     }
 
     // 沉浸态（v0.2.67，微信/销售页同款）：进入极空页隐藏主页顶部 Tab 栏与 APP 底部工具栏
+    // （v0.2.83 红队修正：仪表盘「开关开即启动」的 Effect 已移入 HomeView——
+    //   只有已连接才有 HomeView，杜绝未连接时白白开 GPS）
     DisposableEffect(Unit) {
         JkUiState.immersive = true
         onDispose { JkUiState.immersive = false }
@@ -325,9 +346,10 @@ fun JikongPage() {
                             themeMode = themeMode,
                             onThemeCycle = cycleTheme,
                             onDisconnect = { controller.disconnect() },
+                            dashEnabled = dashEnabled,
                         )
                         1 -> RealtimeView(controller)
-                        2 -> ParamView(controller)
+                        2 -> SettingsView(controller, dashEnabled = dashEnabled, onDashToggle = toggleDash)
                     }
                 }
                 // 底部导航栏
@@ -561,11 +583,22 @@ private fun HomeView(
     themeMode: Int,
     onThemeCycle: () -> Unit,
     onDisconnect: () -> Unit,
+    dashEnabled: Boolean = false,
 ) {
     // 订阅版本号：数据变化触发本页重组，实现实时刷新
     controller.statusVersion.value
+    // v0.2.83：时速仪表盘 1Hz 版本号（车速/续航/电耗基元状态每秒刷新）
+    SpeedDash.version.value
+    val context = LocalContext.current
     val s = controller.status
     val c = LocalJkColors.current
+
+    // v0.2.83 仪表盘生命周期门控（红队修正：HomeView 只在已连接时存在）——
+    // 进入首页（连接建立/回前台）且开关开才启动 GPS+积分；离开即注销，零后台成本。
+    DisposableEffect(dashEnabled) {
+        if (dashEnabled) SpeedDash.start(context)
+        onDispose { SpeedDash.stop() }
+    }
 
     // v0.2.68：进入首页默认滚到「充电/放电/均衡」行置顶；v0.2.72：少滚 8dp，
     // 让连接栏底部稍微露一条边（用户要求）；连接栏仍可通过上滑完全回看。
@@ -620,6 +653,24 @@ private fun HomeView(
         // 状态提示条（盾牌图标 + 电池运行良好）
         HealthBanner()
         Spacer(Modifier.height(6.dp))
+
+        // v0.2.83 时速仪表盘卡片（EV 仪表盘：时速/续航/电耗/行程）——紧跟「电池运行良好」下方。
+        // 开关关闭时不 compose（不占布局、不启动任何资源）。全部基元参数（强跳过陷阱）。
+        if (dashEnabled) {
+            SpeedDashCard(
+                speed = SpeedDash.speedKmh,
+                gpsOk = SpeedDash.gpsFresh,
+                rangeKm = SpeedDash.rangeKm,
+                instWhKm = SpeedDash.instWhKm,
+                avgWhKm = SpeedDash.avgWhKm,
+                tripKm = SpeedDash.tripKm,
+                tripSeconds = SpeedDash.tripSeconds,
+                bmsStale = SpeedDash.bmsStale,
+                permNeeded = SpeedDash.gpsPermissionNeeded,
+                onReset = { SpeedDash.resetTrip(context) },
+            )
+            Spacer(Modifier.height(6.dp))
+        }
 
         // 数据网格一：最高电压 / 最低电压 / 最大压差 / 均衡电流
         QuadGrid(
@@ -735,6 +786,119 @@ private fun HealthBanner() {
         }
         Spacer(Modifier.width(8.dp))
         Text("电池运行良好", color = c.text, fontSize = 14.sp)
+    }
+}
+
+/** 时长格式化：秒 → "m:ss" / "h:mm:ss"。 */
+private fun fmtDuration(seconds: Float): String {
+    val total = seconds.toInt().coerceAtLeast(0)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val sec = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
+
+/**
+ * v0.2.83 时速仪表盘卡片（EV 仪表盘精简版，紧贴「电池运行良好」下方）。
+ * 全部基元参数（Compose 强跳过按值比较，每帧真实刷新——v0.2.79 冻结教训）。
+ *
+ * 布局：
+ * 行1：时速大字（km/h） | 剩余续航（km，BMS 缺数据显 --）
+ * 行2：瞬时电耗 | 平均电耗 | 本次里程（Wh/km 显 1 位小数）
+ * 行3：本次时长 + 清零按钮；权限缺失时整卡降级为授权引导。
+ */
+@Composable
+private fun SpeedDashCard(
+    speed: Float,
+    gpsOk: Boolean,
+    rangeKm: Float,
+    instWhKm: Float,
+    avgWhKm: Float,
+    tripKm: Float,
+    tripSeconds: Float,
+    bmsStale: Boolean,
+    permNeeded: Boolean,
+    onReset: () -> Unit,
+) {
+    val c = LocalJkColors.current
+    val context = LocalContext.current
+    // 精确定位权限：缺失时请求（SpeedDash.onPermissionGranted 里会重试启动）
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) SpeedDash.onPermissionGranted(context) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(c.card, RoundedCornerShape(8.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        if (permNeeded) {
+            // 权限引导行（不弹系统框轰炸，用户点按钮才申请）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("时速仪表盘需要精确定位权限", fontSize = 13.sp, color = c.text, modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    permLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                }) { Text("授权", color = c.blue) }
+            }
+            return@Column
+        }
+        // 行1：时速 | 续航
+        Row(verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text("时速(km/h)", fontSize = 11.sp, color = c.gray)
+                Text(
+                    if (gpsOk) "%.1f".format(speed) else "--",
+                    fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.green,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text("剩余续航(km)", fontSize = 11.sp, color = c.gray)
+                Text(
+                    if (rangeKm >= 0f) "%.0f".format(rangeKm) else "--",
+                    fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                    color = if (bmsStale) c.gray else c.blue,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        DividerV()
+        Spacer(Modifier.height(6.dp))
+        // 行2：瞬时 | 平均 | 里程
+        Row {
+            Column(Modifier.weight(1f)) {
+                Text("瞬时(Wh/km)", fontSize = 11.sp, color = c.gray)
+                Text(
+                    if (instWhKm > 0f) "%.1f".format(instWhKm) else "--",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text("平均(Wh/km)", fontSize = 11.sp, color = c.gray)
+                Text(
+                    if (avgWhKm > 0f) "%.1f".format(avgWhKm) else "--",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text("本次里程(km)", fontSize = 11.sp, color = c.gray)
+                Text(
+                    if (tripKm > 0f) "%.2f".format(tripKm) else "--",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // 行3：时长 + 清零
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("本次时长 ${fmtDuration(tripSeconds)}", fontSize = 11.sp, color = c.gray, modifier = Modifier.weight(1f))
+            TextButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                Text("清零行程", fontSize = 11.sp, color = c.gray)
+            }
+        }
+        if (bmsStale) {
+            Text("保护板数据未到，续航估算暂停", fontSize = 11.sp, color = c.amber)
+        }
     }
 }
 
@@ -1226,125 +1390,103 @@ private fun MosBadge(label: String, on: Boolean, modifier: Modifier = Modifier) 
     }
 }
 
-// ==================== 参数设置（对齐官方 + 保留远程控制） ====================
+// ==================== 设置（v0.2.83 清空重写：不再设置保护板参数/写保护板） ====================
+// 用户拍板（2026-11-06）：保护板参数修改需要设备密码、且无必要——全部删除；
+// 页面只保留「时速仪表盘」开关与累计统计。0x01 帧解析保留（剩余时间计算依赖标称容量）。
 @Composable
-private fun ParamView(controller: JikongController) {
-    // 订阅版本号：数据变化触发本页重组，实现实时刷新
-    controller.statusVersion.value
-    val s = controller.status
+private fun SettingsView(
+    controller: JikongController,
+    dashEnabled: Boolean,
+    onDashToggle: (Boolean) -> Unit,
+) {
     val c = LocalJkColors.current
+    val context = LocalContext.current
+    // 订阅仪表盘 1Hz 版本号：累计统计实时刷新（红队修正：否则 @Volatile 变化不触发重组）
+    SpeedDash.version.value
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("保护参数", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
-        Spacer(Modifier.height(4.dp))
-        Text("修改参数会写入保护板（需设备密码），请谨慎操作。", fontSize = 12.sp, color = c.gray)
-        Spacer(Modifier.height(12.dp))
+        Text("仪表盘", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Spacer(Modifier.height(8.dp))
 
-        ParamRow("单体过压保护", s.cellFullVoltage, "V") { v ->
-            launchWrite(controller) { controller.writeParam(0x01, (v * 1000).toInt()) }
+        // 时速仪表盘开关：开=首页显示卡片并启动 GPS+积分；关=不显示、不启动任何资源（零成本）
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("时速仪表盘", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "首页显示时速/续航/电耗卡片。使用 GPS 定位（仅页面打开时工作），会增加少量耗电；关闭后完全停止。",
+                        fontSize = 11.sp, color = c.gray,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = dashEnabled,
+                    onCheckedChange = { onDashToggle(it) },
+                )
+            }
         }
-        ParamRow("单体欠压保护", s.cellEmptyVoltage, "V") { v ->
-            launchWrite(controller) { controller.writeParam(0x02, (v * 1000).toInt()) }
-        }
-        ParamRow("充电过温", s.chargeOverTemp, "℃") { v ->
-            launchWrite(controller) { controller.writeParam(0x03, (v * 10).toInt()) }
-        }
-        ParamRow("放电过温", s.dischargeOverTemp, "℃") { v ->
-            launchWrite(controller) { controller.writeParam(0x04, (v * 10).toInt()) }
-        }
-        ParamRow("充电限流", s.chargeCurrentLimit, "A") { v ->
-            launchWrite(controller) { controller.writeParam(0x05, (v * 100).toInt()) }
-        }
-        ParamRow("放电限流", s.dischargeCurrentLimit, "A") { v ->
-            launchWrite(controller) { controller.writeParam(0x06, (v * 100).toInt()) }
+        if (SpeedDash.gpsPermissionNeeded) {
+            Spacer(Modifier.height(4.dp))
+            Text("缺少精确定位权限：请到系统设置或首页卡片中授权。", fontSize = 11.sp, color = c.amber)
         }
 
         Spacer(Modifier.height(16.dp))
-        Text("远程控制", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Text("累计统计", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
-
-        ControlCard("充电 MOS", s.chargeMosOn) { on ->
-            kotlinx.coroutines.GlobalScope.launch {
-                try { controller.setMos(charge = true, discharge = null, on = on) }
-                catch (e: Exception) { android.util.Log.w("Jikong", "充电 MOS 控制失败", e) }
-            }
-        }
-        ControlCard("放电 MOS", s.dischargeMosOn) { on ->
-            kotlinx.coroutines.GlobalScope.launch {
-                try { controller.setMos(charge = null, discharge = true, on = on) }
-                catch (e: Exception) { android.util.Log.w("Jikong", "放电 MOS 控制失败", e) }
-            }
-        }
-        ControlCard("主动均衡", s.balanceOn) { on ->
-            kotlinx.coroutines.GlobalScope.launch {
-                try { controller.setBalance(on) }
-                catch (e: Exception) { android.util.Log.w("Jikong", "均衡控制失败", e) }
-            }
-        }
-    }
-}
-
-private fun launchWrite(controller: JikongController, block: suspend () -> Boolean) {
-    kotlinx.coroutines.GlobalScope.launch {
-        try {
-            block()
-        } catch (e: Exception) {
-            android.util.Log.w("Jikong", "写参数失败", e)
-        }
-    }
-}
-
-@Composable
-private fun ParamRow(label: String, value: Float, unit: String, onSave: (Float) -> Unit) {
-    val c = LocalJkColors.current
-    var editing by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf(value.toString()) }
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = c.card)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        // P2 持久化：跨会话累计（进程存活期间实时显示，落盘 30s 一次）
+        val totalKm = JikongPrefs.totalKm(context) + SpeedDash.tripKm
+        val totalWh = JikongPrefs.totalWh(context) + SpeedDash.tripWh
+        val histAvg = if (SpeedDash.avgWhKm > 0f) SpeedDash.avgWhKm else JikongPrefs.histAvgWhKm(context)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
         ) {
-            Text(label, fontSize = 14.sp, color = c.text, modifier = Modifier.weight(1f))
-            if (editing) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.width(100.dp),
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = c.text),
+            Row(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("累计里程(km)", fontSize = 11.sp, color = c.gray)
+                    Text(
+                        if (totalKm > 0f) "%.2f".format(totalKm) else "--",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("累计耗电(Wh)", fontSize = 11.sp, color = c.gray)
+                    Text(
+                        if (totalWh > 0f) "%.0f".format(totalWh) else "--",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("历史电耗(Wh/km)", fontSize = 11.sp, color = c.gray)
+                    Text(
+                        if (histAvg > 0f) "%.1f".format(histAvg) else "--",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text("说明", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "续航 = 剩余电量能量 ÷ 近期平均电耗（EV 通行算法）。" +
+                        "刚开始使用时按参考值 20 Wh/km 估算，骑行积累数据后自动修正为您的真实电耗。" +
+                        "所有数值为估算，仅供参考。保护板参数修改需设备密码，本应用不提供。",
+                    fontSize = 11.sp, color = c.gray,
                 )
-                Spacer(Modifier.width(4.dp))
-                Text(unit, fontSize = 13.sp, color = c.gray)
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = {
-                    val v = text.toFloatOrNull()
-                    if (v != null) {
-                        onSave(v)
-                        editing = false
-                    }
-                }) { Text("保存", color = JkBlue) }
-            } else {
-                Text(fmt(value) + " " + unit, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = { text = value.toString(); editing = true }) { Text("修改", color = JkBlue) }
             }
-        }
-    }
-}
-
-@Composable
-private fun ControlCard(label: String, on: Boolean, onToggle: (Boolean) -> Unit) {
-    val c = LocalJkColors.current
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = c.card)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
-                Spacer(Modifier.height(2.dp))
-                Text(if (on) "已开启" else "已关闭", fontSize = 12.sp, color = if (on) JkGreen else c.gray)
-            }
-            Switch(checked = on, onCheckedChange = onToggle)
         }
     }
 }
