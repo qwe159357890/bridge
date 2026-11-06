@@ -336,22 +336,18 @@ class JikongController private constructor() {
         lastDataFrameAt = 0L
         hasDataFrame = false
         pollJob = scope.launch {
-            // JK02 时序（BHP1000/pippofo 实证）：连接后发 0x97（设备信息）→ 等 500ms
-            // → 发 0x96（读单体）触发 0x01+0x03+0x02 burst，之后 BMS 持续流式推 0x02。
-            // 关键：0x97 与 0x96 之间必须有间隔，否则背靠背连发会命令冲突，
-            // BMS 只循环回 0x01+0x03，永不进入 0x02 数据流（v0.2.58 实测正是此现象）。
-            // 首帧 0x97 立即下发（连接成功后立刻拉取，不再空等 500ms），仅保留命令间隔。
-            Timber.tag(TAG).i("发送 0x97（读设备信息）")
-            val ok97 = runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
-                .getOrDefault(false)
-            if (!ok97) Timber.tag(TAG).w("0x97 首发失败（GATT 忙），交由启动 ramp 重试")
+            // v0.2.82 官方时序对齐：0x97/握手帧已由 BleClient 在 CCCD 成功后 40ms
+            // 以官方 21B 帧发出（会话激活信号），此处不再重复首发 0x97，只负责
+            // 发 0x96 触发数据流 + 启动 ramp 兜底。保留 500ms 间隔给握手帧让路，
+            // 避免与 MTU 协商撞车（写忙时 write() 内部有 20×100ms 短重试兜底）。
             delay(500)
             Timber.tag(TAG).i("发送 0x96（触发数据流）")
             runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
 
             val connectAt = System.currentTimeMillis()
             var lastTriggerAt = connectAt
-            var last97At = if (ok97) lastTriggerAt else 0L
+            // 官方 21B 握手帧由 BleClient 在 CCCD+40ms 发出（连接建立即视为已发）
+            var last97At = connectAt
             while (isActive && JikongBleClient.connected) {
                 delay(400)
                 val now = System.currentTimeMillis()
@@ -389,12 +385,12 @@ class JikongController private constructor() {
                             }
                             Timber.tag(TAG).w("已连续重建 3 次仍无 0x02，保持当前链路继续 ramp（等模块自行苏醒）")
                         }
-                        // v0.2.79：设备信息还没拿到（0x97 首发失败）→ 按「0x97→500ms→0x96」
-                        // 完整时序重试，否则首连后 型号/硬件/软件版本 一直空白。
+                        // v0.2.82：设备信息还没拿到 → 重发官方 21B 握手帧（官方接收侧
+                        // 收到特定响应也会重发此帧，等价会话重激活），再等 500ms 后 ramp 发 0x96。
                         if (status.model.isBlank() && now - last97At > 3000) {
                             last97At = now
-                            Timber.tag(TAG).w("启动 ramp：设备信息缺失，重发 0x97（完整时序）")
-                            runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
+                            Timber.tag(TAG).w("启动 ramp：设备信息缺失，重发官方 21B 握手帧")
+                            runCatching { JikongBleClient.write(JikongProtocol.buildOfficialHandshake()) }
                             delay(500)
                         }
                         Timber.tag(TAG).w("启动阶段未见 0x02，重发 0x96 触发数据流")
@@ -466,7 +462,7 @@ class JikongController private constructor() {
      * 先 0x97 再 0x96，中间间隔 500ms，触发 BMS 数据流。
      */
     suspend fun requestRealtimeData() {
-        runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
+        runCatching { JikongBleClient.write(JikongProtocol.buildOfficialHandshake()) }
         delay(500)
         runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
     }
