@@ -15,9 +15,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,9 +52,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -66,36 +75,48 @@ import my.bridge.com.jikong.JikongBleClient
 import my.bridge.com.jikong.JikongController
 import my.bridge.com.jikong.JikongPrefs
 
-// 极空页配色（对齐官方 APP：纯黑背景 + 荧光绿数字）
-private val JkBlue = Color(0xFF1A6EE8)
-private val JkGreen = Color(0xFF00E050)   // 官方荧光绿数字
+// 极空页配色（定档：assets/design/ui-mockup-jikong-home.html，深浅两套 CSS 变量 1:1 对应）
+private val JkBlue = Color(0xFF1A6EE8)    // 仅旧页面/按钮用
+private val JkGreen = Color(0xFF00E050)   // 官方荧光绿数字（旧页面用，首页走 JkColors.green）
 private val JkRed = Color(0xFFE5484D)
 
-// 深色主题配色（对齐官方：纯黑背景 + 深灰卡片 + 荧光绿）
-private val DarkBg = Color(0xFF000000)
-private val DarkCard = Color(0xFF1A1C1E)
-private val DarkText = Color(0xFFE8EAED)
-private val DarkGray = Color(0xFF8A919F)
-private val DarkDivider = Color(0xFF2A2C30)
-
-// 浅色主题配色
-private val LightBg = Color(0xFFF5F6F8)
-private val LightCard = Color(0xFFFFFFFF)
-private val LightText = Color(0xFF1F2329)
-private val LightGray = Color(0xFF8A919F)
-private val LightDivider = Color(0xFFEEF0F3)
-
-/** 主题配色（按 isDark 二选一）。 */
+/** 主题配色（定档 HTML :root / body.light 全量变量）。 */
 private data class JkColors(
     val bg: Color,
     val card: Color,
     val text: Color,
     val gray: Color,
     val divider: Color,
+    val green: Color,
+    val cyan: Color,
+    val red: Color,
+    val blue: Color,
+    val track: Color,   // 进度条/弧灰色轨道
+    val tabbar: Color,  // 底部导航背景
+    val tabline: Color, // 底部导航顶部分隔线
+    val g1: Color, val g2: Color, val g3: Color, // 仪表盘弧渐变三段
+    val numA: Color,    // 刻度大数字（逢10）
+    val numB: Color,    // 刻度小数字（逢5）
+    val onfill: Color,  // 实心胶囊上的文字色
 )
 
-private val DarkColors = JkColors(DarkBg, DarkCard, DarkText, DarkGray, DarkDivider)
-private val LightColors = JkColors(LightBg, LightCard, LightText, LightGray, LightDivider)
+private val DarkColors = JkColors(
+    bg = Color(0xFF000000), card = Color(0xFF26282B), text = Color(0xFFE8EAED),
+    gray = Color(0xFF8A919F), divider = Color(0xFF33363A),
+    green = Color(0xFF00E050), cyan = Color(0xFF00B8D4), red = Color(0xFFE5484D), blue = Color(0xFF4D8BF5),
+    track = Color(0xFF3A3D40), tabbar = Color(0xFF1A1C1F), tabline = Color(0xFF222222),
+    g1 = Color(0xFF00E050), g2 = Color(0xFF00C8A0), g3 = Color(0xFF00A8E8),
+    numA = Color(0xFFC8CED6), numB = Color(0xFF6B727C), onfill = Color(0xFF06210E),
+)
+
+private val LightColors = JkColors(
+    bg = Color(0xFFEEF1F5), card = Color(0xFFFFFFFF), text = Color(0xFF17191D),
+    gray = Color(0xFF5D6672), divider = Color(0xFFDFE3E8),
+    green = Color(0xFF00A344), cyan = Color(0xFF0097B8), red = Color(0xFFD93036), blue = Color(0xFF2F6FD8),
+    track = Color(0xFFD7DBE1), tabbar = Color(0xFFFFFFFF), tabline = Color(0xFFE3E6EA),
+    g1 = Color(0xFF00B050), g2 = Color(0xFF00A8A0), g3 = Color(0xFF0A84D0),
+    numA = Color(0xFF2A2F36), numB = Color(0xFF9AA2AD), onfill = Color(0xFFFFFFFF),
+)
 
 /** CompositionLocal 提供当前主题配色。 */
 private val LocalJkColors = androidx.compose.runtime.compositionLocalOf { DarkColors }
@@ -125,8 +146,8 @@ fun JikongPage() {
     val controller = remember { JikongController.instance }
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // 主 Tab：首页 / 实时状态 / 参数设置（对齐官方）
-    var tab by remember { mutableIntStateOf(0) }
+    // 主 Tab：实时状态 / 首页 / 参数设置（定档原型顺序，默认首页）
+    var tab by remember { mutableIntStateOf(1) }
 
     // 扫描结果：从 controller 读进程级暂存（切页不丢失）；扫描中/连接中为页面级瞬态
     var scanning by remember { mutableStateOf(false) }
@@ -255,8 +276,8 @@ fun JikongPage() {
                 // 已连接：底部导航三页（首页 / 实时状态 / 参数设置），对齐官方
                 Column(modifier = Modifier.weight(1f)) {
                     when (tab) {
-                        0 -> HomeView(controller)
-                        1 -> RealtimeView(controller)
+                        0 -> RealtimeView(controller)
+                        1 -> HomeView(controller)
                         2 -> ParamView(controller)
                     }
                 }
@@ -267,31 +288,60 @@ fun JikongPage() {
     }
 }
 
-// ==================== 底部导航栏 ====================
+// ==================== 底部导航栏（定档：图标 + 选中指示条，顺序 实时状态/首页/参数设置） ====================
+// 图标 path 数据与定档 HTML 一致（24×24，stroke=2，fill=none）；参数设置为圆+射线
+private val JkTabs = listOf(
+    Triple("实时状态", "M4 20V10l8-6 8 6v10", false),
+    Triple("首页", "M4 20V10l8-6 8 6v10", false),
+    Triple("参数设置", "M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1", true),
+)
+
 @Composable
 private fun BottomNavBar(selected: Int, onSelect: (Int) -> Unit) {
     val c = LocalJkColors.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(c.card)
-            .padding(vertical = 6.dp),
-    ) {
-        listOf("首页", "实时状态", "参数设置").forEachIndexed { i, label ->
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    label,
-                    fontSize = 13.sp,
-                    fontWeight = if (selected == i) FontWeight.Bold else FontWeight.Normal,
-                    color = if (selected == i) JkGreen else c.gray,
-                )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.tabline))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(c.tabbar)
+                .padding(vertical = 6.dp),
+        ) {
+            JkTabs.forEachIndexed { i, (label, path, withCircle) ->
+                val active = selected == i
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onSelect(i) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    // 选中指示条（26×3 圆角绿条）；未选中用等高占位保持图标对齐
+                    if (active) {
+                        Box(Modifier.width(26.dp).height(3.dp).background(c.green, RoundedCornerShape(2.dp)))
+                        Spacer(Modifier.height(2.dp))
+                    } else {
+                        Spacer(Modifier.height(5.dp))
+                    }
+                    TabIcon(path, withCircle, if (active) c.green else c.gray)
+                    Spacer(Modifier.height(3.dp))
+                    Text(label, fontSize = 11.sp, color = if (active) c.green else c.gray)
+                }
             }
+        }
+    }
+}
+
+/** 24×24 描边小图标（path 数据来自定档 HTML，等比缩放到 22dp）。 */
+@Composable
+private fun TabIcon(pathData: String, withCircle: Boolean, tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val s = size.width / 24f
+        withTransform({ scale(s, s, pivot = Offset.Zero) }) {
+            if (withCircle) {
+                drawCircle(tint, radius = 3f, center = Offset(12f, 12f), style = Stroke(2f))
+            }
+            val p = PathParser().parsePathString(pathData).toPath()
+            drawPath(p, tint, style = Stroke(2f))
         }
     }
 }
@@ -387,6 +437,22 @@ private fun ScanConnectView(
             Text("显示全部蓝牙设备（不按极空过滤）", fontSize = 12.sp, color = c.gray)
         }
         Spacer(Modifier.height(4.dp))
+        // 演示模式：不连保护板，直接灌入示例数据查看界面效果（用于复刻验证）
+        Spacer(Modifier.height(16.dp))
+        androidx.compose.material3.OutlinedButton(
+            onClick = { JikongController.instance.enterDemoMode() },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("进入演示模式（无需连接设备）", fontSize = 14.sp)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "演示模式用一份真实示例数据填充页面，便于在远离设备时核对界面是否复刻官方 APP；连接真实设备后自动退出。",
+            color = c.gray,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+
         // 上次扫描时间提示
         if (lastScanAt > 0 && devices.isNotEmpty()) {
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
@@ -438,7 +504,7 @@ private fun ScanConnectView(
     }
 }
 
-// ==================== 首页（仪表盘，对齐官方 JK BMS） ====================
+// ==================== 首页（定档 ui-mockup-jikong-home.html v14，1:1 复刻） ====================
 @Composable
 private fun HomeView(controller: JikongController) {
     // 订阅版本号：数据变化触发本页重组，实现实时刷新
@@ -449,156 +515,149 @@ private fun HomeView(controller: JikongController) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        // 三模式状态（充电/放电/均衡，竖线分隔，官方样式）
+        // 充电/放电/均衡 一行三列（inline 圆点+文字，定档样式）
         StatusRow(s)
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
 
-        // 中央仪表盘（SOC + 电压电流胶囊 + 刻度）
+        // 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊）
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            SocRing(s.soc, s.totalVoltage, s.current)
+            JkGauge(s.soc, s.totalVoltage, s.current, s.totalVoltage * s.current)
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(4.dp))
 
         // 状态提示条（盾牌图标 + 电池运行良好）
         HealthBanner()
         Spacer(Modifier.height(12.dp))
 
-        // 数据网格一：最高电压 / 最低电压 / 最大压差 / 均衡电流（官方 4 列竖线分隔）
+        // 数据网格一：最高电压 / 最低电压 / 最大压差 / 均衡电流
         QuadGrid(
             listOf(
-                QuadCell("最高电压(V)", fmt(s.maxCellVoltage), JkBlue),
-                QuadCell("最低电压(V)", fmt(s.minCellVoltage), JkRed),
-                QuadCell("最大压差(V)", fmt(s.diffVoltage), JkGreen),
-                QuadCell("均衡电流(A)", fmt(s.balanceCurrent), JkGreen),
+                QuadCell("最高电压(V)", fmt(s.maxCellVoltage), c.blue),
+                QuadCell("最低电压(V)", fmt(s.minCellVoltage), c.red),
+                QuadCell("最大压差(V)", fmt(s.diffVoltage), c.green),
+                QuadCell("均衡电流(A)", fmt(s.balanceCurrent), c.green),
             )
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
 
         // 数据网格二：电池容量 / 剩余容量 / 最高温度 / 电池类型
         QuadGrid(
             listOf(
-                QuadCell("电池容量(Ah)", fmt(s.nominalCapacity), JkGreen),
-                QuadCell("剩余容量(Ah)", fmt(s.remainCapacity), JkGreen),
-                QuadCell("最高温度(℃)", fmt(s.maxTemperature), JkGreen),
-                QuadCell("电池类型", if (s.batteryType.isBlank()) "--" else s.batteryType, JkGreen),
+                QuadCell("电池容量(Ah)", fmt(s.nominalCapacity), c.green),
+                QuadCell("剩余容量(Ah)", fmt(s.remainCapacity), c.green),
+                QuadCell("最高温度(℃)", fmt(s.maxTemperature), c.green),
+                QuadCell("电池类型", if (s.batteryType.isBlank()) "--" else s.batteryType, c.green),
             )
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
 
-        // 电流 / 功率 + 滑动条 + 状态 / 剩余时间
+        // 电流 / 功率 + 双向进度条 + 状态 / 剩余时间
         CurrentPowerCard(s)
         Spacer(Modifier.height(12.dp))
     }
 }
 
-/** 首页三分栏状态行（充电/放电/均衡）。 */
+/** 首页三分栏状态行（充电/放电/均衡，inline 同行样式，定档）。充电/放电按电流方向判断。 */
 @Composable
 private fun StatusRow(s: my.bridge.com.jikong.JikongStatus) {
     val c = LocalJkColors.current
+    // 电流方向：>阈值充电，<阈值放电，否则静止（充放电不可能同时开启）
+    val charging = s.current > 0.1f
+    val discharging = s.current < -0.1f
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(c.card, RoundedCornerShape(10.dp))
-            .padding(vertical = 14.dp),
+            .background(c.card, RoundedCornerShape(8.dp))
+            .padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusCell("充电", s.chargeMosOn, Modifier.weight(1f))
-        DividerV()
-        StatusCell("放电", s.dischargeMosOn, Modifier.weight(1f))
-        DividerV()
-        StatusCell("均衡", s.balanceOn, Modifier.weight(1f))
+        StatusCellInline("充电", charging, Modifier.weight(1f))
+        DividerV(16)
+        StatusCellInline("放电", discharging, Modifier.weight(1f))
+        DividerV(16)
+        StatusCellInline("均衡", s.balanceOn, Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun DividerV() {
+private fun DividerV(height: Int = 16) {
     val c = LocalJkColors.current
     Box(
         modifier = Modifier
             .width(1.dp)
-            .height(22.dp)
+            .height(height.dp)
             .background(c.divider),
     )
 }
 
+/** 定档 inline 状态单元：圆点 + 标签 + 状态同一行居中。 */
 @Composable
-private fun StatusCell(label: String, on: Boolean, modifier: Modifier = Modifier) {
+private fun StatusCellInline(label: String, on: Boolean, modifier: Modifier = Modifier) {
     val c = LocalJkColors.current
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier.size(9.dp).background(if (on) JkGreen else JkRed, CircleShape),
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(label, fontSize = 13.sp, color = c.text)
-        Spacer(Modifier.height(2.dp))
-        Text(
-            if (on) "开启" else "关闭",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (on) JkGreen else JkRed,
-        )
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).background(if (on) c.green else c.red, CircleShape))
+        Spacer(Modifier.width(5.dp))
+        Text(label, fontSize = 14.sp, color = c.text)
+        Spacer(Modifier.width(5.dp))
+        Text(if (on) "开启" else "关闭", fontSize = 14.sp, color = if (on) c.green else c.red)
     }
 }
 
-/** 盾牌状态横幅（电池运行良好）。 */
+/** 状态横幅（绿色圆角方块 + 白色对勾 + 电池运行良好，定档样式）。 */
 @Composable
 private fun HealthBanner() {
     val c = LocalJkColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF1B2A2A), RoundedCornerShape(10.dp))
-            .padding(horizontal = 16.dp, vertical = 13.dp),
+            .background(c.card, RoundedCornerShape(8.dp))
+            .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 盾牌图标（含对勾）
+        // 18dp 绿色圆角方块内画白色对勾（定档 SVG：M5 12l5 5L19 7）
         Box(
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(18.dp).background(c.green, RoundedCornerShape(4.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(Modifier.size(18.dp)) {
-                // 简化盾牌形状
-                drawPath(
-                    path = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(size.width * 0.5f, size.height * 0.08f)
-                        lineTo(size.width * 0.92f, size.height * 0.22f)
-                        lineTo(size.width * 0.92f, size.height * 0.55f)
-                        quadraticBezierTo(size.width * 0.92f, size.height * 0.8f, size.width * 0.5f, size.height * 0.95f)
-                        quadraticBezierTo(size.width * 0.08f, size.height * 0.8f, size.width * 0.08f, size.height * 0.55f)
-                        lineTo(size.width * 0.08f, size.height * 0.22f)
-                        close()
-                    },
-                    color = JkGreen,
-                )
+            Canvas(Modifier.size(14.dp)) {
+                val sc = size.width / 24f
+                withTransform({ scale(sc, sc, pivot = Offset.Zero) }) {
+                    val p = PathParser().parsePathString("M5 12l5 5L19 7").toPath()
+                    drawPath(p, Color.White, style = Stroke(3f, cap = StrokeCap.Round))
+                }
             }
         }
-        Spacer(Modifier.width(10.dp))
-        Text("电池运行良好", color = Color(0xFFE8F5EC), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.width(8.dp))
+        Text("电池运行良好", color = c.text, fontSize = 14.sp)
     }
 }
 
-/** 官方四列网格卡片（竖线分隔）。 */
+/** 定档四列网格卡片（17sp 数值 + 11sp 标签 + 60% 高竖线分隔）。 */
 @Composable
 private fun QuadGrid(cells: List<QuadCell>) {
     val c = LocalJkColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(c.card, RoundedCornerShape(10.dp))
-            .padding(vertical = 14.dp),
+            .background(c.card, RoundedCornerShape(8.dp))
+            .padding(vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         cells.forEachIndexed { i, cell ->
-            if (i > 0) DividerV()
+            if (i > 0) Box(Modifier.width(1.dp).height(30.dp).background(c.divider))
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(cell.value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = cell.accent)
-                Spacer(Modifier.height(4.dp))
-                Text(cell.label, fontSize = 10.sp, color = c.gray, textAlign = TextAlign.Center)
+                Text(cell.value, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = cell.accent)
+                Spacer(Modifier.height(5.dp))
+                Text(cell.label, fontSize = 11.sp, color = c.gray, textAlign = TextAlign.Center)
             }
         }
     }
@@ -606,124 +665,247 @@ private fun QuadGrid(cells: List<QuadCell>) {
 
 private data class QuadCell(val label: String, val value: String, val accent: Color)
 
+/**
+ * 定档仪表盘（ui-mockup-jikong-home.html v14 1:1 复刻）：
+ * 300° 主弧缺口朝下（圆心 160,160 / R=126 / 线宽 14，viewBox 320 坐标系），
+ * 灰色全弧轨道 + 渐变进度弧（位置渐变，同 SVG userSpaceOnUse），
+ * 内圈 0~100 三级刻度带（逢10: 16px/2.2，逢5: 12px/1.7，其余 8px/1.1），
+ * 外围刻度数字（逢5标注：逢10 大号 numA 加粗，其余 numB），无任何发光特效。
+ */
 @Composable
-private fun SocRing(soc: Int, voltage: Float, current: Float) {
+private fun JkGauge(soc: Int, voltage: Float, current: Float, power: Float) {
     val c = LocalJkColors.current
     Box(contentAlignment = Alignment.Center) {
-        Canvas(modifier = Modifier.size(210.dp)) {
-            val stroke = 20.dp.toPx()
-            val arcSize = Size(size.width - stroke, size.height - stroke)
-            val topLeft = Offset(stroke / 2, stroke / 2)
-            // 背景环（深灰）
+        Canvas(modifier = Modifier.fillMaxWidth(0.885f).aspectRatio(1f)) {
+            val scale = size.width / 320f
+            val cx = 160f * scale
+            val cy = 160f * scale
+            val R = 126f * scale
+            val sw = 14f * scale
+            val topLeft = Offset(cx - R, cy - R)
+            val arcSize = Size(2 * R, 2 * R)
+
+            // 灰色轨道（全弧 300°，起点 120° → 缺口朝下，butt 端帽）
             drawArc(
-                color = c.divider,
-                startAngle = 135f,
-                sweepAngle = 270f,
-                useCenter = false,
-                topLeft = topLeft,
-                size = arcSize,
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
+                color = c.track,
+                startAngle = 120f, sweepAngle = 300f, useCenter = false,
+                topLeft = topLeft, size = arcSize,
+                style = Stroke(width = sw, cap = StrokeCap.Butt),
             )
-            // 前景环（绿→青渐变）
-            val sweep = 270f * (soc.coerceIn(0, 100) / 100f)
-            drawArc(
-                brush = androidx.compose.ui.graphics.Brush.sweepGradient(
-                    0f to JkGreen,
-                    1f to Color(0xFF00D4FF),
-                ),
-                startAngle = 135f,
-                sweepAngle = sweep,
-                useCenter = false,
-                topLeft = topLeft,
-                size = arcSize,
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
-            )
+            // 渐变进度弧：位置渐变（左缘 g1 → 中 g2 → 右缘 g3），只画 soc 比例段
+            val sweep = 300f * (soc.coerceIn(0, 100) / 100f)
+            if (sweep > 0f) {
+                val brush = Brush.horizontalGradient(
+                    0f to c.g1, 0.5f to c.g2, 1f to c.g3,
+                    startX = cx - R, endX = cx + R,
+                )
+                drawArc(
+                    brush = brush,
+                    startAngle = 120f, sweepAngle = sweep, useCenter = false,
+                    topLeft = topLeft, size = arcSize,
+                    style = Stroke(width = sw, cap = StrokeCap.Butt),
+                )
+            }
+
+            // 内圈刻度带：外端 rOut=113（viewBox 单位），绿描边圆帽
+            val rOut = 113f * scale
+            for (i in 0..100) {
+                val rad = Math.toRadians(120.0 + 3.0 * i)
+                val cosA = kotlin.math.cos(rad).toFloat()
+                val sinA = kotlin.math.sin(rad).toFloat()
+                val (lenU, wU) = when {
+                    i % 10 == 0 -> 16f to 2.2f
+                    i % 5 == 0 -> 12f to 1.7f
+                    else -> 8f to 1.1f
+                }
+                val rIn = (113f - lenU) * scale
+                drawLine(
+                    color = c.green,
+                    start = Offset(cx + rOut * cosA, cy + rOut * sinA),
+                    end = Offset(cx + rIn * cosA, cy + rIn * sinA),
+                    strokeWidth = wU * scale,
+                    cap = StrokeCap.Round,
+                )
+            }
+
+            // 外围刻度数字：r=144，逢5标注；逢10 → numA 11px 加粗，其余 numB 9px
+            drawIntoCanvas { canvas ->
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                paint.textAlign = android.graphics.Paint.Align.CENTER
+                val nr = 144f * scale
+                for (i in 0..100 step 5) {
+                    val major = i % 10 == 0
+                    val rad = Math.toRadians(120.0 + 3.0 * i)
+                    val nx = cx + nr * kotlin.math.cos(rad).toFloat()
+                    val ny = cy + nr * kotlin.math.sin(rad).toFloat() + (if (major) 3.5f else 3f) * scale
+                    paint.textSize = (if (major) 11f else 9f) * scale
+                    paint.isFakeBoldText = major
+                    paint.color = (if (major) c.numA else c.numB).toArgb()
+                    canvas.nativeCanvas.drawText(i.toString(), nx, ny, paint)
+                }
+            }
         }
+        // 中央内容：SOC（%同大小）+ 描边胶囊（电压/电流）+ 实心胶囊（功率）
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("$soc", fontSize = 60.sp, fontWeight = FontWeight.Bold, color = JkGreen)
-            Text("%", fontSize = 18.sp, color = JkGreen)
-            Spacer(Modifier.height(10.dp))
-            // 电压电流圆角胶囊
+            Text(
+                "$soc%",
+                fontSize = 58.sp,
+                fontWeight = FontWeight.Bold,
+                color = c.green,
+                letterSpacing = (-1).sp,
+            )
+            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     fmt(voltage) + "V",
-                    fontSize = 13.sp,
-                    color = c.text,
+                    fontSize = 15.sp,
+                    color = c.green,
                     modifier = Modifier
-                        .background(c.card, RoundedCornerShape(20.dp))
-                        .border(1.dp, JkGreen, RoundedCornerShape(20.dp))
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                        .border(1.dp, c.green, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
                 )
                 Text(
                     fmt(current) + "A",
-                    fontSize = 13.sp,
-                    color = c.text,
+                    fontSize = 15.sp,
+                    color = c.green,
                     modifier = Modifier
-                        .background(c.card, RoundedCornerShape(20.dp))
-                        .border(1.dp, JkGreen, RoundedCornerShape(20.dp))
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                        .border(1.dp, c.green, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
                 )
             }
+            Spacer(Modifier.height(9.dp))
+            Text(
+                fmt(power) + "W",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = c.onfill,
+                modifier = Modifier
+                    .background(c.green, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 13.dp, vertical = 6.dp),
+            )
         }
     }
 }
 
-/** 电流/功率卡片（含滑动条 + 状态 + 剩余时间）。 */
+/** 电流/功率卡片（定档：同行基线标注 + 中点 0 双向进度条 + 状态/剩余时间）。 */
 @Composable
 private fun CurrentPowerCard(s: my.bridge.com.jikong.JikongStatus) {
     val c = LocalJkColors.current
-    Card(colors = CardDefaults.cardColors(containerColor = c.card)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            // 电流 + 功率
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("电流(A)", fontSize = 12.sp, color = c.gray)
-                    Spacer(Modifier.height(3.dp))
-                    Text(fmt(s.current), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = JkGreen)
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("功率(W)", fontSize = 12.sp, color = c.gray)
-                    Spacer(Modifier.height(3.dp))
-                    Text(fmt(s.power), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = JkGreen)
-                }
-            }
-            Spacer(Modifier.height(14.dp))
-            // 水平滑动条（电流指示）
-            val ratio = (s.current.coerceIn(-100f, 100f) / 100f).let { (it + 1f) / 2f }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .background(c.divider, RoundedCornerShape(4.dp)),
-            ) {
+    // 功率现场算：总电压 × 电流，保证与顶部仪表盘电流同源同帧，杜绝滞后。
+    val power = s.totalVoltage * s.current
+    // 剩余时间本地计算（保护板不提供）：充电=(标称-剩余)/电流，放电=剩余/电流，单位小时
+    val remainSeconds = localRemainTime(s)
+    val charging = s.current > 0.1f
+    val discharging = s.current < -0.1f
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(c.card, RoundedCornerShape(8.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        // 电流(A) x.xx   功率(W) xxx.x（同行基线对齐，定档样式）
+        Row {
+            Text("电流(A)", fontSize = 13.sp, color = c.gray, modifier = Modifier.alignByBaseline())
+            Spacer(Modifier.width(6.dp))
+            Text(fmt(s.current), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = c.green, modifier = Modifier.alignByBaseline())
+            Spacer(Modifier.width(22.dp))
+            Text("功率(W)", fontSize = 13.sp, color = c.gray, modifier = Modifier.alignByBaseline())
+            Spacer(Modifier.width(6.dp))
+            Text(fmt(power), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = c.green, modifier = Modifier.alignByBaseline())
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // 端点标注：左充电 / 中0 / 右放电（0 点数字亮白加粗）
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("充电", fontSize = 10.sp, color = c.gray)
+            Text("0", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = c.text)
+            Text("放电", fontSize = 10.sp, color = c.gray)
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // 双向进度条：中点=0，左半充电（绿→青渐变，向左）、右半放电（红，向右），
+        // 半程 = 满量程（充电用参数充电限流、放电用放电限流）；0 点亮白加高刻度
+        val maxCharge = if (s.chargeCurrentLimit > 0f) s.chargeCurrentLimit else 50f
+        val maxDischarge = if (s.dischargeCurrentLimit > 0f) s.dischargeCurrentLimit else 100f
+        val chargeFrac = if (charging) (s.current / maxCharge).coerceIn(0f, 1f) else 0f
+        val dischFrac = if (discharging) (-s.current / maxDischarge).coerceIn(0f, 1f) else 0f
+        Box(modifier = Modifier.fillMaxWidth().height(7.dp)) {
+            Box(Modifier.matchParentSize().background(c.track, RoundedCornerShape(3.5.dp)))
+            // 充电填充：右端固定在中点，宽度 = 电流/充电限流（占左半）
+            Box(Modifier.align(Alignment.CenterEnd).fillMaxWidth(0.5f).fillMaxHeight()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(ratio.coerceIn(0f, 1f))
-                        .height(8.dp)
-                        .background(JkBlue, RoundedCornerShape(4.dp)),
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .fillMaxWidth(chargeFrac)
+                        .background(
+                            Brush.horizontalGradient(0f to c.cyan, 1f to c.green),
+                            RoundedCornerShape(3.5.dp, 0.dp, 0.dp, 3.5.dp),
+                        ),
                 )
             }
-            Spacer(Modifier.height(14.dp))
-            // 状态 + 剩余时间
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("状态：", fontSize = 13.sp, color = c.gray)
-                Text(
-                    if (s.current > 0.1f) "充电" else if (s.current < -0.1f) "放电" else "静止",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = JkGreen,
-                )
-                Spacer(Modifier.weight(1f))
-                Text("剩余时间：", fontSize = 13.sp, color = c.gray)
-                Text(
-                    if (s.remainTimeSeconds > 0) formatDuration(s.remainTimeSeconds) else "--",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = JkGreen,
+            // 放电填充：左端固定在中点，宽度 = |电流|/放电限流（占右半）
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(0.5f).fillMaxHeight()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .fillMaxWidth(dischFrac)
+                        .background(c.red, RoundedCornerShape(0.dp, 3.5.dp, 3.5.dp, 0.dp)),
                 )
             }
+            // 0 点刻度：4×17dp 亮白，上下各探出 5dp
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = -(2.dp))
+                    .size(width = 4.dp, height = 17.dp)
+                    .background(c.text, RoundedCornerShape(2.dp)),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+
+        // 状态 + 剩余时间（充电→「满 时:分:秒」，放电→「空 时:分:秒」）
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("状态:", fontSize = 13.sp, color = c.gray)
+            Spacer(Modifier.width(2.dp))
+            Text(
+                if (charging) "充电" else if (discharging) "放电" else "静止",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.green,
+            )
+            Spacer(Modifier.weight(1f))
+            Text("剩余时间:", fontSize = 13.sp, color = c.gray)
+            Spacer(Modifier.width(2.dp))
+            Text(
+                if (remainSeconds > 0) (if (charging) "满 " else "空 ") + formatDuration(remainSeconds) else "--",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.green,
+            )
         }
     }
+}
+
+/** 本地计算剩余时间（秒）：充电=(标称-剩余)/电流，放电=剩余/|电流|；静止或电流过小返回 0。 */
+private fun localRemainTime(s: my.bridge.com.jikong.JikongStatus): Int {
+    val cur = s.current
+    if (kotlin.math.abs(cur) < 0.05f) return 0 // 静止/电流过小，无法估算
+    val ah = if (cur > 0) {
+        // 充电：还需充入的容量
+        (s.nominalCapacity - s.remainCapacity).coerceAtLeast(0f)
+    } else {
+        // 放电：剩余容量
+        s.remainCapacity.coerceAtLeast(0f)
+    }
+    if (ah <= 0f) return 0
+    val hours = ah / kotlin.math.abs(cur)
+    return (hours * 3600).toInt()
 }
 
 private fun formatDuration(seconds: Int): String {
@@ -759,7 +941,7 @@ private fun RealtimeView(controller: JikongController) {
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 // 左列
                 Column(modifier = Modifier.weight(1f)) {
-                    DetailRow("电池功率", fmt(s.power) + "W")
+                    DetailRow("电池功率", fmt(s.totalVoltage * s.current) + "W")
                     DetailRow("电池容量", fmt(s.nominalCapacity) + "Ah")
                     DetailRow("剩余容量", fmt(s.remainCapacity) + "Ah")
                     DetailRow("功率温度", if (s.temperatures.isNotEmpty()) fmt(s.temperatures[0]) + "℃" else "--")
@@ -850,7 +1032,6 @@ private fun CellGrid(values: List<Float>, total: Int) {
                 for (i in rowStart until (rowStart + 3).coerceAtMost(total)) {
                     val has = i < values.size
                     val v = if (has) values[i] else 0f
-                    val isExtreme = has && (i == maxIdx || i == minIdx)
                     val num = String.format("%02d", i + 1)
                     Column(
                         modifier = Modifier
@@ -870,11 +1051,17 @@ private fun CellGrid(values: List<Float>, total: Int) {
                         }
                         Spacer(Modifier.height(5.dp))
                         if (has) {
+                            // 最高电压=红色、最低电压=蓝色，两种颜色区分（不能都是红色）
+                            val color = when (i) {
+                                maxIdx -> JkRed
+                                minIdx -> JkBlue
+                                else -> c.text
+                            }
                             Text(
                                 "%.3f".format(v),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (isExtreme) JkRed else c.text,
+                                color = color,
                             )
                         } else {
                             Text("--", fontSize = 14.sp, color = c.gray)

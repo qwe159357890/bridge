@@ -112,6 +112,9 @@ class JikongController private constructor() {
                     s.cellVoltages = emptyList(); s.temperatures = emptyList()
                 }
                 reportStatus()
+                // 连接状态变化也要触发 UI 重组（否则断开后界面仍停留「已连接」，
+                // 表现为「点断开没反应」——其实已断开，只是没刷新）。
+                statusVersion.value = statusVersion.value + 1
                 Timber.tag(TAG).i("连接状态变化：connected=$connected")
             } catch (e: Exception) {
                 Timber.w(e, "连接状态回调异常（已忽略）")
@@ -134,6 +137,84 @@ class JikongController private constructor() {
     fun disconnect() {
         stopPolling()
         JikongBleClient.disconnect()
+    }
+
+    /**
+     * 进入「演示模式」：不连接保护板，直接灌入一份真实示例数据（真机 v0.2.59 实测值），
+     * 并把 connected 置为 true，让用户无需靠近设备即可查看/验证三页 UI 是否复刻官方 APP。
+     * 再次调用 disconnect() 或真机连接后即退出演示。
+     */
+    fun enterDemoMode() {
+        stopPolling()
+        val s = status
+        s.connected = true
+        s.deviceName = "演示设备 JK-BD6A24S8PD"
+        s.deviceAddress = "AA:BB:CC:DD:EE:FF"
+        s.model = "JK-BD6A24S8PD"
+        s.hardwareVersion = "11.XW"
+        s.softwareVersion = "11.28"
+
+        // 总览
+        s.totalVoltage = 67.5f
+        s.current = 7.8f            // 充电
+        s.power = s.totalVoltage * s.current
+        s.soc = 72
+        s.nominalCapacity = 100f    // 标称 100Ah
+        s.remainCapacity = 72f
+
+        // 单体：20 串真实（3.37x 附近微差），最高/最低动态可辨
+        val volts = floatArrayOf(
+            3.377f, 3.376f, 3.375f, 3.378f, 3.376f, 3.375f, 3.377f, 3.376f,
+            3.375f, 3.374f, 3.376f, 3.377f, 3.375f, 3.376f, 3.374f, 3.378f,
+            3.376f, 3.375f, 3.377f, 3.376f,
+        ).toList()
+        s.cellCount = volts.size
+        s.cellVoltages = volts
+        s.avgCellVoltage = volts.average().toFloat()
+        s.maxCellVoltage = volts.max()
+        s.minCellVoltage = volts.min()
+        s.maxCellIndex = volts.indexOf(s.maxCellVoltage)
+        s.minCellIndex = volts.indexOf(s.minCellVoltage)
+        s.diffVoltage = s.maxCellVoltage - s.minCellVoltage
+
+        // 内阻：20 串
+        s.cellResistances = List(20) { 0.34f }
+
+        // 温度
+        s.temperatures = listOf(28.5f, 29.0f, 28.8f)
+        s.tempCount = 3
+        s.maxTemperature = s.temperatures.max()
+        s.minTemperature = s.temperatures.min()
+        s.tempDiff = s.maxTemperature - s.minTemperature
+
+        // MOS / 均衡
+        s.chargeMosOn = true
+        s.dischargeMosOn = true
+        s.balanceOn = false
+        s.balanceCurrent = 0f
+
+        // 设备信息 / 扩展字段
+        s.cycleCount = 10
+        s.chargeCount = 12
+        s.soh = 98
+        s.batteryType = "铁锂"
+        s.cycleCapacity = 812.5f
+        s.heaterOn = false
+        s.heaterCurrent = 0f
+        s.chargerState = "插入"
+        s.remainTimeSeconds = 4 * 3600 + 22 * 60 + 18   // 4:22:18
+
+        // 参数（参数设置页展示）
+        s.cellFullVoltage = 3.65f
+        s.cellEmptyVoltage = 2.60f
+        s.chargeOverTemp = 55f
+        s.dischargeOverTemp = 60f
+        s.chargeCurrentLimit = 50f
+        s.dischargeCurrentLimit = 100f
+
+        s.lastUpdateAt = System.currentTimeMillis()
+        statusVersion.value = statusVersion.value + 1
+        Timber.tag(TAG).i("进入演示模式（未连接保护板）")
     }
 
     fun setPageVisible(visible: Boolean) {
@@ -159,7 +240,7 @@ class JikongController private constructor() {
             // → 发 0x96（读单体）触发 0x01+0x03+0x02 burst，之后 BMS 持续流式推 0x02。
             // 关键：0x97 与 0x96 之间必须有间隔，否则背靠背连发会命令冲突，
             // BMS 只循环回 0x01+0x03，永不进入 0x02 数据流（v0.2.58 实测正是此现象）。
-            delay(500)
+            // 首帧 0x97 立即下发（连接成功后立刻拉取，不再空等 500ms），仅保留命令间隔。
             runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
             delay(500)
             runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
@@ -283,10 +364,9 @@ class JikongController private constructor() {
      *
      * 关键偏移（字节下标从 0 起，均已真机验证）：
      *   6+i*2   单体电压（u16 ×0.001V，遇到 0 截止）
-     *   74      平均电压（u16 ×0.001V）
-     *   76      压差（u16 ×0.001V）
-     *   80+i*2  内阻（u16 ×0.001mΩ）
-     *   144     MOS 温度（i16 ×0.1℃）
+     *   74      （注：此偏移为 24S 老固件，32S 布局下平均电压在 90，见下方）
+     *   96+i*2  内阻（u16 ×0.001Ω，32S 布局 = 64+32+i*2）
+     *   144     MOS 温度（i16 ×0.1℃，32S = 112+32）
      *   150     总电压（u32 ×0.001V）
      *   158     电流（i32 ×0.001A，正=充电）
      *   162     电池温度1（i16 ×0.1℃）
@@ -297,9 +377,19 @@ class JikongController private constructor() {
      *   174     剩余容量（u32 ×0.001Ah）
      *   178     标称容量（u32 ×0.001Ah）
      *   182     循环次数（u32）
+     *   186     循环容量（u32 ×0.001Ah）
      *   190     SOH（u8 %）
      *   198     充电 MOS（u8，>0=on）
      *   199     放电 MOS（u8，>0=on）
+     *   215     加热状态（u8，>0=开）
+     *   218     应急时间/剩余时间（u16，秒）
+     *   236     加热电流（i16 ×0.001A）
+     *   245     充电器状态（u8，>0=已插入）
+     *   275     电池类型（u8，0=铁锂/1=三元/2=钛酸锂）
+     *
+     * 以上为 JK02_32S 布局（offset=32）绝对偏移，来源 syssi/esphome-jk-bms 源码
+     * jk_bms_ble.cpp（`jk_get_32bit(154+offset)` 等）+ fl4p/batmon-ha bmslib/models/jikong.py
+     * 交叉验证一致。注：24S 老固件需 -32，本项目设备为 32S 布局。
      */
     private fun parseDataFrame(s: JikongStatus, d: ByteArray) {
         // 单体电压：offset 6，每串 2B LE，×0.001V。串数=遇到 0 截止，最多 32 串。
@@ -316,16 +406,20 @@ class JikongController private constructor() {
         s.cellCount = cells.size
         s.cellVoltages = cells
 
-        // 内阻：offset 80 + i*2，每串 2B LE，×0.001Ω（毫欧转欧姆）
+        // 内阻：offset 64+32 + i*2 = 96 + i*2，每串 2B LE，×0.001Ω（毫欧转欧姆）。
+        // 权威来源 syssi/esphome-jk-bms jk_bms_ble.cpp: `jk_get_16bit(i*2 + 64 + offset)`，
+        // 32S 布局 offset=32 ⇒ 96+i*2（v0.2.62 曾误写 80+i*2，读错偏移）。
         for (i in 0 until cells.size) {
-            val off = 80 + i * 2
+            val off = 96 + i * 2
             if (off + 1 >= d.size) break
             resistances.add(readU16(d, off) * 0.001f)
         }
         s.cellResistances = resistances
 
-        // 单体平均电压：offset 74-75，u16 LE，×0.001V
-        if (d.size >= 76) s.avgCellVoltage = readU16(d, 74) * 0.001f
+        // 单体平均电压：offset 58+32=90，u16 LE，×0.001V（32S 布局）。
+        // 注：syssi 源码注释称 58+offset，但实际用 recompute 求平均；此处两种方式等价，
+        // 直接读协议字段更稳（避免遇 0 截止误差）。v0.2.62 曾误写 74，已纠正为 90。
+        if (d.size >= 92) s.avgCellVoltage = readU16(d, 90) * 0.001f
 
         // 总电压：offset 150-153，uint32 LE，×0.001V
         if (d.size >= 154) s.totalVoltage = readU32(d, 150) * 0.001f
@@ -355,8 +449,34 @@ class JikongController private constructor() {
         // 循环次数：offset 182-185，uint32 LE
         if (d.size >= 186) s.cycleCount = readU32(d, 182).toInt()
 
+        // 循环容量：offset 186-189，uint32 LE，×0.001Ah
+        // （syssi/esphome-jk-bms + fl4p/batmon-ha 均确认：32S 布局 total_charge_throughput @186）
+        if (d.size >= 190) s.cycleCapacity = readU32(d, 186) * 0.001f
+
         // SOH：offset 190
         if (d.size >= 191) s.soh = d[190].toInt() and 0xFF
+
+        // 加热状态：offset 215（0=关，1=开）
+        if (d.size >= 216) s.heaterOn = (d[215].toInt() and 0xFF) > 0
+
+        // 应急时间（剩余时间）：offset 218-219，uint16 LE，单位秒
+        if (d.size >= 220) s.remainTimeSeconds = readU16(d, 218)
+
+        // 加热电流：offset 236-237，i16 LE，×0.001A
+        if (d.size >= 238) s.heaterCurrent = readI16(d, 236) / 1000f
+
+        // 充电器状态：offset 245（0=未插入，1=已插入）
+        if (d.size >= 246) s.chargerState = if ((d[245].toInt() and 0xFF) > 0) "插入" else "未插入"
+
+        // 电池类型：offset 275（243+32），0=LFP(铁锂)、1=Li-ion(三元)、2=LTO(钛酸锂)
+        if (d.size >= 276) {
+            s.batteryType = when (d[275].toInt() and 0xFF) {
+                0 -> "铁锂"
+                1 -> "三元"
+                2 -> "钛酸锂"
+                else -> ""
+            }
+        }
 
         // 均衡电流：offset 170-171，i16 LE，×0.001A
         if (d.size >= 172) s.balanceCurrent = readI16(d, 170) / 1000f

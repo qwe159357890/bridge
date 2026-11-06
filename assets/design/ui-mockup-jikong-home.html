@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>极空首页原型</title>
+<style>
+  :root {
+    --bg: #000000;
+    --card: #26282b;
+    --green: #00e050;
+    --cyan: #00b8d4;
+    --red: #e5484d;
+    --blue: #4d8bf5;
+    --white: #e8eaed;
+    --gray: #8a919f;
+    --divider: #33363a;
+    --track: #3a3d40;
+    --tabbar: #1a1c1f;
+    --tabline: #222;
+    --outer: #111;
+    --g1: #00e050; --g2: #00c8a0; --g3: #00a8e8;
+    --numA: #c8ced6; --numB: #6b727c;
+    --onfill: #06210e;   /* 实心胶囊上的文字色（深色主题） */
+    /* 已移除全部发光特效（光晕/辉光/模糊），节省渲染资源且不晃眼 */
+  }
+  /* ===== 浅色主题 ===== */
+  body.light {
+    --bg: #eef1f5;
+    --card: #ffffff;
+    --green: #00a344;
+    --cyan: #0097b8;
+    --red: #d93036;
+    --blue: #2f6fd8;
+    --white: #17191d;
+    --gray: #5d6672;
+    --divider: #dfe3e8;
+    --track: #d7dbe1;
+    --tabbar: #ffffff;
+    --tabline: #e3e6ea;
+    --outer: #c9ced6;
+    --g1: #00b050; --g2: #00a8a0; --g3: #0a84d0;
+    --numA: #2a2f36; --numB: #9aa2ad;
+    --onfill: #ffffff;   /* 实心胶囊上的文字色（浅色主题） */
+    --tshadow: none;
+    --pshadow: none;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--outer); height: 100%; }
+  body {
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 0;
+  }
+  /* 主题切换按钮（预览用，不入 APP） */
+  .theme-btn {
+    position: fixed; top: 10px; right: 12px; z-index: 9;
+    background: var(--card); color: var(--white);
+    border: 1px solid var(--divider); border-radius: 8px;
+    padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+
+  .phone {
+    width: 390px;
+    height: 844px;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .scroll::-webkit-scrollbar { display: none; }
+
+  /* ========== 充电/放电/均衡 一行三列 ========== */
+  .statusrow {
+    display: flex;
+    align-items: center;
+    background: var(--card);
+    border-radius: 8px;
+    padding: 9px 0;
+    margin-bottom: 12px;
+  }
+  .statusrow .cell {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+  }
+  .statusrow .sep {
+    width: 1px; height: 16px;
+    background: var(--divider);
+  }
+  .statusrow .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.on  { background: var(--green); }
+  .dot.off { background: var(--red); }
+  .statusrow .lbl { color: var(--white); font-size: 14px; }
+  .statusrow .st  { font-size: 14px; }
+  .st.on  { color: var(--green); }
+  .st.off { color: var(--red); }
+
+  /* ========== 仪表盘 ========== */
+  .gauge-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .gauge {
+    position: relative;
+    width: 320px;
+    height: 320px;
+  }
+  .gauge svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .gauge-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    line-height: 1;
+  }
+  .gauge-center .soc {
+    font-size: 58px;
+    font-weight: 700;
+    color: var(--green);
+    letter-spacing: -1px;
+  }
+  .gauge-center .soc .pct {
+    font-size: 58px;
+    font-weight: 700;
+    margin-left: 2px;
+  }
+  .pill-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    justify-content: center;
+  }
+  /* 三个胶囊：电压/电流=描边样式；功率=实心填充样式（突出 V×A 结果值） */
+  .pill {
+    display: inline-block;
+    border: 1px solid var(--green);
+    color: var(--green);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 15px;
+    letter-spacing: .5px;
+    white-space: nowrap;
+  }
+  .pill-fill {
+    display: inline-block;
+    background: var(--green);
+    color: var(--onfill);
+    border-radius: 8px;
+    padding: 6px 13px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: .5px;
+    white-space: nowrap;
+  }
+  .power-row {
+    margin-top: 9px;
+    text-align: center;
+  }
+
+  /* ========== 电池运行良好 提示条 ========== */
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--card);
+    border-radius: 8px;
+    padding: 7px 14px;
+    margin-bottom: 12px;
+  }
+  .banner .shield {
+    width: 18px; height: 18px;
+    background: var(--green);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    flex: none;
+  }
+  .banner .txt { color: var(--white); font-size: 14px; }
+
+  /* ========== 数据卡 4列网格 x2 ========== */
+  .grid {
+    display: flex;
+    background: var(--card);
+    border-radius: 8px;
+    margin-bottom: 10px;
+  }
+  .grid .cell {
+    flex: 1;
+    text-align: center;
+    padding: 11px 4px;
+    position: relative;
+  }
+  .grid .cell + .cell::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 1px; height: 60%;
+    background: var(--divider);
+  }
+  .grid .val {
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+  .grid .lbl { color: var(--gray); font-size: 11px; margin-top: 5px; }
+  .v-blue  { color: var(--blue); }
+  .v-red   { color: var(--red); }
+  .v-green { color: var(--green); }
+
+  /* ========== 电流/功率卡 ========== */
+  .pwcard {
+    background: var(--card);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .pwcard .top {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    margin-bottom: 10px;
+  }
+  .pwcard .item {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 14px;
+  }
+  .pwcard .item .label { color: var(--gray); font-size: 13px; }
+  .pwcard .item .v {
+    color: var(--green);
+    font-size: 16px;
+    font-weight: 700;
+  }
+  /* 中点原点双向进度条：左半=充电(绿)、右半=放电(红)，0 点明显标记 */
+  .pwcard .bar {
+    position: relative;
+    height: 7px;
+    background: var(--track);
+    border-radius: 3.5px;
+    margin-bottom: 6px;
+    overflow: visible;
+  }
+  .pwcard .bar .center { /* 0 点刻度：再次加强——加宽加高、亮白、正中 */
+    position: absolute; left: 50%; top: -5px;
+    width: 4px; height: 17px;
+    background: var(--white);
+    border-radius: 2px;
+    transform: translateX(-50%);
+    z-index: 2;
+  }
+  .pwcard .bar .fill-c { /* 充电：从中点向左，宽度 = current/最大充电电流 × 50% */
+    position: absolute;
+    right: 50%; top: 0; height: 100%;
+    border-radius: 3.5px 0 0 3.5px;
+    background: linear-gradient(270deg, var(--green), var(--cyan));
+  }
+  .pwcard .bar .fill-d { /* 放电：从中点向右，宽度 = |current|/最大放电电流 × 50% */
+    position: absolute;
+    left: 50%; top: 0; height: 100%;
+    border-radius: 0 3.5px 3.5px 0;
+    background: var(--red);
+  }
+  .pwcard .bar-ends { /* 端点标注：左充电 / 中0 / 右放电 */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    color: var(--gray);
+    margin-bottom: 8px;
+  }
+  .pwcard .bar-ends .zero-num { /* 0 点数字标注：与刻度对齐、亮白突出 */
+    color: var(--white);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .pwcard .bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+  }
+  .pwcard .bottom .lbl { color: var(--gray); }
+  .pwcard .bottom .st { color: var(--green); font-weight: 600; }
+  .pwcard .bottom .rt { color: var(--green); font-weight: 600; }
+
+  /* ========== 底部导航 ========== */
+  .tabbar {
+    flex: none;
+    display: flex;
+    background: var(--tabbar);
+    border-top: 1px solid var(--tabline);
+    padding: 8px 0 6px;
+  }
+  .tabbar .tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    color: var(--gray);
+    font-size: 11px;
+  }
+  .tabbar .tab.active { color: var(--green); }
+  .tabbar .tab .ico { width: 22px; height: 22px; }
+  .tabbar .tab.active .bar-ind {
+    width: 26px; height: 3px;
+    background: var(--green);
+    border-radius: 2px;
+    margin-bottom: 2px;
+  }
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="document.body.classList.toggle('light');this.textContent=document.body.classList.contains('light')?'切换深色':'切换浅色'">切换浅色</button>
+<div class="phone">
+  <div class="scroll">
+    <!-- 充电/放电/均衡 一行 -->
+    <div class="statusrow">
+      <div class="cell">
+        <span class="dot on"></span><span class="lbl">充电</span><span class="st on">开启</span>
+      </div>
+      <div class="sep"></div>
+      <div class="cell">
+        <span class="dot off"></span><span class="lbl">放电</span><span class="st off">关闭</span>
+      </div>
+      <div class="sep"></div>
+      <div class="cell">
+        <span class="dot off"></span><span class="lbl">均衡</span><span class="st off">关闭</span>
+      </div>
+    </div>
+
+    <!-- 仪表盘 -->
+    <div class="gauge-wrap">
+      <div class="gauge">
+        <svg viewBox="0 0 320 320">
+          <defs>
+            <linearGradient id="grad" gradientUnits="userSpaceOnUse" x1="34" y1="160" x2="286" y2="160">
+              <stop offset="0%" style="stop-color:var(--g1)"/>
+              <stop offset="50%" style="stop-color:var(--g2)"/>
+              <stop offset="100%" style="stop-color:var(--g3)"/>
+            </linearGradient>
+          </defs>
+
+          <!-- 灰色轨道（全弧 300°） -->
+          <path d="M 97 269.1 A 126 126 0 1 1 223 269.1" fill="none" style="stroke:var(--track)"
+                stroke-width="14" stroke-linecap="butt"/>
+
+          <!-- 渐变进度弧：72%，剩余灰色（无特效，纯描边） -->
+          <path d="M 97 269.1 A 126 126 0 1 1 223 269.1" fill="none" stroke="url(#grad)"
+                stroke-width="14" stroke-linecap="butt"
+                stroke-dasharray="659.7" stroke-dashoffset="184.7"/>
+
+          <!-- 内圈刻度带 -->
+          <g id="ticks"></g>
+
+          <!-- 关键刻度数字（弧外围） -->
+          <g id="ticknums"></g>
+        </svg>
+        <div class="gauge-center">
+          <div class="soc">72<span class="pct">%</span></div>
+          <div class="pill-row">
+            <span class="pill">67.50V</span>
+            <span class="pill">7.80A</span>
+          </div>
+          <div class="power-row"><span class="pill-fill">526.5W</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 电池运行良好 -->
+    <div class="banner">
+      <div class="shield">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="3"><path d="M5 12l5 5L19 7"/></svg>
+      </div>
+      <span class="txt">电池运行良好</span>
+    </div>
+
+    <!-- 数据卡第一行 -->
+    <div class="grid">
+      <div class="cell"><div class="val v-blue">3.377</div><div class="lbl">最高电压(V)</div></div>
+      <div class="cell"><div class="val v-red">3.376</div><div class="lbl">最低电压(V)</div></div>
+      <div class="cell"><div class="val v-green">0.001</div><div class="lbl">最大压差(V)</div></div>
+      <div class="cell"><div class="val v-green">0.000</div><div class="lbl">均衡电流(A)</div></div>
+    </div>
+
+    <!-- 数据卡第二行 -->
+    <div class="grid">
+      <div class="cell"><div class="val v-green">50.0</div><div class="lbl">电池容量(Ah)</div></div>
+      <div class="cell"><div class="val v-green">37.0</div><div class="lbl">剩余容量(Ah)</div></div>
+      <div class="cell"><div class="val v-green">22.7</div><div class="lbl">最高温度(℃)</div></div>
+      <div class="cell"><div class="val v-green">铁锂</div><div class="lbl">电池类型</div></div>
+    </div>
+
+    <!-- 电流/功率卡 -->
+    <div class="pwcard">
+      <div class="top">
+        <div class="item"><span class="label">电流(A)</span><span class="v">7.80</span></div>
+        <div class="item"><span class="label">功率(W)</span><span class="v">526.5</span></div>
+      </div>
+      <div class="bar-ends"><span>充电</span><span class="zero-num">0</span><span>放电</span></div>
+      <div class="bar">
+        <div class="fill-c" style="width:7.8%"></div>
+        <div class="fill-d" style="width:0%"></div>
+        <div class="center"></div>
+      </div>
+      <div class="bottom">
+        <span><span class="lbl">状态:</span><span class="st">充电</span></span>
+        <span><span class="lbl">剩余时间:</span><span class="rt">满 01:40:12</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部导航 -->
+  <div class="tabbar">
+    <div class="tab">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10l8-6 8 6v10"/></svg>
+      <span>实时状态</span>
+    </div>
+    <div class="tab active">
+      <div class="bar-ind"></div>
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10l8-6 8 6v10"/></svg>
+      <span>首页</span>
+    </div>
+    <div class="tab">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+      <span>参数设置</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// 内圈刻度带 + 弧外围关键刻度数字
+(function () {
+  const cx = 160, cy = 160;   // 圆心
+  const R = 126;              // 主弧半径
+  const SW = 14;              // 主弧线宽
+  const rOut = R - SW/2 - 6;  // 刻度外端
+  const START = 120, SPAN = 300; // y-down 角度：缺口朝下
+  let ticks = '', nums = '';
+  for (let i = 0; i <= 100; i++) {
+    const a = (START + SPAN * i / 100) * Math.PI / 180;
+    let len, w;
+    if (i % 10 === 0)      { len = 16; w = 2.2; }
+    else if (i % 5 === 0)  { len = 12; w = 1.7; }
+    else                   { len = 8;  w = 1.1; }
+    const rIn = rOut - len;
+    ticks += '<line x1="' + (cx + rOut*Math.cos(a)).toFixed(1) + '" y1="' + (cy + rOut*Math.sin(a)).toFixed(1)
+           + '" x2="' + (cx + rIn*Math.cos(a)).toFixed(1)  + '" y2="' + (cy + rIn*Math.sin(a)).toFixed(1)
+           + '" style="stroke:var(--green)" stroke-width="' + w + '" stroke-linecap="round"/>';
+    if (i % 5 === 0) {
+      const major = (i % 10 === 0);
+      const nr = R + SW/2 + 11;
+      const nx = cx + nr * Math.cos(a), ny = cy + nr * Math.sin(a) + (major ? 3.5 : 3);
+      nums += '<text x="' + nx.toFixed(1) + '" y="' + ny.toFixed(1) + '" text-anchor="middle" '
+            + 'style="fill:var(--' + (major ? 'numA' : 'numB') + ')" font-size="' + (major ? 11 : 9) + '"'
+            + (major ? ' font-weight="600"' : '') + '>' + i + '</text>';
+    }
+  }
+  document.getElementById('ticks').innerHTML = ticks;
+  document.getElementById('ticknums').innerHTML = nums;
+})();
+
+// 电流/功率进度条：中点为 0，按参数设置里的限流量程计算
+// 演示值：最大充电电流 50A（settings@50），最大放电电流 100A（settings@62）
+// 当前 7.8A 充电 → 右半填充 7.8/50 × 50% = 7.8%？——注意半程代表满量程：
+// 充电填充宽 = current/maxCharge × 50%（半条），本例 7.8/50×50% = 7.8%
+</script>
+</body>
+</html>

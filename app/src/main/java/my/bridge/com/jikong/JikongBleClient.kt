@@ -197,25 +197,36 @@ object JikongBleClient {
 
     /**
      * 连接指定地址的设备，连接成功后自动发现服务、选中透传 characteristic 并订阅通知。
+     *
+     * @param timeoutMs 连接超时（毫秒）。BLE 连接可能因设备不可达/信号弱而长时间
+     *   无回调，若不加超时，`connect()` 会永久挂起，UI 的「连接中」状态卡死、Toast 不弹。
+     *   超时后主动断开并返回 false。默认 10 秒。
      */
     @SuppressLint("MissingPermission")
-    suspend fun connect(context: Context, address: String): Boolean {
+    suspend fun connect(context: Context, address: String, timeoutMs: Long = 10000): Boolean {
         disconnect()
         val a = ensureAdapter(context) ?: return false
         val dev = a.getRemoteDevice(address) ?: return false
         connectedDeviceAddress = address
         connectedDeviceName = runCatching { dev.name }.getOrNull() ?: address
 
-        return suspendCancellableCoroutine { cont ->
-            val g = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                dev.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            } else {
-                @Suppress("DEPRECATION")
-                dev.connectGatt(context, false, gattCallback)
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine { cont ->
+                val g = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    dev.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    dev.connectGatt(context, false, gattCallback)
+                }
+                gatt = g
+                // 连接结果经 gattCallback 回调后 resume（见下方 onConnectionStateChange）
+                connectWaiter = cont
             }
-            gatt = g
-            // 连接结果经 gattCallback 回调后 resume（见下方 onConnectionStateChange）
-            connectWaiter = cont
+        } ?: run {
+            // 超时：主动断开并释放资源，返回 false
+            Timber.tag(TAG).w("连接超时（${timeoutMs}ms），主动断开")
+            disconnect()
+            false
         }
     }
 
@@ -234,8 +245,7 @@ object JikongBleClient {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Timber.tag(TAG).i("GATT 已断开 status=$status")
                 setConnected(false)
-                connectWaiter?.resume(false)
-                connectWaiter = null
+                connectWaiter?.let { w -> connectWaiter = null; w.resume(false) }
             }
         }
 
@@ -243,19 +253,15 @@ object JikongBleClient {
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Timber.tag(TAG).w("服务发现失败 status=$status")
-                connectWaiter?.resume(false)
-                connectWaiter = null
+                connectWaiter?.let { w -> connectWaiter = null; w.resume(false) }
                 return
             }
             val ok = selectCharacters(g)
-            if (ok) {
-                setConnected(true)
-                connectWaiter?.resume(true)
-            } else {
+            if (ok) setConnected(true)
+            connectWaiter?.let { w -> connectWaiter = null; w.resume(ok) }
+            if (!ok) {
                 Timber.tag(TAG).w("未找到可用的透传 characteristic")
-                connectWaiter?.resume(false)
             }
-            connectWaiter = null
         }
 
         @SuppressLint("MissingPermission")
@@ -385,6 +391,8 @@ object JikongBleClient {
     fun disconnect() {
         writeWaiters.values.forEach { it.complete(false) }
         writeWaiters.clear()
+        // 清空挂起的连接等待，避免后续 GATT 回调 resume 一个已取消的 continuation
+        connectWaiter = null
         rxBuffer.reset()
         runCatching { gatt?.disconnect() }
         runCatching { gatt?.close() }
