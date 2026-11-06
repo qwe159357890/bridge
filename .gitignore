@@ -63,5 +63,12 @@ server/logs/
 # 临时诊断产物
 tools/debug/diag_page.png
 
+# ===================== 逆向调试产物（可由 references/极空保护板资料/05_应用软件 官方 APK 重新生成） =====================
+tools/classes*.dex
+tools/blemessage.txt
+tools/gattcb.txt
+tools/jk_official*
+tools/dd*.txt
+
 # 本地待办清单（个人跨轮次跟踪，不入库）
 TodoList.md
