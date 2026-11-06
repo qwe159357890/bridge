@@ -71,6 +71,7 @@ object JikongPrefs {
     const val KEY_SPEAK_ENABLED = "jikong_speak_enabled"
     const val KEY_SPEAK_INTERVAL_MIN = "jikong_speak_interval_min"
     const val KEY_SPEAK_LOW_SOC = "jikong_speak_low_soc"
+    const val KEY_SPEAK_WARN_REPEAT_MIN = "jikong_speak_warn_repeat_min"
 
     /** 上次播报的 SOC 与时间戳（跨连接判定用；持久化防进程重启误播）。 */
     private const val KEY_LAST_SPOKEN_SOC = "jikong_last_spoken_soc"
@@ -100,6 +101,17 @@ object JikongPrefs {
         sp(context).edit().putInt(KEY_SPEAK_LOW_SOC, soc.coerceIn(1, 50)).apply()
     }
 
+    /**
+     * 低电量预警重复提醒间隔（分钟，1~60）。默认 5（v0.2.89）。
+     * 低于阈值期间，即使电量不再变化也按此间隔重复播报带提醒。
+     */
+    fun speakWarnRepeatMin(context: Context): Int =
+        sp(context).getInt(KEY_SPEAK_WARN_REPEAT_MIN, 5)
+
+    fun setSpeakWarnRepeatMin(context: Context, min: Int) {
+        sp(context).edit().putInt(KEY_SPEAK_WARN_REPEAT_MIN, min.coerceIn(1, 60)).apply()
+    }
+
     /** 上次播报的 SOC（-1 = 从未播过）。 */
     fun lastSpokenSoc(context: Context): Int =
         sp(context).getInt(KEY_LAST_SPOKEN_SOC, -1)
@@ -112,6 +124,16 @@ object JikongPrefs {
             .putInt(KEY_LAST_SPOKEN_SOC, soc)
             .putLong(KEY_LAST_SPOKEN_AT, at)
             .apply()
+    }
+
+    /** 上次「带低电提醒」的播报时间（0 = 从未；v0.2.89 预警重复提醒间隔判定用）。 */
+    private const val KEY_LAST_WARN_AT = "jikong_last_warn_at"
+
+    fun lastWarnAt(context: Context): Long =
+        sp(context).getLong(KEY_LAST_WARN_AT, 0L)
+
+    fun setLastWarnAt(context: Context, at: Long) {
+        sp(context).edit().putLong(KEY_LAST_WARN_AT, at).apply()
     }
 
     // ==================== 设备昵称 / 默认设备（v0.2.88） ====================

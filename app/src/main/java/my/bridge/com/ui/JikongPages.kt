@@ -1569,10 +1569,11 @@ private fun SettingsView(
     val context = LocalContext.current
     // 订阅仪表盘 1Hz 版本号：累计统计实时刷新（红队修正：否则 @Volatile 变化不触发重组）
     SpeedDash.version.value
-    // v0.2.88 语音播报设置状态
+    // v0.2.89 语音播报设置状态
     var speakEnabled by remember { mutableStateOf(JikongPrefs.speakEnabled(context)) }
     var speakIntervalMin by remember { mutableIntStateOf(JikongPrefs.speakIntervalMin(context)) }
     var speakLowSoc by remember { mutableIntStateOf(JikongPrefs.speakLowSoc(context)) }
+    var speakWarnRepeatMin by remember { mutableIntStateOf(JikongPrefs.speakWarnRepeatMin(context)) }
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("仪表盘", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
@@ -1606,9 +1607,9 @@ private fun SettingsView(
             Text("缺少精确定位权限：请到系统设置或首页卡片中授权。", fontSize = 11.sp, color = c.amber)
         }
 
-        // v0.2.88 语音播报：开关 + 播报间隔 + 低电量阈值。
-        // 判定规则（用户拍板）：每次连接成功后首个页面可见的含电量帧判定一次，连接期间不再播；
-        // 电量≠上次播报值→播，相同且距上次播报≥间隔→播（跨连接生效，持久化防重启误播）。
+        // v0.2.89 语音播报：开关 + 播报间隔 + 低电量阈值 + 预警提醒间隔。
+        // 判定规则（用户拍板）：每帧持续判定——电量≠上一帧或≠上次播报值→播；
+        // 相同且距上次播报≥间隔→播；低于阈值首次跌破立即播带提醒，此后按预警提醒间隔重复提醒。
         Spacer(Modifier.height(16.dp))
         Text("语音播报", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
@@ -1625,7 +1626,7 @@ private fun SettingsView(
                         Text("连接后播报电量", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            "连接成功并获取到电量后语音播报一次（仅本页打开时）。电量与上次播报相同且未超间隔则不播。",
+                            "本页打开时播报电量：电量变化即播；相同且超播报间隔再播；低于阈值立即提醒并按预警间隔重复提醒。",
                             fontSize = 11.sp, color = c.gray,
                         )
                     }
@@ -1664,9 +1665,22 @@ private fun SettingsView(
                         JikongPrefs.setSpeakLowSoc(context, speakLowSoc)
                     },
                 )
+                Spacer(Modifier.height(2.dp))
+                JkStepperRow(
+                    label = "预警提醒间隔",
+                    value = "$speakWarnRepeatMin 分钟",
+                    onMinus = {
+                        speakWarnRepeatMin = (speakWarnRepeatMin - 1).coerceAtLeast(1)
+                        JikongPrefs.setSpeakWarnRepeatMin(context, speakWarnRepeatMin)
+                    },
+                    onPlus = {
+                        speakWarnRepeatMin = (speakWarnRepeatMin + 1).coerceAtMost(60)
+                        JikongPrefs.setSpeakWarnRepeatMin(context, speakWarnRepeatMin)
+                    },
+                )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "低于阈值时播报追加「电量低，请注意充电」。需要设备装有系统文字转语音（TTS）引擎。",
+                    "低于阈值立即播报「电量低，请注意充电」，之后即使电量不变也按预警提醒间隔重复提醒；首次跌破阈值不受间隔限制立即播。需要设备装有系统文字转语音（TTS）引擎。",
                     fontSize = 11.sp, color = c.gray,
                 )
             }

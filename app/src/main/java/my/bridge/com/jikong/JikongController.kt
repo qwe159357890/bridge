@@ -96,12 +96,11 @@ class JikongController private constructor() {
     var demoMode: Boolean = false
 
     /**
-     * 语音播报机会标记（v0.2.88）：每次连接成功置位，**首个「页面可见时的含电量帧」判定一次**，
-     * 判定后（无论播与不播）即复位——连接存续期内不再播报。跨连接的播/不播规则见 [maybeAnnounce]。
+     * 上一帧 SOC（v0.2.89）：每帧判定「电量与上一帧不同」用；-1 = 本连接还没有前帧。
+     * 连接/重连成功时重置（无前帧时只与「上次播报值」比较，与 v0.2.88 首帧行为一致）。
      */
     @Volatile
-    private var speakPendingThisConnection = false
-        private set
+    private var prevAnnounceSoc = -1
 
     /** 当前会话是否收到过 0x02 实时数据帧（UI 用于区分「无数据」与「真 0 值」，v0.2.77）。 */
     @Volatile
@@ -207,8 +206,8 @@ class JikongController private constructor() {
             demoMode = false
             // v0.2.77：成功连接后启用自动重连（此后意外断开将自动恢复；重连成功即归零）
             autoReconnectEnabled = true
-            // v0.2.88：本次连接获得一次播报机会（首个页面可见的含电量帧判定）
-            speakPendingThisConnection = true
+            // v0.2.89：重置「上一帧 SOC」，连接后首帧只与上次播报值比较
+            prevAnnounceSoc = -1
             startPolling()
         }
         ok
@@ -458,8 +457,8 @@ class JikongController private constructor() {
                 if (ok) {
                     Timber.tag(TAG).i("自动重连成功（失败窗口归零）")
                     demoMode = false
-                    // v0.2.88：重连也是一次「连接成功」，重新获得播报机会
-                    speakPendingThisConnection = true
+                    // v0.2.89：重连成功同样重置「上一帧 SOC」（首帧只与上次播报值比较）
+                    prevAnnounceSoc = -1
                     startPolling()
                     break
                 }
@@ -474,36 +473,42 @@ class JikongController private constructor() {
     }
 
     /**
-     * 语音播报判定（v0.2.88，用户逐条拍板）：
-     * - **每次连接只判一次**：[speakPendingThisConnection] 在连接/重连成功时置位，这里判定后即复位
-     *   ——连接存续期内后续所有帧都不再播报。
-     * - **仅页面可见时**判定：极空页不可见时机会保留（pending 不消耗），可见后的首个含电量帧再判。
-     * - 演示模式不播。
-     * - 跨连接规则：SOC ≠ 上次播报值 → 播；相同且距上次播报 ≥ 设置的间隔 → 播；否则不播。
-     *   「上次播报值/时间」持久化（JikongPrefs），进程重启不误播。
+     * 语音播报判定（v0.2.89，用户逐条拍板；取代 v0.2.88「连接后首帧判一次」规则）：
+     * - **每帧持续判定**：0x02 帧到达即判定（不再限连接后首帧）。
+     * - 仅页面可见时播报；演示模式不播。
+     * - 播报条件（任一满足即播）：
+     *   ①SOC ≠ 上一帧 或 ≠ 上次播报值 → 播（本连接无前帧时只与上次播报值比较）；
+     *   ②SOC 相同且距上次播报 ≥ 播报间隔 → 播（用户拍板保留）；
+     *   ③SOC 低于预警阈值且距上次带提醒播报 ≥ 预警提醒间隔（设置可调，默认 5 分钟）→ 播。
+     *   其中「首次跌破阈值」必然伴随 SOC 变化，由 ① 立即播报带提醒——即 1A 语义。
      * - 话术：「当前电量 N%」；低于低电量阈值追加「电量低，请注意充电」。
+     * - 「上次播报值/时间」「上次带提醒播报时间」持久化（JikongPrefs），进程重启不误播。
      */
     private fun maybeAnnounce(s: JikongStatus) {
-        if (!speakPendingThisConnection) return
-        if (demoMode || !pageVisible) return   // 页面不可见/演示：机会保留，下一帧再判
-        val ctx = appContext ?: return
-        if (!JikongPrefs.speakEnabled(ctx)) return   // 开关未开：不消耗机会（开着了下一帧即判）
         val soc = s.soc
         if (soc !in 0..100) return
-        speakPendingThisConnection = false           // 正式判定，本连接不再播
+        val prev = prevAnnounceSoc
+        prevAnnounceSoc = soc        // 每帧都推进「上一帧」，与页面可见性无关（真实前帧语义）
+        if (demoMode || !pageVisible) return
+        val ctx = appContext ?: return
+        if (!JikongPrefs.speakEnabled(ctx)) return
+        val now = System.currentTimeMillis()
         val lastSoc = JikongPrefs.lastSpokenSoc(ctx)
-        val changed = soc != lastSoc
-        val due = System.currentTimeMillis() - JikongPrefs.lastSpokenAt(ctx) >=
+        val changed = (prev != -1 && soc != prev) || soc != lastSoc
+        val due = now - JikongPrefs.lastSpokenAt(ctx) >=
             JikongPrefs.speakIntervalMin(ctx) * 60_000L
-        if (!(changed || due)) {
-            Timber.tag(TAG).i("语音播报判定：不播（SOC=%d 未变且间隔未到，上次播报 SOC=%d）", soc, lastSoc)
+        val low = soc < JikongPrefs.speakLowSoc(ctx)
+        val warnDue = low && now - JikongPrefs.lastWarnAt(ctx) >=
+            JikongPrefs.speakWarnRepeatMin(ctx) * 60_000L
+        if (!(changed || due || warnDue)) {
+            Timber.tag(TAG).i("语音播报判定：不播（SOC=%d 未变、间隔未到、无预警到期）", soc)
             return
         }
-        val text = "当前电量 $soc%" +
-            if (soc < JikongPrefs.speakLowSoc(ctx)) "，电量低，请注意充电" else ""
-        JikongPrefs.setLastSpoken(ctx, soc)
+        val text = "当前电量 $soc%" + if (low) "，电量低，请注意充电" else ""
+        JikongPrefs.setLastSpoken(ctx, soc, now)
+        if (low) JikongPrefs.setLastWarnAt(ctx, now)
         JikongSpeaker.speak(ctx, text)
-        Timber.tag(TAG).i("语音播报：%s（上次 SOC=%d，changed=%s due=%s）", text, lastSoc, changed, due)
+        Timber.tag(TAG).i("语音播报：%s（上次 SOC=%d，changed=%s due=%s warnDue=%s）", text, lastSoc, changed, due, warnDue)
     }
 
     // ==================== 数据读取 ====================
@@ -593,7 +598,7 @@ class JikongController private constructor() {
                 lastDataFrameAt = System.currentTimeMillis()
                 hasDataFrame = true
                 datalessRecycles = 0   // v0.2.80：数据通了，重建计数归零
-                maybeAnnounce(s)       // v0.2.88：连接后首个页面可见的含电量帧判定播报
+                maybeAnnounce(s)       // v0.2.89：每帧判定播报（变化/间隔/预警，规则见函数注释）
             }
             JikongProtocol.FRAME_SETTINGS -> parseSettingsFrame(s, frame.data)  // 0x01
             JikongProtocol.FRAME_DEVICE_INFO -> parseDeviceFrame(s, frame.data) // 0x03

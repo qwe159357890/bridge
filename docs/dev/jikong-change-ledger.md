@@ -19,6 +19,19 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.89 语音播报规则调整：每帧判定 + 预警重复提醒（2026-11-07 07:30 实施）
+
+| 项 | 内容 |
+|---|---|
+| **需求（用户 07:22 提出、07:27 拍板）** | ①播报从「每次连接成功后首帧判一次、连接内不再播」改为**每帧持续判定**：电量 ≠ 上一帧 或 ≠ 上次播报值 → 播；②预警阈值要考虑：**首次跌破立即播一次带提醒（1A）**；低于阈值期间**按预警提醒间隔重复提醒（间隔设置页可调，默认 5 分钟）**；③「电量相同且距上次播报 ≥ 间隔 → 重复播」**保留** |
+| **回退标记（git 快照）** | 提交 **`fe9ded4`**（`feat: v0.2.88 极空语音播报+设备昵称+默认设备…`，工作区干净即此提交）——本次改动前全部文件原文以此为准 |
+| **回滚配方** | `git checkout fe9ded4 -- app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/build.gradle.kts server/data/updates/update.json`（无新增/删除文件） |
+| **触发回滚的信号** | ①播报刷屏（SOC 每帧都播）；②预警提醒不响或过于频繁；③连接后首帧不播（回归 v0.2.88 行为） |
+| **实施结果（改后回填，2026-11-07 07:40）** | ①`JikongPrefs` 加 speakWarnRepeatMin(1~60,默认5)/KEY_LAST_WARN_AT+lastWarnAt/setLastWarnAt；②Controller：`speakPendingThisConnection` 删除 → `prevAnnounceSoc`（每帧推进、连接/重连成功重置 -1）；`maybeAnnounce` 重写为每帧判定：changed=(prev!=-1&&soc!=prev)\|\|soc!=lastSoc、due 保留、warnDue=low&&距上次带提醒≥预警间隔，任一满足即播，low 时追加提醒并刷 lastWarnAt；③设置页：开关说明改新规则、新增「预警提醒间隔」步进行（1~60 默认5）、卡底说明更新；④版本 0.2.89（versionCode 保持 1，与历史一致）；编译一次通过，APK 实证 0.2.89 + jikong_speak_warn_repeat_min/lastWarnAt/prevAnnounceSoc 在 classes11.dex；分发 updates(45,972,418 B, sha256 7d1ea362…)+Downloads+update.json，删 v0.2.88 APK |
+| **改前原文（逐字，JikongController.kt L98-104 字段）** | `/**\n     * 语音播报机会标记（v0.2.88）：每次连接成功置位，**首个「页面可见时的含电量帧」判定一次**，\n     * 判定后（无论播与不播）即复位——连接存续期内不再播报。跨连接的播/不播规则见 [maybeAnnounce]。\n     */\n    @Volatile\n    private var speakPendingThisConnection = false\n        private set` |
+| **改前原文（逐字，JikongController.kt L486-507 判定函数）** | `private fun maybeAnnounce(s: JikongStatus) {\n        if (!speakPendingThisConnection) return\n        if (demoMode \|\| !pageVisible) return   // 页面不可见/演示：机会保留，下一帧再判\n        val ctx = appContext ?: return\n        if (!JikongPrefs.speakEnabled(ctx)) return   // 开关未开：不消耗机会（开着了下一帧即判）\n        val soc = s.soc\n        if (soc !in 0..100) return\n        speakPendingThisConnection = false           // 正式判定，本连接不再播\n        val lastSoc = JikongPrefs.lastSpokenSoc(ctx)\n        val changed = soc != lastSoc\n        val due = System.currentTimeMillis() - JikongPrefs.lastSpokenAt(ctx) >=\n            JikongPrefs.speakIntervalMin(ctx) * 60_000L\n        if (!(changed \|\| due)) {\n            Timber.tag(TAG).i("语音播报判定：不播（SOC=%d 未变且间隔未到，上次播报 SOC=%d）", soc, lastSoc)\n            return\n        }\n        val text = "当前电量 $soc%" +\n            if (soc < JikongPrefs.speakLowSoc(ctx)) "，电量低，请注意充电" else ""\n        JikongPrefs.setLastSpoken(ctx, soc)\n        JikongSpeaker.speak(ctx, text)\n        Timber.tag(TAG).i("语音播报：%s（上次 SOC=%d，changed=%s due=%s）", text, lastSoc, changed, due)\n    }` |
+| **改前原文（其余触点）** | connect 成功 L210-211：`// v0.2.88：本次连接获得一次播报机会（首个页面可见的含电量帧判定）\n            speakPendingThisConnection = true`；自动重连成功 L461-462：`// v0.2.88：重连也是一次「连接成功」，重新获得播报机会\n                    speakPendingThisConnection = true`；mergeFrame 调用 L596：`maybeAnnounce(s)       // v0.2.88：连接后首个页面可见的含电量帧判定播报`；设置页状态 L1572-1575（speakEnabled/speakIntervalMin/speakLowSoc 三个 remember）；开关说明 L1628：`"连接成功并获取到电量后语音播报一次（仅本页打开时）。电量与上次播报相同且未超间隔则不播."`；低阈值步进行后 L1654 仅 `Spacer(Modifier.height(2.dp))` + 下一行即低电量阈值 JkStepperRow（label="低电量阈值", 范围 1~50）；卡底说明 L1669：`"低于阈值时播报追加「电量低，请注意充电」。需要设备装有系统文字转语音（TTS）引擎。"`；JikongPrefs 无 speakWarnRepeatMin 相关键 |
+
 ### v0.2.88 播报/昵称/默认设备三功能（2026-11-06 23:15 实施）
 
 | 项 | 内容 |
