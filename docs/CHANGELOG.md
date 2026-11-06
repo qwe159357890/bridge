@@ -22,6 +22,57 @@
 
 ---
 
+## 2026-11-05~06 · 🔋 v0.2.51→v0.2.75 五项运维能力落地 + 极空 BMS 三端集成 + 官方 UI 复刻收敛
+
+**节点意义**：四条脉络并行——①五项运维需求（无障碍/权限/协助安装/微信释放开关/无界面模式）与统计命令三轮迭代；②极空保护板（JK BMS）从零三端集成与 BLE 协议攻坚（时序+偏移两轮真机修正）；③官方 APP UI 复刻从「能看」到「定档」的 15 版收敛（确立「HTML 原型先行→确认→Kotlin 复刻」工作流）；④发布链路治理（GitHub 同步、补历史 Release、话术与留存铁律，无 APK 版本）。
+
+### 脉络1 · 五项运维需求 + 统计命令（v0.2.51→v0.2.54）
+
+- **v0.2.51 · 五项需求一次落地**：无障碍 status/enable/disable 三命令（幂等守卫+unknown 禁用+强制下发二次确认）+ ADB 一键全量授权（41 项 pm grant + 6 项 appops + manual 清单）+ check_update mode=assist_install 无障碍自动点安装 + 微信离开释放开关（pageActive+isInteractive 双条件）+ 无界面模式（方案 B 全屏遮挡层 UiLockController，锁定不组合页面→各页 onDispose 自动释放资源）。
+- **v0.2.52 · 设备统计 + 无界面首配破局**：get_device_stats 聚合电量/活跃时长/流量（`NetworkStatsManager` 在 `android.app.usage` 包不是 android.net）；「默认连不上→进不了界面填服务器」真死循环用 FirstRunSetupScreen 首次配置引导页破局；PIN 改服务端权威（config.yaml ui_lock.pin）经 config_update 下发本地缓存，离线可解锁。
+- **v0.2.53 · PIN 解锁卡死根治**：解锁原走「半锁定」中间态（只渲染设置页+底部导航未渲染+back 逻辑错乱），改 grantPinUnlock 直接解除锁定=完整正常界面。
+- **v0.2.54 · 统计命令收官**：命令改名「电/流量统计」+ 按命令分治详情弹窗（沿用 VNT 范式）；无障碍安装按钮「继续安装」识别不到（精确全等→contains+否定词排除）；流量口径双重错误修复（`querySummary` 按自然日归档没有「开机以来」语义→改 TrafficStats；UID_ALL 混入本 App 统计虚高）。
+
+### 脉络2 · 极空 BMS 三端集成与协议攻坚（v0.2.55→v0.2.60）
+
+- **v0.2.55 · 三端集成首版**：客户端 `jikong/` 包（0xDD 帧编解码 / BLE UUID ffe0/ff10/ff80 运行时自适应探测 / Controller 单例两段式注入 WS）+ 主页「极空」Tab + 服务端 jikong_store/api + 管理后台复刻页。
+- **v0.2.56 · 首次真机反馈修复**：连接约 1 分钟必崩=NPE（GlobalScope 默认线程无 Looper 直接 Toast）——Toast 切主线程+全链路 try-catch 兜底（与密码鉴权无关）；扫描改按官方 service UUID 白名单过滤（设备名是一串数字不可依赖）+ 扫描结果进程级暂存。
+- **v0.2.57→58 · 调试底座**：BLE 通信 hex 日志落盘 bridge.log（真机经 VNT adb 拉取分析的前提，后续两轮协议修正都靠它）。
+- **v0.2.59 · 协议时序根因**：BMS 从不推 0x02 实时帧的真因=0x96+0x97 背靠背连发命令冲突（BMS 只循环回 0x01+0x03）；改「0x97→500ms→0x96 触发 burst，之后仅 5s 兜底轮询」；0x02 偏移改 pippofo JK02_32S（下一版被推翻）。
+- **v0.2.60 · 偏移校准 + UI 重构**：真机字节逐字段反推证明 BHP1000 偏移才对（总压@150/电流@158/SOC@173…与官方截图全对上）；六 Tab→三页底部导航（首页/实时状态/参数设置）；JikongPrefs 主题三态（AUTO 按时间 6-18 点浅色/LIGHT/DARK，LocalJkColors 两套配色 CompositionLocal）。
+
+### 脉络3 · 官方 UI 复刻收敛（v0.2.61→v0.2.75）
+
+- **v0.2.61 · 实时刷新根治**：UI 读普通 data class 字段 mutate 不触发重组→`statusVersion = mutableStateOf(0L)` 版本号方案（mergeFrame 末尾自增，IO 线程可写，snapshot 线程安全）；配色对齐官方纯黑#000+荧光绿#00E050；最高/最低电压动态计算（maxByOrNull/minByOrNull，非固定 01 号）。
+- **v0.2.62 · 断开/超时 + 字段补全**：断开无反应=connected 普通字段不触发重组（onConnectionChanged 里 statusVersion++）；connect 无超时→withTimeoutOrNull(10s)+connectWaiter「先取 null 再 resume」防二次 resume 崩溃；字段补全确立 JK02_32S offset=32 布局（syssi/fl4p/mpp-solar 三源一致：循环容量@186/加热@215/加热电流@236/充电器@245/电池类型@275）。
+- **v0.2.63 · 演示模式**：enterDemoMode 灌真机实测示例数据（67.5V/7.8A/SOC72%/20 串微差），保护板不在身边也能验证 UI；真机连接或断开自动退出。
+- **v0.2.64 · 三源防御性核查**：协议文档(PDF 只含 CAN/RS485)+官方 APK+5 开源项目三源交叉验证，发现并修复 2 处重大偏移错（内阻 80→**96+i\*2**、平均电压 74→**90**）；充放电状态改电流方向判断（非 MOS 导通态）、功率现场算 totalVoltage×current、剩余时间本地算、单体最高红/最低蓝。
+- **v0.2.65→66 · 首页定档复刻**：HTML 原型迭代 v1→v14 定档（300° 弧缺口朝下+0~100 三级刻度带+外围数字+三胶囊功率实心+双向进度条充电/0/放电+**去全部发光特效**）→ Kotlin `JkGauge` 按 viewBox 320 等比 1:1；release.py 卡 push 后走本地打包通道兜底（v0.2.66 由脚本自动递增）。
+- **v0.2.67 · 体验八连修**：极空页沉浸态（隐藏主页顶部 Tab 栏+APP 底部工具栏，状态驱动照微信/销售范式）+ 双击返回主页 + 连接栏压单行并移入首页随滚动消失 + 主题点击即时切换（根因=读 SharedPreferences 而非 Compose 状态）+ 双向进度条对齐修复（**Alignment.CenterStart 是垂直居中+水平左缘，不是中心**）+ 演示模式断开修复（demoMode 标记手动复位）。
+- **v0.2.68→69 · 空间压缩与图标化**：进入首页默认滚过连接栏（等效上滑一下）+ 卡片间隔 12/10→6dp；底部导航去文字只留图标（17dp），AI 临时设计三图标。
+- **v0.2.70 · 用户自备图标接入**：三个用户 SVG（主页/实时状态/设置，1024 填充风）转 VectorDrawable——**path 必须带 fillColor 否则不渲染**（tint 只换色不提供填充）；`Icon(painterResource, tint=)` 选中绿/未选中灰。
+- **v0.2.71→73 · 高度与露边微调**：顶部/底部间距省 14dp 全给图标（21→35dp 过大，回调 28→24dp）；初始滚动改 `connBarHeight−peek` 露出连接栏一条边（8→6dp）；连接栏内边距 9→4dp；默认滚动偏移必须与页面间隔联动改（否则露边错位）。
+- **v0.2.74→75 · 实时状态页定档**：电池电压/电流合并一行卡片（标签+数值同行 alignByBaseline，借鉴首页功率行）；单体电压/均衡线电阻改**单卡片 3 列×8 行列优先竖排**（左 1-8/中 9-16/右 17-24，对齐官方）+ 序号徽标大字小边距（12sp/1×4dp/最小宽 24dp）+ 最低电压琥珀黄（JkColors.amber，与最高红对比明显）；实时数据双列保持；页面边距与首页统一。原型 `assets/design/ui-mockup-jikong-realtime.html` 用户「确认」后才动 Kotlin。
+
+### 脉络4 · 发布链路治理（无 APK 版本，2026-11-05）
+
+- **本地/远程对齐**：git 协议不通（代理 502/直连超时）时走 GitHub REST Git Data API 一次性提交对齐（远程=c721a1a8，43 文件回读 0 不一致）；补 0.2.45~0.2.50 六个历史 Release（**资产上传 uploads.github.com 必须直连禁代理**）。
+- **打包话术约定（用户确立）**：「打包」=全链路（本地构建→push→Actions→下载校验）/「本地打包」=仅 assembleDebug /「远程打包」=Actions 产物下载；铁律=任何打包前本地=远程。
+- **唯一留存铁律**：打包完成立即落地 `server/data/updates/bridge-vX.Y.Z.apk` + update.json，并删除其它所有 APK 副本，全项目只留一份。
+- **只建 tag 不 dispatch**：建 tag 自动触发 release.yml，额外 dispatch 造成双 run 浪费（两次实战教训后定论）。
+- **APK 下载必须走 gh-proxy**：资产 API 直拉大文件超时 SIGTERM。
+
+### 关键经验沉淀
+
+- **Compose 实时刷新的通用解=版本号 mutableStateOf**——普通 data class 字段 mutate 不触发重组；数据持有者在变化末尾自增版本号、UI 读一次建立订阅（IO 线程可写）。断开不刷新、主题不即时切都是同根因变体（后者是读了存储没走状态）。
+- **BLE 命令有时序，偏移必须真机反推**——背靠背连发=命令冲突，BMS 永不进数据流；「触发对+间隔+低频兜底」才对。协议偏移分型号（JK02_32S vs 24S），文档不能照抄，真机字节逐字段验证是唯一标准；测试成本高时先三源交叉验证再打包（v0.2.64 用此法抓出 2 处错）。
+- **「测试成本极高」的功能先做演示模式 + HTML 原型先行**——演示模式离板验证逻辑与交互；HTML 原型把「打包→装机→看效果」的长反馈环变成「刷新浏览器」短环，用户确认后再 Kotlin 1:1 复刻，一次到位。
+- **UI 复刻收敛靠像素级事实源**——以官方截图为基准把弧度/刻度/间距全部换算成具体数值进原型，特效（发光/Blur）果断全删（费资源且晃眼）；「用户自备素材」优先于 AI 自创（图标）。
+- **Compose 布局反直觉点要记死**——`Alignment.CenterStart` 是左缘非中心；`scrollTo` 参数是 Int 而 `dp.toPx()` 是 Float；VectorDrawable path 无 fillColor 渲染为空；TextButton 自带最小高度会撑爆单行。
+- **发布链路每个环节都有唯一正解**——gh-proxy 下载、资产直连上传、只建 tag、APK 唯一留存、编译失败时不拷产物（先核对 versionName 再拷贝）。
+
+---
+
 ## 2026-11-05 · 🩸 v0.2.48→v0.2.50 微信页流量大户根治 + 磁盘缓存 + 连接状态一致性收敛
 
 **节点意义**：两条独立主线并行——①微信页 ~200 KB/s 流量大户的最终根治（根因在 center-server 的 uvicorn Ping 风暴，不在客户端）；②客户端磁盘缓存落地 + 连接状态一致性的两次连发修复。前者是服务器端一行修复（用户手动），后者是三个客户端版本递进收敛。
