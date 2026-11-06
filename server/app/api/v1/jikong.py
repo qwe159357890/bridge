@@ -153,3 +153,78 @@ def sync_odometer(
             detail="里程台账存储暂不可用，请稍后重试",
         ) from e
     return OdometerSyncResponse(**result)
+
+
+# ----------------------------------------------------------------------
+# 里程台账查询（管理侧只读，v0.2.86，后台「极空页 1:1 复刻」统计 Tab 用）
+# ----------------------------------------------------------------------
+
+
+def _compute_segments(records_asc: list[dict]) -> list[dict | None]:
+    """按设备端同款公式算段电耗（ records 须为 record_ts 升序、不含墓碑）。
+
+    段 i（i>=1）：Δ容量 × 平均电压 ÷ Δ里程 → Wh/km；
+    Δ容量<=0（换电池/BMS 重置）或 Δ里程<=0 → None（无效段，不进曲线）。
+    返回与输入等长的列表；第 0 项恒为 None（基准）。
+    """
+    segs: list[dict | None] = [None]
+    for i in range(1, len(records_asc)):
+        prev, cur = records_asc[i - 1], records_asc[i]
+        d_odo = round(cur["odo_km"] - prev["odo_km"], 3)
+        d_ah = round(cur["cycle_ah"] - prev["cycle_ah"], 3)
+        if d_odo <= 0 or d_ah <= 0:
+            segs.append(None)
+            continue
+        v0 = prev["volt"] if prev["volt"] else cur["volt"]
+        v1 = cur["volt"] if cur["volt"] else prev["volt"]
+        if not v0 or not v1:
+            segs.append(None)
+            continue
+        avg_v = (v0 + v1) / 2.0
+        segs.append({
+            "d_odo_km": d_odo,
+            "d_ah": d_ah,
+            "avg_volt": round(avg_v, 2),
+            "kwh": round(d_ah * avg_v / 1000.0, 3),
+            "wh_km": round(d_ah * avg_v / d_odo, 1),
+        })
+    return segs
+
+
+@router.get("/{device_id}/odometer", dependencies=[Depends(require_admin)])
+def get_jikong_odometer(device_id: str, request: Request, limit: int = 500) -> dict:
+    """某设备里程台账（管理侧只读）：记录 + 段电耗 + 汇总（与手机统计页同口径）。"""
+    store = request.app.state.odometer_store
+    try:
+        rows = store.list(device_id, limit=min(max(limit, 1), 2000))
+    except Exception as e:  # MySQL 不可用统一 503
+        logger.error("里程台账查询失败：device=%s %s", device_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="里程台账存储暂不可用",
+        ) from e
+    live = [r for r in rows if not r["deleted"]]
+    live.sort(key=lambda r: r["ts_ms"])  # 升序算段（基准在前）
+    segs = _compute_segments(live)
+    records = []
+    for rec, seg in zip(live, segs):
+        records.append({**rec, "seg": seg})
+    records.reverse()  # 倒序输出（最新在前，与手机台账一致）
+    # 汇总（基准→最新）
+    if len(live) >= 2:
+        total_km = round(live[-1]["odo_km"] - live[0]["odo_km"], 1)
+        valid = [s for s in segs if s]
+        total_kwh = round(sum(s["kwh"] for s in valid), 2)
+        avg_wh_km = round(total_kwh * 1000.0 / total_km, 1) if total_km > 0 else None
+    else:
+        total_km, total_kwh, avg_wh_km = 0.0, 0.0, None
+    return {
+        "device_id": device_id,
+        "records": records,
+        "summary": {
+            "total_km": total_km,
+            "total_kwh": total_kwh,
+            "avg_wh_km": avg_wh_km,
+            "count": len(live),
+        },
+    }

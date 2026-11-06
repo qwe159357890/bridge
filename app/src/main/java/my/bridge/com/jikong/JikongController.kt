@@ -782,7 +782,9 @@ class JikongController private constructor() {
 
     // ==================== 上报 ====================
 
-    /** 状态变化时上报服务端（去重：仅变化时发送）。任何异常都吞掉，不影响运行。 */
+    /** 状态变化时上报服务端（去重：仅变化时发送）。任何异常都吞掉，不影响运行。
+     *  v0.2.86：status 内附带 dash（时速仪表盘快照）与 app（本地设置）两块，
+     *  供管理后台「极空页 1:1 复刻」展示；字段缺失时后台显示占位，不影响旧版。 */
     private fun reportStatus() {
         try {
             val json = status.toJson().toString()
@@ -791,12 +793,54 @@ class JikongController private constructor() {
             val ws = _webSocketClient ?: return
             val data = JsonObject().apply {
                 addProperty("event", "jikong_state")
-                add("status", status.toJson())
+                add("status", buildReportStatus())
             }
             ws.sendBusinessMessage(data)
         } catch (e: Exception) {
             Timber.w(e, "极空状态上报失败（已忽略）")
         }
+    }
+
+    /** status.toJson() + dash/app 扩展（v0.2.86）。异常安全：任一块失败只丢该块。 */
+    private fun buildReportStatus(): JsonObject = try {
+        status.toJson().apply {
+            // ---- 时速仪表盘快照（SpeedDash 单例，GPS 数据仅页面可见+已连接时新鲜） ----
+            try {
+                val d = SpeedDash
+                val ctx = appContext
+                add("dash", JsonObject().apply {
+                    addProperty("speed_kmh", d.speedKmh)
+                    addProperty("gps_fresh", d.gpsFresh)
+                    addProperty("range_km", d.rangeKm)
+                    addProperty("inst_wh_km", d.instWhKm)
+                    addProperty("avg_wh_km", d.avgWhKm)
+                    addProperty("trip_km", d.tripKm)
+                    addProperty("trip_wh", d.tripWh)
+                    addProperty("trip_seconds", d.tripSeconds)
+                    addProperty("bms_stale", d.bmsStale)
+                    // 累计统计（JikongPrefs 持久化值 + 当次行程，与设置页口径一致）
+                    if (ctx != null) {
+                        addProperty("total_km", JikongPrefs.totalKm(ctx) + d.tripKm)
+                        addProperty("total_wh", JikongPrefs.totalWh(ctx) + d.tripWh)
+                        addProperty("hist_avg_wh_km",
+                            if (d.avgWhKm > 0f) d.avgWhKm else JikongPrefs.histAvgWhKm(ctx))
+                    }
+                    addProperty("updated_at", System.currentTimeMillis())
+                })
+            } catch (_: Exception) { }
+            // ---- 手机本地设置（后台参数设置页展示用） ----
+            try {
+                val ctx = appContext
+                if (ctx != null) {
+                    add("app", JsonObject().apply {
+                        addProperty("theme", JikongPrefs.theme(ctx))
+                        addProperty("dash_enabled", JikongPrefs.dashEnabled(ctx))
+                    })
+                }
+            } catch (_: Exception) { }
+        }
+    } catch (_: Exception) {
+        status.toJson()
     }
 
     /** 强制立即上报一次（服务端查询/重连对齐时调用）。 */
