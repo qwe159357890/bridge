@@ -65,4 +65,91 @@ object JikongPrefs {
     fun setHistAvgWhKm(context: Context, whkm: Float) {
         sp(context).edit().putFloat(KEY_HIST_AVG, whkm).apply()
     }
+
+    // ==================== 语音播报（v0.2.88） ====================
+
+    const val KEY_SPEAK_ENABLED = "jikong_speak_enabled"
+    const val KEY_SPEAK_INTERVAL_MIN = "jikong_speak_interval_min"
+    const val KEY_SPEAK_LOW_SOC = "jikong_speak_low_soc"
+
+    /** 上次播报的 SOC 与时间戳（跨连接判定用；持久化防进程重启误播）。 */
+    private const val KEY_LAST_SPOKEN_SOC = "jikong_last_spoken_soc"
+    private const val KEY_LAST_SPOKEN_AT = "jikong_last_spoken_at"
+
+    /** 语音播报开关。默认关。 */
+    fun speakEnabled(context: Context): Boolean =
+        sp(context).getBoolean(KEY_SPEAK_ENABLED, false)
+
+    fun setSpeakEnabled(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(KEY_SPEAK_ENABLED, enabled).apply()
+    }
+
+    /** 播报间隔（分钟，1~120）。默认 10。 */
+    fun speakIntervalMin(context: Context): Int =
+        sp(context).getInt(KEY_SPEAK_INTERVAL_MIN, 10)
+
+    fun setSpeakIntervalMin(context: Context, min: Int) {
+        sp(context).edit().putInt(KEY_SPEAK_INTERVAL_MIN, min.coerceIn(1, 120)).apply()
+    }
+
+    /** 低电量阈值（%，1~50），低于此值播报追加提醒。默认 20。 */
+    fun speakLowSoc(context: Context): Int =
+        sp(context).getInt(KEY_SPEAK_LOW_SOC, 20)
+
+    fun setSpeakLowSoc(context: Context, soc: Int) {
+        sp(context).edit().putInt(KEY_SPEAK_LOW_SOC, soc.coerceIn(1, 50)).apply()
+    }
+
+    /** 上次播报的 SOC（-1 = 从未播过）。 */
+    fun lastSpokenSoc(context: Context): Int =
+        sp(context).getInt(KEY_LAST_SPOKEN_SOC, -1)
+
+    fun lastSpokenAt(context: Context): Long =
+        sp(context).getLong(KEY_LAST_SPOKEN_AT, 0L)
+
+    fun setLastSpoken(context: Context, soc: Int, at: Long = System.currentTimeMillis()) {
+        sp(context).edit()
+            .putInt(KEY_LAST_SPOKEN_SOC, soc)
+            .putLong(KEY_LAST_SPOKEN_AT, at)
+            .apply()
+    }
+
+    // ==================== 设备昵称 / 默认设备（v0.2.88） ====================
+
+    /** 昵称表（MAC → 昵称），JSON 对象存单键。 */
+    private const val KEY_NICKNAMES = "jikong_nicknames"
+
+    /** 默认设备 MAC（空 = 未设置）。 */
+    private const val KEY_DEFAULT_MAC = "jikong_default_mac"
+
+    fun nicknames(context: Context): Map<String, String> = try {
+        val obj = org.json.JSONObject(sp(context).getString(KEY_NICKNAMES, "{}") ?: "{}")
+        val out = LinkedHashMap<String, String>()
+        obj.keys().forEach { mac -> out[mac] = obj.optString(mac) }
+        out
+    } catch (e: Exception) {
+        emptyMap()
+    }
+
+    /** 指定 MAC 的昵称（无则 null）。 */
+    fun nickname(context: Context, mac: String): String? =
+        nicknames(context)[mac]?.takeIf { it.isNotBlank() }
+
+    /** 设置昵称；name 空白 = 清除该 MAC 的昵称。 */
+    fun setNickname(context: Context, mac: String, name: String) {
+        val obj = try {
+            org.json.JSONObject(sp(context).getString(KEY_NICKNAMES, "{}") ?: "{}")
+        } catch (e: Exception) {
+            org.json.JSONObject()
+        }
+        if (name.isBlank()) obj.remove(mac) else obj.put(mac, name.trim())
+        sp(context).edit().putString(KEY_NICKNAMES, obj.toString()).apply()
+    }
+
+    fun defaultMac(context: Context): String =
+        sp(context).getString(KEY_DEFAULT_MAC, "") ?: ""
+
+    fun setDefaultMac(context: Context, mac: String) {
+        sp(context).edit().putString(KEY_DEFAULT_MAC, mac.trim()).apply()
+    }
 }

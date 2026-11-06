@@ -19,6 +19,17 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.88 播报/昵称/默认设备三功能（2026-11-06 23:15 实施）
+
+| 项 | 内容 |
+|---|---|
+| **需求（用户 23:12 逐条拍板）** | ①语音播报：设置页开关+间隔+低电量阈值；**每次连接成功后首个含电量帧判定一次，连接存续期内不再播**（判定规则「电量≠上次播报值→播；相同且距上次播报≥间隔→播」跨连接生效）；话术「当前电量 N%」，低于阈值（默认 20，设置可调）追加「电量低，请注意充电」；仅极空页可见时播（页面不可见机会保留到可见后首帧）；演示模式不播。②昵称：连接栏「改名」入口（点设备名弹输入框，留空清除）；扫描列表昵称主标题+原名/MAC 小字。③默认设备：连接栏「设为默认」开关（关=取消）；扫描时默认设备直连、失败自动回退正常扫描；扫描按钮下显示「默认：昵称」；**进入极空页自动连默认设备** |
+| **回退标记（git 快照）** | 提交 **`74af59b`**（`docs: 里程碑补脉络5…`，工作区干净即此提交）——本次改动前全部文件原文以此为准 |
+| **回滚配方** | `git checkout 74af59b -- app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/build.gradle.kts server/data/updates/update.json`，另**手动删除**新增文件 `app/src/main/java/my/bridge/com/jikong/JikongSpeaker.kt` |
+| **触发回滚的信号** | ①TTS 播报异常刷屏/不播；②改昵称后扫描列表/连接栏显示错乱；③默认设备直连失败后不回退扫描或死循环重连；④进页面自动连与自动重连互相打架（双连接竞争） |
+| **实施结果（改后回填，2026-11-06 23:35）** | ①新增 `JikongSpeaker.kt`（长驻 TTS 单例，惰性初始化+pending 补播，缺引擎静默失败）；`JikongPrefs` 加 speakEnabled/speakIntervalMin(1~120,默认10)/speakLowSoc(1~50,默认20)/lastSpokenSoc/lastSpokenAt/nicknames(JSON)/defaultMac；Controller 加 `speakPendingThisConnection`（connect 与自动重连成功置位，`maybeAnnounce` 在 0x02 帧判定后复位——页面不可见/演示/开关未开不消耗机会）；②UI：设置页「语音播报」卡（开关+两个步进行 JkStepperRow）；ConnectionBar 点设备名弹改名框（留空清除）+「设默认/取消默认」文字开关+名称后缀「· 默认」；ScanConnectView 昵称主标题/原名小字+默认提示行；doScan 有默认→直连(fallbackScan=true)，失败 Main 线程回退 doNormalScan（局部函数改单向引用避免 doScan↔doConnect 互调）；JikongPage 进入时 LaunchedEffect 自动连默认设备（未连接/非演示/有连接权限/蓝牙开，失败仅 Toast）；③编译两次过（首错=局部函数前向引用，重构修复）；assembleDebug 成功，APK 实证 0.2.88 + JikongSpeaker/maybeAnnounce 在 classes11.dex；分发 updates+Downloads+update.json（sha256 d4aaddd1…），删 v0.2.87 APK |
+| **踩坑** | Kotlin **局部函数不允许前向引用**——doScan 与 doConnect 互相调用编译错 `Unresolved reference 'doConnect'`；解法=抽出 `doNormalScan()` 打断循环（doConnect 回退直调它，不再回 doScan） |
+
 ### v0.2.86 后台极空页 1:1 复刻 + 客户端上报扩展（2026-11-06 21:00 实施，已构建分发，待验证）
 
 | 项 | 内容 |

@@ -208,7 +208,13 @@ fun JikongPage() {
         return (fine || coarse) && scan && connect
     }
 
-    fun doScan() {
+    // v0.2.88：连接只需 BLUETOOTH_CONNECT（12+），不需要定位/扫描权限（自动连默认设备用）
+    fun hasConnectPermission(): Boolean =
+        android.os.Build.VERSION.SDK_INT < 31 ||
+            context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    /** 蓝牙就绪检查（权限 + 开关），不就绪时弹对应 Toast 并按需请求权限。 */
+    fun ensureBleReady(): Boolean {
         if (!hasBlePermission()) {
             val perms = mutableListOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -219,12 +225,21 @@ fun JikongPage() {
                 perms += Manifest.permission.BLUETOOTH_CONNECT
             }
             permLauncher.launch(perms.toTypedArray())
-            return
+            return false
         }
         if (!JikongBleClient.isBluetoothEnabled(context)) {
             Toast.makeText(context, "请先开启蓝牙", Toast.LENGTH_SHORT).show()
-            return
+            return false
         }
+        return true
+    }
+
+    /** 设备显示名：昵称优先（v0.2.88）。 */
+    fun displayNameOf(mac: String, fallback: String?): String =
+        JikongPrefs.nickname(context, mac) ?: fallback?.takeIf { it.isNotBlank() } ?: mac
+
+    /** 正常扫描（不含默认设备逻辑；供点扫描与默认设备回退共用）。 */
+    fun doNormalScan() {
         scanning = true
         kotlinx.coroutines.GlobalScope.launch {
             try {
@@ -238,7 +253,7 @@ fun JikongPage() {
         }
     }
 
-    fun doConnect(dev: BleDevice) {
+    fun doConnect(dev: BleDevice, isDefault: Boolean = false, fallbackScan: Boolean = false) {
         connecting = true
         kotlinx.coroutines.GlobalScope.launch {
             val ok = try {
@@ -249,11 +264,55 @@ fun JikongPage() {
             }
             connecting = false
             // Toast 必须在主线程（GlobalScope.launch 默认后台线程无 Looper，直接 Toast 会 NPE 崩溃）
-            val msg = if (ok) "已连接 ${dev.name}" else "连接失败，请靠近设备重试"
+            val msg = when {
+                ok -> "已连接 ${displayNameOf(dev.address, dev.name)}"
+                isDefault && fallbackScan -> "默认设备连接失败，转为正常扫描"
+                else -> "连接失败，请靠近设备重试"
+            }
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                // v0.2.88：默认设备直连失败 → 自动回退正常扫描（只回退一次，防循环）。
+                // 权限/蓝牙在进入默认直连前刚检查过，直接复用 doNormalScan（也避免
+                // 局部函数 doConnect 前向引用 doScan 的循环依赖）。
+                if (!ok && fallbackScan) {
+                    doNormalScan()
+                }
             }
         }
+    }
+
+    fun doScan(tryDefault: Boolean = true) {
+        if (!ensureBleReady()) return
+        // v0.2.88 默认设备：点扫描时若有默认设备，跳过扫描直接连接；
+        // 连接失败自动回退正常扫描（doConnect 里触发 doScan(tryDefault=false)）。
+        val defMac = JikongPrefs.defaultMac(context)
+        if (tryDefault && defMac.isNotBlank()) {
+            val cached = controller.cachedDevices.firstOrNull { it.address == defMac }
+            doConnect(
+                BleDevice(defMac, displayNameOf(defMac, cached?.name), cached?.rssi ?: 0),
+                isDefault = true,
+                fallbackScan = true,
+            )
+            return
+        }
+        doNormalScan()
+    }
+
+    // v0.2.88：进入极空页自动连默认设备（用户拍板）。仅未连接、非演示、有默认设备、
+    // 有连接权限且蓝牙开启时尝试一次；失败仅 Toast，不自动转扫描（点扫描按钮才兜底）。
+    LaunchedEffect(Unit) {
+        if (controller.status.connected || controller.demoMode) return@LaunchedEffect
+        val defMac = JikongPrefs.defaultMac(context)
+        if (defMac.isBlank() || !hasConnectPermission()) return@LaunchedEffect
+        if (!JikongBleClient.isBluetoothEnabled(context)) return@LaunchedEffect
+        val cached = controller.cachedDevices.firstOrNull { it.address == defMac }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            Toast.makeText(context, "正在连接默认设备…", Toast.LENGTH_SHORT).show()
+        }
+        doConnect(
+            BleDevice(defMac, displayNameOf(defMac, cached?.name), cached?.rssi ?: 0),
+            isDefault = true,
+        )
     }
 
     // v0.2.83 时速仪表盘开关（默认关）：开=页面可见时启动 GPS+积分；关=完全零成本。
@@ -347,6 +406,8 @@ fun JikongPage() {
                     onShowAllChange = { showAll = it },
                     onScan = { doScan() },
                     onConnect = { doConnect(it) },
+                    defaultMac = JikongPrefs.defaultMac(context),
+                    nicknameOf = { JikongPrefs.nickname(context, it) },
                 )
             } else {
                 // 已连接：底部导航四页；连接状态栏只在首页滚动内容内显示并随上滑消失（v0.2.67）
@@ -426,6 +487,11 @@ private fun ConnectionBar(
     themeMode: Int,
     onThemeCycle: () -> Unit,
     onDisconnect: () -> Unit,
+    // v0.2.88：已连接时额外能力——点设备名改名、设为/取消默认设备
+    deviceAddress: String = "",
+    isDefault: Boolean = false,
+    onRename: (() -> Unit)? = null,
+    onToggleDefault: ((Boolean) -> Unit)? = null,
 ) {
     val c = LocalJkColors.current
     Row(
@@ -437,14 +503,35 @@ private fun ConnectionBar(
     ) {
         Box(Modifier.size(8.dp).background(if (connected) c.green else c.gray, CircleShape))
         Spacer(Modifier.width(6.dp))
+        val nameText = if (connected) {
+            if (isDefault) "已连接 · $deviceName · 默认" else "已连接 · $deviceName"
+        } else "未连接"
         Text(
-            text = if (connected) "已连接 · $deviceName" else "未连接",
+            text = nameText,
             color = if (connected) c.green else c.gray,
             fontSize = 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .then(
+                    if (connected && onRename != null) {
+                        Modifier.clickable(onClick = onRename)
+                    } else Modifier
+                ),
         )
+        if (connected && onToggleDefault != null && deviceAddress.isNotBlank()) {
+            // v0.2.88：设为/取消默认设备（文字开关，与主题切换同款紧凑样式）
+            Text(
+                if (isDefault) "取消默认" else "设默认",
+                color = if (isDefault) JkGreen else JkBlue,
+                fontSize = 13.sp,
+                maxLines = 1,
+                modifier = Modifier
+                    .clickable { onToggleDefault(!isDefault) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            )
+        }
         // 主题切换：自动 → 浅色 → 深色（循环）；紧凑文本（TextButton 有最小高度/宽度，易挤成两行）
         val themeLabel = when (themeMode) {
             JikongPrefs.THEME_LIGHT -> "浅色"
@@ -485,6 +572,8 @@ private fun ScanConnectView(
     onShowAllChange: (Boolean) -> Unit,
     onScan: () -> Unit,
     onConnect: (BleDevice) -> Unit,
+    defaultMac: String = "",
+    nicknameOf: (String) -> String? = { null },
 ) {
     val c = LocalJkColors.current
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -505,6 +594,15 @@ private fun ScanConnectView(
             } else {
                 Text("扫描极空设备")
             }
+        }
+        // v0.2.88：已设默认设备时显示提示（点扫描=直连默认设备，失败自动转正常扫描）
+        if (defaultMac.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "默认：${nicknameOf(defaultMac) ?: defaultMac}（点扫描直连该设备）",
+                fontSize = 12.sp,
+                color = JkGreen,
+            )
         }
         Spacer(Modifier.height(8.dp))
         Text(
@@ -568,10 +666,16 @@ private fun ScanConnectView(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(dev.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                                // v0.2.88：有昵称时昵称为主标题、原名降为小字
+                                val nick = nicknameOf(dev.address)
+                                Text(
+                                    nick ?: dev.name,
+                                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                                )
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    "${dev.address} · 信号 ${dev.rssi} dBm",
+                                    if (nick != null) "原名 ${dev.name} · ${dev.address} · 信号 ${dev.rssi} dBm"
+                                    else "${dev.address} · 信号 ${dev.rssi} dBm",
                                     fontSize = 12.sp,
                                     color = c.gray,
                                 )
@@ -606,6 +710,12 @@ private fun HomeView(
     val s = controller.status
     val c = LocalJkColors.current
 
+    // v0.2.88：默认设备 / 改名弹窗状态。昵称与默认值的显示随 statusVersion（~1s/帧）
+    // 自动重组刷新，无需额外 tick。
+    var defaultMac by remember { mutableStateOf(JikongPrefs.defaultMac(context)) }
+    var showRename by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
+
     // v0.2.83 仪表盘生命周期门控（红队修正：HomeView 只在已连接时存在）——
     // 进入首页（连接建立/回前台）且开关开才启动 GPS+积分；离开即注销，零后台成本。
     DisposableEffect(dashEnabled) {
@@ -634,16 +744,59 @@ private fun HomeView(
             .padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 10.dp),
     ) {
         // 连接状态栏（已连接 · 设备名 · 浅色/深色 · 断开）：仅首页显示，默认滚出视野、可上滑回看
+        // v0.2.88：显示昵称优先；点设备名弹改名框；「设默认/取消默认」文字开关
         Box(Modifier.onSizeChanged { connBarHeightPx = it.height }) {
             ConnectionBar(
                 connected = true,
-                deviceName = s.deviceName,
+                deviceName = JikongPrefs.nickname(context, s.deviceAddress) ?: s.deviceName,
                 themeMode = themeMode,
                 onThemeCycle = onThemeCycle,
                 onDisconnect = onDisconnect,
+                deviceAddress = s.deviceAddress,
+                isDefault = defaultMac == s.deviceAddress,
+                onRename = { renameText = JikongPrefs.nickname(context, s.deviceAddress) ?: ""; showRename = true },
+                onToggleDefault = { on ->
+                    defaultMac = if (on) s.deviceAddress else ""
+                    JikongPrefs.setDefaultMac(context, defaultMac)
+                    Toast.makeText(
+                        context,
+                        if (on) "已设为默认设备" else "已取消默认设备",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
             )
         }
         Spacer(Modifier.height(2.dp))
+
+        // v0.2.88：改名弹窗（点连接栏设备名触发；留空=清除昵称）
+        if (showRename) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showRename = false },
+                title = { Text("设备昵称", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
+                text = {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        placeholder = { Text("留空清除昵称") },
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        JikongPrefs.setNickname(context, s.deviceAddress, renameText)
+                        showRename = false
+                        Toast.makeText(
+                            context,
+                            if (renameText.isBlank()) "已清除昵称" else "昵称已保存",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }) { Text("保存") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRename = false }) { Text("取消") }
+                },
+            )
+        }
 
         // 充电/放电/均衡 一行三列（inline 圆点+文字，定档样式）
         // v0.2.79：改传基元参数（Boolean）。旧签名收整个 JikongStatus——Compose 强跳过
@@ -1416,6 +1569,10 @@ private fun SettingsView(
     val context = LocalContext.current
     // 订阅仪表盘 1Hz 版本号：累计统计实时刷新（红队修正：否则 @Volatile 变化不触发重组）
     SpeedDash.version.value
+    // v0.2.88 语音播报设置状态
+    var speakEnabled by remember { mutableStateOf(JikongPrefs.speakEnabled(context)) }
+    var speakIntervalMin by remember { mutableIntStateOf(JikongPrefs.speakIntervalMin(context)) }
+    var speakLowSoc by remember { mutableIntStateOf(JikongPrefs.speakLowSoc(context)) }
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("仪表盘", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
@@ -1447,6 +1604,72 @@ private fun SettingsView(
         if (SpeedDash.gpsPermissionNeeded) {
             Spacer(Modifier.height(4.dp))
             Text("缺少精确定位权限：请到系统设置或首页卡片中授权。", fontSize = 11.sp, color = c.amber)
+        }
+
+        // v0.2.88 语音播报：开关 + 播报间隔 + 低电量阈值。
+        // 判定规则（用户拍板）：每次连接成功后首个页面可见的含电量帧判定一次，连接期间不再播；
+        // 电量≠上次播报值→播，相同且距上次播报≥间隔→播（跨连接生效，持久化防重启误播）。
+        Spacer(Modifier.height(16.dp))
+        Text("语音播报", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Spacer(Modifier.height(8.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("连接后播报电量", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "连接成功并获取到电量后语音播报一次（仅本页打开时）。电量与上次播报相同且未超间隔则不播。",
+                            fontSize = 11.sp, color = c.gray,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = speakEnabled,
+                        onCheckedChange = {
+                            speakEnabled = it
+                            JikongPrefs.setSpeakEnabled(context, it)
+                        },
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                JkStepperRow(
+                    label = "播报间隔",
+                    value = "$speakIntervalMin 分钟",
+                    onMinus = {
+                        speakIntervalMin = (speakIntervalMin - 1).coerceAtLeast(1)
+                        JikongPrefs.setSpeakIntervalMin(context, speakIntervalMin)
+                    },
+                    onPlus = {
+                        speakIntervalMin = (speakIntervalMin + 1).coerceAtMost(120)
+                        JikongPrefs.setSpeakIntervalMin(context, speakIntervalMin)
+                    },
+                )
+                Spacer(Modifier.height(2.dp))
+                JkStepperRow(
+                    label = "低电量阈值",
+                    value = "$speakLowSoc %",
+                    onMinus = {
+                        speakLowSoc = (speakLowSoc - 1).coerceAtLeast(1)
+                        JikongPrefs.setSpeakLowSoc(context, speakLowSoc)
+                    },
+                    onPlus = {
+                        speakLowSoc = (speakLowSoc + 1).coerceAtMost(50)
+                        JikongPrefs.setSpeakLowSoc(context, speakLowSoc)
+                    },
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "低于阈值时播报追加「电量低，请注意充电」。需要设备装有系统文字转语音（TTS）引擎。",
+                    fontSize = 11.sp, color = c.gray,
+                )
+            }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -1501,6 +1724,32 @@ private fun SettingsView(
                 )
             }
         }
+    }
+}
+
+/** v0.2.88：设置页紧凑步进行（－ 值 ＋），用于播报间隔/低电量阈值。 */
+@Composable
+private fun JkStepperRow(
+    label: String,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+) {
+    val c = LocalJkColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 13.sp, color = c.text, modifier = Modifier.weight(1f))
+        Text(
+            "－", fontSize = 16.sp, color = JkBlue, fontWeight = FontWeight.Bold,
+            modifier = Modifier.clickable(onClick = onMinus).padding(horizontal = 10.dp, vertical = 2.dp),
+        )
+        Text(value, fontSize = 13.sp, color = c.text, modifier = Modifier.defaultMinSize(minWidth = 66.dp))
+        Text(
+            "＋", fontSize = 16.sp, color = JkBlue, fontWeight = FontWeight.Bold,
+            modifier = Modifier.clickable(onClick = onPlus).padding(horizontal = 10.dp, vertical = 2.dp),
+        )
     }
 }
 
