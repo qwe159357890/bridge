@@ -20,6 +20,7 @@ import android.os.Build
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import timber.log.Timber
@@ -92,6 +93,15 @@ object JikongBleClient {
 
     @Volatile
     var connectedDeviceAddress: String = ""
+        private set
+
+    /**
+     * 最近一次 GATT 断开的 status 码（v0.2.78）。
+     * 8 = 连接监督超时（设备走远/遮挡，信号恢复即可能回连成功，适合高频快连）；
+     * 133 等其它值 = 协议栈/链路错误。连接成功后复位为 -1。未经历断开时也是 -1。
+     */
+    @Volatile
+    var lastDisconnectStatus: Int = -1
         private set
 
     // ---- 回调 ----
@@ -232,20 +242,57 @@ object JikongBleClient {
 
     private var connectWaiter: kotlinx.coroutines.CancellableContinuation<Boolean>? = null
 
+    // v0.2.79 首连无数据修复：GATT 操作必须严格串行（MTU → 服务发现 → CCCD 订阅 → 读写）。
+    // 旧代码 requestMtu 与 discoverServices 背靠背同时发起，部分协议栈上随后排队的 CCCD
+    // 订阅/写命令会失败且无人重试 → 首次连接长期收不到通知（用户 2026-11-06 实证：
+    // 首连状态栏长时间不出数据，断开重连才恢复）。servicesRequested 防止兜底定时器重复发现。
+    @Volatile
+    private var servicesRequested = false
+
+    private var cccdRetries = 0
+
+    /** 通知 hex 日志预算（每会话前 3 条，防灌爆上传缓冲，v0.2.81）。 */
+    @Volatile
+    private var notifyLogBudget = 3
+
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Timber.tag(TAG).i("GATT 已连接，开始发现服务")
-                // 请求更大 MTU（极空单帧超 20B，增大 MTU 减少分包，提升稳定性）
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    runCatching { g.requestMtu(256) }
+                Timber.tag(TAG).i("GATT 已连接，先协商 MTU 再发现服务")
+                servicesRequested = false
+                cccdRetries = 0
+                notifyLogBudget = 3
+                // 请求更大 MTU（极空单帧超 20B，增大 MTU 减少分包，提升稳定性）。
+                // discoverServices 移到 onMtuChanged 里串行执行。
+                val requested = runCatching { g.requestMtu(256) }.getOrDefault(false)
+                if (!requested) {
+                    // 个别 ROM requestMtu 直接失败 → 立即降级发现服务
+                    servicesRequested = true
+                    runCatching { g.discoverServices() }
                 }
-                runCatching { g.discoverServices() }
+                // 兜底：MTU 回调 1.5s 内没来（个别 ROM 不回调）也要发现服务
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (!servicesRequested) {
+                        servicesRequested = true
+                        Timber.tag(TAG).w("MTU 回调超时，兜底发起服务发现")
+                        runCatching { g.discoverServices() }
+                    }
+                }, 1500)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Timber.tag(TAG).i("GATT 已断开 status=$status")
+                lastDisconnectStatus = status
                 setConnected(false)
                 connectWaiter?.let { w -> connectWaiter = null; w.resume(false) }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            Timber.tag(TAG).i("MTU 协商完成 mtu=$mtu status=$status")
+            if (!servicesRequested) {
+                servicesRequested = true
+                runCatching { g.discoverServices() }
             }
         }
 
@@ -257,7 +304,10 @@ object JikongBleClient {
                 return
             }
             val ok = selectCharacters(g)
-            if (ok) setConnected(true)
+            if (ok) {
+                lastDisconnectStatus = -1   // 连接成功，清除上次断开原因
+                setConnected(true)
+            }
             connectWaiter?.let { w -> connectWaiter = null; w.resume(ok) }
             if (!ok) {
                 Timber.tag(TAG).w("未找到可用的透传 characteristic")
@@ -270,7 +320,14 @@ object JikongBleClient {
             characteristic: BluetoothGattCharacteristic,
         ) {
             val bytes = characteristic.value ?: return
-            Timber.tag(TAG).d("通知 ${bytes.size}B: ${bytes.toHex()}")
+            // v0.2.81 降噪：实时数据流每秒十几个分包，逐条打 hex 会把 device_logs
+            // 上传缓冲灌爆（2026-11-06 实证：一次上传 1937 条通知 vs 1 条诊断日志，
+            // 连接建立阶段的关键日志全被挤掉）。改为每会话只记前 3 条，其余静默
+            // （解析/断流诊断在 JikongController 层有汇总日志，不依赖逐包 hex）。
+            if (notifyLogBudget > 0) {
+                notifyLogBudget--
+                Timber.tag(TAG).d("通知 ${bytes.size}B: ${bytes.toHex()}")
+            }
             onDataReceived?.invoke(bytes)
         }
 
@@ -290,6 +347,19 @@ object JikongBleClient {
             status: Int,
         ) {
             Timber.tag(TAG).d("descriptor 写回 status=$status")
+            // v0.2.79：CCCD 订阅失败会导致通知永远收不到（首连无数据的另一元凶），
+            // 旧代码只打日志不重试。失败时重新订阅（限 3 次，防风暴）。
+            if (status != BluetoothGatt.GATT_SUCCESS && cccdRetries < 3) {
+                cccdRetries++
+                Timber.tag(TAG).w("CCCD 订阅失败 status=$status，第 %d 次重试", cccdRetries)
+                runCatching {
+                    notifyChar?.let { nc ->
+                        g.setCharacteristicNotification(nc, true)
+                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        g.writeDescriptor(descriptor)
+                    }
+                }
+            }
         }
     }
 
@@ -371,8 +441,20 @@ object JikongBleClient {
                 return false
             }
             c.value = bytes
-            val sent = g.writeCharacteristic(c)
-            if (!sent) return false
+            // v0.2.79：GATT 操作串行——上一个操作（MTU/CCCD 等）未完成时
+            // writeCharacteristic 返回 false，旧代码直接放弃导致 0x97/0x96 静默丢失
+            // （首连设备信息空、数据流迟迟不来的元凶）。加短重试（共 ~2s）。
+            var sent = g.writeCharacteristic(c)
+            var tries = 0
+            while (!sent && tries < 20) {
+                delay(100)
+                sent = g.writeCharacteristic(c)
+                tries++
+            }
+            if (!sent) {
+                Timber.tag(TAG).w("写 characteristic 失败（重试 20 次后放弃）")
+                return false
+            }
             if (noResp) {
                 true // 无响应写，写进队列即认为成功
             } else {

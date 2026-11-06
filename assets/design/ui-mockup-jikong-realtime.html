@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极空实时状态页原型</title>
+<style>
+  :root {
+    --bg: #000000;
+    --card: #26282B;
+    --text: #E8EAED;
+    --gray: #8A919F;
+    --divider: #3A3D40;
+    --green: #00E050;
+    --red: #FF5252;
+    --blue: #4FC3F7;
+    --amber: #FFD60A;
+    --badge: #1F3A66;
+    --tabbar: #1A1C1F;
+    --tabline: #2A2C30;
+    --tabgray: #6B7280;
+  }
+  body.light {
+    --bg: #F5F6F8;
+    --card: #FFFFFF;
+    --text: #1F2329;
+    --gray: #8A919F;
+    --divider: #E5E8EC;
+    --green: #00A344;
+    --red: #D93025;
+    --blue: #1A73E8;
+    --amber: #B45309;
+    --badge: #D6E4FF;
+    --tabbar: #FFFFFF;
+    --tabline: #E5E8EC;
+    --tabgray: #9AA3AF;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    font-family: "HarmonyOS Sans SC", "MiSans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    max-width: 420px; margin: 0 auto; min-height: 100vh;
+    padding-bottom: 56px;
+    transition: background .2s;
+  }
+  .page { padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 6px; }
+
+  /* 区块标题（绿点 + 绿字，官方样式） */
+  .sec { display: flex; align-items: center; gap: 8px; margin: 2px 2px 0; }
+  .sec .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .sec .t { font-size: 15px; font-weight: 700; color: var(--green); }
+
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 10px 14px;
+  }
+  /* 电压/电流行与实时数据：上下边距压小（对齐单体电压卡的紧凑感） */
+  .card.tight { padding: 6px 14px; }
+  /* 网格卡片（单体电压/均衡线电阻）：上下边距小 */
+  .card.gridcard { padding: 8px 12px; }
+
+  /* ① 电池电压 / 电池电流：一行卡片，标签+数值同行（借鉴首页功率行） */
+  .vic { display: flex; align-items: baseline; }
+  .vic .lb { font-size: 13px; color: var(--gray); }
+  .vic .vl { font-size: 16px; font-weight: 700; color: var(--green); margin-left: 6px; }
+  .vic .gap { width: 22px; }
+
+  /* ② 实时数据：双列 KV（保持现有） */
+  .kv { display: flex; }
+  .kv .col { flex: 1; display: flex; flex-direction: column; }
+  .kv .col + .col { margin-left: 24px; }
+  .kvrow { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
+  .kvrow .k { color: var(--gray); }
+  .kvrow .v { font-weight: 600; }
+  .kvrow .v.g { color: var(--green); }
+
+  /* ③ 单体电压 / 均衡线电阻：一个控件内 3 列 × 8 行，序号徽标与数值同行 */
+  .grid { display: flex; flex-direction: column; }
+  .grow { display: flex; }
+  .gcell {
+    flex: 1; display: flex; align-items: center; gap: 7px;
+    padding: 5px 0;
+  }
+  .badge {
+    min-width: 26px; text-align: center;
+    background: var(--badge); color: #fff;
+    font-size: 12px; font-weight: 600; line-height: 1.15;
+    border-radius: 8px; padding: 1px 4px;
+  }
+  body.light .badge { color: #1A3C8C; }
+  .gv { font-size: 14px; font-weight: 600; color: var(--text); }
+  .gv.max { color: var(--red); }
+  .gv.min { color: var(--amber); }
+  .gv.na { color: var(--gray); font-weight: 400; }
+
+  /* 底部导航（示意） */
+  .tabbar {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: 420px;
+    background: var(--tabbar); border-top: 1px solid var(--tabline);
+    display: flex; justify-content: space-around; padding: 6px 0 8px;
+  }
+  .tab { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; color: var(--tabgray); }
+  .tab.on { color: var(--green); }
+  .tab .ind { width: 18px; height: 2px; border-radius: 1px; background: transparent; }
+  .tab.on .ind { background: var(--green); }
+  .tab svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+  .theme-fab {
+    position: fixed; top: 12px; right: 12px; z-index: 10;
+    background: var(--card); color: var(--text);
+    border: 1px solid var(--divider); border-radius: 16px;
+    font-size: 12px; padding: 5px 12px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <button class="theme-fab" onclick="document.body.classList.toggle('light'); this.textContent=document.body.classList.contains('light')?'切换深色':'切换浅色'">切换浅色</button>
+
+  <div class="page">
+
+    <!-- ① 电池电压 / 电池电流：一行，标签与数值同行（借鉴首页）；紧凑内边距 -->
+    <div class="card tight vic">
+      <span class="lb">电池电压(V)</span><span class="vl">67.54</span>
+      <span class="gap"></span>
+      <span class="lb">电池电流(A)</span><span class="vl">7.80</span>
+    </div>
+
+    <!-- ② 实时数据：双列 KV（保持现有） -->
+    <div class="sec"><span class="dot"></span><span class="t">实时数据</span></div>
+    <div class="card tight kv">
+      <div class="col">
+        <div class="kvrow"><span class="k">电池功率</span><span class="v g">526.5W</span></div>
+        <div class="kvrow"><span class="k">电池容量</span><span class="v">50.0Ah</span></div>
+        <div class="kvrow"><span class="k">剩余容量</span><span class="v">37.0Ah</span></div>
+        <div class="kvrow"><span class="k">功率温度</span><span class="v">18.9℃</span></div>
+        <div class="kvrow"><span class="k">电池温度1</span><span class="v">22.5℃</span></div>
+        <div class="kvrow"><span class="k">电池温度2</span><span class="v">22.7℃</span></div>
+        <div class="kvrow"><span class="k">加热状态</span><span class="v g">关闭</span></div>
+        <div class="kvrow"><span class="k">均衡</span><span class="v g">关闭</span></div>
+      </div>
+      <div class="col">
+        <div class="kvrow"><span class="k">单体平均</span><span class="v">3.377V</span></div>
+        <div class="kvrow"><span class="k">最大压差</span><span class="v">0.000V</span></div>
+        <div class="kvrow"><span class="k">均衡电流</span><span class="v">0.000A</span></div>
+        <div class="kvrow"><span class="k">循环次数</span><span class="v">10次</span></div>
+        <div class="kvrow"><span class="k">循环容量</span><span class="v">528.5Ah</span></div>
+        <div class="kvrow"><span class="k">加热电流</span><span class="v">0.0A</span></div>
+        <div class="kvrow"><span class="k">充电器状态</span><span class="v g">未插入</span></div>
+        <div class="kvrow"><span class="k">电池类型</span><span class="v">铁锂</span></div>
+      </div>
+    </div>
+
+    <!-- ③ 单体电压：一个控件，3 列 × 8 行，序号+电压同行 -->
+    <div class="sec"><span class="dot"></span><span class="t">单体电压 (V)</span></div>
+    <div class="card gridcard">
+      <div class="grid" id="cellGrid"></div>
+    </div>
+
+    <!-- ④ 均衡线电阻：同款单控件网格 -->
+    <div class="sec"><span class="dot"></span><span class="t">均衡线电阻 (Ω)</span></div>
+    <div class="card gridcard">
+      <div class="grid" id="resGrid"></div>
+    </div>
+
+  </div>
+
+  <div class="tabbar">
+    <div class="tab on"><span class="ind"></span><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>实时状态</div>
+    <div class="tab"><span class="ind"></span><svg viewBox="0 0 24 24"><path d="M4 20V10l8-6 8 6v10"/></svg>首页</div>
+    <div class="tab"><span class="ind"></span><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>参数设置</div>
+  </div>
+
+<script>
+  // 21 节实测（3.377V，01 号最高标红、12 号最低标蓝），22~24 未接显示 --
+  const cells = [];
+  for (let i = 0; i < 24; i++) cells.push(i < 21 ? 3.377 : null);
+  const MAXI = 0, MINI = 11;
+  function renderGrid(el, vals, fmt) {
+    // 竖向排列（列优先）：左列 1-8、中列 9-16、右列 17-24
+    let html = "";
+    for (let r = 0; r < 8; r++) {
+      html += '<div class="grow">';
+      for (let k = 0; k < 3; k++) {
+        const i = k * 8 + r;
+        const v = vals[i];
+        let cls = "gv", txt = "--";
+        if (v !== null) {
+          txt = fmt(v);
+          if (i === MAXI) cls += " max"; else if (i === MINI) cls += " min";
+        } else cls += " na";
+        html += `<div class="gcell"><span class="badge">${String(i+1).padStart(2,"0")}</span><span class="${cls}">${txt}</span></div>`;
+      }
+      html += "</div>";
+    }
+    el.innerHTML = html;
+  }
+  renderGrid(document.getElementById("cellGrid"), cells, v => v.toFixed(3));
+  // 内阻：前 21 节示例值，未接 --
+  const res = [];
+  for (let i = 0; i < 24; i++) res.push(i < 21 ? 1.25 + (i % 5) * 0.03 : null);
+  renderGrid(document.getElementById("resGrid"), res, v => v.toFixed(3));
+</script>
+</body>
+</html>

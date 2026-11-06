@@ -30,6 +30,22 @@ import timber.log.Timber
 class JikongController private constructor() {
     companion object {
         const val TAG = "Jikong"
+
+        /**
+         * 自动重连窗口（v0.2.77）：意外断开后持续重试，窗口内**一次都没成功过**才放弃；
+         * 期间任一次成功即归零（成功退出本循环，下次断开重新起算窗口）。
+         */
+        const val RECONNECT_WINDOW_MS = 180_000L
+
+        /** 自动重连重试间隔（常规档）。 */
+        const val RECONNECT_RETRY_MS = 3_000L
+
+        /** 自动重连重试间隔（快速档，GATT status=8 信号监督超时触发时使用，v0.2.78）。 */
+        const val RECONNECT_FAST_RETRY_MS = 800L
+
+        /** GATT status=8：连接监督超时（设备走远/遮挡，信号恢复即可能回连成功）。 */
+        const val GATT_STATUS_CONN_TIMEOUT = 8
+
         @Volatile
         private var INSTANCE: JikongController? = null
 
@@ -75,12 +91,49 @@ class JikongController private constructor() {
     @Volatile
     var keepConnection: Boolean = false
 
+    /** 演示模式进行中（enterDemoMode 置位；disconnect / 真机连接成功后清除）。 */
+    @Volatile
+    var demoMode: Boolean = false
+        private set
+
+    /** 当前会话是否收到过 0x02 实时数据帧（UI 用于区分「无数据」与「真 0 值」，v0.2.77）。 */
+    @Volatile
+    var hasDataFrame: Boolean = false
+        private set
+
+    // ---- 自动重连（v0.2.77）----
+    /** 应用上下文（connect 时缓存，供后台重连使用）。 */
+    @Volatile
+    private var appContext: Context? = null
+
+    /** 自动重连开关：用户成功连接后置位；用户主动断开 / 放弃 / 离开页面时清除。 */
+    @Volatile
+    private var autoReconnectEnabled: Boolean = false
+
+    /** 最近一次用户连接的设备地址（重连目标）。 */
+    @Volatile
+    private var lastConnectAddress: String = ""
+
+    private var reconnectJob: Job? = null
+
+    /** 主动重建链路的连续次数（收到 0x02 即归零；防死循环重建，v0.2.80）。 */
+    @Volatile
+    private var datalessRecycles = 0
+
+    /** 置位后立刻主动断开 → onConnectionChanged 触发快档自动重连（v0.2.80）。 */
+    @Volatile
+    private var dataRecyclePending = false
+
     /** 轮询间隔（毫秒）。 */
     @Volatile
     var pollIntervalMs: Long = 2000
 
     private var pollJob: Job? = null
     private var lastReportedJson: String = ""
+
+    /** 最近一次收到 0x02 数据帧的时间（仅 0x02 刷新；0x01/0x03 不算，供断流自愈判断）。 */
+    @Volatile
+    private var lastDataFrameAt: Long = 0L
 
     // ---- 扫描结果暂存（进程级，切页不丢失；刷新才重新扫描）----
     @Volatile
@@ -110,6 +163,13 @@ class JikongController private constructor() {
                     // 断开时复位实时数据，避免管理后台看到陈旧数值
                     s.totalVoltage = 0f; s.current = 0f; s.soc = 0
                     s.cellVoltages = emptyList(); s.temperatures = emptyList()
+                    hasDataFrame = false
+                    // v0.2.79 自动重连：非用户主动断开（开关仍为 true）且页面在前台时自动恢复。
+                    // 真机 2026-11-06 日志实证：三次会话均以 GATT status=8（连接监督超时=信号丢失）
+                    // 断开，存活 16s/25s/97s——用户要求「只要不主动断开就一直尝试，180s 内一次没成功才放弃」。
+                    if (autoReconnectEnabled && (pageVisible || keepConnection)) {
+                        startReconnect(fast = dataRecyclePending)
+                    }
                 }
                 reportStatus()
                 // 连接状态变化也要触发 UI 重组（否则断开后界面仍停留「已连接」，
@@ -129,14 +189,45 @@ class JikongController private constructor() {
     // ==================== 连接控制 ====================
 
     suspend fun connect(context: Context, address: String): Boolean = mutex.withLock {
+        appContext = context.applicationContext
+        lastConnectAddress = address
+        // 用户手动连接优先：终止可能正在跑的自动重连循环
+        reconnectJob?.cancel()
+        reconnectJob = null
         val ok = JikongBleClient.connect(context, address)
-        if (ok) startPolling()
+        if (ok) {
+            // 真机连接成功即退出演示模式
+            demoMode = false
+            // v0.2.77：成功连接后启用自动重连（此后意外断开将自动恢复；重连成功即归零）
+            autoReconnectEnabled = true
+            startPolling()
+        }
         ok
     }
 
     fun disconnect() {
+        // 用户主动断开：关闭自动重连（v0.2.77，用户明确要求「不主动断开才自动重连」）
+        autoReconnectEnabled = false
+        dataRecyclePending = false
+        reconnectJob?.cancel()
+        reconnectJob = null
         stopPolling()
         JikongBleClient.disconnect()
+        if (demoMode) {
+            // v0.2.67 修复：演示模式断开无效——演示模式本就没有 BLE 连接，
+            // onConnectionChanged 回调不会触发，status.connected 永远停在 true。
+            // 此处手动复位状态并触发重组，回到扫描/连接界面。
+            // v0.2.76 完善：复位所有展示字段。之前只清电压/电流/SOC/单体/温度，
+            // 剩余容量/循环/充电器/极值等 demo 残留会混进下一次真机连接的界面
+            //（2026-11-06 真机截图实证：剩余 72.00Ah、循环 10 次、最高温 29℃ 全是 demo 旧值）。
+            demoMode = false
+            status = JikongStatus()
+            lastDataFrameAt = 0L
+            hasDataFrame = false
+            reportStatus()
+            statusVersion.value = statusVersion.value + 1
+            Timber.tag(TAG).i("退出演示模式（用户点击断开）")
+        }
     }
 
     /**
@@ -146,13 +237,14 @@ class JikongController private constructor() {
      */
     fun enterDemoMode() {
         stopPolling()
+        demoMode = true
         val s = status
         s.connected = true
         s.deviceName = "演示设备 JK-BD6A24S8PD"
         s.deviceAddress = "AA:BB:CC:DD:EE:FF"
         s.model = "JK-BD6A24S8PD"
-        s.hardwareVersion = "11.XW"
-        s.softwareVersion = "11.28"
+        s.hardwareVersion = "20H"
+        s.softwareVersion = "20.20"
 
         // 总览
         s.totalVoltage = 67.5f
@@ -223,6 +315,11 @@ class JikongController private constructor() {
             if (JikongBleClient.connected) startPolling()
         } else {
             if (!keepConnection) {
+                // 离开页面即主动释放连接（省电优先）：等同用户离开，不算意外断开，
+                // 关闭自动重连，避免后台反复回连耗电（v0.2.77）。
+                autoReconnectEnabled = false
+                reconnectJob?.cancel()
+                reconnectJob = null
                 stopPolling()
                 // 释放连接（省电优先；页面重新进入时再连）
                 JikongBleClient.disconnect()
@@ -235,24 +332,124 @@ class JikongController private constructor() {
 
     private fun startPolling() {
         if (pollJob?.isActive == true) return
+        // 新会话从零起算：启动加速重试依赖「还没收到过 0x02」这个状态
+        lastDataFrameAt = 0L
+        hasDataFrame = false
         pollJob = scope.launch {
             // JK02 时序（BHP1000/pippofo 实证）：连接后发 0x97（设备信息）→ 等 500ms
             // → 发 0x96（读单体）触发 0x01+0x03+0x02 burst，之后 BMS 持续流式推 0x02。
             // 关键：0x97 与 0x96 之间必须有间隔，否则背靠背连发会命令冲突，
             // BMS 只循环回 0x01+0x03，永不进入 0x02 数据流（v0.2.58 实测正是此现象）。
             // 首帧 0x97 立即下发（连接成功后立刻拉取，不再空等 500ms），仅保留命令间隔。
-            runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
+            Timber.tag(TAG).i("发送 0x97（读设备信息）")
+            val ok97 = runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
+                .getOrDefault(false)
+            if (!ok97) Timber.tag(TAG).w("0x97 首发失败（GATT 忙），交由启动 ramp 重试")
             delay(500)
+            Timber.tag(TAG).i("发送 0x96（触发数据流）")
             runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
 
-            // 触发后进入守护循环：正常情况下 BMS 持续推 0x02，无需重复下发；
-            // 仅当长时间未收到任何数据帧时才补发 0x96 兜底（间隔放宽到 5s，对齐 BHP1000）。
+            val connectAt = System.currentTimeMillis()
+            var lastTriggerAt = connectAt
+            var last97At = if (ok97) lastTriggerAt else 0L
             while (isActive && JikongBleClient.connected) {
-                delay(pollIntervalMs)
-                val since = System.currentTimeMillis() - status.lastUpdateAt
-                if (since > pollIntervalMs * 2) {
-                    runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
+                delay(400)
+                val now = System.currentTimeMillis()
+                if (lastDataFrameAt > 0L) {
+                    // 0x02 断流自愈守护（v0.2.76 修复）：只看 0x02 数据帧，超过 4s 没收到
+                    // 就补发 0x96（限频 3s 一次，防止风暴）。
+                    val sinceData = now - lastDataFrameAt
+                    if (sinceData > 4000 && now - lastTriggerAt > 3000) {
+                        lastTriggerAt = now
+                        Timber.tag(TAG).w("0x02 断流 %ds，补发 0x96 触发数据流", sinceData / 1000)
+                        runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
+                    }
+                } else {
+                    // v0.2.77 启动加速（用户反馈：连接后要几秒~10s 才出数据）：
+                    // 启动阶段还没有任何 0x02 时，每 1.2s 就重试一次 0x96（旧逻辑要等 4s
+                    // 才第一次补发）。真机日志实测连接后 ~1s 内数据即可到达，剩余延迟全是
+                    // 触发失败后的等待——最坏情况 ~2.4s 内拉起数据流。
+                    if (now - lastTriggerAt > 1200) {
+                        lastTriggerAt = now
+                        // v0.2.80 首连半死链自愈（用户真机实证）：蓝牙闲置 ~10 分钟后首连，
+                        // 链路建立但数据通道打不通（BMS 蓝牙模块休眠未醒），旧流程要干等
+                        // ~1min 直到 status=8 断开；而自动重连建的第 2 条链路立即有数据。
+                        // ⇒ 12s 内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
+                        // 重连），把 1 分钟缩短到 ~15s。连续重建限 3 次，防「休眠↔重建」死循环。
+                        if (now - connectAt > 12_000) {
+                            if (datalessRecycles < 3) {
+                                datalessRecycles++
+                                dataRecyclePending = true
+                                Timber.tag(TAG).w(
+                                    "连接 %ds 仍无 0x02（疑似首连半死链），主动重建链路（第 %d/3 次）",
+                                    (now - connectAt) / 1000, datalessRecycles,
+                                )
+                                JikongBleClient.disconnect()  // → 快档自动重连 → startPolling
+                                return@launch
+                            }
+                            Timber.tag(TAG).w("已连续重建 3 次仍无 0x02，保持当前链路继续 ramp（等模块自行苏醒）")
+                        }
+                        // v0.2.79：设备信息还没拿到（0x97 首发失败）→ 按「0x97→500ms→0x96」
+                        // 完整时序重试，否则首连后 型号/硬件/软件版本 一直空白。
+                        if (status.model.isBlank() && now - last97At > 3000) {
+                            last97At = now
+                            Timber.tag(TAG).w("启动 ramp：设备信息缺失，重发 0x97（完整时序）")
+                            runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
+                            delay(500)
+                        }
+                        Timber.tag(TAG).w("启动阶段未见 0x02，重发 0x96 触发数据流")
+                        runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
+                    }
                 }
+            }
+        }
+    }
+
+    /**
+     * v0.2.77 自动重连：连接意外断开后周期性回连 [lastConnectAddress]。
+     * - 放弃条件：[RECONNECT_WINDOW_MS]（180s）内**一次都没成功**；期间任一次成功即退出
+     *   本循环并归零（下次断开重新起算窗口）——即「只要成功过就继续努力」。
+     * - 终止条件：用户点断开（disconnect 清开关）/ 离开页面（setPageVisible 清开关）。
+     * - 重试频率分两档（v0.2.78，用户拍板）：断开原因是 **GATT status=8（信号监督超时）**
+     *   或 [fast]=true（v0.2.80 主动重建链路）时用 [RECONNECT_FAST_RETRY_MS]（800ms）
+     *   高频快连；其它原因走 [RECONNECT_RETRY_MS]（3s）常规档。两档窗口同为 180s。
+     * - 成功后走 startPolling 拉起数据流。
+     */
+    private fun startReconnect(fast: Boolean = false) {
+        if (reconnectJob?.isActive == true) return
+        dataRecyclePending = false
+        val ctx = appContext ?: return
+        if (lastConnectAddress.isBlank()) return
+        // 以「触发本次重连的断开原因」定档：循环期间新尝试产生的 status 变化不改档
+        val fastMode = fast || JikongBleClient.lastDisconnectStatus == GATT_STATUS_CONN_TIMEOUT
+        val retryMs = if (fastMode) RECONNECT_FAST_RETRY_MS else RECONNECT_RETRY_MS
+        val windowStart = System.currentTimeMillis()
+        Timber.tag(TAG).i(
+            "连接意外断开，启动自动重连（档位=%s / 间隔 %dms / 窗口 %ds / 目标 %s）",
+            if (fastMode) "快速(status=8)" else "常规",
+            retryMs, RECONNECT_WINDOW_MS / 1000, lastConnectAddress,
+        )
+        reconnectJob = scope.launch {
+            while (isActive && autoReconnectEnabled && (pageVisible || keepConnection) &&
+                !JikongBleClient.connected
+            ) {
+                if (System.currentTimeMillis() - windowStart > RECONNECT_WINDOW_MS) {
+                    Timber.tag(TAG).w(
+                        "自动重连：%ds 内一次都没成功，放弃（需用户手动重连）",
+                        RECONNECT_WINDOW_MS / 1000,
+                    )
+                    autoReconnectEnabled = false
+                    break
+                }
+                val ok = runCatching { JikongBleClient.connect(ctx, lastConnectAddress) }
+                    .getOrDefault(false)
+                if (ok) {
+                    Timber.tag(TAG).i("自动重连成功（失败窗口归零）")
+                    demoMode = false
+                    startPolling()
+                    break
+                }
+                delay(retryMs)
             }
         }
     }
@@ -344,7 +541,12 @@ class JikongController private constructor() {
     private fun mergeFrame(frame: JikongFrame) {
         val s = status
         when (frame.command) {
-            JikongProtocol.FRAME_DATA -> parseDataFrame(s, frame.data)          // 0x02
+            JikongProtocol.FRAME_DATA -> {
+                parseDataFrame(s, frame.data)          // 0x02
+                lastDataFrameAt = System.currentTimeMillis()
+                hasDataFrame = true
+                datalessRecycles = 0   // v0.2.80：数据通了，重建计数归零
+            }
             JikongProtocol.FRAME_SETTINGS -> parseSettingsFrame(s, frame.data)  // 0x01
             JikongProtocol.FRAME_DEVICE_INFO -> parseDeviceFrame(s, frame.data) // 0x03
             else -> Timber.tag(TAG).d("未处理的 JK02 帧类型 0x${frame.command.toString(16)}")
@@ -387,9 +589,13 @@ class JikongController private constructor() {
      *   245     充电器状态（u8，>0=已插入）
      *   275     电池类型（u8，0=铁锂/1=三元/2=钛酸锂）
      *
-     * 以上为 JK02_32S 布局（offset=32）绝对偏移，来源 syssi/esphome-jk-bms 源码
-     * jk_bms_ble.cpp（`jk_get_32bit(154+offset)` 等）+ fl4p/batmon-ha bmslib/models/jikong.py
-     * 交叉验证一致。注：24S 老固件需 -32，本项目设备为 32S 布局。
+     * 以上偏移 2026-11-06 用真机 0x02 帧逐字段实证（JK-BD6A24S8PD, hw 20H / sw 20.20）：
+     * 20 串总和 65.073V ≈ 总压@150=65.133V、剩余@174=41.513Ah = 标称@178=50.0Ah × SOC@173=83%，
+     * 循环@182=10、SOH@190=100、类型@275=0(铁锂)、温度@144/162/164、MOS@198/199 全部自洽。
+     * 布局归属 = 「新布局」（syssi JK02_32S 选项 / batmon-ha 的 fw≥11 分支，即 legacy 基础偏移 +32；
+     * syssi 明确说明 JK02_24S/32S 是帧格式选项而非串数）。例外：内阻实位 @80（非 96）、
+     * 平均电压实位 @74（非 90）——已改为重算，见 parseDataFrame 内注释。
+     * 交叉验证来源：syssi/esphome-jk-bms、fl4p/batmon-ha、wenwumumu/JK-BMS-4G、AppleSang/jkbms-web。
      */
     private fun parseDataFrame(s: JikongStatus, d: ByteArray) {
         // 单体电压：offset 6，每串 2B LE，×0.001V。串数=遇到 0 截止，最多 32 串。
@@ -406,20 +612,21 @@ class JikongController private constructor() {
         s.cellCount = cells.size
         s.cellVoltages = cells
 
-        // 内阻：offset 64+32 + i*2 = 96 + i*2，每串 2B LE，×0.001Ω（毫欧转欧姆）。
-        // 权威来源 syssi/esphome-jk-bms jk_bms_ble.cpp: `jk_get_16bit(i*2 + 64 + offset)`，
-        // 32S 布局 offset=32 ⇒ 96+i*2（v0.2.62 曾误写 80+i*2，读错偏移）。
+        // 内阻：offset 80 + i*2，每串 2B LE，单位 0.001mΩ（µΩ），存为 mΩ。
+        // 2026-11-06 真机帧实证（JK-BD6A24S8PD, sw 20.20）：20 串值落在 80..118
+        // （333~345，均匀 0.33x mΩ，恰好到串数截止、后随全 0），@96 读出的是内阻数组
+        // 中段而非起点。v0.2.64 曾按 32S 文档改 96，对本机反而是错的。
+        // 注意：不同固件布局可能不同，如他机异常需重新实证。
         for (i in 0 until cells.size) {
-            val off = 96 + i * 2
+            val off = 80 + i * 2
             if (off + 1 >= d.size) break
             resistances.add(readU16(d, off) * 0.001f)
         }
         s.cellResistances = resistances
 
-        // 单体平均电压：offset 58+32=90，u16 LE，×0.001V（32S 布局）。
-        // 注：syssi 源码注释称 58+offset，但实际用 recompute 求平均；此处两种方式等价，
-        // 直接读协议字段更稳（避免遇 0 截止误差）。v0.2.62 曾误写 74，已纠正为 90。
-        if (d.size >= 92) s.avgCellVoltage = readU16(d, 90) * 0.001f
+        // 单体平均电压：不读协议字段（本机 @74 才是平均值、@90 读出 0.34V 垃圾值），
+        // 直接由 cells 重算，跨固件最稳（recomputeExtremes 同思路）。
+        if (cells.isNotEmpty()) s.avgCellVoltage = cells.average().toFloat()
 
         // 总电压：offset 150-153，uint32 LE，×0.001V
         if (d.size >= 154) s.totalVoltage = readU32(d, 150) * 0.001f
@@ -481,7 +688,9 @@ class JikongController private constructor() {
         // 均衡电流：offset 170-171，i16 LE，×0.001A
         if (d.size >= 172) s.balanceCurrent = readI16(d, 170) / 1000f
 
-        // 均衡状态：offset 172（>0=均衡中）
+        // 均衡状态：offset 172（>0=正在均衡）。2026-11-06 真机 0x02 帧实证：该字节与
+        // 均衡电流完美联动（0.597A↔1，0A↔0）——语义是「正在均衡」（实时动作），不是
+        // 均衡开关设置。UI 修完强跳过冻结后，此灯随 BMS 实际均衡动作实时亮灭。
         if (d.size >= 173) s.balanceOn = (d[172].toInt() and 0xFF) > 0
 
         // MOS 状态：offset 198 充电，199 放电

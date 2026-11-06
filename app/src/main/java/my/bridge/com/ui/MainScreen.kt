@@ -156,6 +156,17 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var showExitHint by remember { mutableStateOf(false) }
     var lastBackAt by remember { mutableLongStateOf(0L) }
 
+    // 极空页沉浸态（v0.2.67，微信/销售页同款状态驱动）：
+    // JkUiState.immersive=true 时隐藏主页顶部 Tab 栏 + APP 底部工具栏；
+    // exitToken 自增 = 极空页内双击返回键 → 回主页首 Tab（页面销毁自动退出沉浸）。
+    val jkExitToken = JkUiState.exitToken
+    var consumedJkExit by remember { mutableIntStateOf(jkExitToken) }
+    LaunchedEffect(jkExitToken) {
+        if (jkExitToken == consumedJkExit) return@LaunchedEffect
+        consumedJkExit = jkExitToken
+        homeTab = 0
+    }
+
     // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），
     // 这样页内 BackHandler（短信详情）在其启用时优先接管
     BackHandler {
@@ -308,7 +319,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
         }
         // 底部导航：销售页沉浸时隐藏（selectedBottom==1 且未点「返回导航」）。
         // 点击任意 Tab 时重置 salesNavVisible，保证再次进入销售页回到沉浸态。
-        if (!((selectedBottom == 1 && !wechatNavVisible) || (selectedBottom == 2 && !salesNavVisible))) {
+        // v0.2.67：极空页沉浸（主页顶部 Tab 选中「极空」且 JkUiState.immersive）时同样隐藏。
+        val jkImmersive = selectedBottom == 0 &&
+            homeTabOrder.getOrElse(homeTab) { 0 } == 5 &&
+            JkUiState.immersive
+        if (!((selectedBottom == 1 && !wechatNavVisible) || (selectedBottom == 2 && !salesNavVisible) || jkImmersive)) {
             BridgeBottomBar(
                 selected = selectedBottom,
                 unreadWechat = my.bridge.com.wechat.WechatState.state.unreadTotal,
@@ -404,12 +419,15 @@ fun HomePage(
     onTabChange: (Int) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        BridgeTabRow(
-            // titles 已按显示顺序解析好（自定义名/默认名）
-            titles = titles,
-            currentTab = currentTab,
-            onTabChange = onTabChange,
-        )
+        // v0.2.67：极空页沉浸时隐藏顶部页面 Tab 栏（回主页 = 极空页内双击返回键）
+        if (!(tabOrder.getOrElse(currentTab) { 0 } == 5 && JkUiState.immersive)) {
+            BridgeTabRow(
+                // titles 已按显示顺序解析好（自定义名/默认名）
+                titles = titles,
+                currentTab = currentTab,
+                onTabChange = onTabChange,
+            )
+        }
         // currentTab 语义=「位置」，经顺序表翻译成页面 id 再分发。
         // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..5，此处防御性钳制。
         when (tabOrder.getOrElse(currentTab) { 0 }) {
