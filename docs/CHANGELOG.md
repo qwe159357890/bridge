@@ -37,17 +37,17 @@
 
 ### 脉络2 · 官方握手假设：逆向→证伪→回退定基线（v0.2.82→84）
 
-- **v0.2.82 · dexdump 逆向官方 APK 对齐时序**：BleMessage 字节码实证 STATE_CONNECTED→requestConnectionPriority(HIGH)→80ms→discoverServices→CCCD→40ms→**21B 握手帧**（AA5590EB97+15×00+CRC 0x11）→requestMtu(517)；照抄实施（回退锚点 `0b03027`=v0.2.81）。
+- **v0.2.82 · dexdump 逆向官方 APK 对齐时序**：BleMessage 字节码实证 STATE_CONNECTED→requestConnectionPriority(HIGH)→80ms→discoverServices→CCCD→40ms→**21B 握手帧**（AA5590EB97+15×00+CRC 0x11）→requestMtu(517)；照抄实施（回退锚点 `cacc8f5`=v0.2.81）。
 - **真机证伪**：官方时序完全生效（握手帧发送成功+CCCD+MTU 303）但 BMS 一帧不吐（0x02=0）→「半死链路=缺激活帧」假设不成立；「无限 12s 循环」实为 status=8 链路寿命仅 13s+800ms 快档重连的循环。
 - **二次逆向定论**：官方无独立激活帧（第 3 声蜂鸣=0x6C 时间同步帧、0xC8=OTA、监控平台 0x01 激活是 4E57 GPS 版帧不适用）；官方 CONNECT_TIMEOUT 10s 报错不重连——**半死链路官方 APP 也有**。
 - **v0.2.83 · 时速仪表盘（并行脉络）**：三轮调研（evkx/科普中国/EMA 论文/距离加权专利/两轮车 10~28 Wh/km）→SpeedDash.kt（GPS 1Hz+行程积分，续航=剩余能量÷预测电耗，EMA+20 Wh/km 暖启动+防乐观下限）；红蓝对抗 3 处命中修复（未连接白开 GPS/设置页无重组订阅/作用域引用）。
-- **v0.2.84 · 回退定基线（用户真机确认）**：握手 3 文件回退至 `0b03027`、保留 SpeedDash；真机确认「官方链路也时通时不通，本版偶发重连（约 1 分钟间隔）但至少能通」→**定为当前基线**，握手链路暂存留待剖析；遗留嫌疑=800ms 快档重连致 BMS 未清旧链路的恶性循环、双 GATT 已连接并发竞争。
+- **v0.2.84 · 回退定基线（用户真机确认）**：握手 3 文件回退至 `cacc8f5`、保留 SpeedDash；真机确认「官方链路也时通时不通，本版偶发重连（约 1 分钟间隔）但至少能通」→**定为当前基线**，握手链路暂存留待剖析；遗留嫌疑=800ms 快档重连致 BMS 未清旧链路的恶性循环、双 GATT 已连接并发竞争。
 
 ### 脉络3 · 统计页三端落地（v0.2.85）
 
 - **原型定档**（HTML 原型先行→逐点确认）：口径=区间里程取基准→最新（顶卡总账、台账行小字「距上次 +N km」看单段）；台账最新在上、基准垫底、固定高度内部滑动；段电耗=Δ循环容量×两记录平均电压÷Δ里程（充电不影响循环容量所以中间充电不算错账）。
 - **同步语义（用户逐条拍板）**：本地永远为准（XML JSON 数组，synced 标记）；录入后静默自动同步一次+手动按钮兜底；失败透传服务端错误、标记保留可无限重试；服务端按 (device_id, record_id) 幂等 upsert；删已同步行走 deleted=1 墓碑软删、删未同步行仅动本地。
-- **落地**：客户端 StatsStore/StatsSync/StatsView + 底部导航第 3 位（用户自备统计图标）；服务端 `jk_mileage_records` 表自动创建 + `POST /api/jikong/odometer/sync`（改前锚点 `ae48fa9`）。
+- **落地**：客户端 StatsStore/StatsSync/StatsView + 底部导航第 3 位（用户自备统计图标）；服务端 `jk_mileage_records` 表自动创建 + `POST /api/jikong/odometer/sync`（改前锚点 `3d09eb7`）。
 
 ### 脉络4 · 管理后台 1:1 手机壳复刻（v0.2.86→87）
 

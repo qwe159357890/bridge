@@ -42,7 +42,7 @@
 | [heartbeat-inventory.md](dev/heartbeat-inventory.md) | **心跳与周期任务台账**（6 条长连接的心跳/传输 ping/判死/重连全景，含 VNT 黑盒保活与 **v0.2.38 监督重连**（可重试失败不停服务 + 退避 + NetworkCallback 立即重试）+ 各连接周期硬约束 + 耗电量级模型 + 优化点与实测方法；调任何周期前先查这里） |
 | [crash-ledger.md](dev/crash-ledger.md) | **崩溃台账**（三次根因时间线 + `startForegroundService` 义务按次计铁律 + 全量审计表 + 排障工具链 + **新前台服务接入检查清单 §5**；新服务接入前对照） |
 | [vnt-integration-change-ledger.md](dev/vnt-integration-change-ledger.md) | **VNT 集成改前留档台账**（§一~四 = v0.2.30 P1+P2 全部既有文件改前原文逐字固化 + 回滚配方 + 触发回滚信号 + 新增文件删除清单 + 改后回填；**§五 = v0.2.31** 诊断证据链、改前原文/哈希、新增文件、回滚配方；**§六 = v0.2.32** A1 纯替换 1.x 全量改前留档 + 删除清单 + 回滚配方 + 改后回填；**§七 = v0.2.38** 断线自动重连的改前原文/哈希、监督循环改造、回滚配方与真机验收清单） |
-| [jikong-change-ledger.md](dev/jikong-change-ledger.md) | **极空（JK BMS）改前留档台账**（§一 = 当前生效回退锚点：**v0.2.82 对齐官方握手序列**（HIGH 优先级 + 80ms 发现服务 + CCCD 后 40ms 官方 21B 握手帧 + MTU 517），回退标记 = git 快照 `0b03027`（=v0.2.81），一条命令回滚配方 + 触发回滚信号；§二 = 历史改动登记。**极空相关改动前先更新此台账**） |
+| [jikong-change-ledger.md](dev/jikong-change-ledger.md) | **极空（JK BMS）改前留档台账**（§一 = 当前生效回退锚点：**v0.2.82 对齐官方握手序列**（HIGH 优先级 + 80ms 发现服务 + CCCD 后 40ms 官方 21B 握手帧 + MTU 517），回退标记 = git 快照 `cacc8f5`（=v0.2.81），一条命令回滚配方 + 触发回滚信号；§二 = 历史改动登记。**极空相关改动前先更新此台账**） |
 | coding-style.md | 代码规范（待补充） |
 | git-workflow.md | Git 协作规范（待补充） |
 | commit-convention.md | 提交信息规范（待补充） |

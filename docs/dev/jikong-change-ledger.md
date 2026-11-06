@@ -7,6 +7,14 @@
 > 权威调研文档：`docs/research/jikong-bms-integration.md`；
 > 官方 APK 逆向时序记录：`.workbuddy/memory/2026-11-06.md`（2026-11-06 17:30 段）。
 
+> **★ 2026-11-06 22:15 git 历史重写公告（锚点 SHA 已全部换新）**：
+> 同步远程时发现 v0.2.81 快照误收了 dexdump 调试产物 `tools/dd1/2/3.txt`（最大 140 MB，超 GitHub 100 MB 单文件上限，堵死推送）。
+> 经用户拍板，用 `git filter-branch` 从 v0.2.81 快照起的本地历史中剔除该 3 个文件后强推远程（`cb56583`→`5606d05`）。
+> **重写只删了这 3 个文件，其余内容逐字节不变**；此前所有锚点 SHA 全部失效，新旧对照：
+> `0b03027`→`cacc8f5`（v0.2.81 快照）、`3342e91`→`a4f5404`（v0.2.82 快照）、`ae48fa9`→`3d09eb7`（v0.2.84 快照）、`6305354`→`3fd7bb0`（v0.2.85）、`ab58680`→`9352a06`（里程碑 v0.2.76→87）。
+> `3778aca`（里程碑 v0.2.51→75）等更早提交不受影响。旧 SHA 对象仍在本机 `backup/pre-ddsync-ab58680` 保险分支可达。
+> 同批清理：tools/ 下 dexdump 输出（blemessage/gattcb/jk_official_strings）、抽取的 classes*.dex、重复的官方 APK（原件存 `references/极空保护板资料/05_应用软件/JK_BMS_6.4.04.apk`）。
+
 ---
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
@@ -23,8 +31,8 @@
 |---|---|
 | **需求** | 管理后台「极空保护板」页从 Element Plus 通用仪表盘风格改为**手机壳 1:1 复刻**（390px 居中一台，四 Tab 与手机 APP 完全一致）；补齐客户端一直没上报的数据（时速仪表盘快照、本地设置），统计台账走 MySQL 查询 |
 | **回退目标版本** | v0.2.85（统计页，未真机验证但功能完整） |
-| **回退标记（git 快照）** | 提交 **`6305354`**（`feat: v0.2.85 极空统计页…`，工作区干净即此提交）——本次改动前全部文件原文以此为准 |
-| **回滚配方** | ①客户端：`git checkout 6305354 -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts` 重新打包（恢复 0.2.85 上报内容）；②服务端：`git checkout 6305354 -- server/app/api/v1/jikong.py`（去掉台账查询端点）；③后台：`git checkout 6305354 -- admin/src/views/jikong/index.vue admin/src/api/jikong.ts` 重新 build |
+| **回退标记（git 快照）** | 提交 **`3fd7bb0`**（`feat: v0.2.85 极空统计页…`，工作区干净即此提交）——本次改动前全部文件原文以此为准 |
+| **回滚配方** | ①客户端：`git checkout 3fd7bb0 -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts` 重新打包（恢复 0.2.85 上报内容）；②服务端：`git checkout 3fd7bb0 -- server/app/api/v1/jikong.py`（去掉台账查询端点）；③后台：`git checkout 3fd7bb0 -- admin/src/views/jikong/index.vue admin/src/api/jikong.ts` 重新 build |
 | **触发回滚的信号** | ①上报扩展导致 jikong_state 主链路异常（状态不更新/WS 报错）；②后台页构建失败或极空页白屏；③台账查询接口拖垮服务端 |
 | **改动内容** | ①客户端 v0.2.86：`JikongController.reportStatus` 的 jikong_state 上报 status 对象内附带 `dash`（speed_kmh/gps_fresh/range_km/inst_wh_km/avg_wh_km/trip_km/trip_wh/trip_seconds/bms_stale/updated_at）与 `app`（theme/dash_enabled）两块（SpeedDash 单例 + JikongPrefs）；②服务端：jikong_state 原样透传（store 存原始 dict，零改动）+ `GET /api/jikong/{device_id}/odometer`（require_admin，odometer_store.list + 服务端算段电耗）；③后台：重写 `admin/src/views/jikong/index.vue`（手机壳四 Tab）+ `admin/src/api/jikong.ts` 补字段 |
 
@@ -37,8 +45,8 @@
 | 项 | 内容 |
 |---|---|
 | **回退目标版本** | v0.2.84（已真机确认基线：无握手 + 时速仪表盘） |
-| **回退标记（git 快照）** | 提交 **`ae48fa9`**（`chore: 快照 v0.2.84（极空统计页功能实施前的回退锚点）`）——首次把 v0.2.84 全量工作区状态入库（含此前未跟踪的 SpeedDash.kt / 统计.svg / 原型 HTML），**本次改动前全部文件的原文以此提交为准** |
-| **回滚配方** | `git checkout ae48fa9 -- app/src/main/java/my/bridge/com/ui/JikongPages.kt app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/build.gradle.kts server/app/api/v1/router.py server/app/main.py server/data/updates/update.json`，另**手动删除**新增文件：`app/src/main/java/my/bridge/com/jikong/JikongStatsStore.kt`、`JikongStatsSync.kt`、`app/src/main/res/drawable/ic_jk_stats.xml`、`server/app/core/odometer_store.py`、`server/app/api/v1/odometer.py`（MySQL 表 jk_mileage_records 可留可删，无副作用） |
+| **回退标记（git 快照）** | 提交 **`3d09eb7`**（`chore: 快照 v0.2.84（极空统计页功能实施前的回退锚点）`）——首次把 v0.2.84 全量工作区状态入库（含此前未跟踪的 SpeedDash.kt / 统计.svg / 原型 HTML），**本次改动前全部文件的原文以此提交为准** |
+| **回滚配方** | `git checkout 3d09eb7 -- app/src/main/java/my/bridge/com/ui/JikongPages.kt app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/build.gradle.kts server/app/api/v1/router.py server/app/main.py server/data/updates/update.json`，另**手动删除**新增文件：`app/src/main/java/my/bridge/com/jikong/JikongStatsStore.kt`、`JikongStatsSync.kt`、`app/src/main/res/drawable/ic_jk_stats.xml`、`server/app/core/odometer_store.py`、`server/app/api/v1/odometer.py`（MySQL 表 jk_mileage_records 可留可删，无副作用） |
 | **触发回滚的信号** | ①统计页导致极空主流程异常（连接/状态上报/时速仪表盘被干扰）；②同步逻辑拖垮主 WS 或产生大量重复请求；③服务端 503 频发且 MySQL 正常（新表/SQL 问题）；④编译/打包失败 30 分钟内无法定位 |
 | **改动内容** | 客户端：底部导航第 3 位新增「统计」Tab（图标 `assets/icons/统计.svg` → `ic_jk_stats`，顺序 首页/实时状态/**统计**/参数设置）；`JikongStatsStore`（SharedPreferences JSON 数组：id/ts/odoKm/cycleAh/volt/synced + 待删除队列，org.json 范式）；统计页 UI（概要三卡=区间里程/总耗电/平均电耗、录入卡=里程输入+自动读取循环容量/总压、Canvas 能耗曲线、固定高度倒序台账含删除/未同步徽标/同步按钮+Toast、口径说明）。同步：录入成功后**静默自动同步一次** + 手动按钮兜底，失败保「待同步」标记可重试；服务端：`server/app/core/odometer_store.py`（MySQL 表 `jk_mileage_records`，按 device_id+record_id 幂等 upsert，删除=tombstone deleted=1）+ REST `POST /api/v1/odometer/sync`（X-Device-Id/X-Device-Token 鉴权，复用 locations.mysql 配置，无新配置项） |
 | **口径** | 段电耗 Wh/km = Δ循环容量(Ah) × 两记录平均电压(V) ÷ Δ里程(km)；循环容量只增不减，充电不影响；Δ容量≤0（BMS 重置/换电池）→ 该段标记无效不进曲线并重设基准；新里程须 > 上一条 |
@@ -50,7 +58,7 @@
 | **当前版本（基线）** | **v0.2.84 = v0.2.81 连接时序 + v0.2.83 时速仪表盘（握手改动已完全移除）**。2026-11-06 19:47 用户真机验证通过，明确拍板「暂时将当前版本链路定为当前版本」 |
 | **基线验证结论（用户观察）** | ①官方 APP 链路**也时通时不通**（「官方链路有时能通，有时不能」）→ 半死链路是官方同样存在的现象，并非我们实现独有缺陷；②v0.2.84 回退版：偶发退出重连（有时间隔约 1 分钟）**但至少能通** → 可用性达标，作为后续迭代的对照基线 |
 | **握手链路处置** | **暂存**（用户拍板 2026-11-06 19:47）：21B 握手帧 / 官方时序对齐 / 半死链路根因（快档 800ms 重连嫌疑等）整体搁置，留待以后具体分析和剖析；逆向成果保留在本文档与 2026-11-06 工作日志，随时可复用 |
-| **实施方式** | `git checkout 0b03027 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt JikongController.kt JikongProtocol.kt`（仅回滚握手 3 文件；`SpeedDash.kt`/`JikongPrefs.kt`/`JikongPages.kt` 保留） |
+| **实施方式** | `git checkout cacc8f5 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt JikongController.kt JikongProtocol.kt`（仅回滚握手 3 文件；`SpeedDash.kt`/`JikongPrefs.kt`/`JikongPages.kt` 保留） |
 | **验证** | 编译 3m27s 通过（时速仪表盘与 v0.2.81 Controller API 完全兼容）；APK 实证 0.2.84 + `buildOfficialHandshake` 0 残留 + SpeedDash 在 dex；真机可用（见上） |
 | **回退背景（历史，已证伪）** | ① v0.2.83 真机实证：官方时序完全生效（21B 握手帧发送成功+CCCD+MTU303）但 BMS 休眠时 0 帧数据；② 二轮逆向定论：官方 APP 无独立激活帧（第 3 声蜂鸣=0x6C 时间同步帧，收到数据后才发；0xC8=OTA 帧；监控平台协议 0x01 激活指令是 4E57 帧，不适用 55AAEB 蓝牙直连）；③ 官方 CONNECT_TIMEOUT 10s 报错不重连 |
 | **遗留疑点（暂存，待以后剖析）** | 官方 APP 同场景十几秒连接时长但**链路不断**，我们曾 13s 必 status=8 → 候选原因：①800ms 快档重连循环（BMS 未清完旧链路→新链路质量差→supervision timeout）；②requestConnectionPriority(HIGH) 弱信号副作用。**恢复剖析时一次只测一个变量，先以 0.2.84 基线对照** |
@@ -61,24 +69,24 @@
 | 项 | 内容 |
 |---|---|
 | **回退目标版本** | v0.2.82（官方握手对齐，功能完整但仪表盘尚未验证） |
-| **回退标记（git 快照）** | 提交 **`3342e91`**（`chore: 快照 v0.2.82（时速仪表盘功能实施前的回退锚点）`） |
-| **回滚配方** | `git checkout 3342e91 -- app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/build.gradle.kts server/data/updates/update.json`，另**手动删除**新增文件 `app/src/main/java/my/bridge/com/jikong/SpeedDash.kt`（git 未跟踪） |
+| **回退标记（git 快照）** | 提交 **`a4f5404`**（`chore: 快照 v0.2.82（时速仪表盘功能实施前的回退锚点）`） |
+| **回滚配方** | `git checkout a4f5404 -- app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/build.gradle.kts server/data/updates/update.json`，另**手动删除**新增文件 `app/src/main/java/my/bridge/com/jikong/SpeedDash.kt`（git 未跟踪） |
 | **触发回滚的信号** | ①仪表盘开关打开后 GPS 异常耗电/发热；②首页卡片数值明显错误（如续航乱跳、里程虚增）；③仪表盘逻辑干扰既有极空连接/上报 |
-| **上一轮锚点** | v0.2.82 官方握手对齐（回退标记 `0b03027` = v0.2.81，见下节） |
+| **上一轮锚点** | v0.2.82 官方握手对齐（回退标记 `cacc8f5` = v0.2.81，见下节） |
 
 ### v0.2.82 对齐官方握手序列（2026-11-06 17:40 实施，待真机验证）
 
 | 项 | 内容 |
 |---|---|
 | **回退目标版本** | v0.2.81（功能正常、偏慢但可用的最后版本） |
-| **回退标记（git 快照）** | 提交 **`0b03027`**（`chore: 快照 v0.2.81（极空官方握手帧对齐前的回退锚点）`），含 v0.2.76~81 全部工作区状态 |
+| **回退标记（git 快照）** | 提交 **`cacc8f5`**（`chore: 快照 v0.2.81（极空官方握手帧对齐前的回退锚点）`），含 v0.2.76~81 全部工作区状态 |
 | **回滚配方** | 见下方命令块 |
 | **当前版本** | v0.2.82（改动已落地、打包、分发，**用户尚未真机测试**） |
 
 **回滚配方**（在仓库根目录执行，一条命令退回 v0.2.81 全部相关文件）：
 
 ```bash
-git checkout 0b03027 -- \
+git checkout cacc8f5 -- \
   app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt \
   app/src/main/java/my/bridge/com/jikong/JikongController.kt \
   app/src/main/java/my/bridge/com/jikong/JikongProtocol.kt \
@@ -110,10 +118,10 @@ git checkout 0b03027 -- \
 
 | 日期 | 版本 | 改动 | 快照/回退方式 |
 |---|---|---|---|
-| 2026-11-06 | v0.2.76~81 | 0x02 断流自愈、demo 重置、内阻@80/平均重算、自动重连（180s/双档）、GATT 串行化（MTU→发现服务→CCCD）、强跳过冻结修复（基元传参）、12s 半死链自愈、日志降噪 | 均含于快照 `0b03027`；更早回退点见 git 历史（`3778aca` 之前） |
-| 2026-11-06 | v0.2.82 | 对齐官方握手序列（见 §一） | 已回退到 `0b03027` = v0.2.81 |
-| 2026-11-06 | v0.2.83 | 时速仪表盘（SpeedDash + 首页卡片 + 设置页清空） | 回退到 `3342e91` = v0.2.82（已验证，无需回退） |
-| 2026-11-06 | v0.2.84 | 回退握手 3 文件至 v0.2.81 + 保留时速仪表盘；**用户真机确认定为当前基线**，握手链路暂存 | 基线本身即回退产物；再回退可用 `3342e91`（含握手）或 `0b03027`（无握手无仪表盘） |
-| 2026-11-06 | v0.2.85 | 统计页：里程台账/能耗曲线/同步按钮（本地为准+MySQL 留档），见 §一 | 回退到 `ae48fa9` = v0.2.84 |
+| 2026-11-06 | v0.2.76~81 | 0x02 断流自愈、demo 重置、内阻@80/平均重算、自动重连（180s/双档）、GATT 串行化（MTU→发现服务→CCCD）、强跳过冻结修复（基元传参）、12s 半死链自愈、日志降噪 | 均含于快照 `cacc8f5`；更早回退点见 git 历史（`3778aca` 之前） |
+| 2026-11-06 | v0.2.82 | 对齐官方握手序列（见 §一） | 已回退到 `cacc8f5` = v0.2.81 |
+| 2026-11-06 | v0.2.83 | 时速仪表盘（SpeedDash + 首页卡片 + 设置页清空） | 回退到 `a4f5404` = v0.2.82（已验证，无需回退） |
+| 2026-11-06 | v0.2.84 | 回退握手 3 文件至 v0.2.81 + 保留时速仪表盘；**用户真机确认定为当前基线**，握手链路暂存 | 基线本身即回退产物；再回退可用 `a4f5404`（含握手）或 `cacc8f5`（无握手无仪表盘） |
+| 2026-11-06 | v0.2.85 | 统计页：里程台账/能耗曲线/同步按钮（本地为准+MySQL 留档），见 §一 | 回退到 `3d09eb7` = v0.2.84 |
 
 > 登记规则：今后极空相关每次改版，先在 §一 更新「当前生效的回退锚点」，把旧锚点移入 §二。
