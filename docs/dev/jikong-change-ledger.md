@@ -16,6 +16,7 @@
 | 项 | 内容 |
 |---|---|
 | **实施结果（改后回填，2026-11-06 21:16）** | ①客户端：reportStatus 扩展编译一次通过，assembleDebug 成功，APK 实证 versionName=0.2.86 + buildReportStatus 在 dex，分发 `server/data/updates/bridge-v0.2.86.apk` + Downloads + update.json（0.2.86）；②服务端：odometer 查询端点 py_compile 通过 + 段电耗公式单测通过（73.55V 均压口径与设备端一致，Δ容量≤0 判无效）；③后台：index.vue 重写 + jikong.ts 扩展，`npm run build`（vue-tsc+vite）通过。**待验证**：真机升级 0.2.86 后后台手机壳四 Tab 数据实时性、统计曲线、MOS 控制面板 |
+| **补丁（21:26，用户反馈两点）** | ①后台目标设备接全局 `useTargetDeviceStore`（与命令下发/自动化台一致：localStorage 记忆、切换自动保存、跨页面保持，无记忆才回退第一台）；②`enterDemoMode` 末尾补 `reportStatus()`——演示数据（connected=true）上报服务端，后台显示「已连接 · 演示设备」可用于联调；演示退出路径本就上报复位。同版本未装机，APK 直接覆盖分发（46,123,195 B），提交 `27390e6` |
 | **复刻范围说明** | 手机壳内四 Tab 与客户端 1:1（首页含仪表盘/健康横幅/时速卡/双四格/电流功率卡；实时页双列+单体电压/内阻网格；统计页只读台账+曲线；设置页镜像含开关只读）。**管理台专属面板放在手机壳外**：远程控制（MOS/均衡，手机端已按官方 UI 移除控制入口）+ 保护/告警状态 + 设备信息 |
 
 | 项 | 内容 |
