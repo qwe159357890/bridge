@@ -315,7 +315,7 @@
                   <div v-else class="empty-mini">有效能耗段不足（需至少两条记录且容量递增）</div>
                 </div>
 
-                <div class="jk-card" style="padding: 12px 0 0">
+                <div class="jk-card" style="padding: 12px 0 10px">
                   <div class="stats-head" style="padding: 0 14px 8px">
                     <span style="font-weight: 600">记录台账</span>
                     <span class="mini-label">{{ odo ? odo.records.length : 0 }} 条 · 新在上 · MySQL</span>
@@ -361,7 +361,7 @@
 
                 <div class="set-title">累计统计</div>
                 <div class="jk-card" style="border-radius: 12px">
-                  <div class="dash-row2" style="padding: 0">
+                  <div class="dash-row2" style="padding: 12px 14px">
                     <div class="dash-col">
                       <div class="mini-label">累计里程(km)</div>
                       <div class="dash-mid">{{ dashTotals.km }}</div>
@@ -395,7 +395,7 @@
                   </div>
                 </div>
 
-                <div class="jk-card" style="border-radius: 12px">
+                <div class="jk-card" style="border-radius: 12px; padding: 12px 14px">
                   <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px">说明</div>
                   <div class="mini-label">
                     续航 = 剩余电量能量 ÷ 近期平均电耗（EV 通行算法）。刚开始使用时按参考值 20 Wh/km 估算，骑行积累数据后自动修正为您的真实电耗。所有数值为估算，仅供参考。保护板参数修改需设备密码，本应用不提供。
@@ -900,6 +900,9 @@ const dashTotals = computed(() => {
   scrollbar-width: none;
 }
 .content::-webkit-scrollbar { width: 0; }
+/* 卡片间统一垂直间距（对应手机端卡间 Spacer 12dp）；set-title 自带 14px 上边距优先 */
+.content > * + * { margin-top: 12px; }
+.content > .set-title { margin-top: 14px; }
 
 /* 通用小元素 */
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -1025,7 +1028,7 @@ const dashTotals = computed(() => {
 }
 .sec-dot { width: 8px; height: 8px; border-radius: 50%; background: #00e050; }
 .sec-title { font-size: 15px; font-weight: 700; color: #00e050; }
-.detail-cols { display: flex; padding: 8px 14px; }
+.detail-cols { display: flex; padding: 12px 14px; }
 .detail-col { flex: 1; }
 .detail-col + .detail-col { margin-left: 24px; }
 .drow {
