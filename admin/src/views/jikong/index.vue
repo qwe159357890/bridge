@@ -381,16 +381,16 @@
                 <div class="jk-card" style="border-radius: 12px">
                   <div class="detail-cols">
                     <div class="detail-col">
-                      <div class="drow"><span class="dlabel">单体过压保护(V)</span><span class="dval">{{ fmt(s?.cell_full_voltage) }}</span></div>
-                      <div class="drow"><span class="dlabel">单体欠压保护(V)</span><span class="dval">{{ fmt(s?.cell_empty_voltage) }}</span></div>
-                      <div class="drow"><span class="dlabel">充电过温(℃)</span><span class="dval">{{ fmt(s?.charge_over_temp) }}</span></div>
-                      <div class="drow"><span class="dlabel">放电过温(℃)</span><span class="dval">{{ fmt(s?.discharge_over_temp) }}</span></div>
+                      <div class="drow"><span class="dlabel">单体过压保护(V)</span><span class="dval">{{ connected ? fmt(s?.cell_full_voltage) : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">单体欠压保护(V)</span><span class="dval">{{ connected ? fmt(s?.cell_empty_voltage) : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">充电过温(℃)</span><span class="dval">{{ connected ? fmt(s?.charge_over_temp) : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">放电过温(℃)</span><span class="dval">{{ connected ? fmt(s?.discharge_over_temp) : '--' }}</span></div>
                     </div>
                     <div class="detail-col">
-                      <div class="drow"><span class="dlabel">充电限流(A)</span><span class="dval">{{ fmt(s?.charge_current_limit) }}</span></div>
-                      <div class="drow"><span class="dlabel">放电限流(A)</span><span class="dval">{{ fmt(s?.discharge_current_limit) }}</span></div>
-                      <div class="drow"><span class="dlabel">循环次数</span><span class="dval">{{ s?.cycle_count ?? '--' }}次</span></div>
-                      <div class="drow"><span class="dlabel">健康度 SOH</span><span class="dval">{{ s?.soh ? s.soh + '%' : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">充电限流(A)</span><span class="dval">{{ connected ? fmt(s?.charge_current_limit) : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">放电限流(A)</span><span class="dval">{{ connected ? fmt(s?.discharge_current_limit) : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">循环次数</span><span class="dval">{{ connected ? (s?.cycle_count ?? '--') + '次' : '--' }}</span></div>
+                      <div class="drow"><span class="dlabel">健康度 SOH</span><span class="dval">{{ connected && s?.soh ? s.soh + '%' : '--' }}</span></div>
                     </div>
                   </div>
                 </div>
@@ -424,16 +424,16 @@
             <template #header><span class="title">远程控制（管理台专属）</span></template>
             <div class="mos-row">
               <div class="mos-item">
-                <span class="dot" :class="s?.charge_mos_on ? 'g' : 'gy'" />
-                <span>充电 MOS：{{ s?.charge_mos_on ? '开启' : '关闭' }}</span>
+                <span class="dot" :class="connected && s?.charge_mos_on ? 'g' : 'gy'" />
+                <span>充电 MOS：{{ connected ? (s?.charge_mos_on ? '开启' : '关闭') : '未知' }}</span>
               </div>
               <div class="mos-item">
-                <span class="dot" :class="s?.discharge_mos_on ? 'g' : 'gy'" />
-                <span>放电 MOS：{{ s?.discharge_mos_on ? '开启' : '关闭' }}</span>
+                <span class="dot" :class="connected && s?.discharge_mos_on ? 'g' : 'gy'" />
+                <span>放电 MOS：{{ connected ? (s?.discharge_mos_on ? '开启' : '关闭') : '未知' }}</span>
               </div>
               <div class="mos-item">
-                <span class="dot" :class="s?.balance_on ? 'g' : 'gy'" />
-                <span>主动均衡：{{ s?.balance_on ? '开启' : '关闭' }}</span>
+                <span class="dot" :class="connected && s?.balance_on ? 'g' : 'gy'" />
+                <span>主动均衡：{{ connected ? (s?.balance_on ? '开启' : '关闭') : '未知' }}</span>
               </div>
             </div>
             <div class="mos-actions">
@@ -454,7 +454,8 @@
 
           <el-card shadow="never" class="side-card">
             <template #header><span class="title">保护 / 告警状态</span></template>
-            <div v-if="!protectionEntries.length" class="empty-mini">暂无保护状态数据</div>
+            <div v-if="!connected" class="empty-mini">设备未连接保护板，保护状态未知</div>
+            <div v-else-if="!protectionEntries.length" class="empty-mini">暂无保护状态数据</div>
             <div v-else class="protect-grid">
               <div v-for="(e, i) in protectionEntries" :key="i" class="protect-item">
                 <span class="dot" :class="e.triggered ? 'r' : 'g'" />
@@ -797,7 +798,11 @@ async function loadState() {
     const res = await getJikongState(selectedDevice.value)
     s.value = res.status
     updatedAt.value = res.updated_at
-  } catch { /* 错误已由拦截器提示 */ }
+  } catch {
+    // 获取失败（服务端不可达等）：不得保留上一次的旧信息，全部回「--/未知」（用户拍板 2026-11-06）
+    s.value = null
+    updatedAt.value = null
+  }
 }
 
 async function loadOdo() {
@@ -852,8 +857,9 @@ onUnmounted(() => {
 // 仪表盘中央胶囊描边样式
 const pillOutline = computed(() => ({ border: `1px solid ${c.value.green}`, color: c.value.green }))
 
-// 设置页累计统计（dash 快照，未上报显示 --）
+// 设置页累计统计（dash 快照；未连接保护板时一律 --，不显示断开前旧值）
 const dashTotals = computed(() => {
+  if (!connected.value) return { km: '--', wh: '--', hist: '--' }
   const d = s.value?.dash
   return {
     km: d && d.total_km != null && d.total_km > 0 ? n2(d.total_km) : '--',
