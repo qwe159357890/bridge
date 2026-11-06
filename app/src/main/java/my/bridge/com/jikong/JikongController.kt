@@ -306,7 +306,10 @@ class JikongController private constructor() {
 
         s.lastUpdateAt = System.currentTimeMillis()
         statusVersion.value = statusVersion.value + 1
-        Timber.tag(TAG).i("进入演示模式（未连接保护板）")
+        // v0.2.86：演示数据也上报服务端——管理后台「极空页 1:1 复刻」需要用演示模式
+        // 调试界面/联调，后台据此显示「已连接 · 演示设备」而非未连接。
+        reportStatus()
+        Timber.tag(TAG).i("进入演示模式（未连接保护板，演示数据已上报服务端）")
     }
 
     fun setPageVisible(visible: Boolean) {

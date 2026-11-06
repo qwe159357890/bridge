@@ -487,11 +487,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import {
-  getJikongState, getJikongOdometer, jikongControl,
+import { getJikongState, getJikongOdometer, jikongControl,
   type JikongStatus, type JkOdoRecord, type JkOdoSummary,
 } from '@/api/jikong'
 import { listDevices } from '@/api/devices'
+import { useTargetDeviceStore } from '@/stores/targetDevice'
 
 // ==================== 主题（与客户端 JkColors 1:1） ====================
 /** 深色（默认，官方经典观感）/ 浅色两套变量，色值取自 JikongPages.kt DarkColors/LightColors。 */
@@ -529,7 +529,13 @@ const tabDefs = [
 ]
 
 // ==================== 数据加载 ====================
-const selectedDevice = ref('')
+// 目标设备接全局 store（2026-11-06 用户需求）：与命令下发/自动化调试台一致——
+// 有存储的自动选中、切换后写入 store，跨页面保持、刷新不丢。
+const targetStore = useTargetDeviceStore()
+const selectedDevice = computed({
+  get: () => targetStore.deviceId,
+  set: (v: string) => targetStore.set(v),
+})
 const s = ref<JikongStatus | null>(null)
 const updatedAt = ref<number | null>(null)
 const deviceNameMap = ref<Record<string, string>>({})
@@ -826,6 +832,7 @@ function onDeviceChange() {
 async function loadDeviceNames() {
   const devs = await listDevices()
   deviceNameMap.value = Object.fromEntries(devs.map((d) => [d.device_id, d.device_name || d.device_id]))
+  // 无记忆（store 空）才回退选第一台；有记忆时 store 值即选中项（即使设备此刻不在线也保持）
   if (!selectedDevice.value && devs.length > 0) {
     selectedDevice.value = devs[0].device_id
     loadState()
