@@ -33,8 +33,9 @@ DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 VOICE_RE = re.compile(r"^[A-Za-z]{2,5}-[A-Za-z]{2,8}-[A-Za-z]+$")
 MAX_TEXT_LEN = 120
 
-# 响度归一化目标：语音类内容 -12 LUFS 偏响且留 1.5dB 真峰余量（用户拍板「越大越好但不削波」）。
-_LOUDNORM = "loudnorm=I=-12:TP=-1.5:LRA=7"
+# 响度归一化目标：v0.2.92 用户实测 -12 LUFS 偏小，提档到 -8 LUFS（语音类不削波上限附近，
+# TP 仍留 1.5dB 余量）。缓存键同步升 v2（旧 -12 文件不再生效）。
+_LOUDNORM = "loudnorm=I=-8:TP=-1.5:LRA=7"
 
 
 def _cache_dir() -> Path:
@@ -77,7 +78,8 @@ async def synth_tts(
     if not VOICE_RE.match(voice):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="voice 名不合法")
 
-    key = hashlib.md5(f"{text}|{voice}".encode("utf-8")).hexdigest()
+    # v2 = 响度档版本（v0.2.92 由 -12 提到 -8 LUFS），换档后旧缓存自然失效重新合成
+    key = hashlib.md5(f"{text}|{voice}|v2".encode("utf-8")).hexdigest()
     final = _cache_dir() / f"{key}.mp3"
     if not final.exists() or final.stat().st_size < 256:
         raw = final.with_suffix(".raw.mp3")

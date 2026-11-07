@@ -40,14 +40,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DateRangePicker
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
@@ -59,7 +65,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -855,8 +863,32 @@ private fun HomeView(
         )
         Spacer(Modifier.height(12.dp))
 
+        // v0.2.92 双击播报处理（圆形大表盘 + 时速卡共用；v0.2.91 只挂时速卡，用户双击圆形
+        // 仪表盘无反应）：电量(+低电预警)；有时速追加 时速+剩余续航。显式手势绕过静音开关；
+        // 速度/续航取整播报（降低在线 TTS 缓存键数量，LRU 50MB 兜底）。
+        val onDashDoubleTap: () -> Unit = {
+            val soc = controller.status.soc
+            if (soc in 0..100) {
+                val sb = StringBuilder("当前电量 $soc%")
+                if (soc < JikongPrefs.speakLowSoc(context)) sb.append("，电量低，请注意充电")
+                val speed = SpeedDash.speedKmh
+                if (speed > 0f) {
+                    sb.append("，时速 %.0f 公里".format(speed))
+                    val range = SpeedDash.rangeKm
+                    if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
+                }
+                JikongSpeaker.speak(context, sb.toString())
+            }
+        }
+
         // 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊）
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // v0.2.92：外层 Box 挂双击手势（手势区=表盘整行，高即表盘高）
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDashDoubleTap() }) },
+            contentAlignment = Alignment.Center,
+        ) {
             JkGauge(s.soc, s.totalVoltage, s.current, s.totalVoltage * s.current)
         }
         Spacer(Modifier.height(2.dp))
@@ -880,22 +912,8 @@ private fun HomeView(
                 bmsStale = SpeedDash.bmsStale,
                 permNeeded = SpeedDash.gpsPermissionNeeded,
                 onReset = { SpeedDash.resetTrip(context) },
-                onDoubleTap = {
-                    // v0.2.91 双击播报：电量(+低电预警)；有时速追加 时速+剩余续航。
-                    // 显式手势绕过静音开关；速度/续航取整播报（降低在线 TTS 缓存键数量，LRU 50MB 兜底）。
-                    val soc = controller.status.soc
-                    if (soc in 0..100) {
-                        val sb = StringBuilder("当前电量 $soc%")
-                        if (soc < JikongPrefs.speakLowSoc(context)) sb.append("，电量低，请注意充电")
-                        val speed = SpeedDash.speedKmh
-                        if (speed > 0f) {
-                            sb.append("，时速 %.0f 公里".format(speed))
-                            val range = SpeedDash.rangeKm
-                            if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
-                        }
-                        JikongSpeaker.speak(context, sb.toString())
-                    }
-                },
+                // v0.2.92：双击播报改用共用处理（圆形大表盘同款），见 onDashDoubleTap
+                onDoubleTap = onDashDoubleTap,
             )
             Spacer(Modifier.height(6.dp))
         }
@@ -2003,6 +2021,22 @@ private fun jkBuildSegs(records: List<JkMileageRecord>): List<JkSeg?> {
 private val JkDateFmt = SimpleDateFormat("MM-dd", Locale.getDefault())
 private val JkTimeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
 
+/** v0.2.92：DateRangePicker 返回所选日期「UTC 零点」毫秒，转成本地当天零点
+ *  （UTC+8 下不转会差 8 小时导致区间首尾错日）。 */
+private fun jkLocalDayStart(utcDayMs: Long): Long {
+    val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+    utc.timeInMillis = utcDayMs
+    return java.util.Calendar.getInstance().apply {
+        clear()
+        set(
+            utc.get(java.util.Calendar.YEAR),
+            utc.get(java.util.Calendar.MONTH),
+            utc.get(java.util.Calendar.DAY_OF_MONTH),
+            0, 0, 0,
+        )
+    }.timeInMillis
+}
+
 /**
  * v0.2.91：演示模式内存台账（30 天 7 条，段电耗 31~40 Wh/km 梯度，数值取自真机实测样例）。
  * 只在 controller.demoMode 时替代真实台账显示；增删全在内存，退出演示自动还原真实台账，
@@ -2033,6 +2067,7 @@ private fun jkDemoRecords(): List<JkMileageRecord> {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)   // v0.2.92：DateRangePicker（自定义时间段）
 @Composable
 private fun StatsView(controller: JikongController) {
     val c = LocalJkColors.current
@@ -2175,7 +2210,10 @@ private fun StatsView(controller: JikongController) {
                     listOf("近一周" to 7L, "近一月" to 30L, "一季度" to 90L, "近一年" to 365L)
                 }
                 var stageIdx by remember { mutableStateOf(1) }   // 默认近一月
-                Row {
+                // v0.2.92 自定义时间段：stageIdx == ranges.size 表示自定义；点 chip 弹日期区间选择器
+                var showRangePicker by remember { mutableStateOf(false) }
+                var customRange by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     ranges.forEachIndexed { i, (label, _) ->
                         val sel = i == stageIdx
                         Text(
@@ -2190,10 +2228,104 @@ private fun StatsView(controller: JikongController) {
                         )
                         if (i < ranges.lastIndex) Spacer(Modifier.width(6.dp))
                     }
+                    Spacer(Modifier.width(6.dp))
+                    val selCustom = stageIdx == ranges.size
+                    Text(
+                        "自定义",
+                        fontSize = 12.sp,
+                        color = if (selCustom) c.onfill else c.gray,
+                        fontWeight = if (selCustom) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier
+                            .background(if (selCustom) c.green else c.bg, RoundedCornerShape(14.dp))
+                            .clickable {
+                                stageIdx = ranges.size
+                                showRangePicker = true
+                            }
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                }
+                // 已选自定义区间时展示具体日期（MM-dd ~ MM-dd）
+                if (stageIdx == ranges.size) {
+                    customRange?.let { r ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "自定义区间：${JkDateFmt.format(r.first)} ~ ${JkDateFmt.format(r.second)}",
+                            fontSize = 10.sp, color = c.cyan,
+                        )
+                    }
+                    // v0.2.92 自定义时间段弹窗：Material3 DateRangePicker（起点+终点两次点选）
+                    if (showRangePicker) {
+                        val pickerState = rememberDateRangePickerState(
+                            initialSelectedStartDateMillis = customRange?.first,
+                            initialSelectedEndDateMillis = customRange?.second,
+                        )
+                        Dialog(onDismissRequest = { showRangePicker = false }) {
+                            Surface(shape = RoundedCornerShape(14.dp), color = c.card) {
+                                // 极空页是自绘配色（无全局 MaterialTheme 包装），此处临时提供
+                                // 亮/暗 colorScheme，让 DateRangePicker 默认配色跟随当前主题渲染
+                                MaterialTheme(
+                                    colorScheme = if (c.bg.luminance() < 0.5f) darkColorScheme() else lightColorScheme(),
+                                ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(
+                                        "选择自定义时间段",
+                                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    DateRangePicker(
+                                        state = pickerState,
+                                        showModeToggle = false,
+                                        title = null,
+                                        headline = null,
+                                        modifier = Modifier.height(420.dp),
+                                    )
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                    ) {
+                                        TextButton(onClick = { showRangePicker = false }) {
+                                            Text("取消", color = c.gray)
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                val s0 = pickerState.selectedStartDateMillis
+                                                val s1 = pickerState.selectedEndDateMillis
+                                                if (s0 != null && s1 != null) {
+                                                    customRange = Pair(s0, s1)
+                                                    stageIdx = ranges.size
+                                                }
+                                                showRangePicker = false
+                                            },
+                                            enabled = pickerState.selectedEndDateMillis != null,
+                                        ) {
+                                            Text(
+                                                "确定",
+                                                color = if (pickerState.selectedEndDateMillis != null) c.green else c.gray,
+                                            )
+                                        }
+                                    }
+                                }
+                                }   // MaterialTheme
+                            }
+                        }
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
-                val cutoff = System.currentTimeMillis() - ranges[stageIdx].second * 24 * 3600_000L
-                val stageSegs = validSegs.filter { it.rec.ts >= cutoff }
+                // v0.2.92：自定义 → 日期区间 [start, end+1天)（picker 给 UTC 零点，转本地零点防差日）；
+                // 预设 → 近 N 天。段仍按记录时间归属。
+                val dayMs = 24 * 3600_000L
+                val range = customRange
+                val stageSegs = if (stageIdx == ranges.size) {
+                    if (range == null) emptyList()
+                    else {
+                        val start = jkLocalDayStart(range.first)
+                        val end = jkLocalDayStart(range.second) + dayMs
+                        validSegs.filter { it.rec.ts >= start && it.rec.ts < end }
+                    }
+                } else {
+                    val cutoff = System.currentTimeMillis() - ranges[stageIdx].second * dayMs
+                    validSegs.filter { it.rec.ts >= cutoff }
+                }
                 val stageKmRaw = stageSegs.sumOf { it.deltaKm.toDouble() }.toFloat()
                 val stageWh = stageSegs.sumOf { (it.deltaAh * it.avgVolt).toDouble() }.toFloat()
                 val stageKmDisp = stageKmRaw * discount
@@ -2211,7 +2343,11 @@ private fun StatsView(controller: JikongController) {
                 }
                 if (stageSegs.isEmpty()) {
                     Spacer(Modifier.height(6.dp))
-                    Text("该时间段内还没有记录", fontSize = 10.sp, color = c.gray)
+                    Text(
+                        if (stageIdx == ranges.size && range == null) "请先选择起止日期"
+                        else "该时间段内还没有记录",
+                        fontSize = 10.sp, color = c.gray,
+                    )
                 }
             }
         }

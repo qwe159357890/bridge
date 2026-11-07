@@ -19,6 +19,24 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.92 四项：阶段统计自定义时间段/演示模式清列表/双击仪表盘修复/播报提响（2026-11-07 13:20 实施）
+
+| 项 | 内容 |
+|---|---|
+| **需求（用户 13:20 提出 4 项）** | ①统计页阶段统计加「自定义」chip，用户自由选时间段；②蓝牙防僵尸：进入演示模式也算、同样清空扫描列表；③双击仪表盘没有任何反应（修复）；④播报声音太小（提响） |
+| **回退标记（git 快照）** | 提交 **`d6a6ef6`**（`feat: v0.2.91 第二轮六项…`）——本次改动前全部代码原文以此为准 |
+| **回滚配方** | `git checkout d6a6ef6 -- app/src/main/java/my/bridge/com app/build.gradle.kts server/app/api/v1/tts.py` |
+| **触发回滚的信号** | ①自定义日期选择器崩溃/选不了日期/统计错乱；②进演示模式误清了不该清的状态；③双击播报误触发频繁刷语音；④-8 LUFS 出现削波/破音 |
+| **改前原文（逐字，Controller.enterDemoMode L271-274）** | `fun enterDemoMode() {\n        stopPolling()\n        demoMode = true\n        val s = status` |
+| **改前原文（逐字，HomeView 仪表盘 Box L858-861）** | `// 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊）\n        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {\n            JkGauge(s.soc, s.totalVoltage, s.current, s.totalVoltage * s.current)\n        }` |
+| **改前原文（逐字，阶段统计 chip 行 + cutoff L2174-2196）** | `val ranges = remember {\n                    listOf("近一周" to 7L, "近一月" to 30L, "一季度" to 90L, "近一年" to 365L)\n                }\n                var stageIdx by remember { mutableStateOf(1) }   // 默认近一月\n                Row {\n                    ranges.forEachIndexed { i, (label, _) ->\n                        val sel = i == stageIdx\n                        Text(\n                            label,\n                            fontSize = 12.sp,\n                            color = if (sel) c.onfill else c.gray,\n                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,\n                            modifier = Modifier\n                                .background(if (sel) c.green else c.bg, RoundedCornerShape(14.dp))\n                                .clickable { stageIdx = i }\n                                .padding(horizontal = 12.dp, vertical = 5.dp),\n                        )\n                        if (i < ranges.lastIndex) Spacer(Modifier.width(6.dp))\n                    }\n                }\n                Spacer(Modifier.height(8.dp))\n                val cutoff = System.currentTimeMillis() - ranges[stageIdx].second * 24 * 3600_000L\n                val stageSegs = validSegs.filter { it.rec.ts >= cutoff }` |
+| **改前原文（逐字，JikongSpeaker 缓存键 L86）** | `val key = md5("$text\|${JikongPrefs.TTS_VOICE}")` |
+| **改前原文（逐字，server/app/api/v1/tts.py L36-37 + L80）** | `# 响度归一化目标：语音类内容 -12 LUFS 偏响且留 1.5dB 真峰余量（用户拍板「越大越好但不削波」）。\n_LOUDNORM = "loudnorm=I=-12:TP=-1.5:LRA=7"`；`key = hashlib.md5(f"{text}\|{voice}".encode("utf-8")).hexdigest()` |
+| **双击无反应根因判断** | v0.2.91 双击手势只挂在 SpeedDashCard（时速仪表盘卡片）上；用户说的「仪表盘」是**圆形大表盘**（JkGauge），未挂手势 → 无反应（时速卡开关关闭时更无处可点）。本轮把同一播报处理同时挂到圆形表盘外层 Box |
+| **实施结果（改后回填，2026-11-07 13:55）** | ①阶段统计加「自定义」chip（点选弹 Material3 DateRangePicker，起止两次点选；选中后 chip 行下方显示「自定义区间：MM-dd ~ MM-dd」；区间口径 [start 本地零点, end+1天)，`jkLocalDayStart` 把 picker 的 UTC 零点转本地零点防 UTC+8 错日；未选日期时提示「请先选择起止日期」；弹窗内套 `MaterialTheme(light/darkColorScheme())` 按 c.bg 亮度跟随主题）；②`enterDemoMode()` 加 `clearScanCache()`（进演示也清扫描列表，用户拍板）；③双击播报抽成 `onDashDoubleTap` 共用 lambda，圆形大表盘外层 Box 挂 `detectTapGestures(onDoubleTap)` + SpeedDashCard 保留；演示模式同样生效（demo SOC=72，时速 0 只播电量）；④响度：服务端 `_LOUDNORM` -12→**-8 LUFS**（TP=-1.5 不变），服务端缓存键升 `v2`（`md5(text\|voice\|v2)`），客户端 JikongSpeaker 缓存键同步升 v2，旧低响度缓存两端自然失效；server/data/tts_cache 已清空。编译 3 轮过（踩坑：material3 1.3.1 无 `DateRangePickerDefaults.colors/dateRangePickerColors`，改省略 colors 参数 + MaterialTheme 包装；`luminance` 补 import） |
+| **★ 附加 bug：双击返回键回不了主页（用户 13:31-13:41 实证 + 根因确认）** | **根因**：用户把「极空」重排到主页第 1 位（设置→通用可调 Tab 顺序），`exitToken++ → homeTab=0` 仍停在极空页 → 永远退不出去（与主线程卡顿无关；扫描慢另因：v0.2.88 设计——点扫描先直连默认设备，最长 10s 超时才回退正常扫描）。**拍板行为（用户 13:41）**：极空在第 1 位时双击返回**不切 Tab，改为退出沉浸态**（`JkUiState.immersive=false`，顶部 Tab 栏 + APP 底部工具栏恢复显示）；否则跳第一个非极空 Tab。已按此实现（MainScreen.kt exitToken LaunchedEffect） |
+| **改前原文（逐字，MainScreen exitToken 效果）** | `LaunchedEffect(jkExitToken) {\n        if (jkExitToken == consumedJkExit) return@LaunchedEffect\n        consumedJkExit = jkExitToken\n        homeTab = 0\n    }` |
+
 ### v0.2.91 第二轮六项：同级平均时速/演示台账/双击播报/返回键回首页/阶段统计/蓝牙防僵尸（2026-11-07 11:55 实施）
 
 | 项 | 内容 |

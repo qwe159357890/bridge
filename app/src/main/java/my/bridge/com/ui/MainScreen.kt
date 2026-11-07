@@ -164,7 +164,16 @@ fun MainScreen(modifier: Modifier = Modifier) {
     LaunchedEffect(jkExitToken) {
         if (jkExitToken == consumedJkExit) return@LaunchedEffect
         consumedJkExit = jkExitToken
-        homeTab = 0
+        // v0.2.92 修复：用户可重排主页 Tab（设置→通用）。若「极空」正好排在第 1 位，
+        // 原 homeTab=0 仍停在极空页（双击返回永远退不出去，2026-11-07 用户实证）。
+        // 拍板行为：极空在第 1 位 → 不切 Tab，退出沉浸态（顶部 Tab 栏 + APP 底部工具栏恢复显示）；
+        // 否则 → 跳到第一个非极空 Tab（回到主页）。
+        val firstNonJk = homeTabOrder.indexOfFirst { it != 5 }
+        if (firstNonJk == 0) {
+            JkUiState.immersive = false
+        } else {
+            homeTab = if (firstNonJk > 0) firstNonJk else 0
+        }
     }
 
     // 注意：本 BackHandler 必须先于内容区注册（组合顺序靠前 = 优先级最低），

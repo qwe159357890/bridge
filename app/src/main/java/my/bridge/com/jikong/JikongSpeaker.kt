@@ -83,7 +83,8 @@ object JikongSpeaker {
         val ds = deviceStore ?: return null
         return try {
             val dir = File(app.cacheDir, CACHE_DIR).apply { mkdirs() }
-            val key = md5("$text|${JikongPrefs.TTS_VOICE}")
+            // v2 = 服务端响度档版本（v0.2.92 由 -12 提到 -8 LUFS），升键让旧的低响度缓存全部失效重取
+            val key = md5("$text|${JikongPrefs.TTS_VOICE}|v2")
             val f = File(dir, "$key.mp3")
             if (f.exists() && f.length() > 256) {
                 f.setLastModified(System.currentTimeMillis())

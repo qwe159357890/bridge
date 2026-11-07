@@ -169,7 +169,8 @@ class JikongController private constructor() {
 
     /**
      * 清空扫描暂存（v0.2.91 防僵尸）：①连接成功时调用（连上的设备不属于列表）；
-     * ②进入极空页且距上次扫描超过 [SCAN_STALE_MS] 时调用（陈旧 RSSI/已消失设备）。
+     * ②进入极空页且距上次扫描超过 [SCAN_STALE_MS] 时调用（陈旧 RSSI/已消失设备）；
+     * ③进入演示模式时调用（v0.2.92 用户拍板：进演示也算）。
      * 只清内存暂存，重新点扫描即可刷新。
      */
     fun clearScanCache() {
@@ -271,6 +272,8 @@ class JikongController private constructor() {
     fun enterDemoMode() {
         stopPolling()
         demoMode = true
+        // v0.2.92 防僵尸补口：进入演示模式同样清空扫描暂存（用户拍板：进演示也算，与连接成功同口径）
+        clearScanCache()
         val s = status
         s.connected = true
         s.deviceName = "演示设备 JK-BD6A24S8PD"
