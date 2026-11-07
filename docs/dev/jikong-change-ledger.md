@@ -17,6 +17,39 @@
 
 ---
 
+### v0.2.100 演示GPS覆盖时速/退出演示不清仪表盘（262.8km/h真因）/手机旧滤链段缓存（2026-11-07 21:58 实施）
+
+**需求（用户 21:58 反馈 3 项）**：①演示模式刷新后其它值稳定了，但时速 1~2s 后仍消失；②真机连接平均时速 262.8（时速 11.3，截图 21:46）；③「公里」段前仍有停顿，疑段首尾静音未裁。
+
+**根因（证据链）**：
+- **① = 演示模式 GPS 仍订阅**：dashEnabled 且 demo 把 connected=true → SpeedDash.start 订阅真实 GPS；onFix 回调把注入的模拟时速覆盖成真实值（静止≈0.0）→「消失」。v0.2.99 只挡了 tickLoop，没挡 onFix。
+- **② = 退出演示不清仪表盘（演示值混入真机统计）**：截图铁证——本次时长 6:58=418s、本次里程 1.47km，隐含均速 12.66km/h = 演示 refreshDemoData 的「时长=里程÷均速」自洽注入值；真机重连后 gpsTripKm=1.47（演示残留）+ movingSecondsAvg≈20.1s（真机新累计）→ avg=1.47×3600÷20.1=262.8。injectDemo 污染 gpsTripKm/tripSeconds，退出演示无清理路径。
+- **③ = 手机本地旧滤链段缓存**：服务端进程 21:01:16 重启（晚于 19:05 双向裁静音改动），服务端缓存实证干净（「公里」0.528s、-40dB 无 ≥50ms 静音、ffprobe start=23ms 为 mp3 编码器延迟属正常）；但 v0.2.98 客户端（19:22 发，键 v5seg）在 19:22~21:01 服务端仍跑旧滤链（裁首+40ms 尾垫）期间拉取的段已带尾静音缓存在手机，缓存命中永不重拉 → 停顿持续。修法=客户端键 v5seg→v6seg 强制全量重拉。
+
+**改前原文（逐字抄录）**：
+
+1. SpeedDash.onFix（无演示守卫）：
+```kotlin
+    private fun onFix(loc: Location) {
+        val v = loc.speed * 3.6f
+        if (v < 0f || v > SPEED_MAX_KMH) return  // 毛刺丢弃
+        speedKmh = v
+```
+
+2. JikongController 三处退出演示（均无 SpeedDash 清理）：
+- connect 成功（L245）：`demoMode = false`（前文 `if (ok) {`＋注释「真机连接成功即退出演示模式」）
+- disconnect（L276）：`demoMode = false`（if (demoMode) 分支内，后接 `status = JikongStatus()`）
+- 自动重连成功（L572）：`demoMode = false`（if (ok) 分支内）
+
+3. SpeedDash 无 clearDemoInjection（injectDemo 是唯一演示写入口，退出演示不清理）。
+
+4. JikongSpeaker 缓存键：`val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v5seg" else "v3"}")`
+
+5. versionName：`versionName = "0.2.99"`
+
+**回滚配方**：`git revert` 本轮提交；或手改：onFix 删 demoMode 守卫、删 SpeedDash.clearDemoInjection 及三处调用、键 v6seg→v5seg（服务端 SEG_SUFFIX 不动）、versionName 回 0.2.99。
+**触发信号**：演示模式时速变 0.0/真实值 / 真机平均时速再次出现数百 km/h / 播报段间停顿复现（确认服务端音频干净后即手机缓存问题）。
+
 ### v0.2.99 演示值被 tickLoop 覆盖（4993km/h + 一闪即消）/ TTS 预取并行化（2026-11-07 21:06 实施）
 
 **需求（用户 21:06 反馈 2 项）**：①演示模式点「刷新模拟数据」后平均时速显示 4993.0km/h，且剩余续航/瞬时/平均等数值**一闪就消失**（演示模式不应消失）；②刷新数据后双击仪表盘播报仍有延时——问预取是「一次性拉全部」还是「按需拉」。

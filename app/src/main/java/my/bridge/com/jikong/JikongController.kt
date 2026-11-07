@@ -242,6 +242,9 @@ class JikongController private constructor() {
                 val ok = JikongBleClient.connect(context, address)
                 if (ok) {
                     // 真机连接成功即退出演示模式
+                    // v0.2.100：退出演示先清仪表盘演示注入值（gpsTripKm/tripSeconds 残留
+                    // 会混入真机统计——2026-11-07 实证 262.8km/h 真因）
+                    if (demoMode) SpeedDash.clearDemoInjection()
                     demoMode = false
                     // v0.2.77：成功连接后启用自动重连（此后意外断开将自动恢复；重连成功即归零）
                     autoReconnectEnabled = true
@@ -273,7 +276,9 @@ class JikongController private constructor() {
             // v0.2.76 完善：复位所有展示字段。之前只清电压/电流/SOC/单体/温度，
             // 剩余容量/循环/充电器/极值等 demo 残留会混进下一次真机连接的界面
             //（2026-11-06 真机截图实证：剩余 72.00Ah、循环 10 次、最高温 29℃ 全是 demo 旧值）。
+            // v0.2.100：仪表盘演示注入值同步清理（同 demo 残留混入真机统计问题）。
             demoMode = false
+            SpeedDash.clearDemoInjection()
             status = JikongStatus()
             lastDataFrameAt = 0L
             hasDataFrame = false
@@ -569,6 +574,8 @@ class JikongController private constructor() {
                     .getOrDefault(false)
                 if (ok) {
                     Timber.tag(TAG).i("自动重连成功（失败窗口归零）")
+                    // v0.2.100：重连成功退出演示时同步清仪表盘演示注入值
+                    if (demoMode) SpeedDash.clearDemoInjection()
                     demoMode = false
                     // v0.2.89：重连成功同样重置「上一帧 SOC」（首帧只与上次播报值比较）
                     prevAnnounceSoc = -1

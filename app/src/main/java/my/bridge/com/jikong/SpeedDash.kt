@@ -275,6 +275,29 @@ object SpeedDash {
         version.value = version.value + 1
     }
 
+    /**
+     * 退出演示清理（v0.2.100）：把 injectDemo 灌入的演示值全部复位，防止混入下一次
+     * 真机连接的统计（2026-11-07 用户实证 262.8km/h 真因：演示注入的 gpsTripKm=1.47/
+     * tripSeconds=418 残留，真机只新累计了 ~20s 移动时间 → avg=1.47×3600÷20.1=262.8）。
+     * 只清演示写过的字段（GPS 显示口径一对 gpsTripKm/movingSecondsAvg 同时归零保持
+     * 自洽）；**不动** tripKm/tripWh/movingSeconds/ema（真机 BMS 口径积分，演示没碰）
+     * 与 baseTotal 累计基线（演示值绝不入账）。bmsStale=true → 等 BMS 首帧再出续航。
+     */
+    fun clearDemoInjection() {
+        speedKmh = -1f
+        gpsFresh = false
+        avgSpeedKmh = -1f
+        rangeKm = -1f
+        instWhKm = -1f
+        avgWhKm = -1f
+        gpsTripKm = 0f
+        tripSeconds = 0f
+        movingSecondsAvg = 0f
+        bmsStale = true
+        version.value = version.value + 1
+        Timber.tag(TAG).i("演示注入值已清空（等待真机数据）")
+    }
+
     private var gpsListener: LocationListener? = null
 
     @Volatile
@@ -289,6 +312,10 @@ object SpeedDash {
 
     /** GPS 定位回调（主线程）：过滤毛刺后更新时速。 */
     private fun onFix(loc: Location) {
+        // v0.2.100：演示模式忽略真实定位——演示期间 dashEnabled+connected 会让 start()
+        // 订阅真实 GPS，onFix 回调会把 injectDemo 注入的模拟时速覆盖成真实值（静止≈0.0，
+        // 用户实证「演示时速 1~2s 后消失」）。演示时速只由 injectDemo/refreshDemoData 写入。
+        if (JikongController.instance.demoMode) return
         val v = loc.speed * 3.6f
         if (v < 0f || v > SPEED_MAX_KMH) return  // 毛刺丢弃
         speedKmh = v
