@@ -122,14 +122,16 @@ object JikongSpeaker {
     // ==================== 在线链路（服务端 edge-tts + 本地缓存） ====================
 
     /** 取在线语音：缓存命中直接返回；未命中请求服务端落盘。任何失败返回 null（走本地回退）。
-     *  [seg]=0 整句（键 v2）；[seg]=1 分段（键 v2seg，服务端带尾静音，供本地拼接）。 */
+     *  [seg]=0 整句（键 v3）；[seg]=1 分段（键 v3seg，服务端带尾静音，供本地拼接）。
+     *  键版本历史：v2（-8 LUFS 档）→ v3（0.2.96，服务端重启前旧产物全部作废）。 */
     private suspend fun fetchOnline(app: Context, text: String, seg: Int): File? {
         val api = apiClient ?: return null
         val ds = deviceStore ?: return null
         return try {
             val dir = File(app.cacheDir, CACHE_DIR).apply { mkdirs() }
-            // v2 = 服务端响度档版本（v0.2.92 由 -12 提到 -8 LUFS）；v2seg = 分段档（v0.2.95）
-            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v2seg" else "v2"}")
+            // v3 = 0.2.96：服务端重启前（v0.2.90 旧代码）拉过的分段缓存是 -12 LUFS 且无尾静音，
+            // 升键强制全部重拉（服务端键 v2/v2seg 不变，这只影响客户端本地文件名）。
+            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v3seg" else "v3"}")
             val f = File(dir, "$key.mp3")
             if (f.exists() && f.length() > 256) {
                 f.setLastModified(System.currentTimeMillis())

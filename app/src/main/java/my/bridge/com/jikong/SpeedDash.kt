@@ -67,8 +67,8 @@ object SpeedDash {
     /** 生命周期累计平均电耗生效的最小累计里程（km）（v0.2.90：经验数据从装机起累积）。 */
     private const val LIFETIME_AVG_MIN_KM = 1f
 
-    /** 平均时速生效的最小移动时长（秒），防起步除零抖动。 */
-    private const val AVG_SPEED_MIN_S = 10f
+    /** 平均时速生效的最小移动时长（秒），防起步除零抖动（v0.2.96 10→5s，数值更快出现）。 */
+    private const val AVG_SPEED_MIN_S = 5f
 
     /** EMA 信任门槛：移动累计 >30s 才用 EMA 兜底（否则种子/上次历史）。 */
     private const val EMA_MIN_MOVING_S = 30f

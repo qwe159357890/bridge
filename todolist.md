@@ -191,3 +191,10 @@
 2. ✅ 平均时速恒 0 根因：tripKm 只在 BMS 放电>1W 时积分，保护板断流时被 movingSecondsAvg 稀释成 0.0 → 新增 gpsTripKm（纯 GPS 口径），avgSpeed 与「本次里程」行都改用它。
 3. ✅ 缓存位置解答（见台账 v0.2.95 实施结果）。
 4. ✅ 分段 TTS 本地组合：服务端 /api/tts?seg=1（apad 120ms 尾静音，键 v2seg）+ tts_prewarm.py 预热 0..100+6 词组（107 段全落盘）；BridgeApi.synthTts 加 seg 参数；JikongSpeaker.speakSegs 段全命中→字节拼接零网络播放，缺段补拉，失败回退整句；自动播报与双击播报均切换。
+
+## ✅任务二十四：v0.2.96 三修复（2026-11-07 17:54 反馈四项 → 18:22 发版）
+
+1. ✅ 卡片行距真因：DividerV() 是竖线（1dp宽×16dp高）被当行间分隔线，撑出 4+16+4=24dp 大空隙 → 改横向 1dp 线。
+2. ✅ 平均时速：0.2.95 已改 GPS 口径（数学上不可能恒 0），观察疑为升级前印象/起步 10s 内 "--"；门槛 10→5s 数值更快出现，待骑行实测。
+3. ✅ 播报无声根因（服务端日志+哈希反查实证）：服务端进程从未重启（11:39:20 启动，早于 13:30 -8LUFS 与 17:00 seg 改动），手机 0.2.95 的分段请求全部命中旧代码（无后缀键 md5(text|voice) 反查 9/9 全中）→ -12 LUFS、无尾静音、键错位反复重合成。处置：客户端键升 v3/v3seg 强制重拉 + 服务端重启（用户手动）。
+4. ✅ 断连资源释放确认：HomeView 仅 connected 时 compose，断连→DisposableEffect onDispose→SpeedDash.stop()（GPS 注销+积分协程取消）；ON_PAUSE 同样 stop；轮询/蓝牙由 controller.disconnect 收尾。已释放，无需改动。

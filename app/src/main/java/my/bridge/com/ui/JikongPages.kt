@@ -1148,7 +1148,9 @@ private fun SpeedDashCard(
             }
         }
         Spacer(Modifier.height(4.dp))
-        DividerV()
+        // v0.2.96 间距真因修复：原 DividerV() 是竖线（1dp 宽 × 16dp 高），放在行间撑出
+        // 4+16+4=24dp 大空隙（用户实测「行距太大」根因）；改横向 1dp 细线。
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
         Spacer(Modifier.height(4.dp))
         // 行2：瞬时 | 平均 | 里程（v0.2.90：电耗单位可切换 Wh/km ↔ kWh/100km，只改显示层）
         val kwh100 = JikongPrefs.unitKwh100(context)

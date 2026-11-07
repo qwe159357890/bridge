@@ -17,6 +17,27 @@
 
 ---
 
+### v0.2.96 时速卡间距真因/播报无声排查/平均时速门槛（2026-11-07 17:58 实施）
+
+**需求**：用户 17:54 反馈四项——①卡片行距仍太大（时速/瞬时之间）；②平均时速仍 0；③**完全没有语音播报**；④断连回连接页时 GPS 等资源是否释放。
+
+**排查结论（证据链，勿忘）**：
+- **无声根因 = 服务端进程从未重启**（Win32_Process 实证：`server/.venv python main.py` 启动于 11:39:20，早于 13:30 的 -8 LUFS 与 17:00 的 seg 改动）。手机 17:29-17:30 拉取的 9 个文件哈希全部匹配**无后缀键** `md5(text|voice)`（v0.2.90 服务端格式）且文本=分段（当前电量/百分之/时速/公里/剩余续航/17/18/36/56）→ 证明手机已是 0.2.95、服务端是旧代码：-12 LUFS、无尾静音、键错位导致每次重新合成；且手机本地把旧服务端产物缓存进了 v2seg 键。**处置：本轮重启服务端 + 客户端缓存键升 v3/v3seg 强制重拉**。
+- **间距真因 = `DividerV()` 是竖线**（width 1dp × height 16dp），被当作行 1/行 2 的分隔线放在卡片 Column 里，实际撑出 4+16+4=24dp 空隙。
+- 平均时速代码（GPS 口径）数学上不可能恒 0；用户观察疑为升级前印象/起步 10s 内 "--"。门槛 10s→5s 让数值更快出现。
+
+| 项 | 改前原文 |
+|---|---|
+| **SpeedDashCard 行间分隔** | `Spacer(Modifier.height(4.dp))`⏎`DividerV()`⏎`Spacer(Modifier.height(4.dp))`（DividerV 定义：`Box(modifier = Modifier.width(1.dp).height(height.dp).background(c.divider))`，默认 height=16） |
+| **SpeedDash AVG_SPEED_MIN_S** | `private const val AVG_SPEED_MIN_S = 10f` |
+| **JikongSpeaker 缓存键** | `val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v2seg" else "v2"}")` |
+| **versionName** | `versionName = "0.2.95"` |
+
+**改后**：①SpeedDashCard 分隔改横向 `Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))`；②门槛 10→5s；③客户端键升 v3/v3seg（服务端键不动）；④0.2.96。服务端已重启（15160 端口）。
+
+**回滚配方**：`git revert` 本轮提交即可（四处改动均独立小改）；服务端无需回滚（重启只会更新键错位缓存）。
+**触发信号**：行间 24dp 大空隙复现 / 播报无声且服务端日志出现无后缀键合成 / 平均时速起步 5s 后仍 "--"。
+
 ### v0.2.94 返回键方案 A 统一梯子（2026-11-07 15:00 实施）
 
 **需求**：用户 14:58 反馈返回键在极空页仍不理想并核对示意图后**拍板方案 A（统一梯子）**：无论极空排第几位，back①弹提示→back②显示工具栏（退沉浸）→back③单击跳第一个非极空页面→之后双击退出 APP（微信式逐级上退）。修复 v0.2.92 遗留死循环（极空不排第 1 位时，显示工具栏后再按 back 又回到起点弹提示）。
