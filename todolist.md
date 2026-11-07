@@ -204,3 +204,10 @@
 1. ✅ 平均时速恒 0 真因（用户实证时速 10 仍显示 0.0）：公式 km÷秒 少乘 3600（km/s 当 km/h），v0.2.90 起一直错 → ×3600 修复 + 门槛 0.05→0.001km。
 2. ✅ 段间明显停顿：edge-tts 每段天然首尾静音 + 120ms apad 叠加 → 服务端 seg 链改 silenceremove 裁段首 + 40ms 尾垫；键 v2seg→v3seg（抽出 SEG_SUFFIX 常量两端共享）；旧段删除重预热 107/107。
 3. ✅ 启动预取完全本地：JikongSpeaker.prefetchAll（幂等）+ HomeView 进页触发；客户端 seg 键 v3seg→v4seg。
+
+## ✅任务二十六：v0.2.98 四项（2026-11-07 19:02~19:11 反馈四条 → 19:22 发版）
+
+1. ✅ 语音连读化：服务端双向裁静音（首尾都裁、去 40ms 尾垫）；段序去「百分之」（3段2停顿→2段1停顿）；键 v4seg（服务端）/v5seg（客户端）；106 段重预热。
+2. ✅ 演示模式模拟数据+刷新按钮：SpeedDash.injectDemo + Controller.refreshDemoData（随机合理联动）+ HomeView 演示横幅；进演示=默认值，点刷新=随机重生成。
+3. ✅ 演示自动退出：切离首页（HomeView dispose）或后台化（ON_PAUSE）即 disconnect，真机连接不受影响。
+4. ✅ 进演示掐在飞连接尝试：cancelPendingConnect（修「尝试成功踢出演示」连带 bug）；doConnect 失败在演示下静默收尾。

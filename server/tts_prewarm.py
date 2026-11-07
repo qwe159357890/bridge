@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app.api.v1.tts import _SEG_AF, _cache_dir, _loudnorm, DEFAULT_VOICE, SEG_SUFFIX  # noqa: E402
 
 # 播报词组（客户端 JikongSpeaker 分段口径，顺序拼接成句）
-PHRASES = ["当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电"]
+# v0.2.98：去掉「百分之」——「当前电量」+「72」两段即可（edge-tts 读纯数字为「七十二」），
+# 3 段 2 停顿 → 2 段 1 停顿；整句 fallback 仍含 %（edge-tts 整句自己读「百分之」）。
+PHRASES = ["当前电量", "时速", "公里", "剩余续航", "电量低，请注意充电"]
 
 # 0..100 数字（101 个，纯数字文本；>100 的数值由客户端按需拉取后同样进缓存）
 TEXTS = [str(n) for n in range(0, 101)] + PHRASES

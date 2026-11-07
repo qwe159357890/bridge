@@ -283,6 +283,9 @@ fun JikongPage() {
             // 也不触发「回退正常扫描」（旧 attempt 的 fallback 会和新连接打架）
             if (myAttempt != connectAttemptSeq) return@launch
             connecting = false
+            // v0.2.98：进演示模式会掐掉在飞尝试（cancelPendingConnect→ok=false），
+            // 此时失败提示与「回退扫描」都是对演示的干扰——静默收尾。
+            if (controller.demoMode) return@launch
             // Toast 必须在主线程（GlobalScope.launch 默认后台线程无 Looper，直接 Toast 会 NPE 崩溃）
             val msg = when {
                 ok -> "已连接 ${displayNameOf(dev.address, dev.name)}"
@@ -372,6 +375,9 @@ fun JikongPage() {
                 Lifecycle.Event.ON_PAUSE -> {
                     controller.setPageVisible(false)
                     SpeedDash.stop()   // 离开页面 → GPS 注销 + 积分暂停（零后台成本）
+                    // v0.2.98：演示模式后台化即退出（无真实连接不会自行断开，用户拍板；
+                    // 真机连接不受影响，后台保持既有 keepConnection 策略）
+                    if (controller.demoMode) controller.disconnect()
                 }
                 else -> {}
             }
@@ -774,9 +780,14 @@ private fun HomeView(
 
     // v0.2.83 仪表盘生命周期门控（红队修正：HomeView 只在已连接时存在）——
     // 进入首页（连接建立/回前台）且开关开才启动 GPS+积分；离开即注销，零后台成本。
+    // v0.2.98：演示模式没有真实连接（不会因断连退出），切离首页（回主页/进其它页）
+    // 即自动退出演示——回连接页，避免演示一直挂着（用户拍板）。
     DisposableEffect(dashEnabled) {
         if (dashEnabled) SpeedDash.start(context)
-        onDispose { SpeedDash.stop() }
+        onDispose {
+            SpeedDash.stop()
+            if (controller.demoMode) controller.disconnect()
+        }
     }
 
     // v0.2.97 TTS 分段预取（用户拍板「拉全后完全本地」）：进首页后台把 0..100+词组拉进
@@ -839,6 +850,33 @@ private fun HomeView(
         }
         Spacer(Modifier.height(2.dp))
 
+        // v0.2.98：演示模式横幅（amber 点 + 「刷新模拟数据」按钮）。点刷新 = BMS 总览 +
+        // 仪表盘全部随机重生成（合理范围联动：平均时速<即时速、时长=里程÷均速）。
+        if (controller.demoMode) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(c.card, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(8.dp).background(c.amber, CircleShape))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "演示模式 · 模拟数据（切离本页或后台自动退出）",
+                    fontSize = 11.sp, color = c.amber, modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "刷新模拟数据",
+                    fontSize = 12.sp, color = c.blue, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable { controller.refreshDemoData() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+        }
+
         // v0.2.88：改名弹窗（点连接栏设备名触发；留空=清除昵称）
         if (showRename) {
             androidx.compose.material3.AlertDialog(
@@ -888,7 +926,8 @@ private fun HomeView(
         val onDashDoubleTap: () -> Unit = {
             val soc = controller.status.soc
             if (soc in 0..100) {
-                val segs = mutableListOf("当前电量", "百分之", soc.toString())
+                // v0.2.98：去掉「百分之」段（3段2停顿→2段1停顿，纯数字 edge-tts 自读「七十二」）
+                val segs = mutableListOf("当前电量", soc.toString())
                 if (soc < JikongPrefs.speakLowSoc(context)) segs.add("电量低，请注意充电")
                 val speed = SpeedDash.speedKmh
                 if (speed > 0f) {

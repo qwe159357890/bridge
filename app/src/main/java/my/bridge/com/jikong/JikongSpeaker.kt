@@ -144,15 +144,15 @@ object JikongSpeaker {
     // ==================== 在线链路（服务端 edge-tts + 本地缓存） ====================
 
     /** 取在线语音：缓存命中直接返回；未命中请求服务端落盘。任何失败返回 null（走本地回退）。
-     *  [seg]=0 整句（键 v3）；[seg]=1 分段（键 v4seg，服务端带 40ms 尾垫+裁段首静音，供本地拼接）。
-     *  键版本历史：v2（-8 LUFS 档）→ v3（0.2.96，服务端重启前旧产物作废）→
-     *  v4seg（0.2.97，服务端 seg 停顿收紧 v3seg，本地 120ms 旧段作废）。 */
+     *  [seg]=0 整句（键 v3）；[seg]=1 分段（键 v5seg，服务端首尾双向裁静音，拼接近连读）。
+     *  键版本历史：v2（-8 LUFS）→ v3（0.2.96）→ v4seg（0.2.97 裁首+40ms 尾垫）→
+     *  v5seg（0.2.98 双向裁静音零尾垫，段序去「百分之」）。 */
     private suspend fun fetchOnline(app: Context, text: String, seg: Int): File? {
         val api = apiClient ?: return null
         val ds = deviceStore ?: return null
         return try {
             val dir = File(app.cacheDir, CACHE_DIR).apply { mkdirs() }
-            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v4seg" else "v3"}")
+            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v5seg" else "v3"}")
             val f = File(dir, "$key.mp3")
             if (f.exists() && f.length() > 256) {
                 f.setLastModified(System.currentTimeMillis())

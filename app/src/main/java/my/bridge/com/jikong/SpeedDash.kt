@@ -249,6 +249,32 @@ object SpeedDash {
         start(context)
     }
 
+    /**
+     * 演示模式数据注入（v0.2.98）：演示模式没有 GPS/保护板，积分协程不跑，
+     * 由 [JikongController.refreshDemoData] 直接灌入一套合理的模拟值
+     * （进入演示=默认组合；点「刷新」=重新随机）。字段与 tickLoop 写的同源，UI 无感知。
+     */
+    fun injectDemo(
+        speed: Float,
+        avgSpeed: Float,
+        range: Float,
+        instWh: Float,
+        avgWh: Float,
+        tripKmValue: Float,
+        seconds: Float,
+    ) {
+        speedKmh = speed
+        gpsFresh = speed >= 0f
+        avgSpeedKmh = avgSpeed
+        rangeKm = range
+        instWhKm = instWh
+        avgWhKm = avgWh
+        gpsTripKm = tripKmValue
+        tripSeconds = seconds
+        bmsStale = false
+        version.value = version.value + 1
+    }
+
     private var gpsListener: LocationListener? = null
 
     @Volatile

@@ -37,17 +37,19 @@ MAX_TEXT_LEN = 120
 # TP 仍留 1.5dB 余量）。缓存键同步升 v2（旧 -12 文件不再生效）。
 _LOUDNORM = "loudnorm=I=-8:TP=-1.5:LRA=7"
 
-# 分段模式滤链（v0.2.97 段间大间隔治理）：edge-tts 每段天然带首尾静音 + 旧 120ms apad
-# 叠加后「当前电量→50」之间有明显停顿。改为：silenceremove 裁掉段首静音（起始 0.03s
-# 以下噪声阈值视为静音）+ 仅保留 40ms 尾垫（拼接后的自然过渡间隙）。键升 v3seg。
+# 分段模式滤链（v0.2.98 连读化）：v0.2.97 只裁段首 + 40ms 尾垫，但 edge-tts 每段**天然
+# 带尾部静音（约 150~300ms）**，叠加后停顿仍可闻（用户实证）。改为首尾双向裁静音
+# （areverse→裁→areverse），段与段近乎无缝衔接（类似一人连读）；不再加尾垫。
 _SEG_AF = (
     "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.02,"
-    "loudnorm=I=-8:TP=-1.5:LRA=7,"
-    "apad=pad_dur=0.04"
+    "areverse,"
+    "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.02,"
+    "areverse,"
+    "loudnorm=I=-8:TP=-1.5:LRA=7"
 )
 
 # 分段缓存键后缀（预热脚本 tts_prewarm.py 从这里 import，保证两端键推导永不漂移）
-SEG_SUFFIX = "v3seg"
+SEG_SUFFIX = "v4seg"
 
 
 def _cache_dir() -> Path:

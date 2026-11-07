@@ -80,6 +80,43 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.98 语音连读化/演示模拟数据刷新/演示自动退出（2026-11-07 19:05 实施）
+
+**改前原文（逐字抄录）**：
+
+1. tts.py `_SEG_AF`（v0.2.97 版，40ms 尾垫 + 只裁段首——edge-tts 每段天然尾静音叠加后停顿仍可闻）：
+```python
+_SEG_AF = (
+    "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.02,"
+    "loudnorm=I=-8:TP=-1.5:LRA=7,"
+    "apad=pad_dur=0.04"
+)
+
+# 分段缓存键后缀（预热脚本 tts_prewarm.py 从这里 import，保证两端键推导永不漂移）
+SEG_SUFFIX = "v3seg"
+```
+
+2. 段序含「百分之」（两处，3 段 2 停顿）：Controller.maybeAnnounce `val segs = mutableListOf("当前电量", "百分之", soc.toString())`；Pages.onDashDoubleTap `val segs = mutableListOf("当前电量", "百分之", soc.toString())`。
+
+3. tts_prewarm.py：`PHRASES = ["当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电"]`
+
+4. JikongSpeaker 客户端键：`val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v4seg" else "v3"}")`
+
+5. SpeedDash 无演示注入接口（demoMode 时积分全停，speedKmh=-1 等）；JikongController.enterDemoMode 灌固定值、无 refreshDemoData；HomeView 断开仅在用户点击。
+
+**回滚配方**：4 处键回退（v4seg/v5seg→v3seg/v4seg）、_SEG_AF 回 40ms apad、「百分之」段恢复、删 SpeedDash.injectDemo/JikongController.refreshDemoData、HomeView/ON_PAUSE 演示退出分支删除 → 删 tts_cache 重预热 → 重启服务端。
+**触发信号**：播报恢复三段两停顿 / 演示模式无刷新按钮 / 后台后演示仍挂着。
+
+**实施结果（v0.2.98，19:22 发版）**：
+1. tts.py `_SEG_AF` 改双向裁静音（areverse→silenceremove→areverse）零尾垫；`SEG_SUFFIX` v3seg→v4seg；旧 v3seg 段删 57 个重预热（106 段，PHRASES 去「百分之」）。
+2. 段序：Controller.maybeAnnounce 与 Pages.onDashDoubleTap 去「百分之」（3段2停顿→2段1停顿）；JikongSpeaker seg 键 v4seg→v5seg。
+3. SpeedDash 新增 `injectDemo(speed,avgSpeed,range,instWh,avgWh,tripKm,seconds)`；Controller 新增 `refreshDemoData()`（Random：SOC 22~91、电压 62.8~68.0、单体 ±6mV 微扰、25% 概率充电、时速 6~42 或 15% 静止、平均=瞬时×0.55~0.85、时长=里程÷均速自洽、瞬时静止时 --），enterDemoMode 末尾注入默认值（18.4/15.2/58/18.6/19.8/8.6/2050s）。
+4. HomeView 连接栏下演示横幅（amber + 「刷新模拟数据」clickable）。
+5. 演示自动退出：HomeView DisposableEffect onDispose + JikongPage ON_PAUSE 均加 `if (demoMode) disconnect()`（真机连接不受影响）。
+6. enterDemoMode 开头掐在飞尝试（cancelPendingConnect + reconnectJob.cancel）——修「尝试成功踢出演示」连带 bug；doConnect 失败路径 demoMode 时静默收尾。
+7. 交付：APK 0.2.98（sha256 `6ef49405…`）三件套（删 v0.2.97）。**服务端需再重启一次**。
+**待真机验证**：①「当前电量 72」两段近乎连读；②演示横幅点刷新全部数值合理重生成；③切主页/后台演示即退；④设默认设备后进演示不被踢出。
+
 ### v0.2.97 平均时速单位错+段间隔收紧+启动预取（2026-11-07 18:35 实施）
 
 **改前原文（全部逐字抄录）**：

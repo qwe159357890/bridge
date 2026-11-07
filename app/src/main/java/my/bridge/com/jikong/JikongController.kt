@@ -289,6 +289,12 @@ class JikongController private constructor() {
      * 再次调用 disconnect() 或真机连接后即退出演示。
      */
     fun enterDemoMode() {
+        // v0.2.98：进入演示前先掐掉在飞的连接尝试（自动连默认设备/手动扫描直连）——
+        // 否则尝试稍后成功时 connect() 会置 demoMode=false，把用户踢出演示模式；
+        // 同时取消自动重连循环（演示期间不允许真机连接抢状态）。
+        reconnectJob?.cancel()
+        reconnectJob = null
+        JikongBleClient.cancelPendingConnect()
         stopPolling()
         demoMode = true
         // v0.2.92 防僵尸补口：进入演示模式同样清空扫描暂存（用户拍板：进演示也算，与连接成功同口径）
@@ -362,11 +368,69 @@ class JikongController private constructor() {
         s.lastUpdateAt = System.currentTimeMillis()
         // v0.2.91：演示模式视为「已读到数据」——统计页记一笔门控放行（配合内存演示台账）
         hasDataFrame = true
+        // v0.2.98：仪表盘默认模拟数据（用户拍板：进入演示即显示这套默认值，点「刷新」随机重生成）
+        SpeedDash.injectDemo(
+            speed = 18.4f, avgSpeed = 15.2f, range = 58f,
+            instWh = 18.6f, avgWh = 19.8f, tripKmValue = 8.6f, seconds = 2050f,
+        )
         statusVersion.value = statusVersion.value + 1
         // v0.2.86：演示数据也上报服务端——管理后台「极空页 1:1 复刻」需要用演示模式
         // 调试界面/联调，后台据此显示「已连接 · 演示设备」而非未连接。
         reportStatus()
         Timber.tag(TAG).i("进入演示模式（未连接保护板，演示数据已上报服务端）")
+    }
+
+    /**
+     * 演示模式「刷新模拟数据」（v0.2.98，HomeView 刷新按钮）：BMS 总览字段在合理范围内
+     * 随机重生成（SOC/电压/电流/单体/温度/剩余时间），仪表盘字段联动注入
+     * （平均时速<即时速、时长=里程÷平均时速，保证数值自洽）。真机连接时调用直接忽略。
+     */
+    fun refreshDemoData() {
+        if (!demoMode) return
+        val r = java.util.Random()
+        val s = status
+        val soc = 22 + r.nextInt(70)                     // 22~91
+        val charging = r.nextInt(100) < 25               // 25% 概率充电中
+        s.soc = soc
+        s.remainCapacity = s.nominalCapacity * soc / 100f
+        s.totalVoltage = 62.8f + r.nextFloat() * 5.2f    // 62.8~68.0V
+        s.current = if (charging) 3f + r.nextFloat() * 9f else -(1f + r.nextFloat() * 11f)
+        s.power = s.totalVoltage * s.current
+        // 单体电压：围绕总压均分 + ±6mV 微扰（压差自然可辨）
+        val base = s.totalVoltage / s.cellCount
+        val volts = List(s.cellCount) { base + (r.nextFloat() - 0.5f) * 0.012f }
+        s.cellVoltages = volts
+        s.avgCellVoltage = volts.average().toFloat()
+        s.maxCellVoltage = volts.max()
+        s.minCellVoltage = volts.min()
+        s.maxCellIndex = volts.indexOf(s.maxCellVoltage)
+        s.minCellIndex = volts.indexOf(s.minCellVoltage)
+        s.diffVoltage = s.maxCellVoltage - s.minCellVoltage
+        s.temperatures = listOf(
+            26f + r.nextFloat() * 5f, 27f + r.nextFloat() * 5f, 26.5f + r.nextFloat() * 5f,
+        )
+        s.maxTemperature = s.temperatures.max()
+        s.minTemperature = s.temperatures.min()
+        s.tempDiff = s.maxTemperature - s.minTemperature
+        s.remainTimeSeconds = 600 + r.nextInt(3 * 3600)
+        // 仪表盘联动：15% 概率静止（时速 0、瞬时 --），否则 6~42km/h；
+        // 平均时速 = 即时速 × 0.55~0.85（行程均值恒低于瞬时，物理合理）
+        val moving = r.nextInt(100) >= 15
+        val speed = if (moving) 6f + r.nextFloat() * 36f else 0f
+        val avgSpeed = if (moving) speed * (0.55f + r.nextFloat() * 0.3f) else 12f + r.nextFloat() * 8f
+        val tripKmV = 0.8f + r.nextFloat() * 17.7f       // 0.8~18.5 km
+        val seconds = tripKmV / avgSpeed * 3600f         // 时长与里程/均速自洽
+        val inst = if (moving) 13f + r.nextFloat() * 17f else -1f
+        SpeedDash.injectDemo(
+            speed = speed, avgSpeed = avgSpeed,
+            range = 25f + r.nextFloat() * 70f,           // 25~95 km
+            instWh = inst, avgWh = 15f + r.nextFloat() * 10f,
+            tripKmValue = tripKmV, seconds = seconds,
+        )
+        s.lastUpdateAt = System.currentTimeMillis()
+        statusVersion.value = statusVersion.value + 1
+        reportStatus()
+        Timber.tag(TAG).i("演示数据已刷新（SOC=%d，时速=%.1f，里程=%.1f）", s.soc, speed, tripKmV)
     }
 
     fun setPageVisible(visible: Boolean) {
@@ -562,9 +626,9 @@ class JikongController private constructor() {
             return
         }
         firstAnnouncePending = false
-        // v0.2.95：改分段本地组合播报（"当前电量"+"百分之"+数字[+低电词组]，段全命中零网络）；
-        // fallback 保持原整句文案（含 %，edge-tts 会读"百分之"），拼接失败时回退整句链路。
-        val segs = mutableListOf("当前电量", "百分之", soc.toString())
+        // v0.2.98：去掉「百分之」段（3段2停顿→2段1停顿；edge-tts 读纯数字为「七十二」，
+        // 「当前电量七十二」语义完整）；fallback 保持原整句文案（含 %，整句链路自读「百分之」）。
+        val segs = mutableListOf("当前电量", soc.toString())
         if (low) segs.add("电量低，请注意充电")
         val text = "当前电量 $soc%" + if (low) "，电量低，请注意充电" else ""
         JikongPrefs.setLastSpoken(ctx, soc, now)
