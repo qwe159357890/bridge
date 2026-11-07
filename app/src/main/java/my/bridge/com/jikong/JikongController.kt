@@ -99,6 +99,14 @@ class JikongController private constructor() {
     var demoMode: Boolean = false
 
     /**
+     * v0.2.93：连接尝试进行中（controller.connect 全程为 true，含 mutex 内等待）。
+     * UI 层用它判断「是否已有连接在飞」：自动连接跳过、点扫描不再叠加默认直连。
+     */
+    @Volatile
+    var connectInFlight: Boolean = false
+        private set
+
+    /**
      * 上一帧 SOC（v0.2.89）：每帧判定「电量与上一帧不同」用；-1 = 本连接还没有前帧。
      * 连接/重连成功时重置（无前帧时只与「上次播报值」比较，与 v0.2.88 首帧行为一致）。
      */
@@ -218,25 +226,36 @@ class JikongController private constructor() {
 
     // ==================== 连接控制 ====================
 
-    suspend fun connect(context: Context, address: String): Boolean = mutex.withLock {
-        appContext = context.applicationContext
-        lastConnectAddress = address
-        // 用户手动连接优先：终止可能正在跑的自动重连循环
-        reconnectJob?.cancel()
-        reconnectJob = null
-        val ok = JikongBleClient.connect(context, address)
-        if (ok) {
-            // 真机连接成功即退出演示模式
-            demoMode = false
-            // v0.2.77：成功连接后启用自动重连（此后意外断开将自动恢复；重连成功即归零）
-            autoReconnectEnabled = true
-            // v0.2.89：重置「上一帧 SOC」，连接后首帧只与上次播报值比较
-            prevAnnounceSoc = -1
-            // v0.2.91：连接成功即清空扫描暂存（防僵尸）
-            clearScanCache()
-            startPolling()
+    suspend fun connect(context: Context, address: String): Boolean {
+        // v0.2.93：抢占式终结在飞的连接尝试（自动连接/排队中的旧请求）——resume 其 waiter
+        // 并关闭其 GATT，让 mutex 立即可用。否则新请求要等旧尝试满 10s 超时
+        // （2026-11-07 用户实证：设默认设备后点扫描延时 10~50s 才变「扫描中」）
+        JikongBleClient.cancelPendingConnect()
+        return mutex.withLock {
+            connectInFlight = true
+            try {
+                appContext = context.applicationContext
+                lastConnectAddress = address
+                // 用户手动连接优先：终止可能正在跑的自动重连循环
+                reconnectJob?.cancel()
+                reconnectJob = null
+                val ok = JikongBleClient.connect(context, address)
+                if (ok) {
+                    // 真机连接成功即退出演示模式
+                    demoMode = false
+                    // v0.2.77：成功连接后启用自动重连（此后意外断开将自动恢复；重连成功即归零）
+                    autoReconnectEnabled = true
+                    // v0.2.89：重置「上一帧 SOC」，连接后首帧只与上次播报值比较
+                    prevAnnounceSoc = -1
+                    // v0.2.91：连接成功即清空扫描暂存（防僵尸）
+                    clearScanCache()
+                    startPolling()
+                }
+                ok
+            } finally {
+                connectInFlight = false
+            }
         }
-        ok
     }
 
     fun disconnect() {
@@ -636,6 +655,16 @@ class JikongController private constructor() {
         val s = status
         when (frame.command) {
             JikongProtocol.FRAME_DATA -> {
+                // v0.2.93 硬保证（用户拍板）：数据帧在流 = 链路活着的最高证据。若状态仍是
+                // 未连接（竞态/陈旧回调污染的残留），强制拉回已连接——杜绝「连接成功且在收
+                // 数据但页面停在扫描页」。
+                if (!s.connected && !demoMode) {
+                    Timber.tag(TAG).w("收到数据帧但状态为未连接（竞态污染），强制恢复已连接")
+                    s.connected = true
+                    s.deviceName = JikongBleClient.connectedDeviceName
+                    s.deviceAddress = JikongBleClient.connectedDeviceAddress
+                    autoReconnectEnabled = true
+                }
                 parseDataFrame(s, frame.data)          // 0x02
                 lastDataFrameAt = System.currentTimeMillis()
                 hasDataFrame = true

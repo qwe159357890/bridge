@@ -266,8 +266,11 @@ fun JikongPage() {
         }
     }
 
+    var connectAttemptSeq = 0   // v0.2.93：连接尝试序号（防陈旧 attempt 误重置 UI 状态/误触发回退扫描）
+
     fun doConnect(dev: BleDevice, isDefault: Boolean = false, fallbackScan: Boolean = false) {
         connecting = true
+        val myAttempt = ++connectAttemptSeq
         kotlinx.coroutines.GlobalScope.launch {
             val ok = try {
                 controller.connect(context, dev.address)
@@ -275,6 +278,9 @@ fun JikongPage() {
                 android.util.Log.w("Jikong", "连接失败", e)
                 false
             }
+            // v0.2.93：被更新尝试抢占的旧 attempt 不动 UI（connecting 由新 attempt 接管），
+            // 也不触发「回退正常扫描」（旧 attempt 的 fallback 会和新连接打架）
+            if (myAttempt != connectAttemptSeq) return@launch
             connecting = false
             // Toast 必须在主线程（GlobalScope.launch 默认后台线程无 Looper，直接 Toast 会 NPE 崩溃）
             val msg = when {
@@ -299,7 +305,10 @@ fun JikongPage() {
         // v0.2.88 默认设备：点扫描时若有默认设备，跳过扫描直接连接；
         // 连接失败自动回退正常扫描（doConnect 里触发 doScan(tryDefault=false)）。
         val defMac = JikongPrefs.defaultMac(context)
-        if (tryDefault && defMac.isNotBlank()) {
+        // v0.2.93：已有连接尝试在飞（自动连接/上次直连还没结果）→ 用户明确要点扫描，
+        // 直接正常扫描立即出列表，不再叠加一次 10s 的默认直连（延时 10~50s 的另一元凶）。
+        // 在飞的自动连接不打断——它若成功页面自然进入数据页（用户拍板的硬要求）。
+        if (tryDefault && defMac.isNotBlank() && !connecting && !controller.connectInFlight) {
             val cached = controller.cachedDevices.firstOrNull { it.address == defMac }
             doConnect(
                 BleDevice(defMac, displayNameOf(defMac, cached?.name), cached?.rssi ?: 0),
@@ -320,10 +329,12 @@ fun JikongPage() {
         }
     }
 
-    // v0.2.88：进入极空页自动连默认设备（用户拍板）。仅未连接、非演示、有默认设备、
-    // 有连接权限且蓝牙开启时尝试一次；失败仅 Toast，不自动转扫描（点扫描按钮才兜底）。
+    // v0.2.88：进入极空页自动连默认设备（用户拍板）。仅未连接、非演示、无在飞连接尝试、
+    // 有默认设备、有连接权限且蓝牙开启时尝试一次；失败仅 Toast，不自动转扫描（点扫描按钮才兜底）。
     LaunchedEffect(Unit) {
         if (controller.status.connected || controller.demoMode) return@LaunchedEffect
+        // v0.2.93：已有连接尝试在飞（用户手快先点了扫描/连接）→ 不叠加自动连接
+        if (connecting || controller.connectInFlight) return@LaunchedEffect
         val defMac = JikongPrefs.defaultMac(context)
         if (defMac.isBlank() || !hasConnectPermission()) return@LaunchedEffect
         if (!JikongBleClient.isBluetoothEnabled(context)) return@LaunchedEffect
@@ -2206,8 +2217,9 @@ private fun StatsView(controller: JikongController) {
                     Text("按记录时间归属", fontSize = 10.sp, color = c.gray)
                 }
                 Spacer(Modifier.height(8.dp))
+                // v0.2.93：去掉「近」字减宽（chip 太多时「自定义」被挤到竖排），并禁自动换行
                 val ranges = remember {
-                    listOf("近一周" to 7L, "近一月" to 30L, "一季度" to 90L, "近一年" to 365L)
+                    listOf("一周" to 7L, "一月" to 30L, "一季度" to 90L, "一年" to 365L)
                 }
                 var stageIdx by remember { mutableStateOf(1) }   // 默认近一月
                 // v0.2.92 自定义时间段：stageIdx == ranges.size 表示自定义；点 chip 弹日期区间选择器
@@ -2221,6 +2233,8 @@ private fun StatsView(controller: JikongController) {
                             fontSize = 12.sp,
                             color = if (sel) c.onfill else c.gray,
                             fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier
                                 .background(if (sel) c.green else c.bg, RoundedCornerShape(14.dp))
                                 .clickable { stageIdx = i }
@@ -2235,6 +2249,8 @@ private fun StatsView(controller: JikongController) {
                         fontSize = 12.sp,
                         color = if (selCustom) c.onfill else c.gray,
                         fontWeight = if (selCustom) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier
                             .background(if (selCustom) c.green else c.bg, RoundedCornerShape(14.dp))
                             .clickable {

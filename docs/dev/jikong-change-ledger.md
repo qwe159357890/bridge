@@ -19,6 +19,23 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.93 五项：chip 防竖排/连接竞态治理（陈旧 GATT 回调守卫+连接抢占+数据帧硬保证）（2026-11-07 14:05 实施）
+
+| 项 | 内容 |
+|---|---|
+| **需求（用户 14:05 提出 2 项）** | ①阶段统计 chip「自定义」三字竖排了（按钮太多放不下）→ 拍板去掉「近」字减宽；②连接竞态：设默认设备后点扫描延时 10~50s 才变「扫描中」；自动连接+手动操作交叉后，最终 BLE 已连上且在收数据，但页面停在扫描页。硬要求：**成功连接且读到数据时必须显示数据页** |
+| **回退标记（git 快照）** | 提交 **`8c272db`**（`feat: v0.2.92 四项优化+返回键修复…`）——本次改动前全部代码原文以此为准 |
+| **回滚配方** | `git checkout 8c272db -- app/src/main/java/my/bridge/com app/build.gradle.kts` |
+| **触发回滚的信号** | ①正常断开/重连流程异常（连不上、断不净、重连风暴）；②扫描列表不刷新；③播报/统计行为异常（数据帧强制恢复连接误触发） |
+| **根因（代码层确认，与用户现象逐条对应）** | ①**陈旧 GATT 回调无守卫**：gattCallback 所有回调不检查 `g === gatt`——被 disconnect()/close() 掉的旧 GATT 迟到回调（自动连接 A 与手动连接 C 交叉时必然产生）会 resume 错误的 waiter、`setConnected(true/false)` 污染当前状态；**迟到的 STATE_DISCONNECTED 把正在流数据的新连接打成未连接 → 页面回扫描页而数据网格仍在刷新**（用户观察的最终态）。②**disconnect() 丢弃 waiter 不 resume**：旧 connect() 的 withTimeoutOrNull 只能等满 10s → 新请求在 controller.mutex 排队 → A(10s)+B(10s)+… = 扫描延时 10~50s。③**connect 不能抢占**：controller.connect 排队等 mutex，不终结在飞尝试。④**无数据帧兜底**：状态与链路真值脱节时无自愈 |
+| **改前原文（逐字，BleClient.disconnect L473-485）** | `fun disconnect() {\n        writeWaiters.values.forEach { it.complete(false) }\n        writeWaiters.clear()\n        // 清空挂起的连接等待，避免后续 GATT 回调 resume 一个已取消的 continuation\n        connectWaiter = null\n        rxBuffer.reset()\n        runCatching { gatt?.disconnect() }\n        runCatching { gatt?.close() }\n        gatt = null\n        writeChar = null\n        notifyChar = null\n        setConnected(false)\n    }` |
+| **改前原文（逐字，BleClient.onConnectionStateChange 断开分支 L282-287）** | `} else if (newState == BluetoothProfile.STATE_DISCONNECTED) {\n                Timber.tag(TAG).i("GATT 已断开 status=$status")\n                lastDisconnectStatus = status\n                setConnected(false)\n                connectWaiter?.let { w -> connectWaiter = null; w.resume(false) }\n            }` |
+| **改前原文（逐字，Controller.connect L221-227）** | `suspend fun connect(context: Context, address: String): Boolean = mutex.withLock {\n        appContext = context.applicationContext\n        lastConnectAddress = address\n        // 用户手动连接优先：终止可能正在跑的自动重连循环\n        reconnectJob?.cancel()\n        reconnectJob = null\n        val ok = JikongBleClient.connect(context, address)` |
+| **改前原文（逐字，mergeFrame FRAME_DATA 分支 L638-644）** | `JikongProtocol.FRAME_DATA -> {\n                parseDataFrame(s, frame.data)          // 0x02\n                lastDataFrameAt = System.currentTimeMillis()\n                hasDataFrame = true\n                datalessRecycles = 0   // v0.2.80：数据通了，重建计数归零\n                maybeAnnounce(s)       // v0.2.89：每帧判定播报（变化/间隔/预警，规则见函数注释）\n            }` |
+| **改前原文（其余触点）** | ①Pages doConnect 无 attempt token（陈旧 fallback 扫描会误触发）；②自动连接 LaunchedEffect 只查 connected/demoMode 不查在飞；③doScan 无在飞直连跳过；④阶段统计 ranges=`listOf("近一周" to 7L, "近一月" to 30L, "一季度" to 90L, "近一年" to 365L)` 无 maxLines |
+| **实施结果（改后回填，2026-11-07 14:18）** | ①**BleClient 陈旧守卫**：gattCallback 加 `isStale(g)`（g !== gatt → 忽略+close），挂到 onConnectionStateChange/onMtuChanged/onServicesDiscovered/onDescriptorWrite 全部与 onCharacteristicChanged/onCharacteristicWrite 的 `g !== gatt` 早退——旧链路迟到回调不再污染状态/不再幽灵 resume 新 waiter/旧链路数据不进会话；②**disconnect() resume waiter**（runCatching 包裹防重复 resume）+ 新增 `cancelPendingConnect()`（抢占终结在飞尝试，**不触发 setConnected** 防误拉自动重连）；③**Controller.connect 抢占**：mutex 外先 cancelPendingConnect，全程 `connectInFlight`（@Volatile，finally 复位）；④**数据帧硬保证**（用户拍板硬要求）：mergeFrame FRAME_DATA 收到帧但 `!s.connected && !demoMode` → 强制恢复已连接+补设备名+autoReconnectEnabled=true（链路活着的最高证据）；⑤**UI**：doConnect 加 attempt token（被抢占的旧 attempt 不动 connecting/不 Toast/不回退扫描）；doScan 在飞时跳过默认直连直接正常扫描；自动连接 LaunchedEffect 加 `connecting || connectInFlight` 跳过；阶段统计 chip 去「近」字+`maxLines=1, softWrap=false`。编译一次通过；APK 实证 0.2.93；分发 updates（46,021,570 B，sha256 03b80911…）+Downloads+update.json（删 v0.2.92 APK） |
+| **修复后行为（对应原现象）** | ①点扫描：在飞尝试被毫秒级抢占（不再等 10~50s），立即「扫描中」；②自动连接+手动交叉：旧 GATT 全部被守卫忽略，最终状态=真实链路状态；③即使状态被意外污染，第一帧数据到达即强制回到数据页（双保险） |
+
 ### v0.2.92 四项：阶段统计自定义时间段/演示模式清列表/双击仪表盘修复/播报提响（2026-11-07 13:20 实施）
 
 | 项 | 内容 |

@@ -256,8 +256,24 @@ object JikongBleClient {
     private var notifyLogBudget = 3
 
     private val gattCallback = object : BluetoothGattCallback() {
+        /**
+         * v0.2.93 陈旧 GATT 守卫：回调实例不是当前 [gatt]（已被 disconnect/close 或被新连接
+         * 替换）时一律忽略并 close。不守卫的后果（2026-11-07 用户真机实证）：自动连接与手动
+         * 连接交叉时，旧 GATT 迟到的 STATE_DISCONNECTED 会把**正在流数据的新连接**打成
+         * 未连接 → 页面停在扫描页；迟到的服务发现成功会 resume 新尝试的 waiter（幽灵接管）。
+         */
+        private fun isStale(g: BluetoothGatt): Boolean {
+            if (g !== gatt) {
+                Timber.tag(TAG).w("忽略陈旧 GATT 回调（实例已被替换/关闭）")
+                runCatching { g.close() }
+                return true
+            }
+            return false
+        }
+
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (isStale(g)) return
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Timber.tag(TAG).i("GATT 已连接，先协商 MTU 再发现服务")
                 servicesRequested = false
@@ -289,6 +305,7 @@ object JikongBleClient {
 
         @SuppressLint("MissingPermission")
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            if (isStale(g)) return
             Timber.tag(TAG).i("MTU 协商完成 mtu=$mtu status=$status")
             if (!servicesRequested) {
                 servicesRequested = true
@@ -298,6 +315,7 @@ object JikongBleClient {
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (isStale(g)) return   // v0.2.93：陈旧发现结果不得 resume 当前尝试的 waiter
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Timber.tag(TAG).w("服务发现失败 status=$status")
                 connectWaiter?.let { w -> connectWaiter = null; w.resume(false) }
@@ -319,6 +337,7 @@ object JikongBleClient {
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            if (g !== gatt) return   // v0.2.93：陈旧链路的数据不进当前会话
             val bytes = characteristic.value ?: return
             // v0.2.81 降噪：实时数据流每秒十几个分包，逐条打 hex 会把 device_logs
             // 上传缓冲灌爆（2026-11-06 实证：一次上传 1937 条通知 vs 1 条诊断日志，
@@ -337,6 +356,7 @@ object JikongBleClient {
             characteristic: BluetoothGattCharacteristic,
             status: Int,
         ) {
+            if (g !== gatt) return   // v0.2.93：陈旧写回执不误导当前写等待者
             writeWaiters.remove(characteristic.uuid)?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
 
@@ -346,6 +366,7 @@ object JikongBleClient {
             descriptor: BluetoothGattDescriptor,
             status: Int,
         ) {
+            if (isStale(g)) return   // v0.2.93：陈旧 CCCD 回执不触发重订阅风暴
             Timber.tag(TAG).d("descriptor 写回 status=$status")
             // v0.2.79：CCCD 订阅失败会导致通知永远收不到（首连无数据的另一元凶），
             // 旧代码只打日志不重试。失败时重新订阅（限 3 次，防风暴）。
@@ -473,8 +494,10 @@ object JikongBleClient {
     fun disconnect() {
         writeWaiters.values.forEach { it.complete(false) }
         writeWaiters.clear()
-        // 清空挂起的连接等待，避免后续 GATT 回调 resume 一个已取消的 continuation
-        connectWaiter = null
+        // v0.2.93：旧连接等待者必须立即 resume(false) 放掉——只置 null 的话，旧 connect()
+        // 的 withTimeoutOrNull 只能等满 10s 超时，新连接请求在 controller.mutex 上排队
+        // （2026-11-07 用户实证：点扫描延时 10~50s 才变「扫描中」的元凶之一）
+        connectWaiter?.let { w -> connectWaiter = null; runCatching { w.resume(false) } }
         rxBuffer.reset()
         runCatching { gatt?.disconnect() }
         runCatching { gatt?.close() }
@@ -482,6 +505,22 @@ object JikongBleClient {
         writeChar = null
         notifyChar = null
         setConnected(false)
+    }
+
+    /**
+     * v0.2.93：抢占式终结「正在进行的连接尝试」（resume 其 waiter + 关闭其 GATT），
+     * 供新连接请求立即接管。与 [disconnect] 的区别：**不触发 setConnected**——
+     * 挂起中的尝试本就未 connected，误触 onConnectionChanged(false) 会拉起自动重连
+     * 与新请求竞争。仅应在 controller.connect 入口（未连接态）调用。
+     */
+    fun cancelPendingConnect() {
+        connectWaiter?.let { w -> connectWaiter = null; runCatching { w.resume(false) } }
+        rxBuffer.reset()
+        runCatching { gatt?.disconnect() }
+        runCatching { gatt?.close() }
+        gatt = null
+        writeChar = null
+        notifyChar = null
     }
 
     private fun setConnected(v: Boolean) {
