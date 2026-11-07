@@ -50,6 +50,13 @@
 **回滚配方**：`git revert` 本轮提交；或手改：onFix 删 demoMode 守卫、删 SpeedDash.clearDemoInjection 及三处调用、键 v6seg→v5seg（服务端 SEG_SUFFIX 不动）、versionName 回 0.2.99。
 **触发信号**：演示模式时速变 0.0/真实值 / 真机平均时速再次出现数百 km/h / 播报段间停顿复现（确认服务端音频干净后即手机缓存问题）。
 
+**实施结果（v0.2.100，22:26 发版）**：
+1. SpeedDash.onFix 开头加 `if (JikongController.instance.demoMode) return`——演示期间真实 GPS 不再覆盖注入时速。
+2. SpeedDash 新增 `clearDemoInjection()`：清 speedKmh/gpsFresh/avgSpeedKmh/rangeKm/instWhKm/avgWhKm/gpsTripKm/tripSeconds/movingSecondsAvg，bmsStale=true 等真机数据；不动 tripKm/tripWh/movingSeconds/ema/累计基线（演示值绝不入账）。JikongController 三处退出演示路径（connect 成功 L247 / disconnect L279 / 自动重连成功 L575）挂 `if (demoMode) SpeedDash.clearDemoInjection()`。
+3. JikongSpeaker seg 键 v5seg→v6seg（整句 v3 不动）；服务端 SEG_SUFFIX/滤链均不动（音频已实证干净）。
+4. 交付：提交 `dec5eb1`；release.py 轮询仍 IncompleteRead（直连大响应稳定截断），resume_release.py 接续成功；APK 0.2.100（sha256 `a903e15f…`，46,037,962 B）分发 updates+Downloads+update.json（Downloads 删 0.2.99）。
+**待真机验证**：①演示模式刷新后时速稳定不再被真实 GPS 覆盖；②真机连接平均时速从 0 起算、数值合理（清零行程后更干净）；③升级后首次双击播报重拉 106 段（~2~5s），之后「公里」前无停顿。
+
 ### v0.2.99 演示值被 tickLoop 覆盖（4993km/h + 一闪即消）/ TTS 预取并行化（2026-11-07 21:06 实施）
 
 **需求（用户 21:06 反馈 2 项）**：①演示模式点「刷新模拟数据」后平均时速显示 4993.0km/h，且剩余续航/瞬时/平均等数值**一闪就消失**（演示模式不应消失）；②刷新数据后双击仪表盘播报仍有延时——问预取是「一次性拉全部」还是「按需拉」。
