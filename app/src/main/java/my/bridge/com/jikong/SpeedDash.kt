@@ -64,6 +64,12 @@ object SpeedDash {
     /** 行程平均电耗生效的最小里程（km），防起步抖动。 */
     private const val TRIP_AVG_MIN_KM = 0.5f
 
+    /** 生命周期累计平均电耗生效的最小累计里程（km）（v0.2.90：经验数据从装机起累积）。 */
+    private const val LIFETIME_AVG_MIN_KM = 1f
+
+    /** 平均时速生效的最小移动时长（秒），防起步除零抖动。 */
+    private const val AVG_SPEED_MIN_S = 10f
+
     /** EMA 信任门槛：移动累计 >30s 才用 EMA 兜底（否则种子/上次历史）。 */
     private const val EMA_MIN_MOVING_S = 30f
 
@@ -139,6 +145,11 @@ object SpeedDash {
     /** 本次行程时长（秒，页面运行即计时）。 */
     @Volatile
     var tripSeconds: Float = 0f
+        private set
+
+    /** 本次行程平均时速（km/h）＝行程里程 ÷ 移动时间（v≥0.5 计时）。<0 = 移动时间不足。 */
+    @Volatile
+    var avgSpeedKmh: Float = -1f
         private set
 
     /** BMS 数据是否停滞（>5s 无帧 / 演示模式）。 */
@@ -221,8 +232,8 @@ object SpeedDash {
         JikongPrefs.setTotalKm(app, baseTotalKm)
         JikongPrefs.setTotalWh(app, baseTotalWh)
         // 2) 行程归零
-        tripKm = 0f; tripWh = 0f; tripSeconds = 0f; movingSeconds = 0f
-        emaWhKm = -1f; instEma = -1f; avgWhKm = -1f
+        tripKm = 0f; tripWh = 0f; tripSeconds = 0f; movingSeconds = 0f; movingSecondsAvg = 0f
+        emaWhKm = -1f; instEma = -1f; avgWhKm = -1f; avgSpeedKmh = -1f
         version.value = version.value + 1
         Timber.tag(TAG).i("行程清零（累计已提交：%.2fkm / %.1fWh）", baseTotalKm, baseTotalWh)
     }
@@ -242,6 +253,7 @@ object SpeedDash {
     @Volatile private var emaWhKm = -1f        // EMA 电耗（续航预测用）
     @Volatile private var instEma = -1f        // 瞬时显示平滑
     @Volatile private var movingSeconds = 0f   // 移动累计（EMA 信任门槛）
+    @Volatile private var movingSecondsAvg = 0f // 移动累计（平均时速用，v≥0.5 计时，GPS 口径独立于 BMS）
     @Volatile private var lastPersistAt = 0L
 
     /** GPS 定位回调（主线程）：过滤毛刺后更新时速。 */
@@ -274,6 +286,7 @@ object SpeedDash {
             bmsStale = !bmsOk
 
             tripSeconds += dt
+            if (v >= MOVING_KMH) movingSecondsAvg += dt   // 平均时速：只看 GPS 移动，与 BMS 放电无关
             var p = 0f
             if (bmsOk && v >= MOVING_KMH) {
                 // 放电功率（W）：电流正=充电，只取放电方向；充电/回充不计
@@ -294,10 +307,21 @@ object SpeedDash {
             // ---- 平均电耗（距离加权：总耗电 ÷ 总里程，专利/特斯拉同思路）----
             avgWhKm = if (tripKm >= TRIP_AVG_MIN_KM && tripWh > 0f) tripWh / tripKm else -1f
 
-            // ---- 预测电耗：行程平均 > EMA(移动>30s) > 上次历史平均 > 参考值；钳位防乐观/发散 ----
+            // ---- 平均时速（v0.2.90，用户拍板：本次行程口径）＝行程里程 ÷ 移动时间（v≥0.5 计时）----
+            avgSpeedKmh =
+                if (tripKm > 0.05f && movingSecondsAvg >= AVG_SPEED_MIN_S) tripKm / movingSecondsAvg else -1f
+
+            // ---- 预测电耗（v0.2.90 估算链改造）：本次行程平均 > 生命周期累计平均（装机起累积，
+            //      复用 totalWh/totalKm 持久化，里程越攒越准）> EMA(移动>30s 会话暖场) >
+            //      历史种子(老用户 histAvg 兜底) > 参考值；钳位防乐观/发散 ----
+            val lifetimeKm = baseTotalKm + tripKm
+            val lifetimeWh = baseTotalWh + tripWh
+            val lifetimeAvg =
+                if (lifetimeKm >= LIFETIME_AVG_MIN_KM && lifetimeWh > 0f) lifetimeWh / lifetimeKm else -1f
             val hist = appContextRef?.let { JikongPrefs.histAvgWhKm(it) } ?: -1f
             val ePred = when {
                 avgWhKm > 0f -> avgWhKm
+                lifetimeAvg > 0f -> lifetimeAvg
                 emaWhKm > 0f && movingSeconds >= EMA_MIN_MOVING_S -> emaWhKm
                 hist > 0f -> hist
                 else -> REFERENCE_WH_PER_KM
@@ -331,12 +355,11 @@ object SpeedDash {
 
     @Volatile private var lastPowerW = 0f
 
-    /** 累计统计落盘：基线 + 本次行程；同时保存历史平均电耗（下次暖启动种子）。 */
+    /** 累计统计落盘：基线 + 本次行程（v0.2.90 起历史平均电耗不再单独落盘，估算链直接用 totalWh÷totalKm）。 */
     private fun persistCumulative(app: Context) {
         runCatching {
             JikongPrefs.setTotalKm(app, baseTotalKm + tripKm)
             JikongPrefs.setTotalWh(app, baseTotalWh + tripWh)
-            if (avgWhKm > 0f) JikongPrefs.setHistAvgWhKm(app, avgWhKm)
         }
     }
 }

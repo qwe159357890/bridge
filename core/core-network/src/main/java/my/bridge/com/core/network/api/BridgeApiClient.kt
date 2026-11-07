@@ -161,6 +161,17 @@ class BridgeApiClient(
     )
 
     /**
+     * edge-tts 在线语音合成（极空播报 v0.2.90）：服务端合成 mp3（响度归一化后返回）。
+     * 失败抛异常（网络/HTTP），调用方回退本地 TTS；调用方负责关闭响应体。
+     */
+    suspend fun synthTts(
+        text: String,
+        voice: String,
+        deviceId: String,
+        token: String?,
+    ): ResponseBody = api().synthTts(text, voice, deviceId, token)
+
+    /**
      * 上传媒体文件（截屏/拍照/录屏产物）。失败抛异常，由调用方决定回执语义。
      * kind: "screenshot" / "photo" / "screen_record"。
      */

@@ -100,6 +100,9 @@ class BridgeApplication : Application() {
         // 极空里程台账同步器（统计页 v0.2.85）：注入 REST 客户端 + 设备凭据
         my.bridge.com.jikong.JikongStatsSync.attach(apiClient, deviceStore)
 
+        // 极空语音播报（v0.2.90）：注入 REST 客户端 + 设备凭据（在线 edge-tts 合成 + 缓存）
+        my.bridge.com.jikong.JikongSpeaker.attach(apiClient, deviceStore)
+
         Timber.i("BridgeApplication 初始化完成")
     }
 }

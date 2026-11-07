@@ -80,6 +80,57 @@
   }
   .scroll::-webkit-scrollbar { display: none; }
 
+  /* ========== 连接状态栏（任务四：小喇叭） ========== */
+  .connbar {
+    display: flex;
+    align-items: center;
+    background: var(--card);
+    border-radius: 8px;
+    padding: 7px 12px;
+    margin-bottom: 10px;
+    gap: 4px;
+  }
+  .connbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; }
+  .connbar .dev {
+    color: var(--green); font-size: 13px; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .connbar .iconbtn {
+    background: none; border: none; color: var(--gray);
+    padding: 3px 5px; cursor: pointer; flex: none; line-height: 0;
+  }
+  .connbar .iconbtn svg { width: 17px; height: 17px; }
+  .connbar .iconbtn.txt { font-size: 12px; line-height: 1.4; padding: 3px 4px; }
+  .connbar .iconbtn.on { color: var(--green); }
+  .connbar .iconbtn.off { color: var(--red); }
+  .connbar .iconbtn.muted-amber { color: var(--amber, #ffd60a); }
+  body:not(.light) .connbar .iconbtn.muted-amber { color: #ffd60a; }
+  body.light .connbar .iconbtn.muted-amber { color: #b45309; }
+
+  /* ========== 时速仪表盘卡（任务三：平均时速 + 任务一：单位切换） ========== */
+  .dash { background: var(--card); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
+  .dash .hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .dash .hd .t { color: var(--gray); font-size: 11px; }
+  .dash .hd .unit-sw {
+    display: flex; border: 1px solid var(--divider); border-radius: 7px; overflow: hidden;
+  }
+  .dash .hd .unit-sw button {
+    background: none; border: none; color: var(--gray); font-size: 10px;
+    padding: 3px 9px; cursor: pointer;
+  }
+  .dash .hd .unit-sw button.sel { background: var(--green); color: var(--onfill); font-weight: 700; }
+  .dash .r1 { display: flex; align-items: flex-end; }
+  .dash .col { flex: 1; min-width: 0; }
+  .dash .lbl { color: var(--gray); font-size: 11px; }
+  .dash .big { font-size: 30px; font-weight: 700; color: var(--green); line-height: 1.15; }
+  .dash .big.blue { color: var(--blue); }
+  .dash .mid { font-size: 21px; font-weight: 700; line-height: 1.35; }
+  .dash .dv { height: 1px; background: var(--divider); margin: 6px 0; }
+  .dash .r2 { display: flex; }
+  .dash .r2 .col .val { font-size: 15px; font-weight: 600; }
+  .dash .r3 { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--gray); }
+  .dash .r3 button { background: none; border: none; color: var(--gray); font-size: 11px; cursor: pointer; }
+
   /* ========== 充电/放电/均衡 一行三列 ========== */
   .statusrow {
     display: flex;
@@ -329,6 +380,16 @@
 <button class="theme-btn" onclick="document.body.classList.toggle('light');this.textContent=document.body.classList.contains('light')?'切换深色':'切换浅色'">切换浅色</button>
 <div class="phone">
   <div class="scroll">
+    <!-- 连接状态栏（v0.2.88 实装 + 任务四小喇叭：点喇叭切换 静音/播报） -->
+    <div class="connbar">
+      <span class="dot"></span>
+      <span class="dev">已连接 · 我的小三轮 · 默认</span>
+      <button class="iconbtn" id="spkBtn" onclick="toggleSpk()" title="语音播报 静音/恢复"></button>
+      <button class="iconbtn txt">主题:自动</button>
+      <button class="iconbtn txt">设默认</button>
+      <button class="iconbtn txt off">断开</button>
+    </div>
+
     <!-- 充电/放电/均衡 一行 -->
     <div class="statusrow">
       <div class="cell">
@@ -388,6 +449,42 @@
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="3"><path d="M5 12l5 5L19 7"/></svg>
       </div>
       <span class="txt">电池运行良好</span>
+    </div>
+
+    <!-- 时速仪表盘卡（任务三：行1 中间插入平均时速；任务一：右上单位切换演示，实际开关在设置页） -->
+    <div class="dash">
+      <div class="hd">
+        <span class="t">本次行程</span>
+        <span class="unit-sw">
+          <button id="u0" class="sel" onclick="setUnit(0)">Wh/km</button>
+          <button id="u1" onclick="setUnit(1)">kWh/100km</button>
+        </span>
+      </div>
+      <div class="r1">
+        <div class="col">
+          <div class="lbl">时速(km/h)</div>
+          <div class="big">24.6</div>
+        </div>
+        <div class="col">
+          <div class="lbl">平均时速(km/h)</div>
+          <div class="mid">21.3</div>
+        </div>
+        <div class="col">
+          <div class="lbl">剩余续航(km)</div>
+          <div class="big blue">61</div>
+        </div>
+      </div>
+      <div class="dv"></div>
+      <div class="r2">
+        <div class="col"><div class="lbl" id="instLbl">瞬时(Wh/km)</div><div class="val" id="instVal">42.5</div></div>
+        <div class="col"><div class="lbl" id="avgLbl">平均(Wh/km)</div><div class="val" id="avgVal">38.0</div></div>
+        <div class="col"><div class="lbl">本次里程(km)</div><div class="val">12.42</div></div>
+      </div>
+      <div class="dv"></div>
+      <div class="r3">
+        <span>本次时长 00:42:15</span>
+        <button>清零行程</button>
+      </div>
     </div>
 
     <!-- 数据卡第一行 -->
@@ -479,6 +576,32 @@
 // 演示值：最大充电电流 50A（settings@50），最大放电电流 100A（settings@62）
 // 当前 7.8A 充电 → 右半填充 7.8/50 × 50% = 7.8%？——注意半程代表满量程：
 // 充电填充宽 = current/maxCharge × 50%（半条），本例 7.8/50×50% = 7.8%
+
+/* ===== 任务四：小喇叭 静音/播报 切换 ===== */
+const SPK_ON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.2 6a9 9 0 0 1 0 12"/></svg>';
+const SPK_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"/><path d="M16.5 9.5l5 5"/><path d="M21.5 9.5l-5 5"/></svg>';
+let muted = false;
+function toggleSpk() {
+  muted = !muted;
+  const b = document.getElementById('spkBtn');
+  b.innerHTML = muted ? SPK_OFF : SPK_ON;
+  b.title = muted ? '已静音（启动后首次连接播报不受影响）' : '播报中（点击静音）';
+}
+document.getElementById('spkBtn').innerHTML = SPK_ON;
+
+/* ===== 任务一：电耗单位切换（实际开关在设置页，此处演示显示效果） ===== */
+let unit = 0;   // 0 = Wh/km（默认），1 = kWh/100km
+function setUnit(u) {
+  unit = u;
+  document.getElementById('u0').className = u === 0 ? 'sel' : '';
+  document.getElementById('u1').className = u === 1 ? 'sel' : '';
+  const unitTxt = u === 0 ? 'Wh/km' : 'kWh/100km';
+  document.getElementById('instLbl').textContent = '瞬时(' + unitTxt + ')';
+  document.getElementById('avgLbl').textContent = '平均(' + unitTxt + ')';
+  // 换算：1 kWh/100km = 10 Wh/km
+  document.getElementById('instVal').textContent = u === 0 ? '42.5' : (42.5 / 10).toFixed(2);
+  document.getElementById('avgVal').textContent = u === 0 ? '38.0' : (38.0 / 10).toFixed(2);
+}
 </script>
 </body>
 </html>

@@ -19,6 +19,21 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.90 九项优化：单位切换/估算链/平均时速/静音/edge-tts/音量/记一笔门控/里程折扣/花费（2026-11-07 09:30 实施）
+
+| 项 | 内容 |
+|---|---|
+| **需求（用户 08:51 提出 6 项 + 09:11 追加 3 项并拍板，09:35 原型审核确认）** | 详见 `todolist.md` 九项条目与三份原型（assets/design/ui-mockup-jikong-{home,stats,settings}.html）。拍板：平均时速=本次行程（内存）；静音持久化；服务器 uv 管理 edge-tts、音色+缓存方案同意；服务端响度方案同意 |
+| **回退标记（git 快照）** | 提交 **`20ef571`**（`feat: v0.2.89 语音播报规则调整…`）+ 工作区仅原型文件改动——本次改动前全部客户端/服务端代码原文以此为准 |
+| **回滚配方** | `git checkout 20ef571 -- app/src/main/java/my/bridge/com core/core-network/src/main/java/my/bridge/com/core/network/api/BridgeApi.kt server/app/api/v1 server/app/pyproject.toml server/app/uv.lock app/build.gradle.kts server/data/updates/update.json`，另**手动删除**新增文件 `server/app/api/v1/tts.py` |
+| **触发回滚的信号** | ①edge-tts 播报失败但本地回退也异常（无声）；②缓存目录膨胀超 50MB 上限；③/api/tts 鉴权放行异常；④统计页折扣/花费数值错乱；⑤记一笔永久置灰；⑥平均时速数值离谱（除零/ NaN）；⑦静音后仍播报 |
+| **实施结果（改后回填，2026-11-07 10:05）** | ①SpeedDash：估算链改「行程平均 > 生命周期累计(totalWh÷totalKm, ≥1km) > EMA > hist > 20」（hist 停止落盘）；新增 avgSpeedKmh（tripKm÷movingSecondsAvg，v≥0.5 计时 GPS 口径独立，≥10s 生效）；②JikongPrefs 新增 unitKwh100/odoDiscount(0.1~1)/elecPrice(0.05~10,默认0.6)/muted + TTS_VOICE=zh-CN-XiaoxiaoNeural；③Controller：firstAnnouncePending（进程启动首播强制，播出才消耗），maybeAnnounce 加静音拦截（forced 例外）；④JikongSpeaker 重写：在线优先（BridgeApiClient.synthTts → cacheDir/tts/{md5}.mp3 缓存 LRU 50MB → MediaPlayer STREAM_MUSIC 播放）失败回退长驻本地 TTS；BridgeApi+BridgeApiClient 加 synthTts（@Streaming GET api/tts，设备头鉴权），Application 注入 attach；⑤服务端：新增 api/v1/tts.py（GET /api/tts，edge-tts volume=+0% + ffmpeg loudnorm I=-12 LUFS，缓存 server/data/tts_cache，uv add edge-tts>=7.3.1 已装），router 挂载，py_compile 通过，合成+归一化端到端实测通过（raw 28080B → final 28460B）；⑥UI：SpeedDashCard 行1 三列（时速\|平均时速\|续航）+行2 单位切换显示；ConnectionBar 🔊/🔇；设置页新增「单位与花费」（单位分段+电费步进0.05）与「里程折扣」（步进0.1）两卡+说明更新（估算链）；StatsView：记一笔门控（hasDataFrame&&cycleCapacity>0，禁用+amber 提示）、概要 3→5 卡（区间总花费/平均花费 元/100km+原值小字）、曲线双轴（左 Wh/km 右 元/100km 琥珀，X 轴折扣里程）、台账行折扣显示+原值+该段花费；⑦版本 0.2.90；编译踩坑 3 个（mutableFloatStateOf/RowScope import 缺失；BridgeApiClient 是逐方法包装类需加 synthTts 委托）全部修复；APK 实证 0.2.90+7 符号；分发 updates(46,005,186 B, sha256 eb283cc3…)+Downloads+update.json，删 v0.2.89 APK |
+| **上线前提** | 服务端需重启（加载 /api/tts 路由与 edge-tts 依赖）；客户端「在线人声」需服务器可达，离线自动回退本地引擎 |
+| **改前原文（逐字，SpeedDash.kt L297-304 预测电耗链）** | `// ---- 预测电耗：行程平均 > EMA(移动>30s) > 上次历史平均 > 参考值；钳位防乐观/发散 ----\n            val hist = appContextRef?.let { JikongPrefs.histAvgWhKm(it) } ?: -1f\n            val ePred = when {\n                avgWhKm > 0f -> avgWhKm\n                emaWhKm > 0f && movingSeconds >= EMA_MIN_MOVING_S -> emaWhKm\n                hist > 0f -> hist\n                else -> REFERENCE_WH_PER_KM\n            }.coerceIn(6f, 100f)` |
+| **改前原文（逐字，JikongSpeaker.kt L28-34 speak 入口）** | `/** 播报一段文字（异步，立即返回）。引擎未就绪时暂存待播。 */\n    @Synchronized\n    fun speak(context: Context, text: String) {\n        val cur = tts\n        if (cur != null) {\n            if (ready) doSpeak(cur, text) else pending = text\n            return\n        }\n        pending = text` |
+| **改前原文（逐字，StatsView L1877-1899 概要三卡）** | `// ---- 概要三卡 ----\n        Card(...) {\n            Row(Modifier.padding(12.dp)) {\n                listOf(\n                    "记录区间里程" to (if (totalKm > 0f) "%.1f".format(totalKm) else "--"),\n                    "区间总耗电" to (if (totalWh > 0f) "%.2f".format(totalWh / 1000f) else "--"),\n                    "平均电耗" to (if (avgWhKm > 0f) "%.1f".format(avgWhKm) else "--"),\n                ).forEachIndexed { i, (label, value) -> …三卡渲染…`（完整原文见 git 快照） |
+| **改前原文（其余触点）** | ①Controller.maybeAnnounce 无静音/强制首播逻辑；②SpeedDashCard 行1 双列（时速\|剩余续航）；③StatsView 记一笔 Button 无 enabled 门控；④JkStatsCurve 无右轴；⑤SettingsView 无单位/电费/里程折扣卡；⑥JikongPrefs 无 unit/mute/discount/price 键；⑦BridgeApi 无 TTS 端点；⑧服务端路由无 tts.py |
+
 ### v0.2.89 语音播报规则调整：每帧判定 + 预警重复提醒（2026-11-07 07:30 实施）
 
 | 项 | 内容 |

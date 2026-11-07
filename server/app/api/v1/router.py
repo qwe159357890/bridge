@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, commands, connections, data, devices, jikong, locations, logs, media, music, push, updates
+from app.api.v1 import admin, commands, connections, data, devices, jikong, locations, logs, media, music, push, tts, updates
 
 router = APIRouter(prefix="/api")
 
@@ -24,5 +24,6 @@ router.include_router(updates.router)
 router.include_router(locations.router)
 router.include_router(data.router)
 router.include_router(jikong.router)
+router.include_router(tts.router)
 
 __all__ = ["router"]

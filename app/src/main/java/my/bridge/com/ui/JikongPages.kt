@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -50,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -492,6 +494,9 @@ private fun ConnectionBar(
     isDefault: Boolean = false,
     onRename: (() -> Unit)? = null,
     onToggleDefault: ((Boolean) -> Unit)? = null,
+    // v0.2.90：小喇叭静音开关（持久化；进程启动后首次播报不受影响）
+    muted: Boolean = false,
+    onToggleMute: (() -> Unit)? = null,
 ) {
     val c = LocalJkColors.current
     Row(
@@ -529,6 +534,16 @@ private fun ConnectionBar(
                 maxLines = 1,
                 modifier = Modifier
                     .clickable { onToggleDefault(!isDefault) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            )
+        }
+        // v0.2.90 小喇叭静音：🔊=播报中 / 🔇=已静音（持久化；启动后首次强制播报不受影响）
+        if (onToggleMute != null) {
+            Text(
+                if (muted) "🔇" else "🔊",
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .clickable(onClick = onToggleMute)
                     .padding(horizontal = 6.dp, vertical = 4.dp),
             )
         }
@@ -715,6 +730,8 @@ private fun HomeView(
     var defaultMac by remember { mutableStateOf(JikongPrefs.defaultMac(context)) }
     var showRename by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
+    // v0.2.90：小喇叭静音（持久化，跨重启保留；启动后首次强制播报在 Controller 层不受此影响）
+    var muted by remember { mutableStateOf(JikongPrefs.muted(context)) }
 
     // v0.2.83 仪表盘生命周期门控（红队修正：HomeView 只在已连接时存在）——
     // 进入首页（连接建立/回前台）且开关开才启动 GPS+积分；离开即注销，零后台成本。
@@ -761,6 +778,17 @@ private fun HomeView(
                     Toast.makeText(
                         context,
                         if (on) "已设为默认设备" else "已取消默认设备",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
+                // v0.2.90：小喇叭静音开关（持久化；进程启动后首次强制播报不受影响）
+                muted = muted,
+                onToggleMute = {
+                    muted = !muted
+                    JikongPrefs.setMuted(context, muted)
+                    Toast.makeText(
+                        context,
+                        if (muted) "已静音：之后不再播报（启动后首次电量播报除外）" else "已恢复播报",
                         Toast.LENGTH_SHORT,
                     ).show()
                 },
@@ -829,6 +857,7 @@ private fun HomeView(
                 rangeKm = SpeedDash.rangeKm,
                 instWhKm = SpeedDash.instWhKm,
                 avgWhKm = SpeedDash.avgWhKm,
+                avgSpeed = SpeedDash.avgSpeedKmh,
                 tripKm = SpeedDash.tripKm,
                 tripSeconds = SpeedDash.tripSeconds,
                 bmsStale = SpeedDash.bmsStale,
@@ -980,6 +1009,7 @@ private fun SpeedDashCard(
     rangeKm: Float,
     instWhKm: Float,
     avgWhKm: Float,
+    avgSpeed: Float,
     tripKm: Float,
     tripSeconds: Float,
     bmsStale: Boolean,
@@ -1009,20 +1039,27 @@ private fun SpeedDashCard(
             }
             return@Column
         }
-        // 行1：时速 | 续航
+        // 行1（v0.2.90 三列）：时速 | 平均时速（本次行程）| 剩余续航
         Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
                 Text("时速(km/h)", fontSize = 11.sp, color = c.gray)
                 Text(
                     if (gpsOk) "%.1f".format(speed) else "--",
-                    fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.green,
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.green,
+                )
+            }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("平均时速(km/h)", fontSize = 11.sp, color = c.gray)
+                Text(
+                    if (avgSpeed > 0f) "%.1f".format(avgSpeed) else "--",
+                    fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = c.text,
                 )
             }
             Column(Modifier.weight(1f)) {
                 Text("剩余续航(km)", fontSize = 11.sp, color = c.gray)
                 Text(
                     if (rangeKm >= 0f) "%.0f".format(rangeKm) else "--",
-                    fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold,
                     color = if (bmsStale) c.gray else c.blue,
                 )
             }
@@ -1030,19 +1067,23 @@ private fun SpeedDashCard(
         Spacer(Modifier.height(6.dp))
         DividerV()
         Spacer(Modifier.height(6.dp))
-        // 行2：瞬时 | 平均 | 里程
+        // 行2：瞬时 | 平均 | 里程（v0.2.90：电耗单位可切换 Wh/km ↔ kWh/100km，只改显示层）
+        val kwh100 = JikongPrefs.unitKwh100(context)
+        fun fmtCons(whkm: Float): String =
+            if (kwh100) "%.2f".format(whkm / 10f) else if (whkm >= 100f) "%.0f".format(whkm) else "%.1f".format(whkm)
+        val consUnit = if (kwh100) "kWh/100km" else "Wh/km"
         Row {
             Column(Modifier.weight(1f)) {
-                Text("瞬时(Wh/km)", fontSize = 11.sp, color = c.gray)
+                Text("瞬时($consUnit)", fontSize = 11.sp, color = c.gray)
                 Text(
-                    if (instWhKm > 0f) "%.1f".format(instWhKm) else "--",
+                    if (instWhKm > 0f) fmtCons(instWhKm) else "--",
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
                 )
             }
             Column(Modifier.weight(1f)) {
-                Text("平均(Wh/km)", fontSize = 11.sp, color = c.gray)
+                Text("平均($consUnit)", fontSize = 11.sp, color = c.gray)
                 Text(
-                    if (avgWhKm > 0f) "%.1f".format(avgWhKm) else "--",
+                    if (avgWhKm > 0f) fmtCons(avgWhKm) else "--",
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
                 )
             }
@@ -1574,6 +1615,10 @@ private fun SettingsView(
     var speakIntervalMin by remember { mutableIntStateOf(JikongPrefs.speakIntervalMin(context)) }
     var speakLowSoc by remember { mutableIntStateOf(JikongPrefs.speakLowSoc(context)) }
     var speakWarnRepeatMin by remember { mutableIntStateOf(JikongPrefs.speakWarnRepeatMin(context)) }
+    // v0.2.90 单位/电费/里程折扣设置状态
+    var unitKwh100 by remember { mutableStateOf(JikongPrefs.unitKwh100(context)) }
+    var elecPrice by remember { mutableFloatStateOf(JikongPrefs.elecPrice(context)) }
+    var odoDiscount by remember { mutableFloatStateOf(JikongPrefs.odoDiscount(context)) }
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("仪表盘", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
@@ -1686,13 +1731,102 @@ private fun SettingsView(
             }
         }
 
+        // v0.2.90 单位与花费：电耗显示单位（只改显示层）+ 电费单价（统计页花费计算）
+        Spacer(Modifier.height(16.dp))
+        Text("单位与花费", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Spacer(Modifier.height(8.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("电耗单位", fontSize = 13.sp, color = c.text, modifier = Modifier.weight(1f))
+                    // 分段单选：Wh/km | kWh/100km（1 kWh/100km = 10 Wh/km）
+                    listOf(false to "Wh/km", true to "kWh/100km").forEach { (sel, label) ->
+                        Text(
+                            label,
+                            fontSize = 11.sp,
+                            color = if (unitKwh100 == sel) Color.White else c.gray,
+                            modifier = Modifier
+                                .background(
+                                    if (unitKwh100 == sel) JkBlue else c.bg,
+                                    RoundedCornerShape(6.dp),
+                                )
+                                .clickable {
+                                    unitKwh100 = sel
+                                    JikongPrefs.setUnitKwh100(context, sel)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                JkStepperRow(
+                    label = "电费单价",
+                    value = "%.2f 元/度".format(elecPrice),
+                    onMinus = {
+                        elecPrice = (((elecPrice * 20).toInt() - 1).coerceAtLeast(1)) / 20f
+                        JikongPrefs.setElecPrice(context, elecPrice)
+                    },
+                    onPlus = {
+                        elecPrice = (((elecPrice * 20).toInt() + 1).coerceAtMost(200)) / 20f
+                        JikongPrefs.setElecPrice(context, elecPrice)
+                    },
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "单位切换只影响显示（首页仪表盘瞬时/平均电耗），内部计算一律 Wh/km。" +
+                        "电费单价用于统计页区间总花费与平均花费（元/100km）。",
+                    fontSize = 11.sp, color = c.gray,
+                )
+            }
+        }
+
+        // v0.2.90 里程折扣：三轮车表显里程偏大时按折扣换算（只影响统计页显示层）
+        Spacer(Modifier.height(16.dp))
+        Text("里程折扣", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Spacer(Modifier.height(8.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                JkStepperRow(
+                    label = "三轮车表显里程折扣",
+                    value = "%.1f".format(odoDiscount),
+                    onMinus = {
+                        odoDiscount = (((odoDiscount * 10).toInt() - 1).coerceAtLeast(1)) / 10f
+                        JikongPrefs.setOdoDiscount(context, odoDiscount)
+                    },
+                    onPlus = {
+                        odoDiscount = (((odoDiscount * 10).toInt() + 1).coerceAtMost(10)) / 10f
+                        JikongPrefs.setOdoDiscount(context, odoDiscount)
+                    },
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "三轮车表显里程偏大时（如真实行驶 10km 表显 15km），设折扣换算真实里程。" +
+                        "设为 1.0 时统计页与原来完全一致；设为其它值（0.1~1.0）时统计页里程按折扣显示、" +
+                        "电耗按真实里程重算变大，原值以括号小字保留。台账数据库始终存原始输入。",
+                    fontSize = 11.sp, color = c.gray,
+                )
+            }
+        }
+
         Spacer(Modifier.height(16.dp))
         Text("累计统计", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
         // P2 持久化：跨会话累计（进程存活期间实时显示，落盘 30s 一次）
         val totalKm = JikongPrefs.totalKm(context) + SpeedDash.tripKm
         val totalWh = JikongPrefs.totalWh(context) + SpeedDash.tripWh
-        val histAvg = if (SpeedDash.avgWhKm > 0f) SpeedDash.avgWhKm else JikongPrefs.histAvgWhKm(context)
+        // v0.2.90：生命周期累计平均（装机起累积的经验数据，估算链优先用它），老用户兜底 histAvg
+        val lifeAvg = if (totalKm >= 1f && totalWh > 0f) totalWh / totalKm
+            else JikongPrefs.histAvgWhKm(context)
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = c.card),
@@ -1713,9 +1847,9 @@ private fun SettingsView(
                     )
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("历史电耗(Wh/km)", fontSize = 11.sp, color = c.gray)
+                    Text("生命周期电耗", fontSize = 11.sp, color = c.gray)
                     Text(
-                        if (histAvg > 0f) "%.1f".format(histAvg) else "--",
+                        if (lifeAvg > 0f) "%.1f".format(lifeAvg) else "--",
                         fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.text,
                     )
                 }
@@ -1731,12 +1865,41 @@ private fun SettingsView(
                 Text("说明", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "续航 = 剩余电量能量 ÷ 近期平均电耗（EV 通行算法）。" +
-                        "刚开始使用时按参考值 20 Wh/km 估算，骑行积累数据后自动修正为您的真实电耗。" +
+                    "续航 = 剩余电量能量 ÷ 预测电耗（EV 通行算法）。预测电耗优先级（v0.2.90）：本次行程平均 > " +
+                        "生命周期累计平均（装机起累积、随里程越来越准）> 会话 EMA 暖场 > 参考值 20 Wh/km。" +
                         "所有数值为估算，仅供参考。保护板参数修改需设备密码，本应用不提供。",
                     fontSize = 11.sp, color = c.gray,
                 )
             }
+        }
+    }
+}
+
+/** v0.2.90：统计页概要单元卡（数值+单位+标签+可选小字）。RowScope 扩展（weight(1f)）。 */
+@Composable
+private fun RowScope.JkSumCell(
+    label: String,
+    value: String,
+    unit: String,
+    c: JkColors,
+    highlight: Boolean = false,
+    sub: String? = null,
+) {
+    Column(
+        Modifier.weight(1f).background(c.bg, RoundedCornerShape(10.dp)).padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (highlight) c.green else c.text)
+            if (value != "--") {
+                Spacer(Modifier.width(2.dp))
+                Text(unit, fontSize = 9.sp, color = c.gray)
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(label, fontSize = 10.sp, color = c.gray)
+        if (sub != null) {
+            Text("原 $sub", fontSize = 8.sp, color = c.gray)   // 折扣≠1 时括号保留原值（用户拍板）
         }
     }
 }
@@ -1825,6 +1988,14 @@ private fun StatsView(controller: JikongController) {
     val totalValidKm = validSegs.sumOf { it.deltaKm.toDouble() }.toFloat()
     val avgWhKm = if (totalValidKm > 0.5f) totalWh / totalValidKm else 0f
 
+    // v0.2.90 显示层设置：里程折扣（只影响显示，台账存原始输入）+ 电费单价（花费计算）
+    val discount = JikongPrefs.odoDiscount(context)
+    val price = JikongPrefs.elecPrice(context)
+    val totalKmDisp = totalKm * discount
+    val avgWhKmDisp = if (avgWhKm > 0f) avgWhKm / discount else 0f   // 折扣后里程变短 → 电耗变大
+    val totalCost = totalWh / 1000f * price                          // 区间总花费（元）
+    val avgCost100 = if (avgWhKmDisp > 0f) avgWhKmDisp * price / 10f else 0f  // 平均花费（元/100km）
+
     // ---- 动作 ----
     val onAdd: () -> Unit = {
         val odo = odoText.toFloatOrNull()
@@ -1874,26 +2045,26 @@ private fun StatsView(controller: JikongController) {
         }
         Spacer(Modifier.height(12.dp))
 
-        // ---- 概要三卡 ----
+        // ---- 概要五卡（v0.2.90：3+2 两行；里程/派生量按折扣显示，花费按电费计算）----
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = c.card)) {
-            Row(Modifier.padding(12.dp)) {
-                listOf(
-                    "记录区间里程" to (if (totalKm > 0f) "%.1f".format(totalKm) else "--"),
-                    "区间总耗电" to (if (totalWh > 0f) "%.2f".format(totalWh / 1000f) else "--"),
-                    "平均电耗" to (if (avgWhKm > 0f) "%.1f".format(avgWhKm) else "--"),
-                ).forEachIndexed { i, (label, value) ->
-                    if (i > 0) Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f).background(c.bg, RoundedCornerShape(10.dp)).padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (i == 2) c.green else c.text)
-                            if (value != "--") {
-                                Spacer(Modifier.width(2.dp))
-                                Text(if (i == 0) "km" else if (i == 1) "kWh" else "Wh/km", fontSize = 9.sp, color = c.gray)
-                            }
-                        }
-                        Spacer(Modifier.height(3.dp))
-                        Text(label, fontSize = 10.sp, color = c.gray)
-                    }
+            Column(Modifier.padding(12.dp)) {
+                Row {
+                    JkSumCell("记录区间里程", if (totalKmDisp > 0f) "%.1f".format(totalKmDisp) else "--", "km",
+                        sub = if (discount < 1f && totalKm > 0f) "原 %.1f".format(totalKm) else null, c = c)
+                    Spacer(Modifier.width(8.dp))
+                    JkSumCell("区间总耗电", if (totalWh > 0f) "%.2f".format(totalWh / 1000f) else "--", "kWh", c = c)
+                    Spacer(Modifier.width(8.dp))
+                    JkSumCell("区间总花费", if (totalCost > 0f) "%.2f".format(totalCost) else "--", "元",
+                        highlight = true, c = c)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    JkSumCell("平均电耗", if (avgWhKmDisp > 0f) "%.1f".format(avgWhKmDisp) else "--", "Wh/km",
+                        sub = if (discount < 1f && avgWhKm > 0f) "原 %.1f".format(avgWhKm) else null, c = c)
+                    Spacer(Modifier.width(8.dp))
+                    JkSumCell("平均花费", if (avgCost100 > 0f) "%.2f".format(avgCost100) else "--", "元/100km",
+                        highlight = true, c = c)
+                    Spacer(Modifier.weight(1f))   // 行 2 只有 2 卡，补齐网格
                 }
             }
         }
@@ -1908,6 +2079,8 @@ private fun StatsView(controller: JikongController) {
                     Text("手动输入 · 容量自动读取", fontSize = 11.sp, color = c.gray)
                 }
                 Spacer(Modifier.height(10.dp))
+                // v0.2.90 记一笔门控（用户拍板）：必须成功连接且读到数据（循环容量>0）才可记录
+                val canAdd = controller.hasDataFrame && controller.status.cycleCapacity > 0f
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = odoText,
@@ -1929,11 +2102,24 @@ private fun StatsView(controller: JikongController) {
                     Spacer(Modifier.width(10.dp))
                     Button(
                         onClick = onAdd,
-                        colors = ButtonDefaults.buttonColors(containerColor = c.green, contentColor = c.onfill),
+                        enabled = canAdd,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = c.green,
+                            contentColor = c.onfill,
+                            disabledContainerColor = c.track,
+                            disabledContentColor = c.gray,
+                        ),
                         modifier = Modifier.height(52.dp),
                     ) {
                         Text("记一笔", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
+                }
+                if (!canAdd) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "⚠ 未连接保护板或数据未到，暂不能记录（连接成功并读到数据后自动恢复）",
+                        fontSize = 10.sp, color = c.amber,
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 val cyc = controller.status.cycleCapacity
@@ -1963,21 +2149,31 @@ private fun StatsView(controller: JikongController) {
         }
         Spacer(Modifier.height(12.dp))
 
-        // ---- 能耗曲线 ----
+        // ---- 能耗曲线（v0.2.90：左轴 Wh/km · 右轴 元/100km 双刻度，X 轴按折扣里程）----
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = c.card)) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("能耗曲线", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
                     Spacer(Modifier.weight(1f))
-                    if (avgWhKm > 0f) Text("平均 %.1f Wh/km".format(avgWhKm), fontSize = 11.sp, color = c.cyan)
+                    if (avgWhKmDisp > 0f) {
+                        Text(
+                            "平均 %.1f Wh/km ≈ %.2f 元/100km".format(avgWhKmDisp, avgCost100),
+                            fontSize = 11.sp, color = c.cyan,
+                        )
+                    }
                 }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "左轴 Wh/km（绿）· 右轴 元/100km（琥珀，按电费 %.2f 元/度换算）".format(price),
+                    fontSize = 10.sp, color = c.gray,
+                )
                 Spacer(Modifier.height(8.dp))
                 if (validSegs.isEmpty()) {
                     Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                         Text("录入两条以上记录后显示电耗曲线", fontSize = 12.sp, color = c.gray)
                     }
                 } else {
-                    JkStatsCurve(validSegs, avgWhKm, c)
+                    JkStatsCurve(validSegs, avgWhKmDisp, c, discount, price)
                 }
             }
         }
@@ -2020,7 +2216,7 @@ private fun StatsView(controller: JikongController) {
                         val display = records.indices.reversed().map { i -> i to segs[i] }
                         itemsIndexed(display) { _, item ->
                             val (idx, seg) = item
-                            JkStatsRow(records[idx], seg, c) { onDelete(records[idx].id) }
+                            JkStatsRow(records[idx], seg, c, discount, price) { onDelete(records[idx].id) }
                             Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
                         }
                     }
@@ -2037,7 +2233,9 @@ private fun StatsView(controller: JikongController) {
                 Text(
                     "电耗 = Δ循环容量(Ah) × 平均电压(V) ÷ Δ里程(km)，即行驶这段路电池实际放出的电能。" +
                         "循环容量由保护板累计（只增不减），充电不影响它；换电池 / BMS 重置会使容量回退，" +
-                        "该段自动标记无效、不进曲线，并以新容量重新为基准。",
+                        "该段自动标记无效、不进曲线，并以新容量重新为基准。" +
+                        if (discount < 1f) "当前里程折扣 %.1f：所有里程按折扣显示（真实里程），电耗/花费按真实里程重算，原值以小字保留。".format(discount)
+                        else "",
                     fontSize = 11.sp, color = c.gray, lineHeight = 16.sp,
                 )
             }
@@ -2045,9 +2243,16 @@ private fun StatsView(controller: JikongController) {
     }
 }
 
-/** 一行台账记录（日期/未同步徽标 | 里程+距上次 | Δ明细 | 电耗 | 删除）。 */
+/** 一行台账记录（日期/未同步徽标 | 里程+距上次 | Δ明细 | 电耗+花费 | 删除）。v0.2.90 加折扣显示与花费。 */
 @Composable
-private fun JkStatsRow(rec: JkMileageRecord, seg: JkSeg?, c: JkColors, onDelete: () -> Unit) {
+private fun JkStatsRow(
+    rec: JkMileageRecord,
+    seg: JkSeg?,
+    c: JkColors,
+    discount: Float,
+    price: Float,
+    onDelete: () -> Unit,
+) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         // 日期列 + 未同步徽标
         Column(Modifier.width(52.dp)) {
@@ -2062,12 +2267,15 @@ private fun JkStatsRow(rec: JkMileageRecord, seg: JkSeg?, c: JkColors, onDelete:
                 )
             }
         }
-        // 里程列
+        // 里程列（v0.2.90：折扣≠1 时主显折扣后值、小字保留原值）
         Column(Modifier.width(78.dp)) {
-            Text("%.1f".format(rec.odoKm), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+            Text("%.1f".format(rec.odoKm * discount), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+            if (discount < 1f) {
+                Text("原 %.1f".format(rec.odoKm), fontSize = 8.sp, color = c.gray)
+            }
             Text(
                 if (seg == null) "基准 · 容量 ${fmt(rec.cycleAh)}Ah"
-                else "距上次 +%.1f km".format(seg.deltaKm),
+                else "距上次 +%.1f km".format(seg.deltaKm * discount),
                 fontSize = 9.sp, color = c.gray,
             )
         }
@@ -2083,19 +2291,25 @@ private fun JkStatsRow(rec: JkMileageRecord, seg: JkSeg?, c: JkColors, onDelete:
                 Text("%.2f kWh".format(seg.deltaAh * seg.avgVolt / 1000f), fontSize = 10.sp, color = c.gray)
             }
         }
-        // 电耗列
+        // 电耗列（v0.2.90：折扣≠1 时按真实里程重算变大、小字保留原值；下方加该段花费）
         Column(horizontalAlignment = Alignment.End) {
             when {
                 seg == null -> Text("基准", fontSize = 11.sp, color = c.gray)
                 !seg.valid -> Text("--", fontSize = 12.sp, color = c.gray)
                 else -> {
+                    val whKmDisp = seg.whKm / discount
                     val color = when {
-                        seg.whKm >= 38f -> c.amber   // 偏高（载重/爬坡）
-                        seg.whKm <= 31f -> c.green   // 偏优
+                        whKmDisp >= 38f -> c.amber   // 偏高（载重/爬坡）
+                        whKmDisp <= 31f -> c.green   // 偏优
                         else -> c.text
                     }
-                    Text("%.1f".format(seg.whKm), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = color)
+                    Text("%.1f".format(whKmDisp), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = color)
                     Text("Wh/km", fontSize = 9.sp, color = c.gray)
+                    if (discount < 1f) Text("原 %.1f".format(seg.whKm), fontSize = 8.sp, color = c.gray)
+                    Text(
+                        "≈%.2f 元".format(seg.deltaAh * seg.avgVolt / 1000f * price),
+                        fontSize = 9.sp, color = c.gray,
+                    )
                 }
             }
         }
@@ -2108,40 +2322,52 @@ private fun JkStatsRow(rec: JkMileageRecord, seg: JkSeg?, c: JkColors, onDelete:
     }
 }
 
-/** 能耗折线图（Canvas 手绘：网格 + 折线 + 数据点 + 平均线 + 轴标签）。 */
+/**
+ * 能耗折线图（Canvas 手绘：网格 + 折线 + 数据点 + 平均线 + 双轴标签）。
+ * v0.2.90：左轴 Wh/km、右轴 元/100km（＝左值 × 电费 ÷ 10，线性换算共用一条曲线）、X 轴折扣里程。
+ */
 @Composable
-private fun JkStatsCurve(segs: List<JkSeg>, avgWhKm: Float, c: JkColors) {
+private fun JkStatsCurve(segs: List<JkSeg>, avgWhKm: Float, c: JkColors, discount: Float, price: Float) {
     Canvas(Modifier.fillMaxWidth().height(170.dp)) {
         val padL = 34.dp.toPx()
-        val padR = 8.dp.toPx()
+        val padR = 36.dp.toPx()   // v0.2.90：右轴标签占位
         val padT = 12.dp.toPx()
         val padB = 20.dp.toPx()
         val plotW = size.width - padL - padR
         val plotH = size.height - padT - padB
 
-        val ys = segs.map { it.whKm }
+        val ys = segs.map { it.whKm / discount }   // 折扣后真实里程口径（原值仍在台账括号保留）
         var yMin = ys.min() * 0.9f
         var yMax = ys.max() * 1.1f
         if (yMax - yMin < 2f) { // 电耗过近时拉开量程，避免折线贴成一条线
             val mid = (yMax + yMin) / 2f
             yMin = mid - 1f; yMax = mid + 1f
         }
-        val xMin = segs.first().rec.odoKm
-        val xMax = segs.last().rec.odoKm
+        val xMin = segs.first().rec.odoKm * discount
+        val xMax = segs.last().rec.odoKm * discount
         val xSpan = (xMax - xMin).coerceAtLeast(0.01f)
 
         fun xOf(v: Float) = padL + (v - xMin) / xSpan * plotW
         fun yOf(v: Float) = padT + (1f - (v - yMin) / (yMax - yMin)) * plotH
 
-        // 横向网格 + Y 轴标签（3 条）
+        // 横向网格 + 左轴标签（Wh/km，灰）+ 右轴标签（元/100km，琥珀）
         val labelPaint = android.graphics.Paint().apply {
             color = c.gray.toArgb(); textSize = 9.sp.toPx(); isAntiAlias = true
+        }
+        val rightPaint = android.graphics.Paint().apply {
+            color = c.amber.toArgb(); textSize = 9.sp.toPx(); isAntiAlias = true
+            textAlign = android.graphics.Paint.Align.RIGHT
         }
         for (k in 0..2) {
             val yv = yMin + (yMax - yMin) * k / 2f
             val py = yOf(yv)
             drawLine(c.divider, Offset(padL, py), Offset(padL + plotW, py), 1.dp.toPx())
             drawIntoCanvas { it.nativeCanvas.drawText("%.0f".format(yv), 0f, py + 4.dp.toPx(), labelPaint) }
+            // 右轴：元/100km = Wh/km × 电费 ÷ 10（线性换算，与曲线同形）
+            val cost = yv * price / 10f
+            drawIntoCanvas {
+                it.nativeCanvas.drawText("%.1f".format(cost), size.width, py + 4.dp.toPx(), rightPaint)
+            }
         }
 
         // 平均线（虚线）
@@ -2158,7 +2384,7 @@ private fun JkStatsCurve(segs: List<JkSeg>, avgWhKm: Float, c: JkColors) {
         }
 
         // 折线 + 数据点
-        val pts = segs.map { Offset(xOf(it.rec.odoKm), yOf(it.whKm)) }
+        val pts = segs.map { Offset(xOf(it.rec.odoKm * discount), yOf(it.whKm / discount)) }
         for (i in 0 until pts.size - 1) {
             drawLine(c.green, pts[i], pts[i + 1], 2.5.dp.toPx(), cap = StrokeCap.Round)
         }
@@ -2167,7 +2393,7 @@ private fun JkStatsCurve(segs: List<JkSeg>, avgWhKm: Float, c: JkColors) {
             drawCircle(c.green, 2.8.dp.toPx(), it)
         }
 
-        // X 轴标签（首/中/尾里程）
+        // X 轴标签（首/中/尾里程，折扣后）
         val xLabels = listOf(xMin, (xMin + xMax) / 2f, xMax)
         xLabels.forEachIndexed { i, xv ->
             val tx = xOf(xv)

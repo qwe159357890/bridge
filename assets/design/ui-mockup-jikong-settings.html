@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极空 · 参数设置 原型（单位/电费/里程折扣）</title>
+<style>
+  :root {
+    --bg: #000000; --card: #26282B; --text: #E8EAED; --gray: #8A919F;
+    --divider: #33363A; --green: #00E050; --cyan: #00B8D4; --red: #E5484D;
+    --amber: #FFD60A; --blue: #4D8BF5; --track: #3A3D40;
+    --tabbar: #1A1C1F; --tabline: #222222; --page: #17181a; --onfill: #06210E;
+  }
+  body.light {
+    --bg: #EEF1F5; --card: #FFFFFF; --text: #17191D; --gray: #5D6672;
+    --divider: #DFE3E8; --green: #00A344; --cyan: #0097B8; --red: #D93036;
+    --amber: #B45309; --blue: #2F6FD8; --track: #D7DBE1;
+    --tabbar: #FFFFFF; --tabline: #E3E6EA; --page: #dfe3e9; --onfill: #FFFFFF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--page); font-family: "PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    color: var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding: 24px 12px 48px; transition: background .25s;
+  }
+  .toolbar { width:390px; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .toolbar .tip { font-size:12px; color:var(--gray); }
+  .theme-btn {
+    font-size:12px; padding:6px 14px; border-radius:16px; border:1px solid var(--divider);
+    background: var(--card); color: var(--text); cursor:pointer;
+  }
+  .phone {
+    width:390px; height:844px; background:var(--bg); border-radius:36px;
+    border:1px solid var(--divider); box-shadow:0 18px 50px rgba(0,0,0,.45);
+    overflow:hidden; display:flex; flex-direction:column; transition: background .25s;
+  }
+  .statusbar { height:30px; display:flex; justify-content:space-between; align-items:center;
+    padding:0 20px; font-size:11px; color:var(--gray); flex:none; }
+  .content { flex:1; overflow-y:auto; padding:4px 14px 14px; }
+  .content::-webkit-scrollbar { width:0; }
+  .pgtitle { display:flex; align-items:center; justify-content:space-between; padding:6px 2px 12px; }
+  .pgtitle h1 { font-size:20px; font-weight:700; letter-spacing:.5px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; transition: background .25s; }
+  .card h3 { font-size:13px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; gap:6px; }
+  .card h3 .sub { font-size:11px; font-weight:400; color:var(--gray); margin-left:auto; }
+  .sec { font-size:15px; font-weight:700; color:var(--green); margin:14px 2px 8px; }
+  .sec:first-child { margin-top:2px; }
+  /* 开关行 */
+  .swrow { display:flex; align-items:center; }
+  .swrow .txts { flex:1; min-width:0; }
+  .swrow .t { font-size:14px; font-weight:600; }
+  .swrow .d { font-size:11px; color:var(--gray); margin-top:2px; line-height:1.5; }
+  .switch { width:44px; height:26px; border-radius:13px; background:var(--track); position:relative; cursor:pointer; flex:none; transition:background .2s; }
+  .switch.on { background:var(--green); }
+  .switch i { position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:left .2s; }
+  .switch.on i { left:21px; }
+  /* 步进行 */
+  .step { display:flex; align-items:center; margin-top:8px; }
+  .step .lb { flex:1; font-size:13px; }
+  .step .val { font-size:13px; font-weight:700; min-width:78px; text-align:center; }
+  .step button {
+    width:30px; height:30px; border-radius:8px; border:1px solid var(--divider);
+    background:var(--bg); color:var(--text); font-size:16px; cursor:pointer; line-height:1;
+  }
+  .step button:active { background:var(--track); }
+  /* 单位选择（任务一） */
+  .seg { display:flex; border:1px solid var(--divider); border-radius:9px; overflow:hidden; }
+  .seg button {
+    flex:1; background:none; border:none; color:var(--gray); font-size:13px;
+    padding:9px 0; cursor:pointer; font-weight:600;
+  }
+  .seg button.sel { background:var(--green); color:var(--onfill); }
+  .seg button + button { border-left:1px solid var(--divider); }
+  .hint { font-size:10px; color:var(--gray); margin-top:8px; line-height:1.6; }
+  .hint b { color:var(--text); }
+  .new-tag { display:inline-block; font-size:9px; color:var(--onfill); background:var(--blue);
+    border-radius:4px; padding:1px 5px; margin-left:6px; vertical-align:2px; font-weight:700; }
+  /* 底部导航 */
+  .navbar { flex:none; border-top:1px solid var(--tabline); background:var(--tabbar); display:flex; padding:6px 0 10px; transition: background .25s; }
+  .nav { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; }
+  .nav .ind { width:18px; height:2px; border-radius:1px; background:transparent; }
+  .nav.active .ind { background:var(--green); }
+  .nav svg { width:24px; height:24px; fill:var(--gray); }
+  .nav .lb { font-size:9px; color:var(--gray); }
+  .nav.active .lb { color:var(--green); }
+  .nav.active svg { fill:var(--green); }
+  .doc { width:390px; margin-top:26px; background:var(--card); border-radius:14px; padding:16px; transition: background .25s; }
+  .doc h2 { font-size:14px; margin-bottom:10px; }
+  .doc li { font-size:12px; color:var(--gray); line-height:1.9; margin-left:18px; }
+  .doc b { color:var(--text); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span class="tip">原型 · 极空参数设置（新增：单位/电费/里程折扣）</span>
+  <button class="theme-btn" onclick="document.body.classList.toggle('light')">切换亮/暗</button>
+</div>
+
+<div class="phone">
+  <div class="statusbar"><span>09:12</span><span>5G ▮▮▮ 87%</span></div>
+
+  <div class="content">
+    <div class="pgtitle"><h1>参数设置</h1></div>
+
+    <!-- 仪表盘（已有，上下文） -->
+    <div class="sec">仪表盘</div>
+    <div class="card">
+      <div class="swrow">
+        <div class="txts">
+          <div class="t">时速仪表盘</div>
+          <div class="d">首页显示时速/续航/电耗卡片。使用 GPS 定位（仅页面打开时工作），会增加少量耗电；关闭后完全停止。</div>
+        </div>
+        <div class="switch on" onclick="this.classList.toggle('on')"><i></i></div>
+      </div>
+    </div>
+
+    <!-- 语音播报（v0.2.89 已上线，上下文） -->
+    <div class="sec">语音播报</div>
+    <div class="card">
+      <div class="swrow">
+        <div class="txts">
+          <div class="t">电量语音播报</div>
+          <div class="d">本页打开时播报电量：电量变化即播；相同且超播报间隔再播；低于阈值立即提醒并按预警间隔重复提醒。首页连接栏小喇叭可一键静音（启动后首次播报不受影响）。</div>
+        </div>
+        <div class="switch on" onclick="this.classList.toggle('on')"><i></i></div>
+      </div>
+      <div class="step">
+        <span class="lb">播报间隔</span>
+        <button onclick="step(this,-1,1,120,'s1')">−</button>
+        <span class="val" id="s1">10 分钟</span>
+        <button onclick="step(this,1,1,120,'s1')">＋</button>
+      </div>
+      <div class="step">
+        <span class="lb">低电量阈值</span>
+        <button onclick="step(this,-1,1,50,'s2')">−</button>
+        <span class="val" id="s2">20 %</span>
+        <button onclick="step(this,1,1,50,'s2')">＋</button>
+      </div>
+      <div class="step">
+        <span class="lb">预警提醒间隔</span>
+        <button onclick="step(this,-1,1,60,'s3')">−</button>
+        <span class="val" id="s3">5 分钟</span>
+        <button onclick="step(this,1,1,60,'s3')">＋</button>
+      </div>
+      <div class="hint">低于阈值立即播报「电量低，请注意充电」，之后即使电量不变也按预警提醒间隔重复提醒。需要设备装有系统 TTS 引擎；接入 edge-tts 在线语音后优先使用在线合成（更接近人声）。</div>
+    </div>
+
+    <!-- 单位与花费（任务一 + 任务九） -->
+    <div class="sec">单位与花费</div>
+    <div class="card">
+      <div class="swrow">
+        <div class="txts">
+          <div class="t">电耗单位<span class="new-tag">新增</span></div>
+          <div class="d">首页仪表盘瞬时/平均电耗的显示单位。内部计算不受影响。</div>
+        </div>
+      </div>
+      <div class="seg" style="margin-top:8px">
+        <button id="uWh" class="sel" onclick="setUnit(0)">Wh/km（瓦时/千米）</button>
+        <button id="uK" onclick="setUnit(1)">kWh/100km（度/百公里）</button>
+      </div>
+      <div class="step" style="margin-top:12px">
+        <span class="lb">电费单价<span class="new-tag">新增</span></span>
+        <button onclick="stepF(this,-0.05,0.1,2.0,'sFee')">−</button>
+        <span class="val" id="sFee">0.60 元/度</span>
+        <button onclick="stepF(this,0.05,0.1,2.0,'sFee')">＋</button>
+      </div>
+      <div class="hint">用于统计页花费计算：区间总花费 = 总耗电 × 电费；平均花费折合 <b>元/100km</b>；台账每行显示该段花费。</div>
+    </div>
+
+    <!-- 里程折扣（任务八） -->
+    <div class="sec">里程</div>
+    <div class="card">
+      <div class="swrow">
+        <div class="txts">
+          <div class="t">里程折扣<span class="new-tag">新增</span></div>
+          <div class="d">三轮车表显里程偏大时（如真实 10km 表显 15km），把统计页显示里程 × 折扣。原值以括号小字保留；设为 1.0 与现在完全一致。</div>
+        </div>
+      </div>
+      <div class="step" style="margin-top:8px">
+        <span class="lb">折扣系数</span>
+        <button onclick="stepF(this,-0.1,0.1,1.0,'sDisc')">−</button>
+        <span class="val" id="sDisc">1.0（不折扣）</span>
+        <button onclick="stepF(this,0.1,0.1,1.0,'sDisc')">＋</button>
+      </div>
+      <div class="hint">范围 0.1 ~ 1.0，步进 0.1。台账数据库存的始终是<b>原始输入里程</b>，折扣只影响显示层（概要卡/台账/曲线轴）。</div>
+    </div>
+  </div>
+
+  <!-- 底部导航 -->
+  <div class="navbar">
+    <div class="nav">
+      <div class="ind"></div>
+      <svg viewBox="0 0 24 24"><path d="M12 3l9 8h-3v9h-4v-6h-4v6H6v-9H3z"/></svg>
+      <div class="lb">首页</div>
+    </div>
+    <div class="nav">
+      <div class="ind"></div>
+      <svg viewBox="0 0 24 24"><path d="M4 20V10h3v10zm6.5 0V4h3v16zm6.5 0v-7h3v7z"/></svg>
+      <div class="lb">实时状态</div>
+    </div>
+    <div class="nav">
+      <div class="ind"></div>
+      <svg viewBox="-20 0 1120 1024"><path d="M274.03 872.08H49.03a20.68 20.68 0 0 1-20.6-20.6V471.99a20.68 20.68 0 0 1 20.6-20.6H274.03a20.68 20.68 0 0 1 20.6 20.6v379.33a20.6 20.6 0 0 1-20.6 20.75zm-204.61-41.29h183.35V492.6H69.42zm579.34 41.29H424.27a20.68 20.68 0 0 1-20.6-20.6V325.18a20.68 20.68 0 0 1 20.6-20.6H648.9a20.68 20.68 0 0 1 20.6 20.6v526.14a20.53 20.53 0 0 1-20.6 20.75zm-204.03-41.29h183.35V346.08H444.88zm578.46 41.29H798.71a20.68 20.68 0 0 1-20.46-20.75V24.26a20.68 20.68 0 0 1 20.6-20.6h224.63a20.68 20.68 0 0 1 20.6 20.6V851.32a20.53 20.53 0 0 1-20.75 20.75zm-204.03-41.29h183.35V44.94h-183.2zm236.76 189.56H24.26a20.6 20.6 0 0 1 0-41.29h1031.67a20.6 20.6 0 1 1 0 41.29z"/></svg>
+      <div class="lb">统计</div>
+    </div>
+    <div class="nav active">
+      <div class="ind"></div>
+      <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9.4 5.6l-2 .5a7.6 7.6 0 0 1-.8 1.9l1.1 1.8-1.9 1.9-1.8-1.1a7.6 7.6 0 0 1-1.9.8l-.5 2h-2.7l-.5-2a7.6 7.6 0 0 1-1.9-.8l-1.8 1.1-1.9-1.9 1.1-1.8a7.6 7.6 0 0 1-.8-1.9l-2-.5v-2.7l2-.5a7.6 7.6 0 0 1 .8-1.9L5.2 6.7l1.9-1.9 1.8 1.1a7.6 7.6 0 0 1 1.9-.8l.5-2h2.7l.5 2a7.6 7.6 0 0 1 1.9.8l1.8-1.1 1.9 1.9-1.1 1.8a7.6 7.6 0 0 1 .8 1.9l2 .5z"/></svg>
+      <div class="lb">参数设置</div>
+    </div>
+  </div>
+</div>
+
+<!-- 设计说明 -->
+<div class="doc">
+  <h2>设计说明（实现时照此做）</h2>
+  <li><b>电耗单位（任务一）</b>：单选持久化（默认 Wh/km）；显示层换算 1 kWh/100km = 10 Wh/km；Wh/km 保留 1 位小数、kWh/100km 保留 2 位。作用于首页仪表盘瞬时/平均；内部积分/续航/上报一律 Wh/km。</li>
+  <li><b>电费单价（任务九）</b>：步进 0.05 元（0.1~2.0），默认 0.60 元/度；统计页概要 5 卡 + 曲线右轴 + 台账行花费全部引用它。</li>
+  <li><b>里程折扣（任务八）</b>：步进 0.1（0.1~1.0），默认 1.0；折扣≠1 时显示里程×折扣、电耗/花费按折扣后里程重算、原值括号小字；折扣=1 时不显示括号、与现状一致。</li>
+  <li><b>语音播报卡</b>：v0.2.89 已上线（开关+间隔+阈值+预警间隔），本轮不改；说明文字补一句 edge-tts 在线语音优先（任务五落地后生效）。</li>
+  <li><b>控件复用</b>：开关行/步进行沿用现有 JkStepperRow 与开关范式；单位选择为新增分段控件（Compose 两个 FilterChip 或自绘 Segmented）。</li>
+</div>
+
+<script>
+function setUnit(u) {
+  document.getElementById('uWh').className = u === 0 ? 'sel' : '';
+  document.getElementById('uK').className = u === 1 ? 'sel' : '';
+}
+function step(btn, d, min, max, id) {
+  const el = document.getElementById(id);
+  const m = el.textContent.match(/-?\d+(\.\d+)?/);
+  let v = m ? parseFloat(m[0]) : 0;
+  v = Math.min(max, Math.max(min, v + d));
+  el.textContent = (Number.isInteger(v) ? v : v.toFixed(1)) + (id === 's2' ? ' %' : ' 分钟');
+}
+function stepF(btn, d, min, max, id) {
+  const el = document.getElementById(id);
+  let v = parseFloat(el.dataset.v ?? (id === 'sFee' ? 0.6 : 1.0));
+  v = Math.min(max, Math.max(min, +(v + d).toFixed(2)));
+  el.dataset.v = v;
+  el.textContent = id === 'sFee'
+    ? v.toFixed(2) + ' 元/度'
+    : (v === 1.0 ? '1.0（不折扣）' : v.toFixed(1) + '（显示 ×' + v.toFixed(1) + '）');
+}
+</script>
+
+</body>
+</html>

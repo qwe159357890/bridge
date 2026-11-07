@@ -102,6 +102,14 @@ class JikongController private constructor() {
     @Volatile
     private var prevAnnounceSoc = -1
 
+    /**
+     * 进程启动后「首次收到电量」的强制播报标记（v0.2.90，用户拍板）：
+     * 小喇叭静音**不拦截**这一次播报（每次 App 启动后连接成功收到电量的那一次永远播）；
+     * 真正播出才消耗标记，进程存活期内至多一次。
+     */
+    @Volatile
+    private var firstAnnouncePending = true
+
     /** 当前会话是否收到过 0x02 实时数据帧（UI 用于区分「无数据」与「真 0 值」，v0.2.77）。 */
     @Volatile
     var hasDataFrame: Boolean = false
@@ -483,6 +491,8 @@ class JikongController private constructor() {
      *   其中「首次跌破阈值」必然伴随 SOC 变化，由 ① 立即播报带提醒——即 1A 语义。
      * - 话术：「当前电量 N%」；低于低电量阈值追加「电量低，请注意充电」。
      * - 「上次播报值/时间」「上次带提醒播报时间」持久化（JikongPrefs），进程重启不误播。
+     * - v0.2.90 静音：小喇叭静音（持久化）拦截一切播报；唯一例外=进程启动后首次收到电量
+     *   的强制播报（[firstAnnouncePending]，不受静音影响，真正播出才消耗）。
      */
     private fun maybeAnnounce(s: JikongStatus) {
         val soc = s.soc
@@ -492,6 +502,10 @@ class JikongController private constructor() {
         if (demoMode || !pageVisible) return
         val ctx = appContext ?: return
         if (!JikongPrefs.speakEnabled(ctx)) return
+        // v0.2.90：小喇叭静音（持久化）拦截一切播报；唯一例外=进程启动后首次（forced），
+        // 「连接成功并收到剩余电量」的那一次永远播（用户拍板），真正播出才消耗强制机会。
+        val forced = firstAnnouncePending
+        if (!forced && JikongPrefs.muted(ctx)) return
         val now = System.currentTimeMillis()
         val lastSoc = JikongPrefs.lastSpokenSoc(ctx)
         val changed = (prev != -1 && soc != prev) || soc != lastSoc
@@ -500,15 +514,19 @@ class JikongController private constructor() {
         val low = soc < JikongPrefs.speakLowSoc(ctx)
         val warnDue = low && now - JikongPrefs.lastWarnAt(ctx) >=
             JikongPrefs.speakWarnRepeatMin(ctx) * 60_000L
-        if (!(changed || due || warnDue)) {
+        if (!(forced || changed || due || warnDue)) {
             Timber.tag(TAG).i("语音播报判定：不播（SOC=%d 未变、间隔未到、无预警到期）", soc)
             return
         }
+        firstAnnouncePending = false
         val text = "当前电量 $soc%" + if (low) "，电量低，请注意充电" else ""
         JikongPrefs.setLastSpoken(ctx, soc, now)
         if (low) JikongPrefs.setLastWarnAt(ctx, now)
         JikongSpeaker.speak(ctx, text)
-        Timber.tag(TAG).i("语音播报：%s（上次 SOC=%d，changed=%s due=%s warnDue=%s）", text, lastSoc, changed, due, warnDue)
+        Timber.tag(TAG).i(
+            "语音播报：%s（上次 SOC=%d，changed=%s due=%s warnDue=%s forced=%s muted=%s）",
+            text, lastSoc, changed, due, warnDue, forced, JikongPrefs.muted(ctx),
+        )
     }
 
     // ==================== 数据读取 ====================

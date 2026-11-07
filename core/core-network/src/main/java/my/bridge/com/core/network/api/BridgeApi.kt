@@ -232,6 +232,19 @@ interface BridgeApi {
     ): OdometerSyncResponse
 
     /**
+     * edge-tts 在线语音合成（极空播报 v0.2.90）：服务端合成 mp3（响度归一化后返回）。
+     * 设备鉴权头与 odometer/music 同一套；失败由调用方回退本地 TTS。
+     */
+    @Streaming
+    @GET("api/tts")
+    suspend fun synthTts(
+        @Query("text") text: String,
+        @Query("voice") voice: String,
+        @Header("X-Device-Id") deviceId: String,
+        @Header("X-Device-Token") token: String?,
+    ): ResponseBody
+
+    /**
      * 下载服务器共享目录里的音乐文件（404 = 服务器无此文件）。
      * 设备鉴权头：与 WS hello 同一套注册表校验（auth 关闭时服务端忽略）。
      */

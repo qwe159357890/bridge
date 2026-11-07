@@ -46,13 +46,19 @@
   .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; transition: background .25s; }
   .card h3 { font-size:13px; font-weight:600; color:var(--text); margin-bottom:10px; display:flex; align-items:center; gap:6px; }
   .card h3 .sub { font-size:11px; font-weight:400; color:var(--gray); margin-left:auto; }
-  /* 概要 */
+  /* 概要：5 卡两行（行1 里程/总耗/总花费，行2 平均电耗/平均花费） */
   .summary { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .summary2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
   .sum { background:var(--bg); border-radius:10px; padding:10px 6px; text-align:center; transition: background .25s; }
   .sum .v { font-size:17px; font-weight:700; }
   .sum .v small { font-size:10px; font-weight:400; color:var(--gray); margin-left:2px; }
   .sum .k { font-size:10px; color:var(--gray); margin-top:3px; }
+  .sum .paren { display:block; font-size:9px; font-weight:400; color:var(--gray); margin-top:1px; }
   .sum.hl .v { color:var(--green); }
+  .sum.cost .v { color:var(--amber); }
+  /* 录入：禁用态（未连接/等待数据） */
+  .btn-rec:disabled { background:var(--track); color:var(--gray); cursor:default; }
+  .wait { color:var(--amber); font-size:11px; }
   /* 录入 */
   .in-row { display:flex; gap:8px; align-items:flex-end; }
   .field { flex:1; }
@@ -93,8 +99,11 @@
   .rec .date { width:52px; color:var(--gray); font-size:10px; line-height:1.5; flex:none; }
   .rec .odo { width:74px; font-weight:600; flex:none; }
   .rec .odo small { display:block; font-size:10px; color:var(--gray); font-weight:400; }
+  .rec .odo .paren { font-size:9px; color:var(--track); font-weight:400; }
   .rec .delta { flex:1; color:var(--gray); font-size:10.5px; line-height:1.5; }
   .rec .wh { width:74px; text-align:right; font-weight:700; font-size:13px; flex:none; }
+  .rec .wh small { display:block; font-size:9px; font-weight:400; color:var(--gray); }
+  .rec .wh .paren { font-size:9px; color:var(--track); font-weight:400; }
   .rec .wh small { display:block; font-size:9px; font-weight:400; color:var(--gray); }
   .rec .wh.good { color:var(--green); } .rec .wh.bad { color:var(--amber); }
   .rec.base .wh { color:var(--gray); font-weight:400; font-size:11px; }
@@ -121,8 +130,11 @@
 <body>
 
 <div class="toolbar">
-  <span class="tip">原型 · 极空新增「统计」Tab（位于 参数设置 之前）</span>
-  <span class="tip"><label><input type="checkbox" id="offline"> 模拟服务端离线</label></span>
+  <span class="tip">原型 · 统计页 v2（记一笔门控 / 里程折扣 0.7 / 电费 0.6 元/度）</span>
+  <span class="tip">
+    <label><input type="checkbox" id="offline"> 模拟服务端离线</label>
+    <label><input type="checkbox" id="nodata" onchange="toggleNoData()"> 模拟未连接</label>
+  </span>
   <button class="theme-btn" onclick="document.body.classList.toggle('light')">切换亮/暗</button>
 </div>
 
@@ -148,6 +160,14 @@ function doSync() {
     }
   }, 700);
 }
+/* 任务七：未连接/等待数据 → 「记一笔」置灰 + 自动读取行变等待态 */
+function toggleNoData() {
+  const off = document.getElementById('nodata').checked;
+  document.getElementById('btnRec').disabled = off;
+  document.getElementById('autoRead').style.display = off ? 'none' : 'flex';
+  document.getElementById('waitRow').style.display = off ? 'flex' : 'none';
+  document.getElementById('inputOdo').disabled = off;
+}
 </script>
 
 <div class="phone">
@@ -159,39 +179,47 @@ function doSync() {
       <div class="conn"><span class="dot"></span>已连接 · JK-BMS</div>
     </div>
 
-    <!-- 概要 -->
+    <!-- 概要：任务八（折扣0.7）+ 任务九（电费0.6元/度）演示数据 -->
     <div class="card">
       <div class="summary">
-        <div class="sum"><div class="v">260.0<small>km</small></div><div class="k">记录区间里程</div></div>
+        <div class="sum"><div class="v">182.0<small>km</small></div><div class="paren">原 260.0 · 折扣 0.7</div><div class="k">记录区间里程</div></div>
         <div class="sum"><div class="v">9.25<small>kWh</small></div><div class="k">区间总耗电</div></div>
-        <div class="sum hl"><div class="v">35.5<small>Wh/km</small></div><div class="k">平均电耗</div></div>
+        <div class="sum cost"><div class="v">5.55<small>元</small></div><div class="k">区间总花费</div></div>
+      </div>
+      <div class="summary2">
+        <div class="sum hl"><div class="v">50.8<small>Wh/km</small></div><div class="paren">原 35.5 · 按折扣后里程</div><div class="k">平均电耗</div></div>
+        <div class="sum cost"><div class="v">3.05<small>元/100km</small></div><div class="paren">原 2.13 · 折合 0.03 元/km</div><div class="k">平均花费</div></div>
       </div>
     </div>
 
-    <!-- 录入 -->
+    <!-- 录入（任务七：勾选「模拟未连接」看禁用态） -->
     <div class="card">
       <h3>📝 录入里程<span class="sub">手动输入 · 容量自动读取</span></h3>
       <div class="in-row">
         <div class="field">
           <label>当前三轮车里程（km）</label>
-          <input value="11260.0" inputmode="decimal">
+          <input id="inputOdo" value="11260.0" inputmode="decimal">
         </div>
-        <button class="btn-rec">记一笔</button>
+        <button class="btn-rec" id="btnRec">记一笔</button>
       </div>
-      <div class="auto-read">
+      <div class="auto-read" id="autoRead">
         <span>循环容量 <b>885.6 Ah</b></span>
         <span>总压 <b>73.6 V</b></span>
         <span class="tag">● 已自动读取</span>
       </div>
-      <div class="hint">每次录入 = 记一行（时间 + 里程 + 当时循环容量/电压）。里程须 ≥ 上一条；未连接保护板时容量栏显示「待连接后读取」。</div>
+      <div class="auto-read" id="waitRow" style="display:none">
+        <span class="wait">⏳ 等待数据…（未连接保护板或数据未到）</span>
+      </div>
+      <div class="hint">每次录入 = 记一行（时间 + 里程 + 当时循环容量/电压）。里程须 ≥ 上一条；<b>未连接或读不到数据时「记一笔」置灰不可点</b>，连接成功且数据到达后自动恢复。</div>
     </div>
 
-    <!-- 曲线 -->
+    <!-- 曲线（任务九：右轴双刻度 元/100km；任务八：轴值按折扣 0.7 换算） -->
     <div class="card">
-      <h3>能耗曲线<span class="sub">Wh/km · 按录入区间</span></h3>
+      <h3>能耗与花费曲线<span class="sub">按录入区间 · 折扣 0.7</span></h3>
       <div class="legend">
         <span><i style="background:var(--green)"></i>每段电耗</span>
-        <span><i style="background:var(--cyan)"></i>平均 35.5</span>
+        <span><i style="background:var(--cyan)"></i>平均 50.8（原 35.5）</span>
+        <span style="margin-left:auto">右轴 = 折合花费</span>
       </div>
       <svg viewBox="0 0 340 150" width="100%">
         <!-- 网格 -->
@@ -199,18 +227,24 @@ function doSync() {
           <line x1="34" y1="18" x2="332" y2="18"/><line x1="34" y1="55" x2="332" y2="55"/>
           <line x1="34" y1="92" x2="332" y2="92"/><line x1="34" y1="129" x2="332" y2="129"/>
         </g>
+        <!-- 左轴：Wh/km（折扣后） -->
         <g font-size="9" fill="var(--gray)" text-anchor="end">
-          <text x="30" y="21">45</text><text x="30" y="58">38</text>
-          <text x="30" y="95">31</text><text x="30" y="132">24</text>
+          <text x="30" y="21">64</text><text x="30" y="58">54</text>
+          <text x="30" y="95">44</text><text x="30" y="132">34</text>
+        </g>
+        <!-- 右轴：元/100km（= 左轴 × 电费0.6 ÷ 10） -->
+        <g font-size="9" fill="var(--amber)" text-anchor="start">
+          <text x="336" y="21" >3.8</text><text x="336" y="58">3.2</text>
+          <text x="336" y="95">2.6</text><text x="336" y="132">2.0</text>
         </g>
         <g font-size="9" fill="var(--gray)" text-anchor="middle">
-          <text x="46" y="146">11042</text><text x="122" y="146">11090</text>
-          <text x="197" y="146">11177</text><text x="288" y="146">11260</text>
-          <text x="200" y="8" fill="var(--gray)">行驶里程 (km)</text>
+          <text x="46" y="146">7729</text><text x="122" y="146">7763</text>
+          <text x="197" y="146">7824</text><text x="288" y="146">7882</text>
+          <text x="200" y="8" fill="var(--gray)">行驶里程 (km，折扣后 · 原 11042→11260)</text>
         </g>
         <!-- 平均线 -->
         <line x1="34" y1="63" x2="332" y2="63" stroke="var(--cyan)" stroke-width="1.5" stroke-dasharray="5 4" opacity=".85"/>
-        <!-- 折线 37.1/38.0/32.7/31.2/40.1/34.2 -->
+        <!-- 折线（形状与折扣前完全一致：电耗×1/0.7） -->
         <polyline fill="none" stroke="var(--green)" stroke-width="2.5" stroke-linejoin="round"
           points="46,50 84,47 122,73 160,80 198,29 236,56"/>
         <g fill="var(--bg)" stroke="var(--green)" stroke-width="2">
@@ -219,10 +253,11 @@ function doSync() {
         </g>
         <!-- 最高/最低标注 -->
         <g font-size="9" font-weight="700">
-          <text x="198" y="22" fill="var(--amber)" text-anchor="middle">40.1 ↑载重</text>
-          <text x="160" y="94" fill="var(--green)" text-anchor="middle">31.2 ↓</text>
+          <text x="198" y="22" fill="var(--amber)" text-anchor="middle">57.3 ↑载重</text>
+          <text x="160" y="94" fill="var(--green)" text-anchor="middle">44.6 ↓</text>
         </g>
       </svg>
+      <div class="hint">花费与电耗为线性换算（元/100km = Wh/km × 电费 ÷ 10），曲线形状相同，故<b>不加第二条曲线</b>，用右轴双刻度读取；曲线点悬停/长按可同时显示两轴数值。</div>
     </div>
 
     <!-- 记录列表（最新在最上，基准垫底；固定高度内部滑动） -->
@@ -231,43 +266,43 @@ function doSync() {
       <div class="rec-list">
         <div class="rec">
           <div class="date">11-13<br>17:36<br><span class="badge">未同步</span></div>
-          <div class="odo">11260.0<small>距上次 +41.8 km</small></div>
+          <div class="odo">7882.0<small>距上次 +29.3 km（原 +41.8）<br><span class="paren">原 11260.0</span></small></div>
           <div class="delta">Δ19.4 Ah · 73.6 V<br>1.43 kWh</div>
-          <div class="wh">34.2<small>Wh/km</small></div><div class="del">✕</div>
+          <div class="wh">48.9<small>Wh/km · 0.86元<br><span class="paren">原 34.2</span></small></div><div class="del">✕</div>
         </div>
         <div class="rec">
           <div class="date">11-11<br>18:20<br><span class="badge">未同步</span></div>
-          <div class="odo">11218.2<small>距上次 +41.3 km</small></div>
+          <div class="odo">7852.7<small>距上次 +28.9 km（原 +41.3）<br><span class="paren">原 11218.2</span></small></div>
           <div class="delta">Δ22.4 Ah · 74.0 V<br>1.66 kWh</div>
-          <div class="wh bad">40.1<small>Wh/km</small></div><div class="del">✕</div>
+          <div class="wh bad">57.3<small>Wh/km · 1.00元<br><span class="paren">原 40.1</span></small></div><div class="del">✕</div>
         </div>
         <div class="rec">
           <div class="date">11-09<br>17:55</div>
-          <div class="odo">11176.9<small>距上次 +46.5 km</small></div>
+          <div class="odo">7823.8<small>距上次 +32.6 km（原 +46.5）<br><span class="paren">原 11176.9</span></small></div>
           <div class="delta">Δ19.7 Ah · 73.7 V<br>1.45 kWh</div>
-          <div class="wh good">31.2<small>Wh/km</small></div><div class="del">✕</div>
+          <div class="wh good">44.6<small>Wh/km · 0.87元<br><span class="paren">原 31.2</span></small></div><div class="del">✕</div>
         </div>
         <div class="rec">
           <div class="date">11-07<br>16:30</div>
-          <div class="odo">11130.4<small>距上次 +40.8 km</small></div>
+          <div class="odo">7791.3<small>距上次 +28.6 km（原 +40.8）<br><span class="paren">原 11130.4</span></small></div>
           <div class="delta">Δ18.2 Ah · 73.4 V<br>1.34 kWh</div>
-          <div class="wh">32.7<small>Wh/km</small></div><div class="del">✕</div>
+          <div class="wh">46.7<small>Wh/km · 0.80元<br><span class="paren">原 32.7</span></small></div><div class="del">✕</div>
         </div>
         <div class="rec">
           <div class="date">11-05<br>18:05</div>
-          <div class="odo">11089.6<small>距上次 +47.3 km</small></div>
+          <div class="odo">7762.7<small>距上次 +33.1 km（原 +47.3）<br><span class="paren">原 11089.6</span></small></div>
           <div class="delta">Δ24.4 Ah · 73.8 V<br>1.80 kWh</div>
-          <div class="wh bad">38.0<small>Wh/km</small></div><div class="del">✕</div>
+          <div class="wh bad">54.3<small>Wh/km · 1.08元<br><span class="paren">原 38.0</span></small></div><div class="del">✕</div>
         </div>
         <div class="rec">
           <div class="date">11-03<br>17:42</div>
-          <div class="odo">11042.3<small>距上次 +42.3 km</small></div>
+          <div class="odo">7729.6<small>距上次 +29.6 km（原 +42.3）<br><span class="paren">原 11042.3</span></small></div>
           <div class="delta">Δ21.3 Ah · 73.6 V<br>1.57 kWh</div>
-          <div class="wh bad">37.1<small>Wh/km</small></div><div class="del">✕</div>
+          <div class="wh bad">53.0<small>Wh/km · 0.94元<br><span class="paren">原 37.1</span></small></div><div class="del">✕</div>
         </div>
         <div class="rec base">
           <div class="date">11-02<br>08:10</div>
-          <div class="odo">11000.0<small>基准 · 容量 742.6Ah</small></div>
+          <div class="odo">7700.0<small>基准 · 容量 742.6Ah<br><span class="paren">原 11000.0</span></small></div>
           <div class="delta">第一条记录，作为后续电耗计算的起点</div>
           <div class="wh">基准</div><div class="del"></div>
         </div>
@@ -279,7 +314,9 @@ function doSync() {
       <h3>口径说明</h3>
       <div class="note">
         电耗 = <b>Δ循环容量(Ah) × 平均电压(V) ÷ Δ里程(km)</b>，即行驶这段路电池实际放出的电能。<br>
-        循环容量由保护板累计（只增不减），充电不影响它；<b>换电池 / BMS 重置</b>会使容量回退，此时该段标记无效、不进曲线，重新以新容量为基准。
+        循环容量由保护板累计（只增不减），充电不影响它；<b>换电池 / BMS 重置</b>会使容量回退，此时该段标记无效、不进曲线，重新以新容量为基准。<br>
+        <b>里程折扣</b>（设置页，0.1~1.0）：三轮车表显偏大时，显示里程 = 原始值 × 折扣；电耗/花费按折扣后里程重算，<b>原始值以括号小字保留</b>；台账数据库存原始输入，折扣只影响显示。<br>
+        <b>花费</b>（设置页电费单价，默认 0.6 元/度）：区间总花费 = 总耗电 × 电费；平均花费折合 元/100km = 平均电耗 × 电费 ÷ 10；每行台账花费 = 该段 kWh × 电费。
       </div>
     </div>
   </div>

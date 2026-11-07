@@ -174,4 +174,50 @@ object JikongPrefs {
     fun setDefaultMac(context: Context, mac: String) {
         sp(context).edit().putString(KEY_DEFAULT_MAC, mac.trim()).apply()
     }
+
+    // ==================== 显示单位 / 里程折扣 / 电费（v0.2.90） ====================
+
+    /** 电耗显示单位：false = Wh/km（默认），true = kWh/100km。只改显示层，内部一律 Wh/km。 */
+    private const val KEY_UNIT_KWH100 = "jikong_unit_kwh100"
+
+    fun unitKwh100(context: Context): Boolean =
+        sp(context).getBoolean(KEY_UNIT_KWH100, false)
+
+    fun setUnitKwh100(context: Context, kwh100: Boolean) {
+        sp(context).edit().putBoolean(KEY_UNIT_KWH100, kwh100).apply()
+    }
+
+    /** 三轮车里程折扣（0.1~1.0，默认 1.0）：表显里程 × 折扣 = 真实里程。只影响统计页显示层。 */
+    private const val KEY_ODO_DISCOUNT = "jikong_odo_discount"
+
+    fun odoDiscount(context: Context): Float =
+        sp(context).getFloat(KEY_ODO_DISCOUNT, 1f).coerceIn(0.1f, 1f)
+
+    fun setOdoDiscount(context: Context, discount: Float) {
+        sp(context).edit().putFloat(KEY_ODO_DISCOUNT, discount.coerceIn(0.1f, 1f)).apply()
+    }
+
+    /** 电费单价（元/kWh，0.05~10.0，默认 0.6）。统计页花费显示用。 */
+    private const val KEY_ELEC_PRICE = "jikong_elec_price"
+
+    fun elecPrice(context: Context): Float =
+        sp(context).getFloat(KEY_ELEC_PRICE, 0.6f).coerceIn(0.05f, 10f)
+
+    fun setElecPrice(context: Context, price: Float) {
+        sp(context).edit().putFloat(KEY_ELEC_PRICE, (price.coerceIn(0.05f, 10f) * 100).toInt() / 100f).apply()
+    }
+
+    // ==================== 静音 / TTS（v0.2.90） ====================
+
+    /** 小喇叭静音（持久化）：true = 静音，一切播报停止（唯一例外=进程启动后首次强制播报，见 Controller）。 */
+    private const val KEY_MUTED = "jikong_muted"
+
+    fun muted(context: Context): Boolean = sp(context).getBoolean(KEY_MUTED, false)
+
+    fun setMuted(context: Context, muted: Boolean) {
+        sp(context).edit().putBoolean(KEY_MUTED, muted).apply()
+    }
+
+    /** edge-tts 在线合成音色（服务端 /api/tts 用；本地回退不受影响）。 */
+    const val TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 }
