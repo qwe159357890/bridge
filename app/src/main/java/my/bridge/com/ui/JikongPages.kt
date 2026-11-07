@@ -10,6 +10,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -88,6 +90,7 @@ import my.bridge.com.jikong.BleDevice
 import my.bridge.com.jikong.JikongBleClient
 import my.bridge.com.jikong.JikongController
 import my.bridge.com.jikong.JikongPrefs
+import my.bridge.com.jikong.JikongSpeaker
 import my.bridge.com.jikong.JkMileageRecord
 import my.bridge.com.jikong.JikongStatsStore
 import my.bridge.com.jikong.JikongStatsSync
@@ -300,6 +303,15 @@ fun JikongPage() {
         doNormalScan()
     }
 
+    // v0.2.91 防僵尸：进入极空页时距上次扫描超过 10 分钟即清空列表（陈旧 RSSI/已消失设备）
+    LaunchedEffect(Unit) {
+        if (controller.lastScanAt > 0L &&
+            System.currentTimeMillis() - controller.lastScanAt > JikongController.SCAN_STALE_MS
+        ) {
+            controller.clearScanCache()
+        }
+    }
+
     // v0.2.88：进入极空页自动连默认设备（用户拍板）。仅未连接、非演示、有默认设备、
     // 有连接权限且蓝牙开启时尝试一次；失败仅 Toast，不自动转扫描（点扫描按钮才兜底）。
     LaunchedEffect(Unit) {
@@ -376,8 +388,13 @@ fun JikongPage() {
     }
 
     // 双击返回键回主页（微信/销售同款）：第 1 次 Toast 提示，窗口内第 2 次回主页首 Tab
+    // v0.2.91：已连接且不在首页 Tab 时，第一次按返回先回首页 Tab，再走双击退主页逻辑
     var lastBackAt by remember { mutableStateOf(0L) }
     BackHandler {
+        if (controller.status.connected && tab != 0) {
+            tab = 0
+            return@BackHandler
+        }
         val now = System.currentTimeMillis()
         if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
             JkUiState.exitToken++
@@ -863,6 +880,22 @@ private fun HomeView(
                 bmsStale = SpeedDash.bmsStale,
                 permNeeded = SpeedDash.gpsPermissionNeeded,
                 onReset = { SpeedDash.resetTrip(context) },
+                onDoubleTap = {
+                    // v0.2.91 双击播报：电量(+低电预警)；有时速追加 时速+剩余续航。
+                    // 显式手势绕过静音开关；速度/续航取整播报（降低在线 TTS 缓存键数量，LRU 50MB 兜底）。
+                    val soc = controller.status.soc
+                    if (soc in 0..100) {
+                        val sb = StringBuilder("当前电量 $soc%")
+                        if (soc < JikongPrefs.speakLowSoc(context)) sb.append("，电量低，请注意充电")
+                        val speed = SpeedDash.speedKmh
+                        if (speed > 0f) {
+                            sb.append("，时速 %.0f 公里".format(speed))
+                            val range = SpeedDash.rangeKm
+                            if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
+                        }
+                        JikongSpeaker.speak(context, sb.toString())
+                    }
+                },
             )
             Spacer(Modifier.height(6.dp))
         }
@@ -1015,6 +1048,7 @@ private fun SpeedDashCard(
     bmsStale: Boolean,
     permNeeded: Boolean,
     onReset: () -> Unit,
+    onDoubleTap: () -> Unit = {},   // v0.2.91：双击播报电量/时速/续航（显式手势，绕过静音）
 ) {
     val c = LocalJkColors.current
     val context = LocalContext.current
@@ -1027,6 +1061,7 @@ private fun SpeedDashCard(
         modifier = Modifier
             .fillMaxWidth()
             .background(c.card, RoundedCornerShape(8.dp))
+            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDoubleTap() }) }
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
         if (permNeeded) {
@@ -1052,7 +1087,8 @@ private fun SpeedDashCard(
                 Text("平均时速(km/h)", fontSize = 11.sp, color = c.gray)
                 Text(
                     if (avgSpeed > 0f) "%.1f".format(avgSpeed) else "--",
-                    fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = c.text,
+                    // v0.2.91：与时速/剩余续航同级（28sp Bold）；颜色保留 text 色以区别时速绿/续航蓝
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.text,
                 )
             }
             Column(Modifier.weight(1f)) {
@@ -1899,7 +1935,7 @@ private fun RowScope.JkSumCell(
         Spacer(Modifier.height(3.dp))
         Text(label, fontSize = 10.sp, color = c.gray)
         if (sub != null) {
-            Text("原 $sub", fontSize = 8.sp, color = c.gray)   // 折扣≠1 时括号保留原值（用户拍板）
+            Text(sub, fontSize = 8.sp, color = c.gray)   // 折扣≠1 时括号保留原值（调用方自带「原 」前缀；v0.2.91 修重复前缀）
         }
     }
 }
@@ -1967,6 +2003,36 @@ private fun jkBuildSegs(records: List<JkMileageRecord>): List<JkSeg?> {
 private val JkDateFmt = SimpleDateFormat("MM-dd", Locale.getDefault())
 private val JkTimeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
 
+/**
+ * v0.2.91：演示模式内存台账（30 天 7 条，段电耗 31~40 Wh/km 梯度，数值取自真机实测样例）。
+ * 只在 controller.demoMode 时替代真实台账显示；增删全在内存，退出演示自动还原真实台账，
+ * 不读写 JikongStatsStore、不触发同步——新用户无真实数据也能观察曲线/折扣/花费效果。
+ */
+private fun jkDemoRecords(): List<JkMileageRecord> {
+    val now = System.currentTimeMillis()
+    val twoDays = 2 * 24 * 3600_000L
+    // (里程, 循环容量, 总压)；相邻差值按真机样例设计（Δ19~24Ah / Δ41~47km）
+    val base = listOf(
+        Triple(11000.0f, 742.6f, 73.6f),
+        Triple(11042.3f, 763.9f, 73.6f),
+        Triple(11089.6f, 788.3f, 73.8f),
+        Triple(11130.4f, 806.5f, 73.4f),
+        Triple(11176.9f, 826.2f, 73.7f),
+        Triple(11218.2f, 848.6f, 74.0f),
+        Triple(11260.0f, 868.0f, 73.6f),
+    )
+    return base.mapIndexed { i, (odo, ah, v) ->
+        JkMileageRecord(
+            id = "demo_$i",
+            ts = now - (6 - i) * twoDays,
+            odoKm = odo,
+            cycleAh = ah,
+            volt = v,
+            synced = true,
+        )
+    }
+}
+
 @Composable
 private fun StatsView(controller: JikongController) {
     val c = LocalJkColors.current
@@ -1976,10 +2042,13 @@ private fun StatsView(controller: JikongController) {
     var recordsVersion by remember { mutableIntStateOf(0) } // 记录集版本（增删/同步后自增驱动重读）
     var odoText by remember { mutableStateOf("") }
     var syncing by remember { mutableStateOf(false) }
+    val demoMode = controller.demoMode
 
-    val records = remember(recordsVersion) { JikongStatsStore.records(context) }
+    // v0.2.91：演示模式用内存演示台账（不读写真实存储、不触发同步），退出演示自动还原
+    var demoList by remember { mutableStateOf(jkDemoRecords()) }
+    val records = if (demoMode) demoList else remember(recordsVersion) { JikongStatsStore.records(context) }
     val segs = remember(records) { jkBuildSegs(records) }
-    val pending = remember(recordsVersion) { JikongStatsStore.unsyncedCount(context) }
+    val pending = if (demoMode) 0 else remember(recordsVersion) { JikongStatsStore.unsyncedCount(context) }
 
     // 概要（第一条基准 → 最后一条；仅统计有效段）
     val validSegs = segs.filterNotNull().filter { it.valid }
@@ -2007,21 +2076,40 @@ private fun StatsView(controller: JikongController) {
             controller.status.cycleCapacity <= 0f ->
                 Toast.makeText(context, "未读取到循环容量，请等连接出数后重试", Toast.LENGTH_SHORT).show()
             else -> {
-                JikongStatsStore.add(context, odo, controller.status.cycleCapacity, controller.status.totalVoltage)
-                odoText = ""
-                recordsVersion++
-                // 录入后静默自动同步一次（失败不打扰，保留待同步标记）
-                JikongStatsSync.sync(context, silent = true) { _, _ -> recordsVersion++ }
-                Toast.makeText(context, "已记录", Toast.LENGTH_SHORT).show()
+                if (demoMode) {
+                    // v0.2.91：演示模式记一笔 → 只追加内存演示行（不落盘、不同步）
+                    demoList = demoList + JkMileageRecord(
+                        id = "demo_${System.currentTimeMillis()}",
+                        ts = System.currentTimeMillis(),
+                        odoKm = odo,
+                        cycleAh = controller.status.cycleCapacity,
+                        volt = controller.status.totalVoltage,
+                        synced = true,
+                    )
+                    odoText = ""
+                    Toast.makeText(context, "已记录（演示数据，退出演示即还原）", Toast.LENGTH_SHORT).show()
+                } else {
+                    JikongStatsStore.add(context, odo, controller.status.cycleCapacity, controller.status.totalVoltage)
+                    odoText = ""
+                    recordsVersion++
+                    // 录入后静默自动同步一次（失败不打扰，保留待同步标记）
+                    JikongStatsSync.sync(context, silent = true) { _, _ -> recordsVersion++ }
+                    Toast.makeText(context, "已记录", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
     val onDelete: (String) -> Unit = { id ->
-        val needTombstone = JikongStatsStore.delete(context, id)
-        if (needTombstone) JikongStatsStore.enqueueDelete(context, id)
-        recordsVersion++
-        // 已同步行删除 → 墓碑静默上行；未同步行仅动本地（无需同步）
-        if (needTombstone) JikongStatsSync.sync(context, silent = true) { _, _ -> recordsVersion++ }
+        if (demoMode) {
+            // v0.2.91：演示模式删除 → 仅动内存演示行
+            demoList = demoList.filter { it.id != id }
+        } else {
+            val needTombstone = JikongStatsStore.delete(context, id)
+            if (needTombstone) JikongStatsStore.enqueueDelete(context, id)
+            recordsVersion++
+            // 已同步行删除 → 墓碑静默上行；未同步行仅动本地（无需同步）
+            if (needTombstone) JikongStatsSync.sync(context, silent = true) { _, _ -> recordsVersion++ }
+        }
     }
     val onManualSync: () -> Unit = {
         if (!syncing) {
@@ -2039,9 +2127,12 @@ private fun StatsView(controller: JikongController) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("统计", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.text)
             Spacer(Modifier.weight(1f))
-            Box(Modifier.size(7.dp).background(c.green, CircleShape))
+            Box(Modifier.size(7.dp).background(if (demoMode) c.amber else c.green, CircleShape))
             Spacer(Modifier.width(5.dp))
-            Text("已连接 · JK-BMS", fontSize = 11.sp, color = c.gray)
+            Text(
+                if (demoMode) "已连接 · 演示数据" else "已连接 · JK-BMS",
+                fontSize = 11.sp, color = if (demoMode) c.amber else c.gray,
+            )
         }
         Spacer(Modifier.height(12.dp))
 
@@ -2065,6 +2156,62 @@ private fun StatsView(controller: JikongController) {
                     JkSumCell("平均花费", if (avgCost100 > 0f) "%.2f".format(avgCost100) else "--", "元/100km",
                         highlight = true, c = c)
                     Spacer(Modifier.weight(1f))   // 行 2 只有 2 卡，补齐网格
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // ---- 阶段统计（v0.2.91：近一周/近一月/一季度/近一年，默认近一月）----
+        // 口径：段按其记录时间归属窗口；里程按折扣显示、电耗按折扣里程重算（同概要）。
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = c.card)) {
+            Column(Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("阶段统计", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                    Spacer(Modifier.weight(1f))
+                    Text("按记录时间归属", fontSize = 10.sp, color = c.gray)
+                }
+                Spacer(Modifier.height(8.dp))
+                val ranges = remember {
+                    listOf("近一周" to 7L, "近一月" to 30L, "一季度" to 90L, "近一年" to 365L)
+                }
+                var stageIdx by remember { mutableStateOf(1) }   // 默认近一月
+                Row {
+                    ranges.forEachIndexed { i, (label, _) ->
+                        val sel = i == stageIdx
+                        Text(
+                            label,
+                            fontSize = 12.sp,
+                            color = if (sel) c.onfill else c.gray,
+                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier
+                                .background(if (sel) c.green else c.bg, RoundedCornerShape(14.dp))
+                                .clickable { stageIdx = i }
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                        )
+                        if (i < ranges.lastIndex) Spacer(Modifier.width(6.dp))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                val cutoff = System.currentTimeMillis() - ranges[stageIdx].second * 24 * 3600_000L
+                val stageSegs = validSegs.filter { it.rec.ts >= cutoff }
+                val stageKmRaw = stageSegs.sumOf { it.deltaKm.toDouble() }.toFloat()
+                val stageWh = stageSegs.sumOf { (it.deltaAh * it.avgVolt).toDouble() }.toFloat()
+                val stageKmDisp = stageKmRaw * discount
+                val stageAvgWh = if (stageKmRaw > 0.1f) stageWh / stageKmRaw / discount else 0f
+                val stageCost = stageWh / 1000f * price
+                val stageAvgCost = if (stageAvgWh > 0f) stageAvgWh * price / 10f else 0f
+                Row {
+                    JkSumCell("阶段里程", if (stageKmDisp > 0f) "%.1f".format(stageKmDisp) else "--", "km",
+                        sub = if (discount < 1f && stageKmRaw > 0f) "原 %.1f".format(stageKmRaw) else null, c = c)
+                    Spacer(Modifier.width(8.dp))
+                    JkSumCell("阶段花费", if (stageCost > 0f) "%.2f".format(stageCost) else "--", "元",
+                        highlight = true, c = c)
+                    Spacer(Modifier.width(8.dp))
+                    JkSumCell("平均花费", if (stageAvgCost > 0f) "%.2f".format(stageAvgCost) else "--", "元/100km", c = c)
+                }
+                if (stageSegs.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("该时间段内还没有记录", fontSize = 10.sp, color = c.gray)
                 }
             }
         }
@@ -2185,8 +2332,15 @@ private fun StatsView(controller: JikongController) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("记录台账", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
-                        Text("${records.size} 条 · 新在上 · 存本机", fontSize = 10.sp, color = c.gray)
+                        Text(
+                            if (demoMode) "${records.size} 条演示 · 退出即还原" else "${records.size} 条 · 新在上 · 存本机",
+                            fontSize = 10.sp, color = c.gray,
+                        )
                     }
+                    if (demoMode) {
+                        // v0.2.91：演示模式无同步（不碰服务端）
+                        Text("演示 · 不同步", fontSize = 11.sp, color = c.gray)
+                    } else {
                     Button(
                         onClick = onManualSync,
                         enabled = pending > 0 && !syncing,
@@ -2203,6 +2357,7 @@ private fun StatsView(controller: JikongController) {
                             if (syncing) "同步中…" else if (pending > 0) "⇅ 同步 $pending 条" else "已同步",
                             fontSize = 11.sp,
                         )
+                    }
                     }
                 }
                 Spacer(Modifier.height(6.dp))

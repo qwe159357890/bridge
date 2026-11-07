@@ -40,6 +40,9 @@ class JikongController private constructor() {
         /** 自动重连重试间隔（常规档）。 */
         const val RECONNECT_RETRY_MS = 3_000L
 
+        /** 扫描暂存陈旧阈值（v0.2.91 防僵尸）：进入极空页时距上次扫描超过此值即清空列表。 */
+        const val SCAN_STALE_MS = 10 * 60_000L
+
         /** 自动重连重试间隔（快速档，GATT status=8 信号监督超时触发时使用，v0.2.78）。 */
         const val RECONNECT_FAST_RETRY_MS = 800L
 
@@ -164,6 +167,18 @@ class JikongController private constructor() {
         lastScanAt = System.currentTimeMillis()
     }
 
+    /**
+     * 清空扫描暂存（v0.2.91 防僵尸）：①连接成功时调用（连上的设备不属于列表）；
+     * ②进入极空页且距上次扫描超过 [SCAN_STALE_MS] 时调用（陈旧 RSSI/已消失设备）。
+     * 只清内存暂存，重新点扫描即可刷新。
+     */
+    fun clearScanCache() {
+        if (cachedDevices.isNotEmpty()) {
+            cachedDevices = emptyList()
+            Timber.tag(TAG).i("扫描暂存已清空（防僵尸）")
+        }
+    }
+
     init {
         // 连接状态变化时同步 status.connected 并上报（Binder 线程回调，任何异常都吞掉）
         JikongBleClient.onConnectionChanged = { connected ->
@@ -216,6 +231,8 @@ class JikongController private constructor() {
             autoReconnectEnabled = true
             // v0.2.89：重置「上一帧 SOC」，连接后首帧只与上次播报值比较
             prevAnnounceSoc = -1
+            // v0.2.91：连接成功即清空扫描暂存（防僵尸）
+            clearScanCache()
             startPolling()
         }
         ok
@@ -321,6 +338,8 @@ class JikongController private constructor() {
         s.dischargeCurrentLimit = 100f
 
         s.lastUpdateAt = System.currentTimeMillis()
+        // v0.2.91：演示模式视为「已读到数据」——统计页记一笔门控放行（配合内存演示台账）
+        hasDataFrame = true
         statusVersion.value = statusVersion.value + 1
         // v0.2.86：演示数据也上报服务端——管理后台「极空页 1:1 复刻」需要用演示模式
         // 调试界面/联调，后台据此显示「已连接 · 演示设备」而非未连接。
@@ -467,6 +486,8 @@ class JikongController private constructor() {
                     demoMode = false
                     // v0.2.89：重连成功同样重置「上一帧 SOC」（首帧只与上次播报值比较）
                     prevAnnounceSoc = -1
+                    // v0.2.91：连接成功即清空扫描暂存（防僵尸）
+                    clearScanCache()
                     startPolling()
                     break
                 }

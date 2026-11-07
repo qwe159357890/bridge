@@ -19,6 +19,20 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.91 第二轮六项：同级平均时速/演示台账/双击播报/返回键回首页/阶段统计/蓝牙防僵尸（2026-11-07 11:55 实施）
+
+| 项 | 内容 |
+|---|---|
+| **需求（用户 11:55 提出 6 项）** | 详见 `todolist.md` 任务十~十五：①平均时速与时速/续航视觉同级；②演示模式带内存演示台账（不碰真实存储）；③双击仪表盘播报电量(+预警)+时速+续航；④极空页 tab≠0 时返回键先回首页；⑤统计页阶段统计 chip（周/月/季/年）；⑥连接成功清空蓝牙列表+距上次扫描>10min 进页清空 |
+| **回退标记（git 快照）** | 提交 **`c93ca0d`**（`feat: v0.2.90 九项优化…`）——本次改动前全部客户端代码原文以此为准 |
+| **回滚配方** | `git checkout c93ca0d -- app/src/main/java/my/bridge/com app/build.gradle.kts` |
+| **触发回滚的信号** | ①双击播报误触发/无声；②演示台账混入真实存储或退出演示不还原；③阶段统计数值错乱；④返回键行为异常（回不了首页/直接退主页）；⑤连接后扫描列表仍显示旧设备 |
+| **实施结果（改后回填，2026-11-07 12:10）** | ①平均时速 20sp SemiBold→**28sp Bold**（c.text）；②演示台账：`jkDemoRecords()` 内存 7 条（30 天跨度、段电耗 31~40 梯度、真机样例差值），StatsView `demoMode` 分支——records=demoList、pending=0、记一笔/删除只动内存、同步按钮换「演示 · 不同步」、标题行琥珀「演示数据」、enterDemoMode 置 `hasDataFrame=true` 放行记一笔门控；③双击播报：SpeedDashCard 加 `pointerInput+detectTapGestures(onDoubleTap)`，HomeView 组文案「当前电量 N%」(+低电预警)+时速 N 公里+剩余续航 N 公里（速度取整减缓存键，**绕过静音**，显式手势）；④BackHandler 前置 `connected && tab!=0 → tab=0`；⑤阶段统计卡：4 chip（周/月/季/年默认月）+阶段里程(折扣口径)/阶段花费/平均花费 元每100km，段按记录时间归属（validSegs.ts≥cutoff）；⑥防僵尸：Controller 加 `clearScanCache()`（connect 成功+重连成功调用）+ `SCAN_STALE_MS=10min`（进页 LaunchedEffect 判断 lastScanAt 超时清理）；顺带修 v0.2.90 bug：JkSumCell sub 重复「原 」前缀；版本 0.2.91；编译踩坑 1 个（JikongSpeaker import 缺失）已修；APK 实证 0.2.91+新符号；分发 updates(46,021,570 B, sha256 40ed1663…)+Downloads+update.json，删 v0.2.90 APK |
+| **改前原文（逐字，SpeedDashCard L1051-1056 平均时速列）** | `Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {\n                Text("平均时速(km/h)", fontSize = 11.sp, color = c.gray)\n                Text(\n                    if (avgSpeed > 0f) "%.1f".format(avgSpeed) else "--",\n                    fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = c.text,\n                )\n            }` |
+| **改前原文（逐字，BackHandler L380-388）** | `BackHandler {\n        val now = System.currentTimeMillis()\n        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {\n            JkUiState.exitToken++\n        } else {\n            lastBackAt = now\n            Toast.makeText(context, "再按一次返回主页", Toast.LENGTH_SHORT).show()\n        }\n    }` |
+| **改前原文（逐字，Controller.cacheScanResult L162-165）** | `fun cacheScanResult(devices: List<BleDevice>) {\n        cachedDevices = devices\n        lastScanAt = System.currentTimeMillis()\n    }` |
+| **改前原文（其余触点）** | ①connect()/重连成功处无清列表；②SpeedDashCard 无双击手势；③StatsView 全量读写真实存储、无演示分支、无阶段统计卡 |
+
 ### v0.2.90 九项优化：单位切换/估算链/平均时速/静音/edge-tts/音量/记一笔门控/里程折扣/花费（2026-11-07 09:30 实施）
 
 | 项 | 内容 |
