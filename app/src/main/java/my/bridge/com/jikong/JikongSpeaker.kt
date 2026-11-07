@@ -8,6 +8,8 @@ import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import my.bridge.com.core.network.api.BridgeApiClient
 import my.bridge.com.core.storage.DeviceStore
@@ -122,12 +124,23 @@ object JikongSpeaker {
                 "当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电",
             )
             val texts = (0..100).map { it.toString() } + phrases
-            var pulled = 0
-            for (t in texts) {
-                // fetchOnline 内部：命中缓存直接返回（不触网），只有缺段才请求服务端
-                if (fetchOnline(app, t, seg = 1) != null) pulled++
+            val startedAt = System.currentTimeMillis()
+            val pulled = java.util.concurrent.atomic.AtomicInteger()
+            // v0.2.99：串行逐段拉取在缓存整批失效（如键版本升级）时要 10~30s，窗口内双击
+            // 播报只能对缺段按需补拉 → 可闻延时（2026-11-07 用户实证）。改每批 6 路并发把
+            // 整批窗口压到 ~2~5s；与双击播报并发拉同一段时，fetchOnline 用唯一 tmp 防竞写。
+            texts.chunked(6).forEach { chunk ->
+                chunk.map { t ->
+                    async {
+                        // fetchOnline 内部：命中缓存直接返回（不触网），只有缺段才请求服务端
+                        if (fetchOnline(app, t, seg = 1) != null) pulled.incrementAndGet()
+                    }
+                }.awaitAll()
             }
-            Timber.tag(TAG).i("TTS 分段预取完成：%d/%d 段就绪", pulled, texts.size)
+            Timber.tag(TAG).i(
+                "TTS 分段预取完成：%d/%d 段就绪（耗时 %d ms）",
+                pulled.get(), texts.size, System.currentTimeMillis() - startedAt,
+            )
         }
     }
 
@@ -162,11 +175,18 @@ object JikongSpeaker {
                 text, JikongPrefs.TTS_VOICE, seg,
                 ds.deviceId(), runCatching { ds.token() }.getOrNull(),
             )
-            val tmp = File(dir, "$key.tmp")
+            // v0.2.99：tmp 名加线程+时间戳唯一化——预取 6 路并发后，可能与双击播报的
+            // 按需补拉并发拉同一段，同名 tmp 互相覆盖会产出损坏文件（renameTo 前再查
+            // 一次目标缓存，命中即丢弃本份下载）。
+            val tmp = File(dir, "$key.${Thread.currentThread().id}.${System.currentTimeMillis()}.tmp")
             body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
             if (tmp.length() < 256) {   // 异常小文件（空 mp3/错误页）不进缓存
                 tmp.delete()
                 return null
+            }
+            if (f.exists() && f.length() > 256) {   // 并发方已落盘，用它的，丢本份
+                tmp.delete()
+                return f
             }
             tmp.renameTo(f)
             pruneCache(dir)

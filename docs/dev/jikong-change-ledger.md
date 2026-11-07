@@ -17,7 +17,45 @@
 
 ---
 
-### v0.2.96 时速卡间距真因/播报无声排查/平均时速门槛（2026-11-07 17:58 实施）
+### v0.2.99 演示值被 tickLoop 覆盖（4993km/h + 一闪即消）/ TTS 预取并行化（2026-11-07 21:06 实施）
+
+**需求（用户 21:06 反馈 2 项）**：①演示模式点「刷新模拟数据」后平均时速显示 4993.0km/h，且剩余续航/瞬时/平均等数值**一闪就消失**（演示模式不应消失）；②刷新数据后双击仪表盘播报仍有延时——问预取是「一次性拉全部」还是「按需拉」。
+
+**根因（证据链）**：
+- **① = `SpeedDash.tickLoop` 在演示模式下照跑**：`SpeedDashCard` 的 DisposableEffect 在 `dashEnabled && status.connected` 时调 `start()`，而 enterDemoMode 把 `connected=true` → 积分协程每秒重算，把 injectDemo 注入值全部覆盖——`bmsOk=false` → rangeKm/instWhKm/avgWhKm 置 -1（一闪即消）；`movingSecondsAvg` 只在前 5s（gpsFresh 窗口）累积 1~5 秒，`avgSpeedKmh = 注入里程×3600÷移动秒数` → 天文数字（8.6km÷3s×3600≈10320，用户实测 4993.0 正落此区间）。injectDemo 注释「积分协程不跑」是错误假设。
+- **② = 预取存在但串行且窗口期按需补拉**：`prefetchAll`（0..100+词组 106 段）确实已实现，但 v0.2.98 键 v4seg→v5seg 使本地缓存整批失效，首轮要串行重拉 106 段（每段 1 次网络请求，约 10~30s）；窗口内双击 → speakSegs 对缺段逐段同步补拉（每段一次网络往返）→ 可闻延时。窗口过后所有 ≤100 数值全命中缓存零网络，演示刷新生成的值（时速 6~42/续航 25~95/SOC 22~91）全在预取范围内。
+
+**改前原文（逐字抄录）**：
+
+1. SpeedDash.tickLoop 循环头：
+```kotlin
+        while (isActive) {
+            delay(1_000)
+            val nowElapsed = SystemClock.elapsedRealtime()
+```
+
+2. JikongSpeaker.prefetchAll 主体（串行逐段）：
+```kotlin
+            var pulled = 0
+            for (t in texts) {
+                // fetchOnline 内部：命中缓存直接返回（不触网），只有缺段才请求服务端
+                if (fetchOnline(app, t, seg = 1) != null) pulled++
+            }
+            Timber.tag(TAG).i("TTS 分段预取完成：%d/%d 段就绪", pulled, texts.size)
+```
+
+3. fetchOnline 落盘临时文件（同名 tmp 有并发竞写风险）：
+```kotlin
+            val tmp = File(dir, "$key.tmp")
+            body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+```
+
+4. versionName：`versionName = "0.2.98"`
+
+**回滚配方**：`git revert` 本轮提交；或手改 3 处：tickLoop 循环头删 `if (controller.demoMode) continue`、prefetchAll 回串行、fetchOnline 回固定 `$key.tmp`；versionName 回 0.2.98。
+**触发信号**：演示模式数值 1~5s 后被 --/异常值覆盖 / 平均时速出现数千 km/h / 预取窗口内双击播报仍慢。
+
+
 
 **需求**：用户 17:54 反馈四项——①卡片行距仍太大（时速/瞬时之间）；②平均时速仍 0；③**完全没有语音播报**；④断连回连接页时 GPS 等资源是否释放。
 

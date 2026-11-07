@@ -302,6 +302,12 @@ object SpeedDash {
         val controller = JikongController.instance
         while (isActive) {
             delay(1_000)
+            // v0.2.99：演示模式整个积分循环跳过（2026-11-07 用户实证两处症状根因）——
+            // 演示数据由 injectDemo 一次性灌入且自洽，tickLoop 每秒重算会把注入值全部覆盖：
+            // bmsOk=false → rangeKm/instWhKm/avgWhKm 置 -1（续航/瞬时/平均电耗一闪即消）；
+            // movingSecondsAvg 仅 gpsFresh 窗口内累积 1~5s，avgSpeedKmh=注入里程×3600÷秒数
+            // → 天文数字（用户实测 4993.0km/h）。演示期间保持注入值，点「刷新」重灌。
+            if (controller.demoMode) continue
             val nowElapsed = SystemClock.elapsedRealtime()
             val dt = ((nowElapsed - lastTickAt) / 1000f).coerceIn(0.5f, 5f)
             lastTickAt = nowElapsed
