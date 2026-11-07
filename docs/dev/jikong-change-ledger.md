@@ -17,6 +17,23 @@
 
 ---
 
+### v0.2.94 返回键方案 A 统一梯子（2026-11-07 15:00 实施）
+
+**需求**：用户 14:58 反馈返回键在极空页仍不理想并核对示意图后**拍板方案 A（统一梯子）**：无论极空排第几位，back①弹提示→back②显示工具栏（退沉浸）→back③单击跳第一个非极空页面→之后双击退出 APP（微信式逐级上退）。修复 v0.2.92 遗留死循环（极空不排第 1 位时，显示工具栏后再按 back 又回到起点弹提示）。
+
+| 项 | 改前原文 |
+|---|---|
+| **MainScreen exitToken 处理（改前全文）** | `val firstNonJk = homeTabOrder.indexOfFirst { it != 5 }`⏎`if (firstNonJk == 0) {`⏎`JkUiState.immersive = false`⏎`} else {`⏎`homeTab = if (firstNonJk > 0) firstNonJk else 0`⏎`}`（LaunchedEffect(jkExitToken) 内，含 v0.2.92 注释 5 行） |
+| **JikongPages back① Toast** | `Toast.makeText(context, "再按一次返回主页", Toast.LENGTH_SHORT).show()` |
+| **JikongPages BackHandler 双击分支** | `if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) { JkUiState.exitToken++ } else { lastBackAt = now; Toast… }`（本轮不改此结构，exitToken 语义移交 MainScreen 解释） |
+
+**改后**：MainScreen 以 `JkUiState.immersive` 为梯级标志——true→置 false（显示顶部 Tab 栏+底部工具栏）；false→`homeTab = homeTabOrder.indexOfFirst { it != 5 }.coerceAtLeast(0)`（跳第一个非极空页面）。Toast 文案改「再按一次显示导航栏」。JikongPages BackHandler 结构不变。
+
+**回滚配方**：`git checkout e006070 -- app/src/main/java/my/bridge/com/ui/MainScreen.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt`
+**触发信号**：极空页返回键不逐级上退 / 工具栏显示后再按 back 弹提示死循环复现 / 双击 back 直接跳页。
+
+**实施结果（16:20 发版）**：MainScreen exitToken LaunchedEffect 改为 `if (JkUiState.immersive) { JkUiState.immersive = false } else { homeTab = homeTabOrder.indexOfFirst { it != 5 }.coerceAtLeast(0) }`；JikongPages Toast 改「再按一次显示导航栏」，BackHandler 结构未动。用户追问两点已确认：①极空子页 back→回仪表盘（分支保留未动）；②未连接的扫描页同样走 back②工具栏→back③跳走（BackHandler 页面级，与连接状态无关）。编译通过，aapt 实证 versionName=0.2.94（sha256 `828f985c…`，46,021,570 B），分发 updates+Downloads+update.json（删 v0.2.93 APK）。真机未连 adb，走 check_update 升级。
+
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
 ### v0.2.93 五项：chip 防竖排/连接竞态治理（陈旧 GATT 回调守卫+连接抢占+数据帧硬保证）（2026-11-07 14:05 实施）

@@ -163,7 +163,8 @@ private val LocalJkColors = androidx.compose.runtime.compositionLocalOf { DarkCo
 /**
  * 极空页沉浸态（照 SshUiState/WechatState 状态驱动惯例）：
  * - immersive=true 时 MainScreen 隐藏主页顶部 Tab 栏与 APP 底部工具栏（微信/销售页同款沉浸）；
- * - exitToken 自增触发 MainScreen 的 LaunchedEffect 把 homeTab 打回首 Tab（双击返回键回主页）。
+ * - exitToken 自增触发 MainScreen 梯子上退（v0.2.94 方案A）：immersive 中→显示工具栏；
+ *   工具栏已显示→跳第一个非极空页面（无论极空排第几位，行为统一）。
  */
 object JkUiState {
     var immersive by androidx.compose.runtime.mutableStateOf(false)
@@ -406,8 +407,10 @@ fun JikongPage() {
         onDispose { JkUiState.immersive = false }
     }
 
-    // 双击返回键回主页（微信/销售同款）：第 1 次 Toast 提示，窗口内第 2 次回主页首 Tab
-    // v0.2.91：已连接且不在首页 Tab 时，第一次按返回先回首页 Tab，再走双击退主页逻辑
+    // 返回键统一梯子（v0.2.94 方案A，用户拍板，微信式逐级上退）：
+    // 子页→回仪表盘；back①弹提示；窗口内 back②→exitToken++（MainScreen 解释：
+    // 沉浸中→显示工具栏；工具栏已显示→跳第一个非极空页面）。
+    // v0.2.91：已连接且不在首页 Tab 时，第一次按返回先回首页 Tab，再走梯子逻辑
     var lastBackAt by remember { mutableStateOf(0L) }
     BackHandler {
         if (controller.status.connected && tab != 0) {
@@ -419,7 +422,7 @@ fun JikongPage() {
             JkUiState.exitToken++
         } else {
             lastBackAt = now
-            Toast.makeText(context, "再按一次返回主页", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "再按一次显示导航栏", Toast.LENGTH_SHORT).show()
         }
     }
 

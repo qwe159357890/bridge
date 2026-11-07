@@ -158,21 +158,19 @@ fun MainScreen(modifier: Modifier = Modifier) {
 
     // 极空页沉浸态（v0.2.67，微信/销售页同款状态驱动）：
     // JkUiState.immersive=true 时隐藏主页顶部 Tab 栏 + APP 底部工具栏；
-    // exitToken 自增 = 极空页内双击返回键 → 回主页首 Tab（页面销毁自动退出沉浸）。
+    // exitToken 自增 = 极空页内返回键上退一级（页面销毁自动退出沉浸）。
+    // v0.2.94 方案A统一梯子（用户拍板）：exitToken 不再关心极空排第几位，
+    // 以 immersive 为梯级标志——true→显示工具栏（退沉浸）；false→跳第一个非极空页面。
+    // 即 back①弹提示（JikongPages）→ back②显示工具栏 → back③跳主页 → 双击back退出APP（微信式逐级）。
     val jkExitToken = JkUiState.exitToken
     var consumedJkExit by remember { mutableIntStateOf(jkExitToken) }
     LaunchedEffect(jkExitToken) {
         if (jkExitToken == consumedJkExit) return@LaunchedEffect
         consumedJkExit = jkExitToken
-        // v0.2.92 修复：用户可重排主页 Tab（设置→通用）。若「极空」正好排在第 1 位，
-        // 原 homeTab=0 仍停在极空页（双击返回永远退不出去，2026-11-07 用户实证）。
-        // 拍板行为：极空在第 1 位 → 不切 Tab，退出沉浸态（顶部 Tab 栏 + APP 底部工具栏恢复显示）；
-        // 否则 → 跳到第一个非极空 Tab（回到主页）。
-        val firstNonJk = homeTabOrder.indexOfFirst { it != 5 }
-        if (firstNonJk == 0) {
+        if (JkUiState.immersive) {
             JkUiState.immersive = false
         } else {
-            homeTab = if (firstNonJk > 0) firstNonJk else 0
+            homeTab = homeTabOrder.indexOfFirst { it != 5 }.coerceAtLeast(0)
         }
     }
 
