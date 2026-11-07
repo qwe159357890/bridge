@@ -45,6 +45,13 @@
                     <span class="theme-btn" @click="themeLight = !themeLight">{{ themeLight ? '浅色' : '深色' }}</span>
                   </div>
 
+                  <!-- v0.2.101：演示模式横幅（与手机 v0.2.98 同款；后台只读，刷新在手机端操作） -->
+                  <div v-if="demoMode" class="jk-demobanner">
+                    <span class="dot" :style="{ background: c.amber }" />
+                    <span class="demo-text">演示模式 · 模拟数据（切离本页或后台自动退出）</span>
+                    <span class="demo-refresh" style="cursor: default">刷新模拟数据（手机端）</span>
+                  </div>
+
                   <!-- 充电/放电/均衡 一行三列 -->
                   <div class="jk-statusrow">
                     <div class="jk-statuscell">
@@ -111,12 +118,16 @@
                     <span>电池运行良好</span>
                   </div>
 
-                  <!-- 时速仪表盘卡片（开关关闭时与手机一致不渲染） -->
+                  <!-- 时速仪表盘卡片（开关关闭时与手机一致不渲染）；v0.2.101 行1 三列对齐手机 -->
                   <div v-if="dashEnabled && s.dash" class="jk-card dash-card">
                     <div class="dash-row1">
                       <div class="dash-col">
                         <div class="mini-label">时速(km/h)</div>
                         <div class="dash-big" :style="{ color: c.green }">{{ s.dash.gps_fresh ? n1(s.dash.speed_kmh) : '--' }}</div>
+                      </div>
+                      <div class="dash-col">
+                        <div class="mini-label">平均时速(km/h)</div>
+                        <div class="dash-big" :style="{ color: c.text }">{{ gt0(s.dash.avg_speed_kmh) ? n1(s.dash.avg_speed_kmh) : '--' }}</div>
                       </div>
                       <div class="dash-col">
                         <div class="mini-label">剩余续航(km)</div>
@@ -128,12 +139,12 @@
                     <div class="hdiv" />
                     <div class="dash-row2">
                       <div class="dash-col">
-                        <div class="mini-label">瞬时(Wh/km)</div>
-                        <div class="dash-mid">{{ gt0(s.dash.inst_wh_km) ? n1(s.dash.inst_wh_km) : '--' }}</div>
+                        <div class="mini-label">瞬时({{ consUnit }})</div>
+                        <div class="dash-mid">{{ gt0(s.dash.inst_wh_km) ? fmtCons(s.dash.inst_wh_km) : '--' }}</div>
                       </div>
                       <div class="dash-col">
-                        <div class="mini-label">平均(Wh/km)</div>
-                        <div class="dash-mid">{{ gt0(s.dash.avg_wh_km) ? n1(s.dash.avg_wh_km) : '--' }}</div>
+                        <div class="mini-label">平均({{ consUnit }})</div>
+                        <div class="dash-mid">{{ gt0(s.dash.avg_wh_km) ? fmtCons(s.dash.avg_wh_km) : '--' }}</div>
                       </div>
                       <div class="dash-col">
                         <div class="mini-label">本次里程(km)</div>
@@ -283,31 +294,89 @@
                 </div>
               </template>
 
-              <!-- ============ Tab 2：统计（只读，录入仍在手机端） ============ -->
+              <!-- ============ Tab 2：统计（只读，录入仍在手机端）；v0.2.101 与手机统计页对齐 ============ -->
               <template v-else-if="tab === 2">
-                <div class="stats-summary">
-                  <div class="sum-card" :style="{ background: c.card }">
-                    <div class="sum-label">区间里程(km)</div>
-                    <div class="sum-val">{{ odo ? odo.summary.total_km.toFixed(1) : '--' }}</div>
+                <!-- 概要五卡（3+2，v0.2.90/91：里程按折扣显示、花费按电费计算） -->
+                <div v-if="statsSummary.top.length" class="stats-summary">
+                  <div v-for="cell in statsSummary.top" :key="cell.label" class="sum-card" :style="{ background: c.card }">
+                    <div class="sum-val-row">
+                      <span class="sum-val" :style="{ color: cell.highlight ? c.green : c.text }">{{ cell.value }}</span>
+                      <span v-if="cell.value !== '--'" class="sum-unit">{{ cell.unit }}</span>
+                    </div>
+                    <div class="sum-label">{{ cell.label }}</div>
+                    <div v-if="cell.sub" class="sum-sub">{{ cell.sub }}</div>
                   </div>
-                  <div class="sum-card" :style="{ background: c.card }">
-                    <div class="sum-label">总耗电(kWh)</div>
-                    <div class="sum-val">{{ odo ? odo.summary.total_kwh.toFixed(2) : '--' }}</div>
+                </div>
+                <div v-if="statsSummary.bottom.length" class="stats-summary">
+                  <div v-for="cell in statsSummary.bottom" :key="cell.label" class="sum-card" :style="{ background: c.card }">
+                    <div class="sum-val-row">
+                      <span class="sum-val" :style="{ color: cell.highlight ? c.green : c.text }">{{ cell.value }}</span>
+                      <span v-if="cell.value !== '--'" class="sum-unit">{{ cell.unit }}</span>
+                    </div>
+                    <div class="sum-label">{{ cell.label }}</div>
+                    <div v-if="cell.sub" class="sum-sub">{{ cell.sub }}</div>
                   </div>
-                  <div class="sum-card" :style="{ background: c.card }">
-                    <div class="sum-label">平均电耗(Wh/km)</div>
-                    <div class="sum-val">{{ odo && odo.summary.avg_wh_km != null ? odo.summary.avg_wh_km.toFixed(1) : '--' }}</div>
+                </div>
+                <div v-else class="jk-card" style="padding: 14px; text-align: center">
+                  <span class="mini-label">暂无记录（在手机端统计页录入，同步后此处可见）</span>
+                </div>
+
+                <!-- 阶段统计（v0.2.91/92：一周/一月/一季度/一年/自定义；段按记录时间归属） -->
+                <div class="jk-card" style="padding: 12px 14px">
+                  <div class="stats-head">
+                    <span style="font-weight: 600">阶段统计</span>
+                    <span class="mini-label">按记录时间归属</span>
+                  </div>
+                  <div class="stage-chips">
+                    <span
+                      v-for="(r, i) in stageRanges" :key="r.label"
+                      class="stage-chip"
+                      :style="stageIdx === i ? { background: c.green, color: c.onfill, fontWeight: 700 } : { background: c.bg, color: c.gray }"
+                      @click="stageIdx = i"
+                    >{{ r.label }}</span>
+                    <span
+                      class="stage-chip"
+                      :style="stageIdx === stageRanges.length ? { background: c.green, color: c.onfill, fontWeight: 700 } : { background: c.bg, color: c.gray }"
+                      @click="stageIdx = stageRanges.length"
+                    >自定义</span>
+                  </div>
+                  <div v-if="stageIdx === stageRanges.length" class="stage-custom">
+                    <el-date-picker
+                      v-model="customRange"
+                      type="daterange"
+                      size="small"
+                      range-separator="~"
+                      start-placeholder="开始日期"
+                      end-placeholder="结束日期"
+                      style="width: 100%"
+                    />
+                  </div>
+                  <div class="dash-row2" style="padding: 10px 0 0">
+                    <div v-for="cell in stageCards.cards" :key="cell.label" class="dash-col stage-cell">
+                      <div class="sum-val-row">
+                        <span class="sum-val" :style="{ color: cell.highlight ? c.green : c.text, fontSize: '16px' }">{{ cell.value }}</span>
+                        <span v-if="cell.value !== '--'" class="sum-unit">{{ cell.unit }}</span>
+                      </div>
+                      <div class="sum-label">{{ cell.label }}</div>
+                      <div v-if="cell.sub" class="sum-sub">{{ cell.sub }}</div>
+                    </div>
+                  </div>
+                  <div v-if="!stageCards.count" class="empty-mini" style="padding: 8px 0 0">
+                    {{ stageIdx === stageRanges.length && !customRange ? '请先选择起止日期' : '该时间段内还没有记录' }}
                   </div>
                 </div>
 
                 <div class="jk-card" style="padding: 12px 14px">
                   <div class="stats-head">
                     <span style="font-weight: 600">能耗曲线</span>
-                    <span class="mini-label">Wh/km · 只读（录入在手机端）</span>
+                    <span v-if="curveAvgText" class="mini-label" :style="{ color: c.cyan }">平均 {{ curveAvgText }} Wh/km ≈ {{ curveAvgCost }} 元/100km</span>
+                    <span v-else class="mini-label">Wh/km · 只读（录入在手机端）</span>
+                  </div>
+                  <div class="mini-label" style="margin-top: 4px">
+                    左轴 Wh/km（绿）· 右轴 元/100km（按电费 {{ priceText }} 元/度换算）· X 轴按折扣里程
                   </div>
                   <svg v-if="curvePoints.length >= 2" viewBox="0 0 330 150" class="curve-svg">
                     <line x1="8" y1="20" x2="322" y2="20" :stroke="c.gray" stroke-width="1" stroke-dasharray="4 4" opacity="0.6" />
-                    <text :x="322" y="14" text-anchor="end" :fill="c.gray" font-size="9">均值 {{ curveAvg }}</text>
                     <polyline :points="curvePolyline" fill="none" :stroke="c.green" stroke-width="2" stroke-linejoin="round" />
                     <circle v-for="(p, i) in curvePoints" :key="i" :cx="p.x" :cy="p.y" r="3" :fill="c.green" />
                     <text v-for="(p, i) in curvePoints" :key="'v' + i" :x="p.x" :y="p.y - 7" text-anchor="middle" :fill="c.text" font-size="9">{{ p.v }}</text>
@@ -318,33 +387,40 @@
                 <div class="jk-card" style="padding: 12px 0 10px">
                   <div class="stats-head" style="padding: 0 14px 8px">
                     <span style="font-weight: 600">记录台账</span>
-                    <span class="mini-label">{{ odo ? odo.records.length : 0 }} 条 · 新在上 · MySQL</span>
+                    <span class="mini-label">{{ odo ? odo.records.length : 0 }} 条 · 新在上 · MySQL（手机已同步部分）</span>
                   </div>
                   <div class="rec-list">
-                    <div v-for="(rec, i) in odoRecordsView" :key="rec.record_id" class="rec-row">
+                    <div v-for="rec in odoRecordsView" :key="rec.record_id" class="rec-row">
                       <div class="rec-date">{{ rec.date }}<br>{{ rec.time }}<span v-if="rec.isBase" class="rec-base">基准</span></div>
                       <div class="rec-odo">
-                        {{ rec.odo.toFixed(1) }}
-                        <small>{{ rec.isBase ? '第一条记录' : `距上次 +${rec.dKm.toFixed(1)} km` }}</small>
+                        {{ (rec.odo * discount).toFixed(1) }}
+                        <small v-if="discount < 1">原 {{ rec.odo.toFixed(1) }}</small>
+                        <small>{{ rec.isBase ? '第一条记录' : `距上次 +${(rec.dKm * discount).toFixed(1)} km` }}</small>
                       </div>
                       <div class="rec-delta">
                         <template v-if="rec.seg">{{ rec.seg.d_ah.toFixed(1) }} Ah · {{ rec.seg.avg_volt.toFixed(1) }} V<br>{{ rec.seg.kwh.toFixed(2) }} kWh</template>
-                        <template v-else-if="!rec.isBase && rec.invalid">数据无效段</template>
+                        <template v-else-if="!rec.isBase && rec.invalid">本段无效（容量回退）</template>
+                        <template v-else-if="rec.isBase">第一条记录<br>作为计算起点</template>
                         <template v-else>—</template>
                       </div>
                       <div class="rec-wh" :style="{ color: rec.whColor }">
-                        {{ rec.seg ? rec.seg.wh_km.toFixed(1) : '--' }}<small v-if="rec.seg">Wh/km</small>
+                        <template v-if="rec.seg">
+                          {{ (rec.seg.wh_km / discount).toFixed(1) }}<small>Wh/km</small>
+                          <small v-if="discount < 1">原 {{ rec.seg.wh_km.toFixed(1) }}</small>
+                          <small class="rec-cost">≈{{ (rec.seg.kwh * price).toFixed(2) }} 元</small>
+                        </template>
+                        <template v-else>--</template>
                       </div>
                     </div>
                     <div v-if="!odoRecordsView.length" class="empty-mini">暂无记录（在手机端统计页录入）</div>
                   </div>
                 </div>
                 <div class="stats-note">
-                  口径：段电耗 Wh/km = Δ循环容量 × 两记录平均电压 ÷ Δ里程。循环容量只增不减，充电不影响；Δ容量≤0（换电池/BMS 重置）该段无效不进曲线。
+                  口径：电耗 = Δ循环容量(Ah) × 平均电压(V) ÷ Δ里程(km)。循环容量由保护板累计（只增不减），充电不影响；容量回退段自动标记无效不进曲线。<span v-if="discount < 1">当前里程折扣 {{ discount.toFixed(1) }}：所有里程按折扣显示（真实里程），电耗/花费按真实里程重算，原值以小字保留。</span>
                 </div>
               </template>
 
-              <!-- ============ Tab 3：参数设置（只读镜像） ============ -->
+              <!-- ============ Tab 3：参数设置（只读镜像，v0.2.101 与手机设置页 v0.2.89/90 结构一致） ============ -->
               <template v-else>
                 <div class="set-title">仪表盘</div>
                 <div class="jk-card" style="border-radius: 12px">
@@ -356,6 +432,79 @@
                       </div>
                     </div>
                     <el-switch v-model="dashMirror" disabled size="small" style="margin-left: 8px" />
+                  </div>
+                </div>
+
+                <div class="set-title">语音播报</div>
+                <div class="jk-card" style="border-radius: 12px">
+                  <div class="set-row" style="padding-bottom: 6px">
+                    <div style="flex: 1">
+                      <div style="font-size: 14px; font-weight: 600">连接后播报电量</div>
+                      <div class="mini-label" style="margin-top: 2px">
+                        本页打开时播报电量：电量变化即播；相同且超播报间隔再播；低于阈值立即提醒并按预警间隔重复提醒。
+                      </div>
+                    </div>
+                    <el-switch :model-value="!!s?.app?.speak_enabled" disabled size="small" style="margin-left: 8px" />
+                  </div>
+                  <div class="dash-row2" style="padding: 0 14px 12px">
+                    <div class="dash-col">
+                      <div class="mini-label">播报间隔</div>
+                      <div class="dash-mid">{{ s?.app?.speak_interval_min != null ? s.app.speak_interval_min + ' 分钟' : '--' }}</div>
+                    </div>
+                    <div class="dash-col">
+                      <div class="mini-label">低电量阈值</div>
+                      <div class="dash-mid">{{ s?.app?.speak_low_soc != null ? s.app.speak_low_soc + ' %' : '--' }}</div>
+                    </div>
+                    <div class="dash-col">
+                      <div class="mini-label">预警提醒间隔</div>
+                      <div class="dash-mid">{{ s?.app?.speak_warn_repeat_min != null ? s.app.speak_warn_repeat_min + ' 分钟' : '--' }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="set-title">单位与花费</div>
+                <div class="jk-card" style="border-radius: 12px">
+                  <div class="set-row">
+                    <div style="flex: 1">
+                      <div style="font-size: 13px; color: v-bind('c.text')">电耗单位</div>
+                      <div class="mini-label" style="margin-top: 2px">单位切换只影响显示（首页仪表盘瞬时/平均电耗），内部计算一律 Wh/km</div>
+                    </div>
+                    <span
+                      class="mini-label"
+                      :style="{
+                        background: !unitKwh100 ? c.blue : 'transparent',
+                        color: !unitKwh100 ? '#fff' : c.gray,
+                        borderRadius: '6px', padding: '4px 10px', fontWeight: 600,
+                      }"
+                    >Wh/km</span>
+                    <span
+                      class="mini-label"
+                      :style="{
+                        background: unitKwh100 ? c.blue : 'transparent',
+                        color: unitKwh100 ? '#fff' : c.gray,
+                        borderRadius: '6px', padding: '4px 10px', fontWeight: 600, marginLeft: '6px',
+                      }"
+                    >kWh/100km</span>
+                  </div>
+                  <div class="set-row" style="padding-top: 0">
+                    <div style="flex: 1">
+                      <div style="font-size: 13px; color: v-bind('c.text')">电费单价</div>
+                      <div class="mini-label" style="margin-top: 2px">用于统计页区间总花费与平均花费（元/100km）</div>
+                    </div>
+                    <span class="dash-mid">{{ s?.app?.elec_price != null ? s.app.elec_price.toFixed(2) + ' 元/度' : '--' }}</span>
+                  </div>
+                </div>
+
+                <div class="set-title">里程折扣</div>
+                <div class="jk-card" style="border-radius: 12px">
+                  <div class="set-row">
+                    <div style="flex: 1">
+                      <div style="font-size: 13px; color: v-bind('c.text')">三轮车表显里程折扣</div>
+                      <div class="mini-label" style="margin-top: 2px">
+                        表显里程偏大时按折扣换算真实里程（只影响统计页显示层，台账数据库始终存原始输入）
+                      </div>
+                    </div>
+                    <span class="dash-mid">{{ s?.app?.odo_discount != null ? s.app.odo_discount.toFixed(1) : '--' }}</span>
                   </div>
                 </div>
 
@@ -371,26 +520,8 @@
                       <div class="dash-mid">{{ dashTotals.wh }}</div>
                     </div>
                     <div class="dash-col">
-                      <div class="mini-label">历史电耗(Wh/km)</div>
+                      <div class="mini-label">生命周期电耗</div>
                       <div class="dash-mid">{{ dashTotals.hist }}</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="set-title">保护板参数（只读）</div>
-                <div class="jk-card" style="border-radius: 12px">
-                  <div class="detail-cols">
-                    <div class="detail-col">
-                      <div class="drow"><span class="dlabel">单体过压保护(V)</span><span class="dval">{{ connected ? fmt(s?.cell_full_voltage) : '--' }}</span></div>
-                      <div class="drow"><span class="dlabel">单体欠压保护(V)</span><span class="dval">{{ connected ? fmt(s?.cell_empty_voltage) : '--' }}</span></div>
-                      <div class="drow"><span class="dlabel">充电过温(℃)</span><span class="dval">{{ connected ? fmt(s?.charge_over_temp) : '--' }}</span></div>
-                      <div class="drow"><span class="dlabel">放电过温(℃)</span><span class="dval">{{ connected ? fmt(s?.discharge_over_temp) : '--' }}</span></div>
-                    </div>
-                    <div class="detail-col">
-                      <div class="drow"><span class="dlabel">充电限流(A)</span><span class="dval">{{ connected ? fmt(s?.charge_current_limit) : '--' }}</span></div>
-                      <div class="drow"><span class="dlabel">放电限流(A)</span><span class="dval">{{ connected ? fmt(s?.discharge_current_limit) : '--' }}</span></div>
-                      <div class="drow"><span class="dlabel">循环次数</span><span class="dval">{{ connected ? (s?.cycle_count ?? '--') + '次' : '--' }}</span></div>
-                      <div class="drow"><span class="dlabel">健康度 SOH</span><span class="dval">{{ connected && s?.soh ? s.soh + '%' : '--' }}</span></div>
                     </div>
                   </div>
                 </div>
@@ -398,7 +529,7 @@
                 <div class="jk-card" style="border-radius: 12px; padding: 12px 14px">
                   <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px">说明</div>
                   <div class="mini-label">
-                    续航 = 剩余电量能量 ÷ 近期平均电耗（EV 通行算法）。刚开始使用时按参考值 20 Wh/km 估算，骑行积累数据后自动修正为您的真实电耗。所有数值为估算，仅供参考。保护板参数修改需设备密码，本应用不提供。
+                    续航 = 剩余电量能量 ÷ 预测电耗（EV 通行算法）。预测电耗优先级（v0.2.90）：本次行程平均 &gt; 生命周期累计平均（装机起累积、随里程越来越准）&gt; 会话 EMA 暖场 &gt; 参考值 20 Wh/km。所有数值为估算，仅供参考。保护板参数修改需设备密码，本应用不提供。
                   </div>
                 </div>
               </template>
@@ -559,6 +690,23 @@ const dashMirror = computed({
   get: () => dashEnabled.value,
   set: () => { /* 只读镜像（手机端开关） */ },
 })
+
+// ---------- v0.2.101：与手机 1:1 对齐所需（演示/单位/折扣/电费） ----------
+const demoMode = computed(() => !!s.value?.app?.demo_mode)
+const unitKwh100 = computed(() => !!s.value?.app?.unit_kwh100)
+const consUnit = computed(() => (unitKwh100.value ? 'kWh/100km' : 'Wh/km'))
+/** 与客户端 fmtCons 同公式：kWh/100km=Wh/km÷10 两位小数；Wh/km ≥100 整数否则一位 */
+function fmtCons(whkm?: number): string {
+  if (whkm == null) return '--'
+  if (unitKwh100.value) return (whkm / 10).toFixed(2)
+  return whkm >= 100 ? whkm.toFixed(0) : whkm.toFixed(1)
+}
+/** 里程折扣/电费单价来自手机上报的本地设置（旧版 APK 未上报时折扣=1、单价=0 → 花费 --） */
+const discount = computed(() => s.value?.app?.odo_discount ?? 1)
+const price = computed(() => s.value?.app?.elec_price ?? 0)
+const priceText = computed(() =>
+  s.value?.app?.elec_price != null ? s.value.app.elec_price.toFixed(2) : '--',
+)
 
 const protectionEntries = computed(() => {
   const p = s.value?.protection_states
@@ -722,16 +870,18 @@ interface OdoView {
 /** 倒序台账视图（最新在上、基准垫底）+ 语义着色（与手机统计页一致）。 */
 const odoRecordsView = computed<OdoView[]>(() => {
   const list = odo.value?.records ?? []
-  const avg = odo.value?.summary.avg_wh_km
   return list.map((r, idx) => {
     const d = new Date(r.ts_ms)
     const p = (x: number) => String(x).padStart(2, '0')
     const isBase = idx === list.length - 1
     const prev = idx < list.length - 1 ? list[idx + 1] : null
     const invalid = !r.seg && !isBase
+    // v0.2.101：与手机台账行同口径——折扣后电耗 ≥38 偏高(amber) / ≤31 偏优(green) / 其余正文色
     let whColor: string = c.value.text
-    if (r.seg && avg != null) whColor = r.seg.wh_km > avg ? c.value.red : c.value.green
-    else if (invalid) whColor = c.value.gray
+    if (r.seg) {
+      const whDisp = r.seg.wh_km / discount.value
+      whColor = whDisp >= 38 ? c.value.amber : whDisp <= 31 ? c.value.green : c.value.text
+    } else if (invalid) whColor = c.value.gray
     return {
       record_id: r.record_id,
       date: `${p(d.getMonth() + 1)}-${p(d.getDate())}`,
@@ -746,27 +896,115 @@ const odoRecordsView = computed<OdoView[]>(() => {
   })
 })
 
-/** 能耗曲线（X=里程起点偏移，Y=Wh/km；与手机曲线同口径，只取有效段） */
+/** 概要基量（与手机统计页同公式：基准→末条里程、有效段耗电、平均电耗），v0.2.101。 */
+const statsBase = computed(() => {
+  const list = odo.value?.records ?? []
+  if (list.length < 2) return null
+  const valid = list.filter((r) => r.seg)
+  const totalKmRaw = list[list.length - 1].odo_km - list[0].odo_km
+  const totalWh = valid.reduce((a, r) => a + r.seg!.kwh * 1000, 0)
+  const totalValidKm = valid.reduce((a, r) => a + r.seg!.d_odo_km, 0)
+  const avgWh = totalValidKm > 0.5 ? totalWh / totalValidKm : 0
+  return { count: list.length, totalKmRaw, totalWh, avgWh }
+})
+
+interface SumCellV { label: string; value: string; unit: string; highlight?: boolean; sub?: string }
+
+/** 概要五卡（3+2）：里程按折扣显示、电耗按真实里程重算、花费按电费（v0.2.90/91 口径）。 */
+const statsSummary = computed<{ top: SumCellV[]; bottom: SumCellV[] }>(() => {
+  const b = statsBase.value
+  if (!b) return { top: [], bottom: [] }
+  const d = discount.value, pr = price.value
+  const avgWhDisp = b.avgWh > 0 ? b.avgWh / d : 0
+  const totalCost = b.totalWh / 1000 * pr
+  const avgCost100 = avgWhDisp > 0 ? avgWhDisp * pr / 10 : 0
+  return {
+    top: [
+      { label: '记录区间里程', value: b.totalKmRaw > 0 ? (b.totalKmRaw * d).toFixed(1) : '--', unit: 'km',
+        sub: d < 1 && b.totalKmRaw > 0 ? `原 ${b.totalKmRaw.toFixed(1)}` : undefined },
+      { label: '区间总耗电', value: b.totalWh > 0 ? (b.totalWh / 1000).toFixed(2) : '--', unit: 'kWh' },
+      { label: '区间总花费', value: totalCost > 0 ? totalCost.toFixed(2) : '--', unit: '元', highlight: true },
+    ],
+    bottom: [
+      { label: '平均电耗', value: avgWhDisp > 0 ? avgWhDisp.toFixed(1) : '--', unit: 'Wh/km',
+        sub: d < 1 && b.avgWh > 0 ? `原 ${b.avgWh.toFixed(1)}` : undefined },
+      { label: '平均花费', value: avgCost100 > 0 ? avgCost100.toFixed(2) : '--', unit: '元/100km', highlight: true },
+    ],
+  }
+})
+
+// ---------- 阶段统计（v0.2.91/92：预设窗口 + 自定义日期区间；段按记录时间归属） ----------
+const stageRanges = [
+  { label: '一周', days: 7 },
+  { label: '一月', days: 30 },
+  { label: '一季度', days: 90 },
+  { label: '一年', days: 365 },
+]
+const stageIdx = ref(1)   // 默认近一月（与手机一致）
+const customRange = ref<[Date, Date] | null>(null)
+
+const startOfLocalDay = (dt: Date) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime()
+
+const stageCards = computed<{ count: number; cards: SumCellV[] }>(() => {
+  const list = odo.value?.records ?? []
+  const d = discount.value, pr = price.value
+  const valid = list.filter((r): r is typeof r & { seg: NonNullable<typeof r.seg> } => !!r.seg)
+  let segs = valid
+  if (stageIdx.value === stageRanges.length) {
+    if (!customRange.value) segs = []
+    else {
+      const start = startOfLocalDay(customRange.value[0])
+      const end = startOfLocalDay(customRange.value[1]) + 86_400_000
+      segs = valid.filter((r) => r.ts_ms >= start && r.ts_ms < end)
+    }
+  } else {
+    const cutoff = Date.now() - stageRanges[stageIdx.value].days * 86_400_000
+    segs = valid.filter((r) => r.ts_ms >= cutoff)
+  }
+  const kmRaw = segs.reduce((a, r) => a + r.seg.d_odo_km, 0)
+  const wh = segs.reduce((a, r) => a + r.seg.kwh * 1000, 0)
+  const avgWh = kmRaw > 0.1 ? wh / kmRaw / d : 0
+  const cost = wh / 1000 * pr
+  const avgCost = avgWh > 0 ? avgWh * pr / 10 : 0
+  return {
+    count: segs.length,
+    cards: [
+      { label: '阶段里程', value: kmRaw > 0 ? (kmRaw * d).toFixed(1) : '--', unit: 'km',
+        sub: d < 1 && kmRaw > 0 ? `原 ${kmRaw.toFixed(1)}` : undefined },
+      { label: '阶段花费', value: cost > 0 ? cost.toFixed(2) : '--', unit: '元', highlight: true },
+      { label: '平均花费', value: avgCost > 0 ? avgCost.toFixed(2) : '--', unit: '元/100km' },
+    ],
+  }
+})
+
+/** 能耗曲线（X=折扣里程，Y=折扣后 Wh/km；与手机曲线同口径，只取有效段） */
 const curvePoints = computed(() => {
   const list = (odo.value?.records ?? []).slice().sort((a, b) => a.ts_ms - b.ts_ms)
   const valid = list.filter((r) => r.seg)
   if (valid.length < 2) return []
-  const x0 = valid[0].odo_km
-  const x1 = valid[valid.length - 1].odo_km
-  const ys = valid.map((r) => r.seg!.wh_km)
+  const d = discount.value
+  const x0 = valid[0].odo_km * d
+  const x1 = valid[valid.length - 1].odo_km * d
+  const ys = valid.map((r) => r.seg!.wh_km / d)
   const yMin = Math.min(...ys), yMax = Math.max(...ys)
   const spanY = Math.max(1, yMax - yMin)
   const spanX = Math.max(0.1, x1 - x0)
   return valid.map((r) => ({
-    x: 24 + ((r.odo_km - x0) / spanX) * 284,
-    y: 128 - ((r.seg!.wh_km - yMin) / spanY) * 92,
-    v: r.seg!.wh_km.toFixed(1),
+    x: 24 + ((r.odo_km * d - x0) / spanX) * 284,
+    y: 128 - ((r.seg!.wh_km / d - yMin) / spanY) * 92,
+    v: (r.seg!.wh_km / d).toFixed(1),
   }))
 })
 const curvePolyline = computed(() => curvePoints.value.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '))
-const curveAvg = computed(() => {
-  const a = odo.value?.summary.avg_wh_km
-  return a != null ? a.toFixed(1) : '--'
+const curveAvgText = computed(() => {
+  const b = statsBase.value
+  if (!b || b.avgWh <= 0) return ''
+  return (b.avgWh / discount.value).toFixed(1)
+})
+const curveAvgCost = computed(() => {
+  const b = statsBase.value
+  if (!b || b.avgWh <= 0) return '--'
+  return (b.avgWh / discount.value * price.value / 10).toFixed(2)
 })
 
 // ==================== 远程控制（管理台专属，保留自旧版） ====================
@@ -1053,6 +1291,31 @@ const dashTotals = computed(() => {
   padding: 1px 4px; font-size: 12px; font-weight: 600;
 }
 .tri-val { font-size: 14px; font-weight: 600; margin-left: 7px; }
+
+/* 演示横幅（v0.2.101，与手机 v0.2.98 同款） */
+.jk-demobanner {
+  display: flex; align-items: center; gap: 6px;
+  background: v-bind('c.card'); border-radius: 8px;
+  padding: 4px 12px; margin-top: 8px;
+}
+.demo-text { flex: 1; font-size: 11px; color: v-bind('c.amber'); }
+.demo-refresh { font-size: 12px; color: v-bind('c.gray'); opacity: 0.7; }
+
+/* 统计页概要五卡（v0.2.101：值+单位同行、原值小字） */
+.sum-val-row { display: flex; align-items: baseline; justify-content: center; gap: 2px; }
+.sum-unit { font-size: 9px; color: v-bind('c.gray'); }
+.sum-sub { font-size: 8px; color: v-bind('c.gray'); margin-top: 1px; }
+
+/* 阶段统计 chips（v0.2.93 手机端样式：无「近」字、禁换行） */
+.stage-chips { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: nowrap; }
+.stage-chip {
+  font-size: 12px; border-radius: 14px; padding: 5px 12px;
+  cursor: pointer; white-space: nowrap; user-select: none;
+}
+.stage-custom { margin-top: 8px; }
+.stage-cell { text-align: center; }
+.stage-cell .sum-val-row, .stage-cell .sum-label, .stage-cell .sum-sub { justify-content: center; }
+.rec-cost { display: block; }
 
 /* 统计页 */
 .stats-summary { display: flex; gap: 8px; margin-bottom: 10px; }

@@ -17,6 +17,71 @@
 
 ---
 
+### v0.2.101 管理后台极空页与客户端 v0.2.100 对齐（2026-11-08 07:33 实施）
+
+**需求（用户 11-08 07:33）**：客户端多轮迭代后，管理后台「极空保护板」页未跟进——检查并确保与客户端 APP 极空页面百分百一致（只读镜像，交互类动作不搬运）。
+
+**差异清单（逐项核对结论）**：
+| # | 位置 | 客户端现状 | 后台现状 | 处置 |
+|---|---|---|---|---|
+| 1 | 时速卡行1 | **三列**：时速/平均时速/剩余续航（v0.2.91） | 只有时速/剩余续航两列 | 后台补平均时速列 |
+| 2 | 时速卡本次里程 | GPS 口径 gpsTripKm（v0.2.95） | 服务端 dash.trip_km 报的是 BMS 口径 tripKm → 与手机不一致 | 客户端上报改 gpsTripKm（BMS 口径另存 bms_trip_km） |
+| 3 | 时速卡电耗单位 | 跟随 unit_kwh100 切换 Wh/km ↔ kWh/100km（v0.2.90） | 写死 Wh/km | 上报 unit_kwh100 + 后台跟随换算 |
+| 4 | 首页演示横幅 | demoMode 时 amber 横幅（v0.2.92/98） | 无 | 上报 demo_mode + 后台只读横幅 |
+| 5 | 统计页概要 | 五卡 3+2（区间里程[折扣]/总耗电/总花费/平均电耗[折扣]/平均花费，v0.2.90/91） | 三卡（里程/耗电/平均电耗），无花费无折扣 | 后台补齐（需 elec_price/odo_discount 上报） |
+| 6 | 统计页阶段统计 | 一周/一月/一季度/一年/自定义(DateRangePicker)+按记录时间归属（v0.2.92） | 无 | 后台补（el-date-picker daterange） |
+| 7 | 能耗曲线标题 | 「平均 X Wh/km ≈ Y 元/100km」双刻度（v0.2.90） | 「均值 X」 | 后台对齐文案 |
+| 8 | 设置页累计统计 | 第三格=「生命周期电耗」=totalWh/totalKm（≥1km）else hist（v0.2.90） | 标签「历史电耗」且服务端 hist_avg_wh_km 报的是行程平均优先 | 客户端上报改生命周期口径 + 后台改标签 |
+| 9 | 设置页结构 | 仪表盘开关/语音播报/单位与花费/里程折扣/累计统计/说明（v0.2.89/90）；**保护板参数已删（v0.2.83）** | 只有仪表盘开关/累计统计/**保护板参数（只读）**/说明 | 后台删保护板参数块，补三个只读镜像块，说明文案对齐 |
+| 10 | 实时页/首页四格/电流功率卡/仪表盘 SVG | — | 逐字段核对一致 | 不动 |
+
+**改前原文（逐字抄录，节选关键块）**：
+
+1. JikongController.buildReportStatus（dash 块 + app 块，见 v0.2.86 版全文）：
+```kotlin
+                add("dash", JsonObject().apply {
+                    addProperty("speed_kmh", d.speedKmh)
+                    addProperty("gps_fresh", d.gpsFresh)
+                    addProperty("range_km", d.rangeKm)
+                    addProperty("inst_wh_km", d.instWhKm)
+                    addProperty("avg_wh_km", d.avgWhKm)
+                    addProperty("trip_km", d.tripKm)
+                    addProperty("trip_wh", d.tripWh)
+                    addProperty("trip_seconds", d.tripSeconds)
+                    addProperty("bms_stale", d.bmsStale)
+                    if (ctx != null) {
+                        addProperty("total_km", JikongPrefs.totalKm(ctx) + d.tripKm)
+                        addProperty("total_wh", JikongPrefs.totalWh(ctx) + d.tripWh)
+                        addProperty("hist_avg_wh_km",
+                            if (d.avgWhKm > 0f) d.avgWhKm else JikongPrefs.histAvgWhKm(ctx))
+                    }
+                    addProperty("updated_at", System.currentTimeMillis())
+                })
+            ...
+                    add("app", JsonObject().apply {
+                        addProperty("theme", JikongPrefs.theme(ctx))
+                        addProperty("dash_enabled", JikongPrefs.dashEnabled(ctx))
+                    })
+```
+
+2. admin/src/views/jikong/index.vue 时速卡行1（两列）：
+```html
+                    <div class="dash-row1">
+                      <div class="dash-col">
+                        <div class="mini-label">时速(km/h)</div>
+                        <div class="dash-big" :style="{ color: c.green }">{{ s.dash.gps_fresh ? n1(s.dash.speed_kmh) : '--' }}</div>
+                      </div>
+                      <div class="dash-col">
+                        <div class="mini-label">剩余续航(km)</div>
+```
+
+3. index.vue 统计概要三卡：`区间里程(km)/总耗电(kWh)/平均电耗(Wh/km)`（odo.summary 直出，无花费/折扣）。
+4. index.vue 设置页 Tab3：仪表盘开关镜像 + 累计统计（km/wh/hist 标签「历史电耗」）+ **保护板参数（只读）卡 + 说明卡**。
+5. admin/src/api/jikong.ts dash/app 类型同客户端旧字段。
+
+**回滚配方**：`git revert` 本轮客户端提交（buildReportStatus 恢复）+ admin 提交回退（index.vue/jikong.ts）→ admin 重新 build。
+**触发信号**：后台时速卡与手机列数不一致 / 里程口径差 / 设置页多出保护板参数 / 统计页无花费。
+
 ### v0.2.100 演示GPS覆盖时速/退出演示不清仪表盘（262.8km/h真因）/手机旧滤链段缓存（2026-11-07 21:58 实施）
 
 **需求（用户 21:58 反馈 3 项）**：①演示模式刷新后其它值稳定了，但时速 1~2s 后仍消失；②真机连接平均时速 262.8（时速 11.3，截图 21:46）；③「公里」段前仍有停顿，疑段首尾静音未裁。

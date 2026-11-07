@@ -51,26 +51,39 @@ export interface JikongStatus {
   discharge_over_temp?: number
   charge_current_limit?: number
   discharge_current_limit?: number
-  /** v0.2.86：时速仪表盘快照（客户端 SpeedDash 单例上报） */
+  /** v0.2.86：时速仪表盘快照（客户端 SpeedDash 单例上报）；v0.2.101 与手机卡片同口径 */
   dash?: {
     speed_kmh?: number
     gps_fresh?: boolean
     range_km?: number
     inst_wh_km?: number
     avg_wh_km?: number
+    /** v0.2.101：GPS 口径（与手机卡片一致）；旧语义的 BMS 放电口径改列 bms_trip_km */
     trip_km?: number
+    bms_trip_km?: number
+    /** v0.2.101：本次行程平均时速（km/h，手机行 1 三列之一） */
+    avg_speed_kmh?: number
     trip_wh?: number
     trip_seconds?: number
     bms_stale?: boolean
     total_km?: number
     total_wh?: number
+    /** v0.2.101：生命周期电耗（装机起累积 totalWh/totalKm，≥1km），与手机设置页一致 */
     hist_avg_wh_km?: number
     updated_at?: number
   }
-  /** v0.2.86：手机本地设置（主题模式 / 仪表盘开关） */
+  /** v0.2.86：手机本地设置；v0.2.101 补齐 1:1 复刻所需（演示/单位/播报/电费/折扣） */
   app?: {
     theme?: number
     dash_enabled?: boolean
+    demo_mode?: boolean
+    unit_kwh100?: boolean
+    speak_enabled?: boolean
+    speak_interval_min?: number
+    speak_low_soc?: number
+    speak_warn_repeat_min?: number
+    elec_price?: number
+    odo_discount?: number
   }
 }
 

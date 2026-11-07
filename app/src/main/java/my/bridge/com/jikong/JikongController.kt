@@ -1013,16 +1013,26 @@ class JikongController private constructor() {
                     addProperty("range_km", d.rangeKm)
                     addProperty("inst_wh_km", d.instWhKm)
                     addProperty("avg_wh_km", d.avgWhKm)
-                    addProperty("trip_km", d.tripKm)
+                    // v0.2.101：里程/平均时速与手机卡片同口径——卡片显示 GPS 口径
+                    // （v0.2.95 起），旧 trip_km 报的 BMS 口径会导致后台与手机不一致；
+                    // BMS 口径保留为 bms_trip_km（电耗距离加权用）。
+                    addProperty("trip_km", d.gpsTripKm)
+                    addProperty("bms_trip_km", d.tripKm)
+                    addProperty("avg_speed_kmh", d.avgSpeedKmh)
                     addProperty("trip_wh", d.tripWh)
                     addProperty("trip_seconds", d.tripSeconds)
                     addProperty("bms_stale", d.bmsStale)
                     // 累计统计（JikongPrefs 持久化值 + 当次行程，与设置页口径一致）
                     if (ctx != null) {
-                        addProperty("total_km", JikongPrefs.totalKm(ctx) + d.tripKm)
-                        addProperty("total_wh", JikongPrefs.totalWh(ctx) + d.tripWh)
+                        val totalKm = JikongPrefs.totalKm(ctx) + d.tripKm
+                        val totalWh = JikongPrefs.totalWh(ctx) + d.tripWh
+                        addProperty("total_km", totalKm)
+                        addProperty("total_wh", totalWh)
+                        // v0.2.101：改生命周期口径（装机起累积，≥1km 才出值）——与手机
+                        // 设置页「生命周期电耗」一致；旧版报行程平均优先，与手机不符
                         addProperty("hist_avg_wh_km",
-                            if (d.avgWhKm > 0f) d.avgWhKm else JikongPrefs.histAvgWhKm(ctx))
+                            if (totalKm >= 1f && totalWh > 0f) totalWh / totalKm
+                            else JikongPrefs.histAvgWhKm(ctx))
                     }
                     addProperty("updated_at", System.currentTimeMillis())
                 })
@@ -1034,6 +1044,16 @@ class JikongController private constructor() {
                     add("app", JsonObject().apply {
                         addProperty("theme", JikongPrefs.theme(ctx))
                         addProperty("dash_enabled", JikongPrefs.dashEnabled(ctx))
+                        // v0.2.101：后台 1:1 复刻所需的本地设置/状态（演示横幅、单位切换、
+                        // 语音播报、电费、里程折扣——均与手机设置页/统计页同源）
+                        addProperty("demo_mode", demoMode)
+                        addProperty("unit_kwh100", JikongPrefs.unitKwh100(ctx))
+                        addProperty("speak_enabled", JikongPrefs.speakEnabled(ctx))
+                        addProperty("speak_interval_min", JikongPrefs.speakIntervalMin(ctx))
+                        addProperty("speak_low_soc", JikongPrefs.speakLowSoc(ctx))
+                        addProperty("speak_warn_repeat_min", JikongPrefs.speakWarnRepeatMin(ctx))
+                        addProperty("elec_price", JikongPrefs.elecPrice(ctx))
+                        addProperty("odo_discount", JikongPrefs.odoDiscount(ctx))
                     })
                 }
             } catch (_: Exception) { }
