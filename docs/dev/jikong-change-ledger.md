@@ -82,6 +82,15 @@
 **回滚配方**：`git revert` 本轮客户端提交（buildReportStatus 恢复）+ admin 提交回退（index.vue/jikong.ts）→ admin 重新 build。
 **触发信号**：后台时速卡与手机列数不一致 / 里程口径差 / 设置页多出保护板参数 / 统计页无花费。
 
+**实施结果（v0.2.101，2026-11-08 07:55 发版）**：
+1. 客户端 buildReportStatus：dash +avg_speed_kmh、trip_km 改 GPS 口径（BMS 口径保留 bms_trip_km）、hist_avg_wh_km 改生命周期口径（totalWh/totalKm≥1km）；app +demo_mode/unit_kwh100/speak_*/elec_price/odo_discount。
+2. admin jikong.ts 类型同步扩展；index.vue：时速卡行 1 三列+行 2 单位跟随（fmtCons 同公式）、首页演示横幅（只读）、统计页概要五卡 3+2（折扣+花费）、阶段统计 chips+el-date-picker 自定义区间+阶段三卡、曲线双轴文案+折扣 X 轴、台账行折扣显示+31/38 着色+花费小字、口径说明对齐；设置页删保护板参数镜像，新增语音播报/单位与花费/里程折扣三个只读镜像块，累计统计第三格改「生命周期电耗」，说明文案对齐 v0.2.90。
+3. 逐字段核对一致不动：首页四格×2、实时页双列+单体/内阻网格、电流功率卡、仪表盘 SVG 几何、设备信息/保护状态/MOS 控制侧板。
+4. 构建：admin `npm run build` 通过（vue-tsc+vite）；客户端编译通过。
+5. 发版：提交 `9090fd7`；git 直连 github.com:443 中断（Connection reset/连不上），按发布网络策略切 **API 通道**（REST 创建 annotated tag a061533 → refs/tags/v0.2.101 → CI 触发成功）；resume_release.py 等待+下载成功。APK 0.2.101（aapt 实证 versionName=0.2.101，sha256 `808890c7…`，46,037,962 B）分发 updates+Downloads+update.json（Downloads 删 0.2.100）。
+**注意**：管理后台新字段依赖 v0.2.101 客户端上报——手机未升级到 0.2.101 前，后台新增块显示 --/默认值（优雅降级）；admin dist 已重新构建，若服务端托管 admin 静态资源需确认其读取的是 admin/dist 最新产物。
+**待真机验证**：升级 0.2.101 后后台四 Tab 与手机逐屏对照。
+
 ### v0.2.100 演示GPS覆盖时速/退出演示不清仪表盘（262.8km/h真因）/手机旧滤链段缓存（2026-11-07 21:58 实施）
 
 **需求（用户 21:58 反馈 3 项）**：①演示模式刷新后其它值稳定了，但时速 1~2s 后仍消失；②真机连接平均时速 262.8（时速 11.3，截图 21:46）；③「公里」段前仍有停顿，疑段首尾静音未裁。
