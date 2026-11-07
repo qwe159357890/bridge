@@ -779,6 +779,10 @@ private fun HomeView(
         onDispose { SpeedDash.stop() }
     }
 
+    // v0.2.97 TTS 分段预取（用户拍板「拉全后完全本地」）：进首页后台把 0..100+词组拉进
+    // 本地缓存（幂等，已缓存段零网络跳过）；全部就绪后播报字节拼接零网络零延迟。
+    LaunchedEffect(Unit) { JikongSpeaker.prefetchAll(context) }
+
     // v0.2.68：进入首页默认滚到「充电/放电/均衡」行置顶；v0.2.72：少滚 8dp，
     // 让连接栏底部稍微露一条边（用户要求）；连接栏仍可通过上滑完全回看。
     val scrollState = rememberScrollState()

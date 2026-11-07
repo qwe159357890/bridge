@@ -108,9 +108,31 @@ object JikongSpeaker {
         }
     }
 
+    /**
+     * 启动预取（v0.2.97，用户拍板「拉全后完全本地」）：把 0..100 数字 + 播报词组全部
+     * 按需拉进本地缓存（幂等：已缓存的段直接跳过，零网络）。全部就绪后播报
+     * **完全本地组合**——字节拼接零网络、零合成延迟；后续时速/续航 >100 的数值
+     * 首播按需补拉后同样进缓存。约 107 段 × 10~20KB ≈ 1~2MB，仅 Wi-Fi/局域网代价。
+     * 失败静默（下次进页重试），不影响任何播报（缺段时 speakSegs 自带整句回退）。
+     */
+    fun prefetchAll(context: Context) {
+        val app = context.applicationContext
+        scope.launch {
+            val phrases = listOf(
+                "当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电",
+            )
+            val texts = (0..100).map { it.toString() } + phrases
+            var pulled = 0
+            for (t in texts) {
+                // fetchOnline 内部：命中缓存直接返回（不触网），只有缺段才请求服务端
+                if (fetchOnline(app, t, seg = 1) != null) pulled++
+            }
+            Timber.tag(TAG).i("TTS 分段预取完成：%d/%d 段就绪", pulled, texts.size)
+        }
+    }
+
     /** 拼接产物文件：先清理 5 分钟前的旧 compose_*.mp3（播放中的不会被删，播放完下轮清）。 */
-    private fun composeFile(dir: File): File? {
-        val now = System.currentTimeMillis()
+    private fun composeFile(dir: File): File? {        val now = System.currentTimeMillis()
         dir.listFiles()?.forEach { f ->
             if (f.name.startsWith("compose_") && now - f.lastModified() > 5 * 60_000L) {
                 runCatching { f.delete() }
@@ -122,16 +144,15 @@ object JikongSpeaker {
     // ==================== 在线链路（服务端 edge-tts + 本地缓存） ====================
 
     /** 取在线语音：缓存命中直接返回；未命中请求服务端落盘。任何失败返回 null（走本地回退）。
-     *  [seg]=0 整句（键 v3）；[seg]=1 分段（键 v3seg，服务端带尾静音，供本地拼接）。
-     *  键版本历史：v2（-8 LUFS 档）→ v3（0.2.96，服务端重启前旧产物全部作废）。 */
+     *  [seg]=0 整句（键 v3）；[seg]=1 分段（键 v4seg，服务端带 40ms 尾垫+裁段首静音，供本地拼接）。
+     *  键版本历史：v2（-8 LUFS 档）→ v3（0.2.96，服务端重启前旧产物作废）→
+     *  v4seg（0.2.97，服务端 seg 停顿收紧 v3seg，本地 120ms 旧段作废）。 */
     private suspend fun fetchOnline(app: Context, text: String, seg: Int): File? {
         val api = apiClient ?: return null
         val ds = deviceStore ?: return null
         return try {
             val dir = File(app.cacheDir, CACHE_DIR).apply { mkdirs() }
-            // v3 = 0.2.96：服务端重启前（v0.2.90 旧代码）拉过的分段缓存是 -12 LUFS 且无尾静音，
-            // 升键强制全部重拉（服务端键 v2/v2seg 不变，这只影响客户端本地文件名）。
-            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v3seg" else "v3"}")
+            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v4seg" else "v3"}")
             val f = File(dir, "$key.mp3")
             if (f.exists() && f.length() > 256) {
                 f.setLastModified(System.currentTimeMillis())

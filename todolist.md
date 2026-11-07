@@ -198,3 +198,9 @@
 2. ✅ 平均时速：0.2.95 已改 GPS 口径（数学上不可能恒 0），观察疑为升级前印象/起步 10s 内 "--"；门槛 10→5s 数值更快出现，待骑行实测。
 3. ✅ 播报无声根因（服务端日志+哈希反查实证）：服务端进程从未重启（11:39:20 启动，早于 13:30 -8LUFS 与 17:00 seg 改动），手机 0.2.95 的分段请求全部命中旧代码（无后缀键 md5(text|voice) 反查 9/9 全中）→ -12 LUFS、无尾静音、键错位反复重合成。处置：客户端键升 v3/v3seg 强制重拉 + 服务端重启（用户手动）。
 4. ✅ 断连资源释放确认：HomeView 仅 connected 时 compose，断连→DisposableEffect onDispose→SpeedDash.stop()（GPS 注销+积分协程取消）；ON_PAUSE 同样 stop；轮询/蓝牙由 controller.disconnect 收尾。已释放，无需改动。
+
+## ✅任务二十五：v0.2.97 三项（2026-11-07 18:25~18:32 反馈三条 → 18:52 发版）
+
+1. ✅ 平均时速恒 0 真因（用户实证时速 10 仍显示 0.0）：公式 km÷秒 少乘 3600（km/s 当 km/h），v0.2.90 起一直错 → ×3600 修复 + 门槛 0.05→0.001km。
+2. ✅ 段间明显停顿：edge-tts 每段天然首尾静音 + 120ms apad 叠加 → 服务端 seg 链改 silenceremove 裁段首 + 40ms 尾垫；键 v2seg→v3seg（抽出 SEG_SUFFIX 常量两端共享）；旧段删除重预热 107/107。
+3. ✅ 启动预取完全本地：JikongSpeaker.prefetchAll（幂等）+ HomeView 进页触发；客户端 seg 键 v3seg→v4seg。

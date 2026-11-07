@@ -37,6 +37,18 @@ MAX_TEXT_LEN = 120
 # TP 仍留 1.5dB 余量）。缓存键同步升 v2（旧 -12 文件不再生效）。
 _LOUDNORM = "loudnorm=I=-8:TP=-1.5:LRA=7"
 
+# 分段模式滤链（v0.2.97 段间大间隔治理）：edge-tts 每段天然带首尾静音 + 旧 120ms apad
+# 叠加后「当前电量→50」之间有明显停顿。改为：silenceremove 裁掉段首静音（起始 0.03s
+# 以下噪声阈值视为静音）+ 仅保留 40ms 尾垫（拼接后的自然过渡间隙）。键升 v3seg。
+_SEG_AF = (
+    "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.02,"
+    "loudnorm=I=-8:TP=-1.5:LRA=7,"
+    "apad=pad_dur=0.04"
+)
+
+# 分段缓存键后缀（预热脚本 tts_prewarm.py 从这里 import，保证两端键推导永不漂移）
+SEG_SUFFIX = "v3seg"
+
 
 def _cache_dir() -> Path:
     """server/data/tts_cache（与 updates 目录同范式：相对 server 根解析）。"""
@@ -69,9 +81,9 @@ async def synth_tts(
 ) -> FileResponse:
     """合成一段中文语音（mp3）。同 (text, voice, seg) 只合成一次，之后走缓存。
 
-    v0.2.95 分段模式（seg=1）：为客户端本地字节拼接服务——合成后追加 120ms 尾部静音
-    （apad），拼接多段时句间有自然停顿；缓存键独立为 ``v2seg``，与整句缓存互不干扰。
-    0..100 数字与常用词组由 ``server/tts_prewarm.py`` 预热，超出部分客户端按需拉取。
+    v0.2.95 分段模式（seg=1）：为客户端本地字节拼接服务——合成后追加尾静音，拼接多段时
+    句间有自然停顿。v0.2.97 段间停顿收紧（用户实测 120ms 太明显）：裁段首静音 + 尾垫
+    40ms；缓存键升 ``v3seg``，旧 v2seg 段全部失效重合成（预热脚本同步重跑）。
     """
     _check_device_auth(
         request,
@@ -84,8 +96,8 @@ async def synth_tts(
     if not VOICE_RE.match(voice):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="voice 名不合法")
 
-    # v2 = 响度档版本（v0.2.92 由 -12 提到 -8 LUFS）；v2seg = 分段档（含尾静音）
-    suffix = "v2seg" if seg else "v2"
+    # v2 = 响度档版本（v0.2.92 由 -12 提到 -8 LUFS）；v3seg = 分段档（v0.2.97 停顿收紧）
+    suffix = SEG_SUFFIX if seg else "v2"
     key = hashlib.md5(f"{text}|{voice}|{suffix}".encode("utf-8")).hexdigest()
     final = _cache_dir() / f"{key}.mp3"
     if not final.exists() or final.stat().st_size < 256:
@@ -100,7 +112,7 @@ async def synth_tts(
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, detail="在线语音合成暂不可用",
             ) from e
-        af = _LOUDNORM + (",apad=pad_dur=0.12" if seg else "")
+        af = _SEG_AF if seg else _LOUDNORM
         if _loudnorm(raw, final, af):
             raw.unlink(missing_ok=True)
         else:

@@ -80,6 +80,41 @@
 
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
+### v0.2.97 平均时速单位错+段间隔收紧+启动预取（2026-11-07 18:35 实施）
+
+**改前原文（全部逐字抄录）**：
+
+1. SpeedDash.kt 平均时速公式（**真因：km÷秒 单位错误，少乘 3600**——10km/h 算出 0.003，`%.1f` 显示 0.0，v0.2.90 起一直如此）：
+```kotlin
+            // ---- 平均时速（v0.2.95 修恒 0）：GPS 里程 ÷ 移动时间，不再依赖 BMS 放电口径 tripKm ----
+            avgSpeedKmh =
+                if (gpsTripKm > 0.05f && movingSecondsAvg >= AVG_SPEED_MIN_S) gpsTripKm / movingSecondsAvg else -1f
+```
+
+2. tts.py seg 滤链与键（v0.2.95 版，120ms apad 是段间大间隔元凶）：
+```python
+    # v2 = 响度档版本（v0.2.92 由 -12 提到 -8 LUFS）；v2seg = 分段档（含尾静音）
+    suffix = "v2seg" if seg else "v2"
+    key = hashlib.md5(f"{text}|{voice}|{suffix}".encode("utf-8")).hexdigest()
+...
+        af = _LOUDNORM + (",apad=pad_dur=0.12" if seg else "")
+```
+
+3. tts_prewarm.py 键推导：`return hashlib.md5(f"{text}|{voice}|v2seg".encode("utf-8")).hexdigest()`
+
+4. JikongSpeaker.kt 客户端键：`val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v3seg" else "v3"}")`
+
+**回滚配方**：上述 4 处逆向还原（键回 v2seg/v3seg、apad 回 0.12、公式去掉 ×3600）→ 删 server/data/tts_cache 全部重预热 → 重启服务端。
+**实施结果（v0.2.97，18:52 发版）**：
+1. SpeedDash 平均时速公式 `gpsTripKm / movingSecondsAvg` → `gpsTripKm * 3600f / movingSecondsAvg`（真因修复，用户实证时速 10 显示 0.0 与公式推导吻合），门槛 `>0.05f` → `>0.001f`（起步快出数）。
+2. tts.py：新增 `_SEG_AF`（silenceremove 段首 -40dB + loudnorm + apad 0.04）替代旧 120ms apad；键 v2seg→v3seg 并抽出 `SEG_SUFFIX` 常量供预热脚本 import（两端键永不漂移）。
+3. tts_prewarm.py：键/滤链改从 tts.py import；旧 v2seg 段删除（58 个）后全量重预热，107/107 就绪。
+4. JikongSpeaker：seg 键 v3seg→v4seg（本地 120ms 旧段作废重拉）；新增 `prefetchAll`（0..100+6 词组幂等预取）；HomeView 进页 `LaunchedEffect(Unit)` 触发——拉全后播报完全本地组合零网络。
+5. 交付：APK 0.2.97（sha256 `5a9db5bd…`）分发三件套（删 v0.2.96）。**服务端需再重启一次**（v3seg+_SEG_AF 生效）。
+**待真机验证**：①骑行时速 10 左右平均时速≈10（不再是 0.0）；②「当前电量→50」段间停顿明显变短；③进首页后日志「TTS 分段预取完成：107/107」，之后双击播报第二次起零网络。
+
+**触发信号**：平均时速回归 0.0 / 段间隔回到 120ms 明显停顿 / 预取后播报不发声。
+
 ### v0.2.93 五项：chip 防竖排/连接竞态治理（陈旧 GATT 回调守卫+连接抢占+数据帧硬保证）（2026-11-07 14:05 实施）
 
 | 项 | 内容 |

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app.api.v1.tts import _LOUDNORM, _cache_dir, _loudnorm, DEFAULT_VOICE  # noqa: E402
+from app.api.v1.tts import _SEG_AF, _cache_dir, _loudnorm, DEFAULT_VOICE, SEG_SUFFIX  # noqa: E402
 
 # 播报词组（客户端 JikongSpeaker 分段口径，顺序拼接成句）
 PHRASES = ["当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电"]
@@ -25,7 +25,8 @@ TEXTS = [str(n) for n in range(0, 101)] + PHRASES
 
 
 def seg_key(text: str, voice: str) -> str:
-    return hashlib.md5(f"{text}|{voice}|v2seg".encode("utf-8")).hexdigest()
+    # 键后缀从端点 import（SEG_SUFFIX），两端永不漂移（v0.2.97：v2seg→v3seg）
+    return hashlib.md5(f"{text}|{voice}|{SEG_SUFFIX}".encode("utf-8")).hexdigest()
 
 
 async def synth_one(text: str, voice: str, final: Path) -> None:
@@ -34,8 +35,7 @@ async def synth_one(text: str, voice: str, final: Path) -> None:
     raw = final.with_suffix(".raw.mp3")
     communicate = edge_tts.Communicate(text, voice=voice, volume="+0%")
     await asyncio.wait_for(communicate.save(str(raw)), timeout=30)
-    af = _LOUDNORM + ",apad=pad_dur=0.12"
-    if _loudnorm(raw, final, af):
+    if _loudnorm(raw, final, _SEG_AF):   # v0.2.97：裁段首静音+40ms 尾垫（与端点同链）
         raw.unlink(missing_ok=True)
     else:
         raw.replace(final)

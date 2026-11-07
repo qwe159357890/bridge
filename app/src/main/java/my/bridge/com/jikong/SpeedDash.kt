@@ -317,9 +317,11 @@ object SpeedDash {
             // ---- 平均电耗（距离加权：总耗电 ÷ 总里程，专利/特斯拉同思路）----
             avgWhKm = if (tripKm >= TRIP_AVG_MIN_KM && tripWh > 0f) tripWh / tripKm else -1f
 
-            // ---- 平均时速（v0.2.95 修恒 0）：GPS 里程 ÷ 移动时间，不再依赖 BMS 放电口径 tripKm ----
+            // ---- 平均时速（v0.2.97 真因修复）：GPS 里程(km) ÷ 移动时间(秒) × 3600。
+            //      v0.2.90~96 少乘 3600（km/s 当 km/h 用），10km/h 算出 0.003 → 永远显示 0.0。
+            //      门槛放宽到 0.001km（5s 移动 @10km/h ≈ 0.014km，起步快出数）----
             avgSpeedKmh =
-                if (gpsTripKm > 0.05f && movingSecondsAvg >= AVG_SPEED_MIN_S) gpsTripKm / movingSecondsAvg else -1f
+                if (gpsTripKm > 0.001f && movingSecondsAvg >= AVG_SPEED_MIN_S) gpsTripKm * 3600f / movingSecondsAvg else -1f
 
             // ---- 预测电耗（v0.2.90 估算链改造）：本次行程平均 > 生命周期累计平均（装机起累积，
             //      复用 totalWh/totalKm 持久化，里程越攒越准）> EMA(移动>30s 会话暖场) >
