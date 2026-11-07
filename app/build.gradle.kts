@@ -20,7 +20,7 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.2.94"
+        versionName = "0.2.95"
 
         // VNT 组网（v0.2.32）：用户自建 VNTS 与存量客户端全为 1.x、必须互通 ⇒ 集成
         // 官方最后一个 Java JNI 版 VntApp v1.2.9。该版本仓库内只带 2 套 ABI 的

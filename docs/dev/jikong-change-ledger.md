@@ -34,6 +34,29 @@
 
 **实施结果（16:20 发版）**：MainScreen exitToken LaunchedEffect 改为 `if (JkUiState.immersive) { JkUiState.immersive = false } else { homeTab = homeTabOrder.indexOfFirst { it != 5 }.coerceAtLeast(0) }`；JikongPages Toast 改「再按一次显示导航栏」，BackHandler 结构未动。用户追问两点已确认：①极空子页 back→回仪表盘（分支保留未动）；②未连接的扫描页同样走 back②工具栏→back③跳走（BackHandler 页面级，与连接状态无关）。编译通过，aapt 实证 versionName=0.2.94（sha256 `828f985c…`，46,021,570 B），分发 updates+Downloads+update.json（删 v0.2.93 APK）。真机未连 adb，走 check_update 升级。
 
+### v0.2.95 四项：时速卡行距/平均时速 GPS 解耦/分段 TTS 本地组合（2026-11-07 16:45 实施）
+
+**需求（用户 16:38 提出 4 项）**：①时速卡每行之间间隙太大（时速行/瞬时行/本次时长行/保护板提示行之间都有大空隙）；②平均时速一直显示 0（时速有数据）；③问缩略图/头像/TTS 缓存存放位置（纯解答不改码）；④edge-tts 整句组合难命中缓存——预合成 0-100 数字+词组段，客户端本地字节拼接。
+
+**问题②根因**：`avgSpeedKmh = tripKm / movingSecondsAvg`，而 `tripKm` 只在 **BMS 放电功率>1W** 时积分（tripWh/tripKm 电耗口径）；用户截图时正处「保护板数据未到」态（页脚提示），tripKm 冻结极小值、movingSecondsAvg 持续累计 → 平均值被稀释成 0.0x 显示 0.0。
+
+| 项 | 改前原文 |
+|---|---|
+| **SpeedDash avgSpeed（改前全文）** | `avgSpeedKmh =⏎if (tripKm > 0.05f && movingSecondsAvg >= AVG_SPEED_MIN_S) tripKm / movingSecondsAvg else -1f`；tripKm 积分条件 `if (bmsOk && v >= MOVING_KMH) { … if (p > 1f) { … tripKm += v * dt / 3600f … } }` |
+| **SpeedDashCard 行3 清零（改前）** | `TextButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("清零行程", fontSize = 11.sp, color = c.gray) }`（48dp 最小触控目标把行3 撑出大量空白） |
+| **SpeedDashCard 行距（改前）** | 行间 `Spacer(Modifier.height(6.dp))` ×3；行1 三个 28sp 值无 includeFontPadding 设置 |
+| **tts.py（改前）** | `def synth_tts(request, text, voice=DEFAULT_VOICE)` 无 seg 参数；`_loudnorm(src, dst)` 固定 `-af _LOUDNORM`；键 `md5(f"{text}|{voice}|v2")` |
+| **maybeAnnounce 播报（改前）** | `val text = "当前电量 $soc%" + if (low) "，电量低，请注意充电" else ""` → `JikongSpeaker.speak(ctx, text)` |
+| **双击播报（改前）** | onDashDoubleTap 内 StringBuilder 拼 `"当前电量 $soc%"`（+低电/时速/续航）→ `JikongSpeaker.speak(context, sb.toString())` |
+| **BridgeApi.synthTts（改前）** | 参数 `(text, voice, deviceId, token)` 无 seg |
+
+**改后**：①SpeedDash 新增 `gpsTripKm`（v≥0.5 且 GPS 新鲜即积分，与 BMS 解耦）——avgSpeed 与卡片「本次里程」行都改用它，电耗口径 tripKm 不动；②行3 TextButton→clickable Text，Spacer 6→4dp，28sp 值 includeFontPadding=false；③tts.py 加 `seg=1`（追加 120ms 尾静音 `apad=pad_dur=0.12`，键升 `v2seg`）+ `server/tts_prewarm.py` 预热 0..100 数字+6 词组；④BridgeApi.synthTts 加 `seg` 参数；JikongSpeaker.fetchOnline 加 seg 参数、新增 `speakSegs`（本地段全命中→字节拼接 mp3 播放，缺段补拉，失败回退整句）；maybeAnnounce 与双击播报改 speakSegs。
+
+**回滚配方**：`git checkout a7852e8 -- app/src/main/java/my/bridge/com core/core-network server/app/api/v1/tts.py`
+**触发信号**：平均时速回到恒 0/里程不走/时速卡行距回归/播报回退整句或无声。
+
+**实施结果（17:10 发版）**：全部落地。预热脚本两轮跑完 107 段（首轮后台任务 ~2min 被截停于 49 段，幂等补跑补齐 50-100+6 词组；⚠️ 首轮可能仍存活并发写过同名文件，均为完整 ffmpeg 产物无损坏）。aapt 实证 0.2.95（sha256 `34339555…`），分发 updates+Downloads+update.json（删 v0.2.94）。**服务端需重启**（tts.py 新 seg 参数才生效；旧服务端会忽略 seg 返回无尾静音整句音频，客户端不崩、只是段间无停顿）。缓存位置问答（不改码）：微信头像/缩略图/封面=`getExternalFilesDir/bridge/wechat/cache/{avatars,media}`（外部私有，7 天清理）；TTS 客户端=`cacheDir/tts/`；微信语音=`cacheDir/wechat/`；更新包=`getExternalFilesDir/updates/`；音乐=`getExternalFilesDir/music/`；服务端 TTS=`server/data/tts_cache/`。
+
 ## §一 当前生效的回退锚点（★ 最高优先查看）
 
 ### v0.2.93 五项：chip 防竖排/连接竞态治理（陈旧 GATT 回调守卫+连接抢占+数据帧硬保证）（2026-11-07 14:05 实施）

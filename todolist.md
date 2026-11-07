@@ -184,3 +184,10 @@
 - 实测确认口径：①极空子页（统计/设置）back→回仪表盘；②未连接的扫描页同样走 back②→back③。
 - 实现：MainScreen exitToken 以 `JkUiState.immersive` 为梯级标志；JikongPages BackHandler 结构不变、Toast 改「再按一次显示导航栏」。
 - 交付：v0.2.94（sha256 `828f985c…`）分发三件套，台账 §一 有改前原文+回滚配方（锚点 `e006070`）。
+
+## ✅任务二十三：时速卡四项（2026-11-07 16:38 提出四项 → 17:10 发版 v0.2.95）
+
+1. ✅ 时速卡行距收紧：28sp 值 includeFontPadding=false + Spacer 6→4dp + 清零 TextButton→clickable Text（48dp 最小触控目标是大空隙元凶）。
+2. ✅ 平均时速恒 0 根因：tripKm 只在 BMS 放电>1W 时积分，保护板断流时被 movingSecondsAvg 稀释成 0.0 → 新增 gpsTripKm（纯 GPS 口径），avgSpeed 与「本次里程」行都改用它。
+3. ✅ 缓存位置解答（见台账 v0.2.95 实施结果）。
+4. ✅ 分段 TTS 本地组合：服务端 /api/tts?seg=1（apad 120ms 尾静音，键 v2seg）+ tts_prewarm.py 预热 0..100+6 词组（107 段全落盘）；BridgeApi.synthTts 加 seg 参数；JikongSpeaker.speakSegs 段全命中→字节拼接零网络播放，缺段补拉，失败回退整句；自动播报与双击播报均切换。

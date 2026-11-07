@@ -240,6 +240,7 @@ interface BridgeApi {
     suspend fun synthTts(
         @Query("text") text: String,
         @Query("voice") voice: String,
+        @Query("seg") seg: Int,
         @Header("X-Device-Id") deviceId: String,
         @Header("X-Device-Token") token: String?,
     ): ResponseBody

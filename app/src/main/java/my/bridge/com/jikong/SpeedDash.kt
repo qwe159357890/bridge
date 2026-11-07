@@ -132,9 +132,14 @@ object SpeedDash {
     var avgWhKm: Float = -1f
         private set
 
-    /** 本次行程里程（km）。 */
+    /** 本次行程里程（km，BMS 放电口径：只累计放电>1W 时的距离，供电耗距离加权用）。 */
     @Volatile
     var tripKm: Float = 0f
+        private set
+
+    /** 本次行程 GPS 里程（km，v≥0.5 即积分，与保护板解耦；v0.2.95 平均时速/里程显示口径）。 */
+    @Volatile
+    var gpsTripKm: Float = 0f
         private set
 
     /** 本次行程耗电（Wh）。 */
@@ -232,7 +237,7 @@ object SpeedDash {
         JikongPrefs.setTotalKm(app, baseTotalKm)
         JikongPrefs.setTotalWh(app, baseTotalWh)
         // 2) 行程归零
-        tripKm = 0f; tripWh = 0f; tripSeconds = 0f; movingSeconds = 0f; movingSecondsAvg = 0f
+        tripKm = 0f; tripWh = 0f; gpsTripKm = 0f; tripSeconds = 0f; movingSeconds = 0f; movingSecondsAvg = 0f
         emaWhKm = -1f; instEma = -1f; avgWhKm = -1f; avgSpeedKmh = -1f
         version.value = version.value + 1
         Timber.tag(TAG).i("行程清零（累计已提交：%.2fkm / %.1fWh）", baseTotalKm, baseTotalWh)
@@ -286,7 +291,12 @@ object SpeedDash {
             bmsStale = !bmsOk
 
             tripSeconds += dt
-            if (v >= MOVING_KMH) movingSecondsAvg += dt   // 平均时速：只看 GPS 移动，与 BMS 放电无关
+            if (v >= MOVING_KMH) {
+                // v0.2.95：平均时速/里程显示口径改 GPS 独立积分（与保护板解耦）——
+                // 修「保护板数据未到时平均时速被稀释成 0.0」：tripKm 仍按放电口径供电耗用
+                movingSecondsAvg += dt
+                gpsTripKm += v * dt / 3600f
+            }
             var p = 0f
             if (bmsOk && v >= MOVING_KMH) {
                 // 放电功率（W）：电流正=充电，只取放电方向；充电/回充不计
@@ -307,9 +317,9 @@ object SpeedDash {
             // ---- 平均电耗（距离加权：总耗电 ÷ 总里程，专利/特斯拉同思路）----
             avgWhKm = if (tripKm >= TRIP_AVG_MIN_KM && tripWh > 0f) tripWh / tripKm else -1f
 
-            // ---- 平均时速（v0.2.90，用户拍板：本次行程口径）＝行程里程 ÷ 移动时间（v≥0.5 计时）----
+            // ---- 平均时速（v0.2.95 修恒 0）：GPS 里程 ÷ 移动时间，不再依赖 BMS 放电口径 tripKm ----
             avgSpeedKmh =
-                if (tripKm > 0.05f && movingSecondsAvg >= AVG_SPEED_MIN_S) tripKm / movingSecondsAvg else -1f
+                if (gpsTripKm > 0.05f && movingSecondsAvg >= AVG_SPEED_MIN_S) gpsTripKm / movingSecondsAvg else -1f
 
             // ---- 预测电耗（v0.2.90 估算链改造）：本次行程平均 > 生命周期累计平均（装机起累积，
             //      复用 totalWh/totalKm 持久化，里程越攒越准）> EMA(移动>30s 会话暖场) >

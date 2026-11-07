@@ -46,12 +46,12 @@ def _cache_dir() -> Path:
     return d
 
 
-def _loudnorm(src: Path, dst: Path) -> bool:
-    """ffmpeg loudnorm 响度归一化；失败返回 false（调用方降级用原始输出）。"""
+def _loudnorm(src: Path, dst: Path, af: str = _LOUDNORM) -> bool:
+    """ffmpeg 滤链响度归一化（可追加 apad 尾静音）；失败返回 false（调用方降级用原始输出）。"""
     try:
         r = subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-             "-af", _LOUDNORM, "-b:a", "48k", str(dst)],
+             "-af", af, "-b:a", "48k", str(dst)],
             capture_output=True, timeout=30,
         )
         return r.returncode == 0 and dst.exists() and dst.stat().st_size > 256
@@ -65,8 +65,14 @@ async def synth_tts(
     request: Request,
     text: str,
     voice: str = DEFAULT_VOICE,
+    seg: int = 0,
 ) -> FileResponse:
-    """合成一段中文语音（mp3）。同 (text, voice) 只合成一次，之后走缓存。"""
+    """合成一段中文语音（mp3）。同 (text, voice, seg) 只合成一次，之后走缓存。
+
+    v0.2.95 分段模式（seg=1）：为客户端本地字节拼接服务——合成后追加 120ms 尾部静音
+    （apad），拼接多段时句间有自然停顿；缓存键独立为 ``v2seg``，与整句缓存互不干扰。
+    0..100 数字与常用词组由 ``server/tts_prewarm.py`` 预热，超出部分客户端按需拉取。
+    """
     _check_device_auth(
         request,
         request.headers.get("x-device-id"),
@@ -78,8 +84,9 @@ async def synth_tts(
     if not VOICE_RE.match(voice):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="voice 名不合法")
 
-    # v2 = 响度档版本（v0.2.92 由 -12 提到 -8 LUFS），换档后旧缓存自然失效重新合成
-    key = hashlib.md5(f"{text}|{voice}|v2".encode("utf-8")).hexdigest()
+    # v2 = 响度档版本（v0.2.92 由 -12 提到 -8 LUFS）；v2seg = 分段档（含尾静音）
+    suffix = "v2seg" if seg else "v2"
+    key = hashlib.md5(f"{text}|{voice}|{suffix}".encode("utf-8")).hexdigest()
     final = _cache_dir() / f"{key}.mp3"
     if not final.exists() or final.stat().st_size < 256:
         raw = final.with_suffix(".raw.mp3")
@@ -93,7 +100,8 @@ async def synth_tts(
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, detail="在线语音合成暂不可用",
             ) from e
-        if _loudnorm(raw, final):
+        af = _LOUDNORM + (",apad=pad_dur=0.12" if seg else "")
+        if _loudnorm(raw, final, af):
             raw.unlink(missing_ok=True)
         else:
             raw.replace(final)  # 降级：无 ffmpeg 时直接用 edge 原始输出

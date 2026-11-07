@@ -562,10 +562,14 @@ class JikongController private constructor() {
             return
         }
         firstAnnouncePending = false
+        // v0.2.95：改分段本地组合播报（"当前电量"+"百分之"+数字[+低电词组]，段全命中零网络）；
+        // fallback 保持原整句文案（含 %，edge-tts 会读"百分之"），拼接失败时回退整句链路。
+        val segs = mutableListOf("当前电量", "百分之", soc.toString())
+        if (low) segs.add("电量低，请注意充电")
         val text = "当前电量 $soc%" + if (low) "，电量低，请注意充电" else ""
         JikongPrefs.setLastSpoken(ctx, soc, now)
         if (low) JikongPrefs.setLastWarnAt(ctx, now)
-        JikongSpeaker.speak(ctx, text)
+        JikongSpeaker.speakSegs(ctx, segs, text)
         Timber.tag(TAG).i(
             "语音播报：%s（上次 SOC=%d，changed=%s due=%s warnDue=%s forced=%s muted=%s）",
             text, lastSoc, changed, due, warnDue, forced, JikongPrefs.muted(ctx),

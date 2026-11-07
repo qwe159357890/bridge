@@ -25,6 +25,8 @@ import java.util.Locale
  *    同一文案只请求一次；缓存 LRU 上限 [CACHE_LIMIT_BYTES]（50MB）。
  * 2. **本地回退**：离线 / 服务端不可达 / 合成失败 → 回退长驻系统 TTS 引擎（不违反
  *    必可达硬约束：服务器挂了播报能力依然在）。
+ * 3. **分段本地组合（v0.2.95，[speakSegs]）**：词组/数字按段缓存，全命中时字节拼接
+ *    零网络播放（组合句「数值常变、汉字不变」整句难命中缓存的解法），失败回退整句链路。
  *
  * 本地引擎为**长驻单例**：首次播报惰性初始化，之后复用（播报是骑行/查看数据时的即时
  * 反馈，不能容忍 1~3 秒初始化延迟）。精简 ROM 缺引擎时静默失败（记日志），不影响其它功能。
@@ -69,29 +71,72 @@ object JikongSpeaker {
     fun speak(context: Context, text: String) {
         val app = context.applicationContext
         scope.launch {
-            val file = fetchOnline(app, text)
+            val file = fetchOnline(app, text, seg = 0)
             if (file != null && playMp3(file)) return@launch
             localSpeak(app, text)
         }
     }
 
+    /**
+     * 分段本地组合播报（v0.2.95）：把句子拆成词组/数字段（如「当前电量」「百分之」「72」），
+     * 服务端按段合成（seg=1，尾部带 120ms 静音），客户端 **字节级拼接 mp3** 后播放——
+     * 段缓存全部命中时零网络、零合成延迟；缺段自动按需补拉（0..100 与常用词组已由
+     * server/tts_prewarm.py 预热）；拼接或拉取失败回退 [fallback] 整句链路（整句在线 → 本地引擎）。
+     * mp3 同编码参数（edge-tts 24kHz/48kbps 单声道）字节拼接可直接被 MediaPlayer 解码。
+     */
+    @Synchronized
+    fun speakSegs(context: Context, segs: List<String>, fallback: String) {
+        val app = context.applicationContext
+        scope.launch {
+            val dir = File(app.cacheDir, CACHE_DIR).apply { mkdirs() }
+            val files = ArrayList<File>(segs.size)
+            var allOk = true
+            for (s in segs) {
+                val f = fetchOnline(app, s, seg = 1)
+                if (f == null) { allOk = false; break }
+                files.add(f)
+            }
+            if (!allOk) { speak(app, fallback); return@launch }
+            composeFile(dir)?.let { out ->
+                val merged = runCatching {
+                    out.outputStream().use { o -> files.forEach { f -> f.inputStream().use { it.copyTo(o) } } }
+                    out.length() > files.sumOf { it.length() } / 2   // 拼接产物 sanity 校验
+                }.getOrDefault(false)
+                if (merged && playMp3(out)) return@launch
+            }
+            speak(app, fallback)
+        }
+    }
+
+    /** 拼接产物文件：先清理 5 分钟前的旧 compose_*.mp3（播放中的不会被删，播放完下轮清）。 */
+    private fun composeFile(dir: File): File? {
+        val now = System.currentTimeMillis()
+        dir.listFiles()?.forEach { f ->
+            if (f.name.startsWith("compose_") && now - f.lastModified() > 5 * 60_000L) {
+                runCatching { f.delete() }
+            }
+        }
+        return runCatching { File(dir, "compose_${now}.mp3") }.getOrNull()
+    }
+
     // ==================== 在线链路（服务端 edge-tts + 本地缓存） ====================
 
-    /** 取在线语音：缓存命中直接返回；未命中请求服务端落盘。任何失败返回 null（走本地回退）。 */
-    private suspend fun fetchOnline(app: Context, text: String): File? {
+    /** 取在线语音：缓存命中直接返回；未命中请求服务端落盘。任何失败返回 null（走本地回退）。
+     *  [seg]=0 整句（键 v2）；[seg]=1 分段（键 v2seg，服务端带尾静音，供本地拼接）。 */
+    private suspend fun fetchOnline(app: Context, text: String, seg: Int): File? {
         val api = apiClient ?: return null
         val ds = deviceStore ?: return null
         return try {
             val dir = File(app.cacheDir, CACHE_DIR).apply { mkdirs() }
-            // v2 = 服务端响度档版本（v0.2.92 由 -12 提到 -8 LUFS），升键让旧的低响度缓存全部失效重取
-            val key = md5("$text|${JikongPrefs.TTS_VOICE}|v2")
+            // v2 = 服务端响度档版本（v0.2.92 由 -12 提到 -8 LUFS）；v2seg = 分段档（v0.2.95）
+            val key = md5("$text|${JikongPrefs.TTS_VOICE}|${if (seg == 1) "v2seg" else "v2"}")
             val f = File(dir, "$key.mp3")
             if (f.exists() && f.length() > 256) {
                 f.setLastModified(System.currentTimeMillis())
                 return f
             }
             val body = api.synthTts(
-                text, JikongPrefs.TTS_VOICE,
+                text, JikongPrefs.TTS_VOICE, seg,
                 ds.deviceId(), runCatching { ds.token() }.getOrNull(),
             )
             val tmp = File(dir, "$key.tmp")

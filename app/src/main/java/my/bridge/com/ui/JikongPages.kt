@@ -878,20 +878,30 @@ private fun HomeView(
         Spacer(Modifier.height(12.dp))
 
         // v0.2.92 双击播报处理（圆形大表盘 + 时速卡共用；v0.2.91 只挂时速卡，用户双击圆形
-        // 仪表盘无反应）：电量(+低电预警)；有时速追加 时速+剩余续航。显式手势绕过静音开关；
-        // 速度/续航取整播报（降低在线 TTS 缓存键数量，LRU 50MB 兜底）。
+        // 仪表盘无反应）：电量(+低电预警)；有时速追加 时速+剩余续航。显式手势绕过静音开关。
+        // v0.2.95：改分段本地组合（词组+数字段全命中本地缓存时零网络拼接播放）；
+        // 速度/续航取整播报；>100 的数值段首播按需拉取后进缓存；失败回退整句（fallback）。
         val onDashDoubleTap: () -> Unit = {
             val soc = controller.status.soc
             if (soc in 0..100) {
+                val segs = mutableListOf("当前电量", "百分之", soc.toString())
+                if (soc < JikongPrefs.speakLowSoc(context)) segs.add("电量低，请注意充电")
+                val speed = SpeedDash.speedKmh
+                if (speed > 0f) {
+                    segs.add("时速"); segs.add(kotlin.math.round(speed).toInt().toString()); segs.add("公里")
+                    val range = SpeedDash.rangeKm
+                    if (range >= 0f) {
+                        segs.add("剩余续航"); segs.add(kotlin.math.round(range).toInt().toString()); segs.add("公里")
+                    }
+                }
                 val sb = StringBuilder("当前电量 $soc%")
                 if (soc < JikongPrefs.speakLowSoc(context)) sb.append("，电量低，请注意充电")
-                val speed = SpeedDash.speedKmh
                 if (speed > 0f) {
                     sb.append("，时速 %.0f 公里".format(speed))
                     val range = SpeedDash.rangeKm
                     if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
                 }
-                JikongSpeaker.speak(context, sb.toString())
+                JikongSpeaker.speakSegs(context, segs, sb.toString())
             }
         }
 
@@ -921,7 +931,8 @@ private fun HomeView(
                 instWhKm = SpeedDash.instWhKm,
                 avgWhKm = SpeedDash.avgWhKm,
                 avgSpeed = SpeedDash.avgSpeedKmh,
-                tripKm = SpeedDash.tripKm,
+                // v0.2.95：里程/平均时速改 GPS 口径（与保护板解耦，修平均时速恒 0）
+                tripKm = SpeedDash.gpsTripKm,
                 tripSeconds = SpeedDash.tripSeconds,
                 bmsStale = SpeedDash.bmsStale,
                 permNeeded = SpeedDash.gpsPermissionNeeded,
@@ -1107,12 +1118,16 @@ private fun SpeedDashCard(
             return@Column
         }
         // 行1（v0.2.90 三列）：时速 | 平均时速（本次行程）| 剩余续航
+        // v0.2.95 行距收紧：28sp 值去 includeFontPadding（字体上下各省 ~6dp）
+        val tight = androidx.compose.ui.text.TextStyle(
+            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+        )
         Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
                 Text("时速(km/h)", fontSize = 11.sp, color = c.gray)
                 Text(
                     if (gpsOk) "%.1f".format(speed) else "--",
-                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.green,
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.green, style = tight,
                 )
             }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1120,21 +1135,21 @@ private fun SpeedDashCard(
                 Text(
                     if (avgSpeed > 0f) "%.1f".format(avgSpeed) else "--",
                     // v0.2.91：与时速/剩余续航同级（28sp Bold）；颜色保留 text 色以区别时速绿/续航蓝
-                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.text,
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.text, style = tight,
                 )
             }
             Column(Modifier.weight(1f)) {
                 Text("剩余续航(km)", fontSize = 11.sp, color = c.gray)
                 Text(
                     if (rangeKm >= 0f) "%.0f".format(rangeKm) else "--",
-                    fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, style = tight,
                     color = if (bmsStale) c.gray else c.blue,
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         DividerV()
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         // 行2：瞬时 | 平均 | 里程（v0.2.90：电耗单位可切换 Wh/km ↔ kWh/100km，只改显示层）
         val kwh100 = JikongPrefs.unitKwh100(context)
         fun fmtCons(whkm: Float): String =
@@ -1163,13 +1178,14 @@ private fun SpeedDashCard(
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
-        // 行3：时长 + 清零
+        Spacer(Modifier.height(4.dp))
+        // 行3：时长 + 清零（v0.2.95：TextButton→clickable Text，消除 48dp 最小触控目标撑出的大空隙）
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("本次时长 ${fmtDuration(tripSeconds)}", fontSize = 11.sp, color = c.gray, modifier = Modifier.weight(1f))
-            TextButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                Text("清零行程", fontSize = 11.sp, color = c.gray)
-            }
+            Text(
+                "清零行程", fontSize = 11.sp, color = c.gray,
+                modifier = Modifier.clickable { onReset() }.padding(horizontal = 8.dp, vertical = 2.dp),
+            )
         }
         if (bmsStale) {
             Text("保护板数据未到，续航估算暂停", fontSize = 11.sp, color = c.amber)

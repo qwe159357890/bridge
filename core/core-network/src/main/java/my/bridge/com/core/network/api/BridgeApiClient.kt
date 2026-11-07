@@ -167,9 +167,10 @@ class BridgeApiClient(
     suspend fun synthTts(
         text: String,
         voice: String,
+        seg: Int,
         deviceId: String,
         token: String?,
-    ): ResponseBody = api().synthTts(text, voice, deviceId, token)
+    ): ResponseBody = api().synthTts(text, voice, seg, deviceId, token)
 
     /**
      * 上传媒体文件（截屏/拍照/录屏产物）。失败抛异常，由调用方决定回执语义。
