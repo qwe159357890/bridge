@@ -53,6 +53,8 @@ gh_token.txt
 server/data/updates/*.apk
 # 服务端运行数据（媒体文件等，运行时生成）
 server/data/media/
+# TTS 语音缓存（edge-tts 合成 mp3，运行时按需生成，v0.2.106 起不入库）
+server/data/tts_cache/
 # ADB platform-tools（17MB 下载的二进制，获取与放置说明见 docs/server/design.md §20）
 tools/adb/
 tools/debug/.pwenv/

@@ -22,6 +22,55 @@
 
 ---
 
+## 2026-11-07~08 · 🔊📱 v0.2.88→v0.2.106 语音播报体系从零到连读 + 演示模式数值自洽 + 后台↔手机双向同步全面打通
+
+**节点意义**：三条脉络——①语音播报从「无」到「edge-tts 在线人声 + 分段缓存本地拼接连读」的十一版演进（缓存键版本化是贯穿始终的暗线）；②演示模式作为联调工具被补齐到「数值全部自洽」（注入值与积分协程/GPS/退出清理的三路打架）；③管理后台极空页从「只读镜像」进化为「与手机双向实时同步的遥控器」（命令族 jikong_* 六连发）。另有仓库治理暗线：git 直连抖动常态化，API 备用通道三次造成本地/远程 SHA 分叉又三次对齐。
+
+### 脉络1 · 语音播报体系（v0.2.88→98）
+
+- **v0.2.88 · 播报/昵称/默认设备三功能**：连接后自动播报电量（首帧判一次）+ 低电预警；设备昵称与默认设备记忆（点扫描先直连默认设备最长 10s 再回退扫描——「扫描慢」由此而来，是设计非 bug）。
+- **v0.2.89 · 每帧持续判定 + 预警重复提醒**：播报从「连接内只判一次」改为每帧判定（变化即播/超间隔重播/跌破阈值按预警间隔重复提醒）；`prevAnnounceSoc` 在可见性 gate 之前推进（真实前帧语义）。
+- **v0.2.90 · 九项大版：edge-tts 在线人声落地**：服务端 `GET /api/tts`（edge-tts + ffmpeg loudnorm -12 LUFS 不削波）+ 客户端 cacheDir 二级缓存 LRU 50MB + 失败回退本地引擎；同版落电耗单位切换/续航估算链（行程平均>生命周期>EMA>参考 20）/平均时速/静音/里程折扣/花费卡。**坑：BridgeApiClient 是逐方法包装类，BridgeApi 加方法必须同步加委托，否则 app 模块 Unresolved**。
+- **v0.2.91 · 双击播报 + 演示台账 + 阶段统计**：仪表盘双击播报（显式手势绕过静音）；演示模式内存台账；阶段统计四 chip；蓝牙扫描防僵尸（connect 成功清缓存+10 分钟过期）。
+- **v0.2.92 · 提响 + 自定义时间段 + 返回键死循环首修**：loudnorm -12→-8 LUFS + 缓存键升 v2；DateRangePicker（本地零点防 UTC+8 错日）；返回键 bug 首次暴露——极空排第 1 位时 `exitToken→homeTab=0` 永远退不出。**坑：material3 1.3.1 无 DateRangePickerDefaults.colors（javap 实证）**。
+- **v0.2.93 · 连接竞态治理（本轮最硬核）**：三根因全中——①陈旧 GATT 回调无守卫（旧连接迟到 DISCONNECTED 掐死新连接）②disconnect 丢 waiter（新请求 mutex 排队 10~50s）③connect 不抢占。修复：全回调 `isStale` 守卫、立即 resume、`cancelPendingConnect` 抢占、数据帧硬保证（0x02 帧本身=链路活着最高证据，强制恢复已连接）。
+- **v0.2.94 · 返回键方案 A 统一梯子**：先画状态机/梯子两张示意图核对再动手——back①弹提示→back②显示工具栏→back③跳第一个非极空页→主页双击退 APP，与极空排位彻底解耦。
+- **v0.2.95 · 分段 TTS 本地组合（架构关键步）**：服务端 seg=1 段级合成（apad 尾垫）+ 预热 107 段全落盘；客户端 `speakSegs` 段全命中→本地字节拼接→零网络即时播；缺段逐个补拉、失败回退整句。
+- **v0.2.96 · 播报无声真因 = 服务端没重启**：分段请求全命中旧代码（旧键格式 md5 反查实证）→ 客户端键升 v3 强制重拉；时速卡 24dp 大空隙真因=`DividerV()` 竖线放行间（改横向 1dp）。**服务端改代码必须重启，从此每轮发布固定检查项**。
+- **v0.2.97 · 平均时速恒 0 真因 = 单位错**：`km/s ÷ 秒` 当 km/h 用，少乘 3600（v0.2.90 起一直如此，前两轮都修偏了）。教训：**显示恒 0.0 而非 -- = 计算路径有正数输出，先查单位换算**。同版双向裁首尾静音（v3seg）+ 首页预取。
+- **v0.2.98 · 连读化 + 演示模拟数据**：areverse+silenceremove+areverse 双向裁静音≈连读、段序去「百分之」；`injectDemo`/`refreshDemoData` 仪表盘全字段可控+随机联动；演示自动退出（dispose/ON_PAUSE→disconnect）+ **进演示先掐在飞连接**（否则自动连稍后成功会踢出演示）。
+- **v0.2.99 · 预取并行化**：换键致 106 段缓存整批失效，串行重拉 10~30s 窗口内播报有延时→每批 6 路 async/awaitAll（**Semaphore.withLock 的 lambda 不支持 suspend**）；演示值被 tickLoop 每秒覆盖（4993km/h+一闪即消）→ 循环头 demoMode continue。
+
+### 脉络2 · 演示模式数值自洽收口（v0.2.100）
+
+- **v0.2.100 · 三处残留一次清完**：①onFix 仍会拿真实 GPS 覆盖注入时速（99 只挡了 tickLoop 没挡 onFix）→ 双路径都加演示守卫；②真机 262.8km/h 真因=退出演示不清注入值（演示里程 1.47km ÷ 真机 20s 移动时间，截图自洽反推实锤）→ `clearDemoInjection()` 挂三处退出路径，只清演示写过字段、GPS 口径对自洽归零；③「公里」前停顿=手机本地缓存滞留旧滤链段（服务端 21:01 已修、手机 19:22 拉的旧段永在）→ 客户端键 v6seg。**铁律：服务端换滤链必须同时升客户端缓存键——客户端缓存命中永不重拉**。
+
+### 脉络3 · 后台↔手机双向同步全面打通（v0.2.101→106）
+
+- **v0.2.101 · 对齐复核打底**：后台极空页与客户端逐项核对；`buildReportStatus` 扩 dash/app 块（后台看不到的数据先让手机报上来）。
+- **v0.2.102 · 三条远程命令落地**：`jikong_speak`/`jikong_set_theme`/`jikong_set_speak` 经 /control→CommandModule→`JkUiState.remoteTick++`→LaunchedEffect 即时生效+forceReport 回报；演示台账迁 Controller 上报 demo_stats；压差 3 位小数；自动刷新频率可设。**双向同步的骨架模式就此定型**。
+- **v0.2.103 · 八项修复收尾**：演示切内部 Tab 误退出（DisposableEffect 上移根层）；主题/静音改动 forceReport（reportStatus 按 JSON 去重不含 app 块，扩字段必须手动 force）；后台区间里程负数恒 --（升序相减）；进页立即 loadState；同轮修 admin 白屏（**watch 引用未声明的 const 命中 TDZ，vue-tsc 查不出**）。
+- **v0.2.104 · 设置镜像全面可编辑**：小喇叭从侧栏卡移到首页连接栏（与手机同位置同交互）；新增 `jikong_set_config`（仪表盘开关/电耗单位/电费/折扣四字段可选下发，执行器同步启停 SpeedDash）；手机端 9 处设置控件改动立即 forceReport；后台 cfg* 镜像带独立 6s 回声窗口。**同款 TDZ 第二次踩：ref 必须声明在 watch 之前（immediate 同步执行）**。
+- **v0.2.105 · 远程刷新演示数据 + 播报单位修正**：后台「刷新模拟数据」从占位变可点（`jikong_demo_refresh`→复用 refreshDemoData→forceReport→后台成功后立即 loadState）；播报时速「6公里」→「6公里每小时」（**新词组 md5 独立、旧段零变化 → 无需升 seg 键，prefetchAll 幂等补拉即可**——与 0.2.100 旧段内容坏必须升键的场景区分）。
+- **v0.2.106 · 对齐细节**：时速卡行 1 中列去 CenterHorizontally，两行「平均」列与后台一致左对齐（后台 dash-col 默认左对齐，仅此一处不一致）。
+
+### 仓库治理暗线 · git 通道与对齐（贯穿全程，无 APK）
+
+- 直连 github.com:443 持续抖动（fetch/push 随机 Connection reset），API 通道（`api_push.py`）成为常规备用：以远端 main 为 parent、按 PUSH_BASE..HEAD 差异建 blob/tree/commit。**固有副作用：API 建的 commit 与本地内容相同但 SHA 不同，每次使用后留下分叉**。
+- 三次分叉三次对齐：v0.2.94/95（rebase+mixed reset）、v0.2.96（reset origin/main 终结）、v0.2.106 后（直连恢复 fetch，树 diff 为空实证后 `reset --hard origin/main`）。**对齐前必做 `git diff origin/main HEAD` 空校验，非空禁 reset**。
+- 附带坑：`release.py` 不支持 --help（传参被当 tag 执行）；`server/data/tts_cache/` 运行时缓存曾被 `git add -A` 误收入库，v0.2.106 后 `.gitignore` 排除并 `git rm -r --cached`。
+
+### 关键经验沉淀
+
+- **缓存键版本化是服务端音频链路与客户端缓存的一致性契约**：服务端改合成参数/滤链 → 必须同时升客户端键（v2→v6 五次）；反过来，纯新增词组（md5 独立）不必升键。判定标准=旧段内容是否变化。
+- **服务端改代码必须重启**：v0.2.96 播报无声的真因不是任何一端代码，是服务端进程跑了 6 小时旧代码；「手机请求的键格式与新旧代码都不同」这类哈希反查是定位铁证。
+- **演示模式注入值有三路天敌**：积分协程 tickLoop、GPS onFix、退出不清理——进入掐在飞连接、运行双路径守卫、退出 clearDemoInjection 三件套缺一不可；数值是否自洽（时长=里程÷均速）是快速验尸工具。
+- **后台↔手机同步的标准模式**：命令 params 透传 → 执行器写 Prefs + remoteTick++ → LaunchedEffect 重读即时生效 + forceReport 回报 → 后台镜像带 6s 回声窗口防回声抖动。反向（手机改）靠各控件立即 forceReport。
+- **声明顺序 TDZ 三连坑**：script setup 的 watch（immediate 同步执行）引用未声明 ref、Compose LaunchedEffect 前置引用后置声明——编译期或运行期炸且 vue-tsc 查不出，**一切 Effect/watch 只能写在它引用的声明之后**。
+- **git 直连抖动的标准处置**：push 失败→api_push.py 兜底；恢复后 fetch+空 diff 校验+reset --hard 对齐；运行时缓存目录（tts_cache 等）一律进 .gitignore，提交显式 add 改动文件。
+
+---
+
 ## 2026-11-06 · 🔋⚡ v0.2.76→v0.2.87 极空连接稳定性攻坚 + 官方握手证伪回退 + 时速仪表盘 + 统计页 + 后台手机壳复刻
 
 **节点意义**：五条脉络并行——①连接稳定性从「概率性不出数」到「自动重连+断流自愈」的六版攻坚（真机日志实证驱动）；②「官方握手帧」假设从逆向→实施→真机证伪→二次逆向定论→回退定基线的完整闭环（改前留档纪律首次实战大放异彩）；③时速仪表盘 EV 功能（GPS 1Hz+续航估算）从调研到红蓝对抗落地；④自研「统计」页三端落地（里程台账/能耗曲线/MySQL 留档）；⑤管理后台极空页重写为手机壳 1:1 复刻并补齐数据上报。
