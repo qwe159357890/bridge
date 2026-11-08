@@ -645,9 +645,9 @@ class JikongController private constructor() {
                         // v0.2.80 首连半死链自愈（用户真机实证）：蓝牙闲置 ~10 分钟后首连，
                         // 链路建立但数据通道打不通（BMS 蓝牙模块休眠未醒），旧流程要干等
                         // ~1min 直到 status=8 断开；而自动重连建的第 2 条链路立即有数据。
-                        // ⇒ 12s 内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
-                        // 重连），把 1 分钟缩短到 ~15s。连续重建限 3 次，防「休眠↔重建」死循环。
-                        if (now - connectAt > 12_000) {
+                        // ⇒ 20s 内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
+                        // 重连），把 1 分钟缩短到 ~22s。连续重建限 3 次，防「休眠↔重建」死循环。
+                        if (now - connectAt > 20_000) {
                             if (datalessRecycles < 3) {
                                 datalessRecycles++
                                 dataRecyclePending = true
