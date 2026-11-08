@@ -1760,6 +1760,9 @@ private fun SettingsView(
     var speakIntervalMin by remember { mutableIntStateOf(JikongPrefs.speakIntervalMin(context)) }
     var speakLowSoc by remember { mutableIntStateOf(JikongPrefs.speakLowSoc(context)) }
     var speakWarnRepeatMin by remember { mutableIntStateOf(JikongPrefs.speakWarnRepeatMin(context)) }
+    // v0.2.115 播报音量提升：主开关（默认开=智能检测）+ 强制开关（默认关=无条件拉满）
+    var volumeBoostEnabled by remember { mutableStateOf(JikongPrefs.volumeBoostEnabled(context)) }
+    var volumeBoostForce by remember { mutableStateOf(JikongPrefs.volumeBoostForce(context)) }
     // v0.2.90 单位/电费/里程折扣设置状态（★ 必须在下方 LaunchedEffect 之前声明）
     var unitKwh100 by remember { mutableStateOf(JikongPrefs.unitKwh100(context)) }
     var elecPrice by remember { mutableFloatStateOf(JikongPrefs.elecPrice(context)) }
@@ -1773,6 +1776,8 @@ private fun SettingsView(
         speakIntervalMin = JikongPrefs.speakIntervalMin(context)
         speakLowSoc = JikongPrefs.speakLowSoc(context)
         speakWarnRepeatMin = JikongPrefs.speakWarnRepeatMin(context)
+        volumeBoostEnabled = JikongPrefs.volumeBoostEnabled(context)
+        volumeBoostForce = JikongPrefs.volumeBoostForce(context)
         unitKwh100 = JikongPrefs.unitKwh100(context)
         elecPrice = JikongPrefs.elecPrice(context)
         odoDiscount = JikongPrefs.odoDiscount(context)
@@ -1936,6 +1941,53 @@ private fun SettingsView(
                     "低于阈值立即播报「电量低，请注意充电」，之后即使电量不变也按预警提醒间隔重复提醒；首次跌破阈值不受间隔限制立即播。需要设备装有系统文字转语音（TTS）引擎。",
                     fontSize = 11.sp, color = c.gray,
                 )
+                Spacer(Modifier.height(10.dp))
+                // v0.2.115 播报音量提升：主开关（默认开=智能检测）+ 强制开关（默认关=无条件拉满）
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("播报时提升音量", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "每次播报前临时把媒体音量拉到最大、播完恢复；若检测到其他程序正在放声音（听歌/看视频/导航）则不拉，避免打断。",
+                            fontSize = 11.sp, color = c.gray,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = volumeBoostEnabled,
+                        onCheckedChange = {
+                            volumeBoostEnabled = it
+                            JikongPrefs.setVolumeBoostEnabled(context, it)
+                            controller.forceReport()
+                        },
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("强制提升", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "打开后不检测其他程序，所有播报只要音量不是最大就拉满。仅在「播报时提升音量」开启时生效。",
+                            fontSize = 11.sp, color = c.gray,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = volumeBoostForce,
+                        enabled = volumeBoostEnabled,
+                        onCheckedChange = {
+                            volumeBoostForce = it
+                            JikongPrefs.setVolumeBoostForce(context, it)
+                            controller.forceReport()
+                        },
+                    )
+                }
             }
         }
 

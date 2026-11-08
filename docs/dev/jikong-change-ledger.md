@@ -17,7 +17,47 @@
 
 ---
 
-### v0.2.114 锁屏音量「前台+极空页」增补 + 半死链实验④（强制 7.5ms 连接参数）（2026-11-08 17:35 实施）
+### v0.2.115 播报音量提升重构：所有播报都调 + 智能检测其他程序 + 强制开关（2026-11-08 19:05 实施）
+
+**背景（用户 11-08 18:48 反馈）**：用户实测发现「锁屏/熄屏时没调音量」，且明确纠正核心诉求——**所有播报都调节音量，不是只有连接成功首次收到数据才调**。日志实证：旧逻辑「锁定/熄屏/极空页」三条件下音量提升其实**部分生效**（6 次提升），但 21 次播报里有 15 次没提升（亮屏已解锁、不在极空页场景），体感像「只有首次才调」。用户拍板：
+- **默认智能检测**：播报前查有无**其他程序**在放声音，没有才拉满（避免打断听歌/看视频/导航）。
+- **智能 + 强制两个开关**：主开关「播报时提升音量」默认开；子开关「强制提升」默认关（无条件拉满）。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交 `7faa9a1` 存全文）**：
+1. `SpeakVolumeBoost.kt`（改前 v0.2.114 版）：
+   ```kotlin
+   @Volatile
+   private var extraBoostCondition: (() -> Boolean)? = null
+   fun setExtraBoostCondition(cond: (() -> Boolean)?) { extraBoostCondition = cond }
+
+   fun shouldBoost(context: Context): Boolean {
+       val km = context.getSystemService(KeyguardManager::class.java)
+       val pm = context.getSystemService(PowerManager::class.java)
+       val locked = runCatching { km?.isDeviceLocked == true }.getOrDefault(false)
+       val screenOn = runCatching { pm?.isInteractive == true }.getOrDefault(false)
+       val extra = runCatching { extraBoostCondition?.invoke() == true }.getOrDefault(false)
+       return locked || !screenOn || extra
+   }
+   ```
+2. `JikongController.kt` init 块尾部（改前注入极空页可见）：
+   ```kotlin
+   SpeakVolumeBoost.setExtraBoostCondition { pageVisible }
+   ```
+3. `app/build.gradle.kts`：`versionName = "0.2.114"`。
+
+**改动清单**：
+- `SpeakVolumeBoost.kt`：删 `extraBoostCondition`/`setExtraBoostCondition` 与「锁定/熄屏/极空页」三条件判断；新增 `shouldBoostProvider` 注入字段 + `setShouldBoostProvider`；`shouldBoost` 改为委托注入函数（未注入恒 false 安全默认）；新增 `isOtherAppPlaying(context)`（Android 8.0+ 用 `getActivePlaybackConfigurations` 遍历 usage ∈ {MEDIA/GAME/NAVIGATION_GUIDANCE/ASSISTANT/UNKNOWN}，8.0 以下降级 `isMusicActive`）。`begin`/`end`/`describeLock`/`describeScreen` 不变。
+- `JikongController.kt`：注入改为完整决策函数 `{ ctx -> 主开关关→false；强制开关开→true；否则 !isOtherAppPlaying(ctx) }`；`reportStatus` app 块新增 `volume_boost_enabled`/`volume_boost_force` 两属性（后台镜像）。
+- `JikongPrefs.kt`：新增 `volumeBoostEnabled`（默认 true）/`setVolumeBoostEnabled`、`volumeBoostForce`（默认 false）/`setVolumeBoostForce`，key `jikong_volume_boost_enabled`/`jikong_volume_boost_force`。
+- `JikongPages.kt`：设置页「语音播报」卡新增两个开关（「播报时提升音量」主开关 + 「强制提升」子开关，子开关 `enabled = volumeBoostEnabled`）；状态声明 + `remoteSpeakTick` 重读同步。
+- `versionName` 0.2.114→0.2.115。
+- **不动**：JikongSpeaker（`begin`/`end` 调用点原样）、JikongBleClient、JikongProtocol、握手实验④（12s 阈值、0x96、反射 7.5ms）全部原样——本次只改「数据到手之后的播报音量」环节，与握手零交集。
+
+**回滚配方**：`git checkout 7faa9a1 -- app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/build.gradle.kts`；或 revert 本轮提交。
+
+**触发信号**：无（纯功能重构，非 bug 修复）。
+
+**实施结果（2026-11-08 19:15 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（5m52s，仅存量 deprecation 警告，无害）。首轮编译踩坑 1 个：`AudioPlaybackConfiguration` 无 `isActive` 属性（`getActivePlaybackConfigurations()` 返回的本身就是「活跃播放」列表），删掉 `cfg.isActive &&` 后通过。**未打包分发**（待用户确认打包时机）。
 
 **背景（用户 11-08 17:29 反馈）**：两块诉求，同版本合并打包（用户拍板）：
 - **A｜音量增补**：v0.2.112 的「锁定或熄屏」音量提升已够后台静默场景，但用户还要求**客户端前台且处于极空页**时也临时拉满音量播报（主动打开极空页看数据时播报也要清晰）。

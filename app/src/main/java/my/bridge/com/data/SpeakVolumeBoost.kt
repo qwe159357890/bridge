@@ -2,22 +2,28 @@ package my.bridge.com.data
 
 import android.app.KeyguardManager
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.os.Build
 import android.os.PowerManager
 import timber.log.Timber
 
 /**
- * 后台静默播报音量临时提升（用户 2026-11-08 穿插需求）。
+ * 播报音量临时提升（用户 2026-11-08 需求；v0.2.115 重构策略）。
  *
- * 背景：用户常把媒体音量调得很小，后台静默（熄屏/锁屏）状态下播报（如极空「靠近自动连接」
- * 连上后的电量播报）会因音量太小而听不清。本工具在「设备锁定 或 屏幕熄灭」时把媒体音量
- * 临时拉到最大，播报完成后恢复原值。
+ * 背景：用户常把媒体音量调得很小，播报（尤其后台静默时）会因音量太小而听不清。本工具在
+ * 播报前把媒体音量临时拉到最大、播报完成后恢复原值。
  *
- * 判断策略（用户拍板「锁定或熄屏」，v0.2.114 增补「前台极空页」）：
- * shouldBoost = isDeviceLocked() || !isInteractive() || 极空页可见。
- * 覆盖「有锁/无锁 + 熄屏」「亮屏锁屏界面」，以及「前台停留在极空页」（用户主动查看数据时
- * 播报也要清晰）；仅在「亮屏已解锁且不在极空页（用户正在用手机其它页面/应用）」时不提升，
- * 尊重用户当前音量设置。仅动媒体流（STREAM_MUSIC），不动铃声/闹钟/通知/系统流。
+ * 判断策略（v0.2.115 用户拍板「智能检测 + 强制开关」）：
+ * - 主开关（默认开）关闭 → 不提升；
+ * - 强制开关（默认关）打开 → 无条件提升（只要音量不是最大就拉满）；
+ * - 否则走「智能检测」：播报前查有无**其他程序**正在播放声音（音乐/视频/游戏/导航），
+ *   没有才提升（避免打断用户正在听的内容）。
+ *
+ * 本工具只提供「拉满/恢复」与「检测其他程序是否在播放」的纯能力；「是否该提升」的完整
+ * 决策（读 [JikongPrefs] 开关 + 调 [isOtherAppPlaying]）由 jikong 包通过
+ * [setShouldBoostProvider] 注入——data 包不反向依赖 jikong 包。未注入时 [shouldBoost] 恒
+ * false（安全默认，不提升）。
  *
  * 幂等设计：同一时刻多次 [begin] 只记录一次原始音量、不重复拉高；直到最后一次 [end]
  * 才真正恢复（对齐 JikongSpeaker「同一时刻只保留一个播放实例」的语义，防连续/重叠播报
@@ -32,16 +38,16 @@ object SpeakVolumeBoost {
     private var original = -1
 
     /**
-     * 额外提升条件（v0.2.114「前台 + 极空页」）：由 JikongController 注入「极空页是否可见」
-     * 判定。为避免 data 包反向依赖 jikong 包，用注入 lambda 解耦；未注入时此条件恒不命中
-     * （即退回「锁定或熄屏」两条件）。
+     * 「是否应提升音量」决策函数（v0.2.115）：由 JikongController 注入（读 JikongPrefs 开关
+     * + 调 [isOtherAppPlaying]）。为避免 data 包反向依赖 jikong 包，用注入 lambda 解耦；
+     * 未注入时恒 false（安全默认，不提升）。
      */
     @Volatile
-    private var extraBoostCondition: (() -> Boolean)? = null
+    private var shouldBoostProvider: ((Context) -> Boolean)? = null
 
-    /** 注入额外提升条件（如「极空页可见」）。传 null 清除。 */
-    fun setExtraBoostCondition(cond: (() -> Boolean)?) {
-        extraBoostCondition = cond
+    /** 注入「是否应提升音量」决策函数。传 null 清除（退回「永不提升」）。 */
+    fun setShouldBoostProvider(provider: ((Context) -> Boolean)?) {
+        shouldBoostProvider = provider
     }
 
     /**
@@ -76,15 +82,40 @@ object SpeakVolumeBoost {
         Timber.i("后台静默播报音量恢复：媒体 → %d", target)
     }
 
-    /** 是否应提升音量：设备锁定 或 屏幕熄灭 或 前台极空页（v0.2.114 增补）。 */
-    fun shouldBoost(context: Context): Boolean {
-        val km = context.getSystemService(KeyguardManager::class.java)
-        val pm = context.getSystemService(PowerManager::class.java)
-        val locked = runCatching { km?.isDeviceLocked == true }.getOrDefault(false)
-        val screenOn = runCatching { pm?.isInteractive == true }.getOrDefault(false)
-        val extra = runCatching { extraBoostCondition?.invoke() == true }.getOrDefault(false)
-        return locked || !screenOn || extra
+    /** 是否应提升音量（v0.2.115）：委托给注入的决策函数；未注入恒 false（安全默认，不提升）。 */
+    fun shouldBoost(context: Context): Boolean =
+        runCatching { shouldBoostProvider?.invoke(context) == true }.getOrDefault(false)
+
+    /**
+     * 是否有**其他程序**正在播放声音（音乐/视频/游戏/导航等）。
+     *
+     * Android 8.0+（API 26）用 [AudioManager.getActivePlaybackConfigurations] 遍历当前活跃
+     * 播放配置，命中媒体/游戏/导航等 usage 即视为「有程序在放声音」；8.0 以下降级用
+     * [AudioManager.isMusicActive]。调用时机在「播报真正开始之前」（此刻我们自己的播报尚未
+     * 启动），所以检测到的活跃播放天然属于其他 app，无需排除自己。
+     */
+    fun isOtherAppPlaying(context: Context): Boolean {
+        val am = context.getSystemService(AudioManager::class.java) ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val configs = runCatching { am.activePlaybackConfigurations }.getOrNull()
+                ?: return false
+            configs.any { cfg ->
+                cfg.audioAttributes.usage in OTHER_APP_PLAYING_USAGES
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { am.isMusicActive }.getOrDefault(false)
+        }
     }
+
+    /** 视为「有程序在放声音」的 usage 集合（媒体/游戏/导航/助手/未知）。 */
+    private val OTHER_APP_PLAYING_USAGES = setOf(
+        AudioAttributes.USAGE_MEDIA,
+        AudioAttributes.USAGE_GAME,
+        AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE,
+        AudioAttributes.USAGE_ASSISTANT,
+        AudioAttributes.USAGE_UNKNOWN,
+    )
 
     /**
      * 查询锁屏状态（get_lock_state 命令）。

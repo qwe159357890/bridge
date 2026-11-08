@@ -221,6 +221,33 @@ object JikongPrefs {
     /** edge-tts 在线合成音色（服务端 /api/tts 用；本地回退不受影响）。 */
     const val TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 
+    // ==================== 播报音量提升（v0.2.115） ====================
+
+    /**
+     * 音量提升主开关（默认开）：播报前临时把媒体音量拉到最大、播完恢复。
+     * 开启后走「智能检测」——播报前查有无其他程序在放声音，没有才提升（避免打断听歌/看视频/导航）。
+     */
+    private const val KEY_VOLUME_BOOST_ENABLED = "jikong_volume_boost_enabled"
+
+    /**
+     * 强制提升子开关（默认关）：打开后跳过「其他程序在放声音」检测，所有播报只要音量不是最大就拉满。
+     */
+    private const val KEY_VOLUME_BOOST_FORCE = "jikong_volume_boost_force"
+
+    fun volumeBoostEnabled(context: Context): Boolean =
+        sp(context).getBoolean(KEY_VOLUME_BOOST_ENABLED, true)
+
+    fun setVolumeBoostEnabled(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(KEY_VOLUME_BOOST_ENABLED, enabled).apply()
+    }
+
+    fun volumeBoostForce(context: Context): Boolean =
+        sp(context).getBoolean(KEY_VOLUME_BOOST_FORCE, false)
+
+    fun setVolumeBoostForce(context: Context, force: Boolean) {
+        sp(context).edit().putBoolean(KEY_VOLUME_BOOST_FORCE, force).apply()
+    }
+
     // ==================== 靠近自动连接（v0.2.107） ====================
 
     /** 靠近自动连接开关。默认关（保持现状：必须进极空页才触发连接/回连）。 */

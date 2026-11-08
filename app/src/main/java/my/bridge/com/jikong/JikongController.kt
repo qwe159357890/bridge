@@ -329,10 +329,14 @@ class JikongController private constructor() {
         JikongBleClient.onDataReceived = { bytes ->
             handleData(bytes)
         }
-        // v0.2.114：注入「前台 + 极空页」音量提升条件。pageVisible 由 setPageVisible 维护，
-        // 极空页可见即代表「前台 + 极空页」（Compose 页面可见必然 App 在前台），无需额外
-        // 判前台。注入发生在单例首次实例化时，此后 setPageVisible 的每次变化都被正确反映。
-        SpeakVolumeBoost.setExtraBoostCondition { pageVisible }
+        // v0.2.115：注入「是否应提升音量」决策函数——主开关（默认开）关闭则不提升；
+        // 强制开关（默认关）打开则无条件提升；否则智能检测「有无其他程序在放声音」，
+        // 没有才提升。注入发生在单例首次实例化时，此后开关变化都被实时反映。
+        SpeakVolumeBoost.setShouldBoostProvider { ctx ->
+            if (!JikongPrefs.volumeBoostEnabled(ctx)) return@setShouldBoostProvider false
+            if (JikongPrefs.volumeBoostForce(ctx)) return@setShouldBoostProvider true
+            !SpeakVolumeBoost.isOtherAppPlaying(ctx)
+        }
     }
 
     // ==================== 连接控制 ====================
@@ -1266,6 +1270,9 @@ class JikongController private constructor() {
                         addProperty("speak_warn_repeat_min", JikongPrefs.speakWarnRepeatMin(ctx))
                         // v0.2.102：小喇叭静音（后台「语音播报」卡镜像/同步用）
                         addProperty("speak_muted", JikongPrefs.muted(ctx))
+                        // v0.2.115：播报音量提升（主开关 + 强制开关，后台镜像/同步用）
+                        addProperty("volume_boost_enabled", JikongPrefs.volumeBoostEnabled(ctx))
+                        addProperty("volume_boost_force", JikongPrefs.volumeBoostForce(ctx))
                         addProperty("elec_price", JikongPrefs.elecPrice(ctx))
                         addProperty("odo_discount", JikongPrefs.odoDiscount(ctx))
                         // v0.2.107：靠近自动连接模式状态（管理后台可见；注意 reportStatus
