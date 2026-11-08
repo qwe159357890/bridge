@@ -11,6 +11,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.bridge.com.data.SpeakVolumeBoost
 import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import timber.log.Timber
 
@@ -328,6 +329,10 @@ class JikongController private constructor() {
         JikongBleClient.onDataReceived = { bytes ->
             handleData(bytes)
         }
+        // v0.2.114：注入「前台 + 极空页」音量提升条件。pageVisible 由 setPageVisible 维护，
+        // 极空页可见即代表「前台 + 极空页」（Compose 页面可见必然 App 在前台），无需额外
+        // 判前台。注入发生在单例首次实例化时，此后 setPageVisible 的每次变化都被正确反映。
+        SpeakVolumeBoost.setExtraBoostCondition { pageVisible }
     }
 
     // ==================== 连接控制 ====================
@@ -645,9 +650,10 @@ class JikongController private constructor() {
                         // v0.2.80 首连半死链自愈（用户真机实证）：蓝牙闲置 ~10 分钟后首连，
                         // 链路建立但数据通道打不通（BMS 蓝牙模块休眠未醒），旧流程要干等
                         // ~1min 直到 status=8 断开；而自动重连建的第 2 条链路立即有数据。
-                        // ⇒ 20s 内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
-                        // 重连），把 1 分钟缩短到 ~22s。连续重建限 3 次，防「休眠↔重建」死循环。
-                        if (now - connectAt > 20_000) {
+                        // ⇒ 12s 内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
+                        // 重连），把 1 分钟缩短到 ~14s。连续重建限 3 次，防「休眠↔重建」死循环。
+                        // v0.2.114：实验②a（放宽到 20s）真机实证更差（97s/5 次连接），改回 12s。
+                        if (now - connectAt > 12_000) {
                             if (datalessRecycles < 3) {
                                 datalessRecycles++
                                 dataRecyclePending = true

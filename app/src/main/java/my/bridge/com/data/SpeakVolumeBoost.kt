@@ -13,8 +13,10 @@ import timber.log.Timber
  * 连上后的电量播报）会因音量太小而听不清。本工具在「设备锁定 或 屏幕熄灭」时把媒体音量
  * 临时拉到最大，播报完成后恢复原值。
  *
- * 判断策略（用户拍板「锁定或熄屏」）：shouldBoost = isDeviceLocked() || !isInteractive()。
- * 覆盖「有锁/无锁 + 熄屏」以及「亮屏锁屏界面」；仅在「亮屏已解锁（用户正在用手机）」时不提升，
+ * 判断策略（用户拍板「锁定或熄屏」，v0.2.114 增补「前台极空页」）：
+ * shouldBoost = isDeviceLocked() || !isInteractive() || 极空页可见。
+ * 覆盖「有锁/无锁 + 熄屏」「亮屏锁屏界面」，以及「前台停留在极空页」（用户主动查看数据时
+ * 播报也要清晰）；仅在「亮屏已解锁且不在极空页（用户正在用手机其它页面/应用）」时不提升，
  * 尊重用户当前音量设置。仅动媒体流（STREAM_MUSIC），不动铃声/闹钟/通知/系统流。
  *
  * 幂等设计：同一时刻多次 [begin] 只记录一次原始音量、不重复拉高；直到最后一次 [end]
@@ -28,6 +30,19 @@ object SpeakVolumeBoost {
 
     /** 提升前记录的媒体音量档位（未提升时为 -1）。 */
     private var original = -1
+
+    /**
+     * 额外提升条件（v0.2.114「前台 + 极空页」）：由 JikongController 注入「极空页是否可见」
+     * 判定。为避免 data 包反向依赖 jikong 包，用注入 lambda 解耦；未注入时此条件恒不命中
+     * （即退回「锁定或熄屏」两条件）。
+     */
+    @Volatile
+    private var extraBoostCondition: (() -> Boolean)? = null
+
+    /** 注入额外提升条件（如「极空页可见」）。传 null 清除。 */
+    fun setExtraBoostCondition(cond: (() -> Boolean)?) {
+        extraBoostCondition = cond
+    }
 
     /**
      * 「锁定或熄屏」时记录媒体音量并拉到最大；否则不动作。
@@ -61,13 +76,14 @@ object SpeakVolumeBoost {
         Timber.i("后台静默播报音量恢复：媒体 → %d", target)
     }
 
-    /** 是否应提升音量：设备锁定 或 屏幕熄灭（= 用户未在主动使用手机）。 */
+    /** 是否应提升音量：设备锁定 或 屏幕熄灭 或 前台极空页（v0.2.114 增补）。 */
     fun shouldBoost(context: Context): Boolean {
         val km = context.getSystemService(KeyguardManager::class.java)
         val pm = context.getSystemService(PowerManager::class.java)
         val locked = runCatching { km?.isDeviceLocked == true }.getOrDefault(false)
         val screenOn = runCatching { pm?.isInteractive == true }.getOrDefault(false)
-        return locked || !screenOn
+        val extra = runCatching { extraBoostCondition?.invoke() == true }.getOrDefault(false)
+        return locked || !screenOn || extra
     }
 
     /**

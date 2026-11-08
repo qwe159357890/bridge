@@ -335,9 +335,12 @@ object JikongBleClient {
             if (isStale(g)) return
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Timber.tag(TAG).i("GATT 已连接，先协商 MTU 再发现服务")
-                // v0.2.110 实验①：连接建立后立即请求 HIGH 优先级（7.5ms 连接间隔），
-                // 复刻官方「高频连接事件持续唤醒休眠 MCU」的时序（v0.2.82 dexdump 逆向实证）。
+                // v0.2.110 实验①：连接建立后立即请求 HIGH 优先级（Android 6+ 实际映射
+                // 11.25~15ms 连接间隔），复刻官方「高频连接事件持续唤醒休眠 MCU」的时序
+                //（v0.2.82 dexdump 逆向实证）。
                 runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }
+                // v0.2.114 实验④：反射调用 AOSP 隐藏 API 强制 7.5ms（公开 API 做不到真 7.5ms）。
+                forceLeConnectionParams(g)
                 servicesRequested = false
                 cccdRetries = 0
                 notifyLogBudget = 3
@@ -443,6 +446,39 @@ object JikongBleClient {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * v0.2.114 实验④：反射调用 AOSP 隐藏 API `requestLeConnectionUpdate` 强制 7.5ms 连接间隔。
+     *
+     * 背景：公开 API 只有 `requestConnectionPriority`，Android 6.0+ 把 HIGH 映射到
+     * 11.25~15ms（非 7.5ms，见 AOSP GattService.connectionParameterUpdate 的
+     * gatt_high_priority_min_interval 资源）。官方 APP 能一次唤醒休眠 BMS，疑似靠更短
+     * 连接间隔产生更高频连接事件。本方法反射 @hide 的 `requestLeConnectionUpdate`，
+     * 直接下发 LE Connection Update 请求（min=max=6 → 7.5ms、latency=0、timeout=200×10ms）。
+     * 方法不存在/反射失败/被拒 → 静默降级（HIGH 已在前面请求过，不影响链路）。
+     * 注：7.5ms 可能被 BMS（CC2541）拒绝，能否生效以真机 HCI/行为为准；本方法只保证「发起请求」。
+     */
+    @SuppressLint("MissingPermission")
+    private fun forceLeConnectionParams(g: BluetoothGatt) {
+        runCatching {
+            val m = BluetoothGatt::class.java.getMethod(
+                "requestLeConnectionUpdate",
+                Int::class.javaPrimitiveType,   // minConnectionInterval（单位 1.25ms）
+                Int::class.javaPrimitiveType,   // maxConnectionInterval
+                Int::class.javaPrimitiveType,   // slaveLatency
+                Int::class.javaPrimitiveType,   // supervisionTimeout（单位 10ms）
+                Int::class.javaPrimitiveType,   // minConnectionEventLen
+                Int::class.javaPrimitiveType,   // maxConnectionEventLen
+            )
+            val ok = m.invoke(g, 6, 6, 0, 200, 0, 0) as? Boolean ?: false
+            Timber.tag(TAG).i(
+                "实验④强制连接参数：requestLeConnectionUpdate 反射%s（7.5ms/7.5ms/latency0/timeout2s）",
+                if (ok) "成功" else "返回 false",
+            )
+        }.onFailure { e ->
+            Timber.tag(TAG).w("实验④反射 requestLeConnectionUpdate 失败（降级 HIGH）：%s", e.message)
         }
     }
 

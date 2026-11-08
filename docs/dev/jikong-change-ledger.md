@@ -17,6 +17,52 @@
 
 ---
 
+### v0.2.114 锁屏音量「前台+极空页」增补 + 半死链实验④（强制 7.5ms 连接参数）（2026-11-08 17:35 实施）
+
+**背景（用户 11-08 17:29 反馈）**：两块诉求，同版本合并打包（用户拍板）：
+- **A｜音量增补**：v0.2.112 的「锁定或熄屏」音量提升已够后台静默场景，但用户还要求**客户端前台且处于极空页**时也临时拉满音量播报（主动打开极空页看数据时播报也要清晰）。
+- **B｜半死链实验④**：用户反馈「靠近几分钟不播报 + 切极空页重连几次才有数据」，日志实证实验②a（20s 阈值）**未命中且更差**（5 次连接 97s），拍板「改回 12s + 强制 7.5ms 连接参数」。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交 `7faa9a1` 存全文）**：
+1. `SpeakVolumeBoost.kt` `shouldBoost`（改前只有两条件）：
+   ```kotlin
+   fun shouldBoost(context: Context): Boolean {
+       val km = context.getSystemService(KeyguardManager::class.java)
+       val pm = context.getSystemService(PowerManager::class.java)
+       val locked = runCatching { km?.isDeviceLocked == true }.getOrDefault(false)
+       val screenOn = runCatching { pm?.isInteractive == true }.getOrDefault(false)
+       return locked || !screenOn
+   }
+   ```
+2. `JikongController.kt` init 块尾部（改前无注入）：
+   ```kotlin
+   JikongBleClient.onDataReceived = { bytes ->
+       handleData(bytes)
+   }
+   ```
+3. `JikongController.kt` startPolling 重建阈值（改前 20s）：
+   ```kotlin
+   if (now - connectAt > 20_000) {
+   ```
+4. `JikongBleClient.kt` STATE_CONNECTED（改前只有 HIGH 请求）：
+   ```kotlin
+   runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }
+   ```
+5. `app/build.gradle.kts`：`versionName = "0.2.113"`。
+
+**改动清单**：
+- **A｜音量**：`SpeakVolumeBoost.kt` 加 `extraBoostCondition` 字段 + `setExtraBoostCondition(cond)` setter，`shouldBoost` 加 `|| (extraBoostCondition?.invoke() == true)`；`JikongController.kt` 加 import + init 注入 `SpeakVolumeBoost.setExtraBoostCondition { pageVisible }`。
+- **B｜半死链实验④**：`JikongController.kt` startPolling 重建阈值 20_000→12_000（回退实验②a 的失败改动，恢复实验①基线）；`JikongBleClient.kt` 加 `forceLeConnectionParams(g)`——反射调用 AOSP 隐藏 API `requestLeConnectionUpdate(6, 6, 0, 200, 0, 0)`（min=max=7.5ms、latency=0、timeout=2s），失败静默降级 HIGH（公开 API 只有 requestConnectionPriority，HIGH 在 Android 6+ 仅 11.25~15ms，真 7.5ms 只能反射 @hide 方法）。
+- `versionName` 0.2.113→0.2.114。
+
+**回滚配方**：`git checkout 7faa9a1 -- app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt app/build.gradle.kts`；或 revert 本轮提交。
+
+**触发信号**：B 实验④归因看日志——`实验④强制连接参数：requestLeConnectionUpdate 反射成功` vs `实验④反射 requestLeConnectionUpdate 失败（降级 HIGH）`。
+
+**实施结果（2026-11-08 17:53 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（1m28s，仅存量 deprecation 警告，无害）。**未打包分发**。
+
+---
+
 ### v0.2.113 锁屏/息屏回执文案去歧义 + 管理后台「查看详情」弹窗（2026-11-08 16:35 实施）
 
 **背景（用户 11-08 16:31 反馈，v0.2.112 真机验证后）**：①回执文案 `screen_on=false（屏幕点亮）` 自相矛盾——括号里「屏幕点亮」是固定字段说明，与 `false` 读起来冲突；②希望命令历史回执列加「查看详情」按钮，点开格式化展示状态。两条诉求分别落在两端：**回执文案在客户端**（手机端产生，需重打包 APK）；**详情弹窗在管理后台**（admin 前端，构建部署即生效，不依赖 APK）。
