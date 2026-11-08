@@ -39,7 +39,7 @@
 **回滚配方**：`git revert` 本轮提交；或手改：Command.kt/CommandModule 删 set_config 条目、JikongPages 删两处 tick 订阅与 9 处 forceReport、jikong.py 回三 action 白名单、command_catalog 删条目、admin 回退 connbar/Tab3/侧栏卡/watch 四处→admin npm run build；versionName 回 0.2.103。
 **触发信号**：后台首页看不到小喇叭 / 后台改仪表盘·单位·电费·折扣手机不生效 / 手机改设置后台刷新不同步 / 后台极空页白屏（TDZ）。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 09:40 回填）**：编译/构建全过（admin vue-tsc+vite、客户端 compileDebugKotlin、server py_compile、assembleDebug 46,037,962B）。中途两次声明顺序报错（admin cfg* TDZ、SettingsView unit/price/discount 在 Effect 后声明 Unresolved），均前置声明后过。提交 `ff1c8cb` 直连推送；tag v0.2.104 推送触发 CI 打包成功，APK 0.2.104（aapt 实证，sha256 `828b748f…`，46,037,962 字节）resume_release 下载分发 updates+Downloads（Downloads 删 0.2.103 旧包）+update.json。**服务端 jikong.py/command_catalog.py 有改动，用户明确不需代启——服务端重启由用户自行完成**（重启前 set_config 会 400 未知 action，重启后即通）。⚠ 新坑：release.py 不支持 --help，传参会被当 tag 执行（本轮 `git tag -f --help` 恰好显示帮助未建误 tag，侥幸）；看用法直接读脚本头注释。admin npm run build 已含本改动，用户 dev/build 后即可见。
 
 ### v0.2.103 后台/客户端八项修复（2026-11-08 08:47 实施）
 
