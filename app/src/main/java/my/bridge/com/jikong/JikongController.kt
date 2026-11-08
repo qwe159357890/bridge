@@ -99,6 +99,40 @@ class JikongController private constructor() {
     var demoMode: Boolean = false
 
     /**
+     * v0.2.102：演示模式内存台账（原 StatsView 私有 remember 状态）。
+     * 进演示灌入 [jkDemoRecords] 基线；演示中记/删由统计页直接改此列表；
+     * 退出演示清空（真实台账读 JikongStatsStore，与演示列表互不污染）。
+     * buildReportStatus 在演示期间把该列表报为 demo_stats，管理后台统计页同源显示。
+     */
+    val demoOdoRecords: MutableList<JkMileageRecord> =
+        androidx.compose.runtime.mutableStateListOf()
+
+    /** 演示基线（v0.2.91：30 天 7 条，段电耗 31~40 Wh/km 梯度，数值取自真机实测样例）。 */
+    private fun jkDemoRecords(): List<JkMileageRecord> {
+        val now = System.currentTimeMillis()
+        val twoDays = 2 * 24 * 3600_000L
+        val base = listOf(
+            Triple(11000.0f, 742.6f, 73.6f),
+            Triple(11042.3f, 763.9f, 73.6f),
+            Triple(11089.6f, 788.3f, 73.8f),
+            Triple(11130.4f, 806.5f, 73.4f),
+            Triple(11176.9f, 826.2f, 73.7f),
+            Triple(11218.2f, 848.6f, 74.0f),
+            Triple(11260.0f, 868.0f, 73.6f),
+        )
+        return base.mapIndexed { i, (odo, ah, v) ->
+            JkMileageRecord(
+                id = "demo_$i",
+                ts = now - (6 - i) * twoDays,
+                odoKm = odo,
+                cycleAh = ah,
+                volt = v,
+                synced = true,
+            )
+        }
+    }
+
+    /**
      * v0.2.93：连接尝试进行中（controller.connect 全程为 true，含 mutex 内等待）。
      * UI 层用它判断「是否已有连接在飞」：自动连接跳过、点扫描不再叠加默认直连。
      */
@@ -244,7 +278,7 @@ class JikongController private constructor() {
                     // 真机连接成功即退出演示模式
                     // v0.2.100：退出演示先清仪表盘演示注入值（gpsTripKm/tripSeconds 残留
                     // 会混入真机统计——2026-11-07 实证 262.8km/h 真因）
-                    if (demoMode) SpeedDash.clearDemoInjection()
+                    if (demoMode) { SpeedDash.clearDemoInjection(); demoOdoRecords.clear() }
                     demoMode = false
                     // v0.2.77：成功连接后启用自动重连（此后意外断开将自动恢复；重连成功即归零）
                     autoReconnectEnabled = true
@@ -279,6 +313,7 @@ class JikongController private constructor() {
             // v0.2.100：仪表盘演示注入值同步清理（同 demo 残留混入真机统计问题）。
             demoMode = false
             SpeedDash.clearDemoInjection()
+            demoOdoRecords.clear()
             status = JikongStatus()
             lastDataFrameAt = 0L
             hasDataFrame = false
@@ -373,6 +408,10 @@ class JikongController private constructor() {
         s.lastUpdateAt = System.currentTimeMillis()
         // v0.2.91：演示模式视为「已读到数据」——统计页记一笔门控放行（配合内存演示台账）
         hasDataFrame = true
+        // v0.2.102：演示台账迁入控制器（原 StatsView 内 remember）——管理后台统计页要
+        // 与手机演示一致，必须在 jikong_state 上报 demo_stats；Composable 私有状态报不了。
+        demoOdoRecords.clear()
+        demoOdoRecords.addAll(jkDemoRecords())
         // v0.2.98：仪表盘默认模拟数据（用户拍板：进入演示即显示这套默认值，点「刷新」随机重生成）
         SpeedDash.injectDemo(
             speed = 18.4f, avgSpeed = 15.2f, range = 58f,
@@ -575,7 +614,7 @@ class JikongController private constructor() {
                 if (ok) {
                     Timber.tag(TAG).i("自动重连成功（失败窗口归零）")
                     // v0.2.100：重连成功退出演示时同步清仪表盘演示注入值
-                    if (demoMode) SpeedDash.clearDemoInjection()
+                    if (demoMode) { SpeedDash.clearDemoInjection(); demoOdoRecords.clear() }
                     demoMode = false
                     // v0.2.89：重连成功同样重置「上一帧 SOC」（首帧只与上次播报值比较）
                     prevAnnounceSoc = -1
@@ -645,6 +684,37 @@ class JikongController private constructor() {
             "语音播报：%s（上次 SOC=%d，changed=%s due=%s warnDue=%s forced=%s muted=%s）",
             text, lastSoc, changed, due, warnDue, forced, JikongPrefs.muted(ctx),
         )
+    }
+
+    /**
+     * v0.2.102：立即播报仪表盘数值（管理后台双击表盘 → jikong_speak 命令 → 本方法；
+     * 手机端双击表盘/时速卡同走此路）。话术与 v0.2.92~98 逐版演进结果一致：
+     * 当前电量 N%【+低电提醒】+有时速追加 时速X公里+剩余续航Y公里。
+     * 显式触发语义：绕过小喇叭静音（与手机双击一致）；demoMode/未读到 SOC 则不播。
+     */
+    fun speakDashboardNow(context: Context) {
+        val soc = status.soc
+        if (soc !in 0..100) return
+        val low = soc < JikongPrefs.speakLowSoc(context)
+        val segs = mutableListOf("当前电量", soc.toString())
+        if (low) segs.add("电量低，请注意充电")
+        val speed = SpeedDash.speedKmh
+        if (speed > 0f) {
+            segs.add("时速"); segs.add(kotlin.math.round(speed).toInt().toString()); segs.add("公里")
+            val range = SpeedDash.rangeKm
+            if (range >= 0f) {
+                segs.add("剩余续航"); segs.add(kotlin.math.round(range).toInt().toString()); segs.add("公里")
+            }
+        }
+        val sb = StringBuilder("当前电量 $soc%")
+        if (low) sb.append("，电量低，请注意充电")
+        if (speed > 0f) {
+            sb.append("，时速 %.0f 公里".format(speed))
+            val range = SpeedDash.rangeKm
+            if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
+        }
+        JikongSpeaker.speakSegs(context, segs, sb.toString())
+        Timber.tag(TAG).i("仪表盘播报（显式触发）：%s", sb)
     }
 
     // ==================== 数据读取 ====================
@@ -1052,8 +1122,27 @@ class JikongController private constructor() {
                         addProperty("speak_interval_min", JikongPrefs.speakIntervalMin(ctx))
                         addProperty("speak_low_soc", JikongPrefs.speakLowSoc(ctx))
                         addProperty("speak_warn_repeat_min", JikongPrefs.speakWarnRepeatMin(ctx))
+                        // v0.2.102：小喇叭静音（后台「语音播报」卡镜像/同步用）
+                        addProperty("speak_muted", JikongPrefs.muted(ctx))
                         addProperty("elec_price", JikongPrefs.elecPrice(ctx))
                         addProperty("odo_discount", JikongPrefs.odoDiscount(ctx))
+                    })
+                }
+            } catch (_: Exception) { }
+            // ---- v0.2.102：演示模式内存台账（后台统计页与手机演示同源显示） ----
+            try {
+                if (demoMode && demoOdoRecords.isNotEmpty()) {
+                    add("demo_stats", JsonObject().apply {
+                        add("records", com.google.gson.JsonArray().apply {
+                            demoOdoRecords.forEach { r ->
+                                add(JsonObject().apply {
+                                    addProperty("ts_ms", r.ts)
+                                    addProperty("odo_km", r.odoKm.toDouble())
+                                    addProperty("cycle_ah", r.cycleAh.toDouble())
+                                    addProperty("volt", r.volt.toDouble())
+                                })
+                            }
+                        })
                     })
                 }
             } catch (_: Exception) { }

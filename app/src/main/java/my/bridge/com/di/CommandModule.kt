@@ -336,6 +336,16 @@ object CommandModule {
         Command.JIKONG_WRITE_PARAM to CommandExecutor { command ->
             executeJikongWriteParam(command)
         },
+        // ---- v0.2.102：管理后台↔手机同步（远程播报/主题/播报设置）----
+        Command.JIKONG_SPEAK to CommandExecutor { command ->
+            executeJikongSpeak(context, command)
+        },
+        Command.JIKONG_SET_THEME to CommandExecutor { command ->
+            executeJikongSetTheme(context, command)
+        },
+        Command.JIKONG_SET_SPEAK to CommandExecutor { command ->
+            executeJikongSetSpeak(context, command)
+        },
         // ---- 界面自动化增强（v0.2.40：委托 automation/commands 执行器）----
         Command.UI_LONG_CLICK to CommandExecutor { command ->
             my.bridge.com.automation.commands.UiCommandExecutors.longClick(command)
@@ -3118,4 +3128,84 @@ object CommandModule {
     }
 
     private fun fmt2(v: Float): String = if (kotlin.math.abs(v) >= 100) "%.1f".format(v) else "%.2f".format(v)
+
+    /** jikong_speak（v0.2.102）：远程触发仪表盘播报（与手机双击表盘同一组合逻辑，绕过静音）。 */
+    private fun executeJikongSpeak(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val s = my.bridge.com.jikong.JikongController.instance.status
+            if (s.soc !in 0..100) {
+                CommandResult(id, name, false, "未读到有效电量（SOC=${s.soc}），无法播报")
+            } else {
+                my.bridge.com.jikong.JikongController.instance.speakDashboardNow(context)
+                CommandResult(id, name, true, "已触发手机播报仪表盘数值（电量${s.soc}%）")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_speak 执行失败")
+            CommandResult(id, name, false, "播报失败：${e.message}")
+        }
+    }
+
+    /** jikong_set_theme（v0.2.102）：后台切换深/浅色同步到手机（持久化 + 页面即时生效）。 */
+    private fun executeJikongSetTheme(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val mode = command.params.get("mode")?.asInt
+            ?: return CommandResult(id, name, false, "缺少参数 mode（0=自动 1=浅色 2=深色）")
+        return try {
+            my.bridge.com.jikong.JikongPrefs.setTheme(context, mode)
+            my.bridge.com.ui.JkUiState.remoteThemeTick++   // 页面订阅 tick 即时重读生效
+            my.bridge.com.jikong.JikongController.instance.forceReport()
+            CommandResult(id, name, true, "主题已切换（mode=$mode），手机端即时生效")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_set_theme 执行失败")
+            CommandResult(id, name, false, "切主题失败：${e.message}")
+        }
+    }
+
+    /** jikong_set_speak（v0.2.102）：后台「语音播报」卡同步小喇叭/播报设置（字段可选，仅改传了的）。 */
+    private fun executeJikongSetSpeak(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val p = command.params
+        return try {
+            val applied = mutableListOf<String>()
+            p.get("muted")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asBoolean
+                my.bridge.com.jikong.JikongPrefs.setMuted(context, v)
+                applied.add(if (v) "已静音" else "已恢复播报")
+            }
+            p.get("speak_enabled")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asBoolean
+                my.bridge.com.jikong.JikongPrefs.setSpeakEnabled(context, v)
+                applied.add(if (v) "语音播报开" else "语音播报关")
+            }
+            p.get("speak_interval_min")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asInt.coerceIn(1, 120)
+                my.bridge.com.jikong.JikongPrefs.setSpeakIntervalMin(context, v)
+                applied.add("播报间隔 ${v} 分钟")
+            }
+            p.get("speak_low_soc")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asInt.coerceIn(1, 50)
+                my.bridge.com.jikong.JikongPrefs.setSpeakLowSoc(context, v)
+                applied.add("低电阈值 ${v}%")
+            }
+            p.get("speak_warn_repeat_min")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asInt.coerceIn(1, 60)
+                my.bridge.com.jikong.JikongPrefs.setSpeakWarnRepeatMin(context, v)
+                applied.add("提醒间隔 ${v} 分钟")
+            }
+            if (applied.isEmpty()) {
+                CommandResult(id, name, false, "无有效参数（muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min）")
+            } else {
+                my.bridge.com.ui.JkUiState.remoteSpeakTick++
+                my.bridge.com.jikong.JikongController.instance.forceReport()
+                CommandResult(id, name, true, "播报设置已同步：" + applied.joinToString("；"))
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_set_speak 执行失败")
+            CommandResult(id, name, false, "同步播报设置失败：${e.message}")
+        }
+    }
 }

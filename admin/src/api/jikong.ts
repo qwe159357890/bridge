@@ -72,7 +72,7 @@ export interface JikongStatus {
     hist_avg_wh_km?: number
     updated_at?: number
   }
-  /** v0.2.86：手机本地设置；v0.2.101 补齐 1:1 复刻所需（演示/单位/播报/电费/折扣） */
+  /** v0.2.86：手机本地设置；v0.2.101 补齐 1:1 复刻所需（演示/单位/播报/电费/折扣）；v0.2.102 补 speak_muted */
   app?: {
     theme?: number
     dash_enabled?: boolean
@@ -82,8 +82,14 @@ export interface JikongStatus {
     speak_interval_min?: number
     speak_low_soc?: number
     speak_warn_repeat_min?: number
+    /** v0.2.102：小喇叭静音（后台「语音播报」卡镜像/同步） */
+    speak_muted?: boolean
     elec_price?: number
     odo_discount?: number
+  }
+  /** v0.2.102：演示模式内存台账（与手机统计页演示同源；后台统计页演示期间用它替代 MySQL） */
+  demo_stats?: {
+    records: { ts_ms: number; odo_km: number; cycle_ah: number; volt: number }[]
   }
 }
 
@@ -137,12 +143,14 @@ export function getJikongOdometer(deviceId: string): Promise<{ device_id: string
 // ==================== 极空控制命令 ====================
 
 export interface JikongControlParams {
-  action: 'mos' | 'balance' | 'write_param'
+  action: 'mos' | 'balance' | 'write_param' | 'speak' | 'set_theme' | 'set_speak'
   charge?: boolean
   discharge?: boolean
   on?: boolean
   param_id?: number
   value?: number
+  /** v0.2.102：speak/set_theme/set_speak 透传参数 */
+  params?: Record<string, unknown>
 }
 
 export function jikongControl(deviceId: string, params: JikongControlParams): Promise<{ command_id: string; delivered: boolean }> {

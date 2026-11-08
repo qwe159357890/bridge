@@ -531,6 +531,24 @@ COMMANDS: list[dict[str, Any]] = [
                  placeholder="1~255", description="参数编号（见极空协议文档参数表）"),
           _param("value", "参数值", PARAM_TYPE_NUMBER, required=True,
                  placeholder="整数", description="原始参数值（单位由参数类型决定）")]),
+    # ---- v0.2.102：管理后台↔手机同步（远程播报/主题/播报设置；极空页交互用） ----
+    _cmd("jikong_speak", "极空播报", "jikong", "🔊",
+         "远程触发手机播报仪表盘数值（当前电量+低电提醒+时速/续航，与手机双击表盘同一话术；"
+         "显式触发，绕过小喇叭静音）", []),
+    _cmd("jikong_set_theme", "极空同步主题", "jikong", "🎨",
+         "管理后台切换深/浅色后同步到手机端（持久化，极空页即时生效）",
+         [_param("mode", "主题模式", PARAM_TYPE_SELECT, default="2",
+                 options=[{"value": "0", "label": "自动（白天浅/夜晚深）"},
+                          {"value": "1", "label": "浅色"},
+                          {"value": "2", "label": "深色"}])]),
+    _cmd("jikong_set_speak", "极空同步播报设置", "jikong", "📻",
+         "管理后台「语音播报」卡改动后同步到手机端（小喇叭静音/播报开关/间隔/低电阈值/提醒间隔，"
+         "字段可选仅改传了的）",
+         [_param("muted", "小喇叭静音", PARAM_TYPE_SWITCH),
+          _param("speak_enabled", "语音播报开关", PARAM_TYPE_SWITCH),
+          _param("speak_interval_min", "播报间隔(分钟)", PARAM_TYPE_NUMBER),
+          _param("speak_low_soc", "低电阈值(%)", PARAM_TYPE_NUMBER),
+          _param("speak_warn_repeat_min", "提醒间隔(分钟)", PARAM_TYPE_NUMBER)]),
 
     # ---- 界面自动化（v0.2.38 引入，对标 autox 无障碍引擎）----
     # 依赖设备开启「Bridge 辅助服务」（无障碍），且须为 canRetrieveWindowContent + canPerformGestures。

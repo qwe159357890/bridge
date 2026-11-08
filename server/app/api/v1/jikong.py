@@ -35,14 +35,20 @@ async def get_jikong_state(device_id: str, request: Request) -> dict:
 
 
 class JikongControlRequest(BaseModel):
-    """极空控制命令请求。action 决定命令名与参数。"""
+    """极空控制命令请求。action 决定命令名与参数。
 
-    action: str = Field(..., description="mos / balance / write_param")
+    v0.2.102：新增 speak / set_theme / set_speak（管理后台↔手机同步类，params 透传）。
+    """
+
+    action: str = Field(..., description="mos / balance / write_param / speak / set_theme / set_speak")
     charge: bool | None = Field(None, description="action=mos 时：是否含充电 MOS")
     discharge: bool | None = Field(None, description="action=mos 时：是否含放电 MOS")
     on: bool | None = Field(None, description="action=mos/balance 时：开/关")
     param_id: int | None = Field(None, description="action=write_param 时：参数 id")
     value: int | None = Field(None, description="action=write_param 时：参数值")
+    # v0.2.102：同步类命令参数透传（speak 无参；set_theme: mode；set_speak:
+    # muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min）
+    params: dict | None = Field(None, description="action=speak/set_theme/set_speak 时：透传参数")
 
 
 @router.post("/{device_id}/control", dependencies=[Depends(require_admin)])
@@ -58,9 +64,8 @@ async def jikong_control(device_id: str, body: JikongControlRequest, request: Re
 
     command = f"jikong_{body.action}"
     command_id = uuid.uuid4().hex
-    params: dict = {}
     if body.action == "mos":
-        params = {
+        params: dict = {
             "charge": body.charge,
             "discharge": body.discharge,
             "on": body.on,
@@ -69,6 +74,14 @@ async def jikong_control(device_id: str, body: JikongControlRequest, request: Re
         params = {"on": body.on}
     elif body.action == "write_param":
         params = {"param_id": body.param_id, "value": body.value}
+    elif body.action in ("speak", "set_theme", "set_speak"):
+        # v0.2.102：同步类命令参数原样透传（客户端执行器自行校验字段与取值范围）
+        params = body.params or {}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"未知 action: {body.action}",
+        )
 
     command_data = CommandData(command=command, command_id=command_id, params=params)
     envelope = Envelope.make("command", command_data.model_dump())

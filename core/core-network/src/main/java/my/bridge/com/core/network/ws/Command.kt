@@ -156,6 +156,10 @@ data class Command(
         const val JIKONG_MOS = "jikong_mos"
         const val JIKONG_BALANCE = "jikong_balance"
         const val JIKONG_WRITE_PARAM = "jikong_write_param"
+        // ---- v0.2.102：管理后台↔手机同步（远程播报/主题/播报设置） ----
+        const val JIKONG_SPEAK = "jikong_speak"                 // 远程触发仪表盘播报
+        const val JIKONG_SET_THEME = "jikong_set_theme"         // 同步背景主题（mode 0/1/2）
+        const val JIKONG_SET_SPEAK = "jikong_set_speak"         // 同步小喇叭/播报设置
 
         /** 从 command 消息的 data 解析；字段缺失返回 null。 */
         fun fromData(data: JsonObject?): Command? {

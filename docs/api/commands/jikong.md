@@ -48,6 +48,19 @@ BMS(从机) --BLE(0xDD/NW帧)--> 客户端(jikong模块) --主WS(jikong_state)--
 ### jikong_write_param 极空写参数
 - 参数 `param_id`（参数编号）+ `value`（原始整数，单位由参数类型决定）。需设备密码，谨慎操作。
 
+### jikong_speak 极空播报（v0.2.102）
+- 远程触发手机播报仪表盘数值：当前电量 N%【+低电提醒】+有时速追加 时速X公里+剩余续航Y公里。
+- 与手机双击表盘同一组合逻辑（`JikongController.speakDashboardNow`），显式触发绕过小喇叭静音。
+
+### jikong_set_theme 极空同步主题（v0.2.102）
+- 参数 `mode`：0=自动（白天浅/夜晚深）1=浅色 2=深色。持久化到 JikongPrefs；
+  手机极空页经 JkUiState.remoteThemeTick 订阅即时生效，并 forceReport 回报新主题。
+
+### jikong_set_speak 极空同步播报设置（v0.2.102）
+- 字段可选（仅改传了的）：`muted`（小喇叭静音）/`speak_enabled`/`speak_interval_min`(1~120)/
+  `speak_low_soc`(1~50)/`speak_warn_repeat_min`(1~60)。
+- 手机设置页/小喇叭经 JkUiState.remoteSpeakTick 订阅即时刷新，并 forceReport 回报。
+
 ## 坑与提醒
 
 1. **无真机最大风险**：BLE UUID 与帧字段偏移因固件版本而异，真机连不上时用 nRF Connect 抓一帧

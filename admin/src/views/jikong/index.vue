@@ -7,6 +7,15 @@
         <div class="tools">
           <el-switch v-model="autoRefresh" active-text="自动刷新" size="small" style="margin-right: 8px" />
           <el-select
+            v-model="refreshSec"
+            size="small"
+            :disabled="!autoRefresh"
+            style="width: 104px; margin-right: 8px"
+            title="自动刷新频率"
+          >
+            <el-option v-for="o in refreshOptions" :key="o" :label="o + ' 秒'" :value="o" />
+          </el-select>
+          <el-select
             v-model="selectedDevice"
             placeholder="选择设备"
             size="small"
@@ -42,7 +51,7 @@
                   <div class="jk-connbar">
                     <span class="dot" :class="connected ? 'g' : 'gy'" />
                     <span class="conn-text" :class="connected ? 'g-text' : 'gy'">已连接 · {{ s.device_name || selectedDevice }}</span>
-                    <span class="theme-btn" @click="themeLight = !themeLight">{{ themeLight ? '浅色' : '深色' }}</span>
+                    <span class="theme-btn" @click="onThemeToggle">{{ themeLight ? '浅色' : '深色' }}</span>
                   </div>
 
                   <!-- v0.2.101：演示模式横幅（与手机 v0.2.98 同款；后台只读，刷新在手机端操作） -->
@@ -70,8 +79,9 @@
                     </div>
                   </div>
 
-                  <!-- 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊） -->
-                  <div class="gauge-wrap">
+                  <!-- 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊）
+                       v0.2.102：双击=远程触发手机播报（jikong_speak，话术与手机双击一致） -->
+                  <div class="gauge-wrap" title="双击：手机播报当前电量" @dblclick="onRemoteSpeak">
                     <svg viewBox="0 0 320 320" class="gauge-svg">
                       <defs>
                         <linearGradient id="gaugeGrad" gradientUnits="userSpaceOnUse" x1="34" y1="160" x2="286" y2="160">
@@ -253,7 +263,7 @@
                       </div>
                       <div class="detail-col">
                         <div class="drow"><span class="dlabel">单体平均</span><span class="dval">{{ fmt(s.avg_cell_voltage) }}V</span></div>
-                        <div class="drow"><span class="dlabel">最大压差</span><span class="dval">{{ fmt(s.diff_voltage) }}V</span></div>
+                        <div class="drow"><span class="dlabel">最大压差</span><span class="dval">{{ fmt3(s.diff_voltage) }}V</span></div>
                         <div class="drow"><span class="dlabel">均衡电流</span><span class="dval">{{ fmt(s.balance_current) }}A</span></div>
                         <div class="drow"><span class="dlabel">循环次数</span><span class="dval">{{ s.cycle_count ?? 0 }}次</span></div>
                         <div class="drow"><span class="dlabel">循环容量</span><span class="dval">{{ fmt(s.cycle_capacity) }}Ah</span></div>
@@ -387,7 +397,8 @@
                 <div class="jk-card" style="padding: 12px 0 10px">
                   <div class="stats-head" style="padding: 0 14px 8px">
                     <span style="font-weight: 600">记录台账</span>
-                    <span class="mini-label">{{ odo ? odo.records.length : 0 }} 条 · 新在上 · MySQL（手机已同步部分）</span>
+                    <span v-if="demoMode" class="mini-label" :style="{ color: c.amber }">{{ statsRecords.length }} 条演示 · 与手机演示一致</span>
+                    <span v-else class="mini-label">{{ statsRecords.length }} 条 · 新在上 · MySQL（手机已同步部分）</span>
                   </div>
                   <div class="rec-list">
                     <div v-for="rec in odoRecordsView" :key="rec.record_id" class="rec-row">
@@ -578,8 +589,43 @@
                 {{ s?.balance_on ? '关均衡' : '开均衡' }}
               </el-button>
             </div>
+          </el-card>
+
+          <!-- v0.2.102：语音播报（与手机设置页/小喇叭同源，改动即时下发手机） -->
+          <el-card shadow="never" class="side-card">
+            <template #header><span class="title">语音播报（同步到手机）</span></template>
+            <div class="spk-row">
+              <div style="flex: 1">
+                <div class="spk-label">小喇叭{{ spkMuted ? '（已静音）' : '' }}</div>
+                <div class="mini-label">静音后手机不再自动播报（双击表盘播报不受影响）</div>
+              </div>
+              <el-switch v-model="spkMuted" size="small" @change="sendSpeakSettings('小喇叭')" />
+            </div>
+            <div class="spk-row">
+              <div style="flex: 1">
+                <div class="spk-label">语音播报</div>
+                <div class="mini-label">连接后按变化/间隔自动播报电量</div>
+              </div>
+              <el-switch v-model="spkEnabled" size="small" @change="sendSpeakSettings('语音播报')" />
+            </div>
+            <div class="spk-row">
+              <div class="spk-label" style="width: 96px">播报间隔</div>
+              <el-select v-model="spkInterval" size="small" style="flex: 1" @change="sendSpeakSettings('播报间隔')">
+                <el-option v-for="m in [1, 5, 10, 15, 30, 60]" :key="m" :label="m + ' 分钟'" :value="m" />
+              </el-select>
+            </div>
+            <div class="spk-row">
+              <div class="spk-label" style="width: 96px">低电阈值</div>
+              <el-input-number v-model="spkLowSoc" size="small" :min="1" :max="50" style="flex: 1" @change="sendSpeakSettings('低电阈值')" />
+            </div>
+            <div class="spk-row">
+              <div class="spk-label" style="width: 96px">提醒间隔</div>
+              <el-select v-model="spkWarnRepeat" size="small" style="flex: 1" @change="sendSpeakSettings('提醒间隔')">
+                <el-option v-for="m in [1, 5, 10, 30]" :key="m" :label="m + ' 分钟'" :value="m" />
+              </el-select>
+            </div>
             <div class="mini-label" style="margin-top: 8px">
-              控制命令经设备端蓝牙下发保护板；手机端极空页按官方 UI 不含控制入口，故此面板保留在手机壳外。
+              改动即时下发手机（jikong_set_speak），手机端设置页同步生效。
             </div>
           </el-card>
 
@@ -616,11 +662,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { getJikongState, getJikongOdometer, jikongControl,
-  type JikongStatus, type JkOdoRecord, type JkOdoSummary,
+  type JikongStatus, type JkOdoRecord, type JkOdoSeg, type JkOdoSummary,
 } from '@/api/jikong'
 import { listDevices } from '@/api/devices'
 import { useTargetDeviceStore } from '@/stores/targetDevice'
@@ -649,6 +695,65 @@ const THEMES = {
 const themeLight = ref(false)
 const c = computed(() => (themeLight.value ? THEMES.light : THEMES.dark))
 
+// ==================== v0.2.102：后台↔手机双向同步（主题/播报/远程播报） ====================
+/**
+ * 主题双向同步：客户端上报 app.theme（0=自动 1=浅色 2=深色）→ 后台跟随；
+ * 后台点击切换 → jikong_set_theme 下发 → 手机持久化+即时生效（总纲：两端一致）。
+ */
+watch(() => s.value?.app?.theme, (t) => {
+  if (t === 1) themeLight.value = true
+  else if (t === 2) themeLight.value = false
+})
+function onThemeToggle() {
+  themeLight.value = !themeLight.value
+  const mode = themeLight.value ? 1 : 2
+  jikongControl(selectedDevice.value, { action: 'set_theme', params: { mode } })
+    .then(() => ElMessage.success('主题已同步到手机'))
+    .catch(() => ElMessage.warning('主题已本地切换，同步手机失败（设备不在线？）'))
+}
+
+/** 双击仪表盘 → 远程触发手机播报（jikong_speak，话术与手机双击一致）。 */
+async function onRemoteSpeak() {
+  try {
+    await jikongControl(selectedDevice.value, { action: 'speak' })
+    ElMessage.success('播报指令已下发，手机将播报当前电量')
+  } catch { /* 已提示 */ }
+}
+
+// ---- 语音播报设置（镜像手机上报值；改动即时全量下发，字段全传客户端按需覆盖） ----
+const spkMuted = ref(false)
+const spkEnabled = ref(false)
+const spkInterval = ref(5)
+const spkLowSoc = ref(30)
+const spkWarnRepeat = ref(5)
+let spkLastSendAt = 0
+watch(() => s.value?.app, (app) => {
+  if (!app || Date.now() - spkLastSendAt < 6000) return   // 刚下发的回声窗口内不回写
+  if (app.speak_muted != null) spkMuted.value = app.speak_muted
+  if (app.speak_enabled != null) spkEnabled.value = app.speak_enabled
+  if (app.speak_interval_min != null) spkInterval.value = app.speak_interval_min
+  if (app.speak_low_soc != null) spkLowSoc.value = app.speak_low_soc
+  if (app.speak_warn_repeat_min != null) spkWarnRepeat.value = app.speak_warn_repeat_min
+}, { immediate: true })
+async function sendSpeakSettings(what: string) {
+  spkLastSendAt = Date.now()
+  try {
+    await jikongControl(selectedDevice.value, {
+      action: 'set_speak',
+      params: {
+        muted: spkMuted.value,
+        speak_enabled: spkEnabled.value,
+        speak_interval_min: spkInterval.value,
+        speak_low_soc: spkLowSoc.value,
+        speak_warn_repeat_min: spkWarnRepeat.value,
+      },
+    })
+    ElMessage.success(`${what} 已同步手机`)
+  } catch {
+    ElMessage.warning('下发失败（设备不在线？）')
+  }
+}
+
 // ==================== 底部导航图标（assets/icons/*.svg → currentColor 单色） ====================
 const svgWrap = (inner: string, vb = '0 0 1024 1024') =>
   `<svg viewBox="${vb}" width="24" height="24" fill="currentColor">${inner}</svg>`
@@ -672,8 +777,22 @@ const s = ref<JikongStatus | null>(null)
 const updatedAt = ref<number | null>(null)
 const deviceNameMap = ref<Record<string, string>>({})
 const autoRefresh = ref(true)
+// v0.2.102：自动刷新频率可设置（2/5/10/30/60 秒，localStorage 记忆）
+const refreshOptions = [2, 5, 10, 30, 60]
+const refreshSec = ref<number>(Number(localStorage.getItem('jk_refresh_sec')) || 5)
 const tab = ref(0)
 let timer: number | undefined
+
+function restartTimer() {
+  if (timer) clearInterval(timer)
+  timer = window.setInterval(() => {
+    if (autoRefresh.value && selectedDevice.value) loadState()
+  }, refreshSec.value * 1000)
+}
+watch(refreshSec, (v) => {
+  localStorage.setItem('jk_refresh_sec', String(v))
+  restartTimer()
+})
 
 const deviceOptions = computed(() =>
   Object.entries(deviceNameMap.value).map(([id, name]) => ({ value: id, label: name || id })),
@@ -721,6 +840,8 @@ function fmt(v: number | undefined | null): string {
 }
 const n1 = (v?: number) => (v == null ? '--' : v.toFixed(1))
 const n2 = (v?: number) => (v == null ? '--' : v.toFixed(2))
+/** v0.2.102：压差三位小数（0.008V 级别两位会变 0.01，与手机 fmt3 同口径） */
+const fmt3 = (v?: number | null) => (v == null ? '--' : v.toFixed(3))
 const gt0 = (v?: number) => v != null && v > 0
 
 function fmtDuration(seconds: number): string {
@@ -740,7 +861,7 @@ const tempAt = (i: number) =>
 const quad1 = computed(() => [
   { label: '最高电压(V)', value: fmt(s.value?.max_cell_voltage), color: c.value.blue },
   { label: '最低电压(V)', value: fmt(s.value?.min_cell_voltage), color: c.value.red },
-  { label: '最大压差(V)', value: fmt(s.value?.diff_voltage), color: c.value.green },
+  { label: '最大压差(V)', value: fmt3(s.value?.diff_voltage), color: c.value.green },
   { label: '均衡电流(A)', value: fmt(s.value?.balance_current), color: c.value.green },
 ])
 const quad2 = computed(() => [
@@ -855,6 +976,51 @@ function triRows(values: number[] | undefined, isVolt: boolean): TriCell[] {
 const odo = ref<{ records: JkOdoRecord[]; summary: JkOdoSummary } | null>(null)
 const odoLoading = ref(false)
 
+/**
+ * v0.2.102：统计页数据源——演示模式用客户端上报的 demo_stats（与手机演示台账同源，
+ * 含演示中新增/删除），否则用 MySQL 台账。演示记录按升序算段（与服务端 _compute_segments
+ * 同公式：Δ容量×平均电压÷Δ里程），再转倒序输出（最新在上）。
+ */
+const statsRecords = computed<JkOdoRecord[]>(() => {
+  const demo = s.value?.demo_stats
+  if (demoMode.value && demo?.records?.length) {
+    const asc = [...demo.records].sort((a, b) => a.ts_ms - b.ts_ms)
+    const out: JkOdoRecord[] = []
+    for (let i = 0; i < asc.length; i++) {
+      const r = asc[i]
+      let seg: JkOdoSeg | null = null
+      if (i > 0) {
+        const p = asc[i - 1]
+        const dOdo = Number((r.odo_km - p.odo_km).toFixed(3))
+        const dAh = Number((r.cycle_ah - p.cycle_ah).toFixed(3))
+        const v0 = p.volt || r.volt
+        const v1 = r.volt || p.volt
+        if (dOdo > 0 && dAh > 0 && v0 && v1) {
+          const avgV = (v0 + v1) / 2
+          seg = {
+            d_odo_km: dOdo,
+            d_ah: dAh,
+            avg_volt: Number(avgV.toFixed(2)),
+            kwh: Number(((dAh * avgV) / 1000).toFixed(3)),
+            wh_km: Number(((dAh * avgV) / dOdo).toFixed(1)),
+          }
+        }
+      }
+      out.push({
+        record_id: r.ts_ms.toString(),
+        ts_ms: r.ts_ms,
+        odo_km: r.odo_km,
+        cycle_ah: r.cycle_ah,
+        volt: r.volt,
+        deleted: false,
+        seg,
+      })
+    }
+    return out.reverse()
+  }
+  return odo.value?.records ?? []
+})
+
 interface OdoView {
   record_id: string
   date: string
@@ -869,7 +1035,7 @@ interface OdoView {
 
 /** 倒序台账视图（最新在上、基准垫底）+ 语义着色（与手机统计页一致）。 */
 const odoRecordsView = computed<OdoView[]>(() => {
-  const list = odo.value?.records ?? []
+  const list = statsRecords.value
   return list.map((r, idx) => {
     const d = new Date(r.ts_ms)
     const p = (x: number) => String(x).padStart(2, '0')
@@ -898,7 +1064,7 @@ const odoRecordsView = computed<OdoView[]>(() => {
 
 /** 概要基量（与手机统计页同公式：基准→末条里程、有效段耗电、平均电耗），v0.2.101。 */
 const statsBase = computed(() => {
-  const list = odo.value?.records ?? []
+  const list = statsRecords.value
   if (list.length < 2) return null
   const valid = list.filter((r) => r.seg)
   const totalKmRaw = list[list.length - 1].odo_km - list[0].odo_km
@@ -946,7 +1112,7 @@ const customRange = ref<[Date, Date] | null>(null)
 const startOfLocalDay = (dt: Date) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime()
 
 const stageCards = computed<{ count: number; cards: SumCellV[] }>(() => {
-  const list = odo.value?.records ?? []
+  const list = statsRecords.value
   const d = discount.value, pr = price.value
   const valid = list.filter((r): r is typeof r & { seg: NonNullable<typeof r.seg> } => !!r.seg)
   let segs = valid
@@ -979,7 +1145,7 @@ const stageCards = computed<{ count: number; cards: SumCellV[] }>(() => {
 
 /** 能耗曲线（X=折扣里程，Y=折扣后 Wh/km；与手机曲线同口径，只取有效段） */
 const curvePoints = computed(() => {
-  const list = (odo.value?.records ?? []).slice().sort((a, b) => a.ts_ms - b.ts_ms)
+  const list = statsRecords.value.slice().sort((a, b) => a.ts_ms - b.ts_ms)
   const valid = list.filter((r) => r.seg)
   if (valid.length < 2) return []
   const d = discount.value
@@ -1084,9 +1250,7 @@ async function loadDeviceNames() {
 
 onMounted(() => {
   loadDeviceNames()
-  timer = window.setInterval(() => {
-    if (autoRefresh.value && selectedDevice.value) loadState()
-  }, 2000)
+  restartTimer()
 })
 onUnmounted(() => {
   if (timer) clearInterval(timer)
@@ -1305,6 +1469,11 @@ const dashTotals = computed(() => {
 .sum-val-row { display: flex; align-items: baseline; justify-content: center; gap: 2px; }
 .sum-unit { font-size: 9px; color: v-bind('c.gray'); }
 .sum-sub { font-size: 8px; color: v-bind('c.gray'); margin-top: 1px; }
+
+/* v0.2.102：语音播报卡（后台↔手机同步） */
+.spk-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; }
+.spk-row + .spk-row { border-top: 1px solid v-bind('c.divider'); }
+.spk-label { font-size: 14px; font-weight: 600; color: v-bind('c.text'); }
 
 /* 阶段统计 chips（v0.2.93 手机端样式：无「近」字、禁换行） */
 .stage-chips { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: nowrap; }

@@ -17,6 +17,27 @@
 
 ---
 
+### v0.2.102 管理后台↔客户端双向对齐第二轮（远程播报/主题/小喇叭/演示统计/刷新频率/压差3位）（2026-11-08 08:10 实施）
+
+**需求（用户 08:05 反馈 7 项）**：①后台双击仪表盘→下发手机播报；②最大压差 3 位小数（后台+客户端核对）；③远程控制卡删「关充电 关放电 开均衡…保留在手机壳外」旧说明；④后台自动刷新频率可设置；⑤后台深/浅色切换必须同步客户端；⑥后台加小喇叭并可同步客户端；⑦客户端演示模式时后台统计页须与客户端一致（当前后台用的是 MySQL 真实台账）。总纲：后台必须和客户端一模一样，客户端能操作的后台也能操作（进入演示模式除外）。
+
+**改前原文**：
+- `JikongPages.kt` JkUiState（169-172 行）：仅 `immersive`、`exitToken` 两字段。
+- `JikongPages.kt` 主题状态（399 行）：`var themeMode by remember { mutableIntStateOf(JikongPrefs.theme(context)) }`，cycleTheme=(themeMode+1)%3。
+- `JikongPages.kt` onDashDoubleTap（926-949 行）：播报组合逻辑内联在 HomeView Composable 里。
+- `JikongPages.kt` 演示台账（2158 行）：`var demoList by remember { mutableStateOf(jkDemoRecords()) }`；`val records = if (demoMode) demoList else remember(recordsVersion) { JikongStatsStore.records(context) }`（演示台账在 Composable 内存，控制器不可见→无法上报后台）。
+- `JikongPages.kt` 压差显示（994/1587 行）：`fmt(s.diffVoltage)`=≥100 一位小数否则两位。
+- `JikongController.kt` buildReportStatus app 块（1044-1057 行）：theme/dash_enabled/demo_mode/unit_kwh100/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min/elec_price/odo_discount，**无 speak_muted、无 demo_stats**。
+- `Command.kt`（152-158 行）：JIKONG_SCAN~JIKONG_WRITE_PARAM 七个常量。
+- `CommandModule.kt`（317-338 行）：jikong 七个执行器映射。
+- `server/app/api/v1/jikong.py` control（37-84 行）：action 仅 mos/balance/write_param，params 白名单构造。
+- `admin/index.vue`：autoRefresh 固定 2000ms（1087-1089 行）；theme-btn 仅本地翻转（45 行）；远程控制卡说明文字（581-583 行）；压差 `fmt(s.diff_voltage)` 两位（256/743 行）；统计页数据源 `odo.value`（MySQL 台账）。
+
+**改动清单**：JkUiState+remoteThemeTick/remoteSpeakTick；新增 `JikongController.speakDashboardNow(ctx)`（onDashDoubleTap 与 jikong_speak 命令共用）；演示台账迁入控制器 `demoOdoRecords`（可上报）；buildReportStatus+`speak_muted`+`demo_stats`；Command.kt+3 常量、CommandModule+3 执行器（jikong_speak/jikong_set_theme/jikong_set_speak）；jikong.py control 放行新 action（params 透传）；command_catalog.py+3 条目；后台：刷新频率下拉、主题切换下发、双击表盘下发播报、语音播报卡（静音/开关/间隔/低电阈值/提醒间隔，改即下发）、删旧说明、压差 toFixed(3)、统计页演示数据源（demo_stats 前端算段）。versionName 0.2.100→0.2.102。
+
+**回滚配方**：`git revert` 本轮提交；或手改：JkUiState 删两 tick 字段、JikongController 删 speakDashboardNow/demoOdoRecords、buildReportStatus 删 speak_muted/demo_stats、Command.kt/CommandModule 删三条目、jikong.py 回白名单、admin 五处回退→admin npm run build；versionName 回 0.2.101。
+**触发信号**：后台点主题/小喇叭手机不生效 / 后台双击表盘手机不播 / 演示模式后台统计仍是真实台账 / 压差仍两位。
+
 ### v0.2.101 管理后台极空页与客户端 v0.2.100 对齐（2026-11-08 07:33 实施）
 
 **需求（用户 11-08 07:33）**：客户端多轮迭代后，管理后台「极空保护板」页未跟进——检查并确保与客户端 APP 极空页面百分百一致（只读镜像，交互类动作不搬运）。

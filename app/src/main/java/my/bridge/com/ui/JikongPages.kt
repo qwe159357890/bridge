@@ -169,6 +169,10 @@ private val LocalJkColors = androidx.compose.runtime.compositionLocalOf { DarkCo
 object JkUiState {
     var immersive by androidx.compose.runtime.mutableStateOf(false)
     var exitToken by androidx.compose.runtime.mutableIntStateOf(0)
+    // v0.2.102：管理后台远程改设置时自增，页面 LaunchedEffect 订阅后重读 Prefs 刷新 UI
+    // （主题/小喇叭/播报设置都是 remember 快照读，不订阅的话远程改了本地界面不动）。
+    var remoteThemeTick by androidx.compose.runtime.mutableIntStateOf(0)
+    var remoteSpeakTick by androidx.compose.runtime.mutableIntStateOf(0)
 }
 
 /** 根据主题模式（AUTO 跟随时间 / 手动指定优先）解析是否深色。mode 由调用方传入状态值，保证点击即时切换。 */
@@ -397,6 +401,10 @@ fun JikongPage() {
     // v0.2.67：resolveDarkTheme 改为吃本状态值——改前在函数内读 Prefs，Compose 订阅不到，
     // 导致点击「浅色/深色」标签变了但页面配色要下次进入才切换。
     var themeMode by remember { mutableIntStateOf(JikongPrefs.theme(context)) }
+    // v0.2.102：管理后台切深/浅色 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读即时生效
+    androidx.compose.runtime.LaunchedEffect(JkUiState.remoteThemeTick) {
+        themeMode = JikongPrefs.theme(context)
+    }
     val isDark = resolveDarkTheme(context, themeMode)
     val colors = if (isDark) DarkColors else LightColors
     val cycleTheme: () -> Unit = {
@@ -777,6 +785,10 @@ private fun HomeView(
     var renameText by remember { mutableStateOf("") }
     // v0.2.90：小喇叭静音（持久化，跨重启保留；启动后首次强制播报在 Controller 层不受此影响）
     var muted by remember { mutableStateOf(JikongPrefs.muted(context)) }
+    // v0.2.102：管理后台「小喇叭」开关同步（命令改 Prefs 后 tick 自增，此处重读刷新）
+    androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
+        muted = JikongPrefs.muted(context)
+    }
 
     // v0.2.83 仪表盘生命周期门控（红队修正：HomeView 只在已连接时存在）——
     // 进入首页（连接建立/回前台）且开关开才启动 GPS+积分；离开即注销，零后台成本。
@@ -923,29 +935,10 @@ private fun HomeView(
         // 仪表盘无反应）：电量(+低电预警)；有时速追加 时速+剩余续航。显式手势绕过静音开关。
         // v0.2.95：改分段本地组合（词组+数字段全命中本地缓存时零网络拼接播放）；
         // 速度/续航取整播报；>100 的数值段首播按需拉取后进缓存；失败回退整句（fallback）。
+        // v0.2.102：组合逻辑抽到 JikongController.speakDashboardNow（管理后台双击表盘
+        // 远程触发 jikong_speak 命令复用同一份，保证两端话术永远一致）。
         val onDashDoubleTap: () -> Unit = {
-            val soc = controller.status.soc
-            if (soc in 0..100) {
-                // v0.2.98：去掉「百分之」段（3段2停顿→2段1停顿，纯数字 edge-tts 自读「七十二」）
-                val segs = mutableListOf("当前电量", soc.toString())
-                if (soc < JikongPrefs.speakLowSoc(context)) segs.add("电量低，请注意充电")
-                val speed = SpeedDash.speedKmh
-                if (speed > 0f) {
-                    segs.add("时速"); segs.add(kotlin.math.round(speed).toInt().toString()); segs.add("公里")
-                    val range = SpeedDash.rangeKm
-                    if (range >= 0f) {
-                        segs.add("剩余续航"); segs.add(kotlin.math.round(range).toInt().toString()); segs.add("公里")
-                    }
-                }
-                val sb = StringBuilder("当前电量 $soc%")
-                if (soc < JikongPrefs.speakLowSoc(context)) sb.append("，电量低，请注意充电")
-                if (speed > 0f) {
-                    sb.append("，时速 %.0f 公里".format(speed))
-                    val range = SpeedDash.rangeKm
-                    if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
-                }
-                JikongSpeaker.speakSegs(context, segs, sb.toString())
-            }
+            controller.speakDashboardNow(context)
         }
 
         // 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊）
@@ -991,7 +984,7 @@ private fun HomeView(
             listOf(
                 QuadCell("最高电压(V)", fmt(s.maxCellVoltage), c.blue),
                 QuadCell("最低电压(V)", fmt(s.minCellVoltage), c.red),
-                QuadCell("最大压差(V)", fmt(s.diffVoltage), c.green),
+                QuadCell("最大压差(V)", fmt3(s.diffVoltage), c.green),
                 QuadCell("均衡电流(A)", fmt(s.balanceCurrent), c.green),
             )
         )
@@ -1584,7 +1577,7 @@ private fun RealtimeView(controller: JikongController) {
                 // 右列
                 Column(modifier = Modifier.weight(1f)) {
                     DetailRow("单体平均", fmt(s.avgCellVoltage) + "V")
-                    DetailRow("最大压差", fmt(s.diffVoltage) + "V")
+                    DetailRow("最大压差", fmt3(s.diffVoltage) + "V")
                     DetailRow("均衡电流", fmt(s.balanceCurrent) + "A")
                     DetailRow("循环次数", "${s.cycleCount}次")
                     DetailRow("循环容量", fmt(s.cycleCapacity) + "Ah")
@@ -1744,6 +1737,13 @@ private fun SettingsView(
     var speakIntervalMin by remember { mutableIntStateOf(JikongPrefs.speakIntervalMin(context)) }
     var speakLowSoc by remember { mutableIntStateOf(JikongPrefs.speakLowSoc(context)) }
     var speakWarnRepeatMin by remember { mutableIntStateOf(JikongPrefs.speakWarnRepeatMin(context)) }
+    // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
+    androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
+        speakEnabled = JikongPrefs.speakEnabled(context)
+        speakIntervalMin = JikongPrefs.speakIntervalMin(context)
+        speakLowSoc = JikongPrefs.speakLowSoc(context)
+        speakWarnRepeatMin = JikongPrefs.speakWarnRepeatMin(context)
+    }
     // v0.2.90 单位/电费/里程折扣设置状态
     var unitKwh100 by remember { mutableStateOf(JikongPrefs.unitKwh100(context)) }
     var elecPrice by remember { mutableFloatStateOf(JikongPrefs.elecPrice(context)) }
@@ -2112,35 +2112,8 @@ private fun jkLocalDayStart(utcDayMs: Long): Long {
     }.timeInMillis
 }
 
-/**
- * v0.2.91：演示模式内存台账（30 天 7 条，段电耗 31~40 Wh/km 梯度，数值取自真机实测样例）。
- * 只在 controller.demoMode 时替代真实台账显示；增删全在内存，退出演示自动还原真实台账，
- * 不读写 JikongStatsStore、不触发同步——新用户无真实数据也能观察曲线/折扣/花费效果。
- */
-private fun jkDemoRecords(): List<JkMileageRecord> {
-    val now = System.currentTimeMillis()
-    val twoDays = 2 * 24 * 3600_000L
-    // (里程, 循环容量, 总压)；相邻差值按真机样例设计（Δ19~24Ah / Δ41~47km）
-    val base = listOf(
-        Triple(11000.0f, 742.6f, 73.6f),
-        Triple(11042.3f, 763.9f, 73.6f),
-        Triple(11089.6f, 788.3f, 73.8f),
-        Triple(11130.4f, 806.5f, 73.4f),
-        Triple(11176.9f, 826.2f, 73.7f),
-        Triple(11218.2f, 848.6f, 74.0f),
-        Triple(11260.0f, 868.0f, 73.6f),
-    )
-    return base.mapIndexed { i, (odo, ah, v) ->
-        JkMileageRecord(
-            id = "demo_$i",
-            ts = now - (6 - i) * twoDays,
-            odoKm = odo,
-            cycleAh = ah,
-            volt = v,
-            synced = true,
-        )
-    }
-}
+// v0.2.102：jkDemoRecords() 已迁入 JikongController（演示台账需随 jikong_state 上报
+// demo_stats 给管理后台，Composable 私有状态报不了）；StatsView 直接读 controller.demoOdoRecords。
 
 @OptIn(ExperimentalMaterial3Api::class)   // v0.2.92：DateRangePicker（自定义时间段）
 @Composable
@@ -2155,8 +2128,8 @@ private fun StatsView(controller: JikongController) {
     val demoMode = controller.demoMode
 
     // v0.2.91：演示模式用内存演示台账（不读写真实存储、不触发同步），退出演示自动还原
-    var demoList by remember { mutableStateOf(jkDemoRecords()) }
-    val records = if (demoMode) demoList else remember(recordsVersion) { JikongStatsStore.records(context) }
+    // v0.2.102：台账本体迁入 controller.demoOdoRecords（后台统计页需同源上报演示数据）
+    val records = if (demoMode) controller.demoOdoRecords else remember(recordsVersion) { JikongStatsStore.records(context) }
     val segs = remember(records) { jkBuildSegs(records) }
     val pending = if (demoMode) 0 else remember(recordsVersion) { JikongStatsStore.unsyncedCount(context) }
 
@@ -2188,15 +2161,19 @@ private fun StatsView(controller: JikongController) {
             else -> {
                 if (demoMode) {
                     // v0.2.91：演示模式记一笔 → 只追加内存演示行（不落盘、不同步）
-                    demoList = demoList + JkMileageRecord(
-                        id = "demo_${System.currentTimeMillis()}",
-                        ts = System.currentTimeMillis(),
-                        odoKm = odo,
-                        cycleAh = controller.status.cycleCapacity,
-                        volt = controller.status.totalVoltage,
-                        synced = true,
+                    // v0.2.102：迁到 controller 列表 + forceReport（后台统计页同步看到）
+                    controller.demoOdoRecords.add(
+                        JkMileageRecord(
+                            id = "demo_${System.currentTimeMillis()}",
+                            ts = System.currentTimeMillis(),
+                            odoKm = odo,
+                            cycleAh = controller.status.cycleCapacity,
+                            volt = controller.status.totalVoltage,
+                            synced = true,
+                        )
                     )
                     odoText = ""
+                    controller.forceReport()
                     Toast.makeText(context, "已记录（演示数据，退出演示即还原）", Toast.LENGTH_SHORT).show()
                 } else {
                     JikongStatsStore.add(context, odo, controller.status.cycleCapacity, controller.status.totalVoltage)
@@ -2211,8 +2188,9 @@ private fun StatsView(controller: JikongController) {
     }
     val onDelete: (String) -> Unit = { id ->
         if (demoMode) {
-            // v0.2.91：演示模式删除 → 仅动内存演示行
-            demoList = demoList.filter { it.id != id }
+            // v0.2.91：演示模式删除 → 仅动内存演示行（v0.2.102 迁 controller + forceReport）
+            controller.demoOdoRecords.removeAll { it.id == id }
+            controller.forceReport()
         } else {
             val needTombstone = JikongStatsStore.delete(context, id)
             if (needTombstone) JikongStatsStore.enqueueDelete(context, id)
@@ -2782,3 +2760,6 @@ private fun JkStatsCurve(segs: List<JkSeg>, avgWhKm: Float, c: JkColors, discoun
 
 private fun fmt(v: Float): String =
     if (kotlin.math.abs(v) >= 100) "%.1f".format(v) else "%.2f".format(v)
+
+/** v0.2.102：压差等小数值三位小数（0.008V 级别两位会四舍五入成 0.01，用户要求 3 位）。 */
+private fun fmt3(v: Float): String = "%.3f".format(v)
