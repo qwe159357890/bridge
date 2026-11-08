@@ -332,10 +332,16 @@ class JikongController private constructor() {
         // v0.2.115：注入「是否应提升音量」决策函数——主开关（默认开）关闭则不提升；
         // 强制开关（默认关）打开则无条件提升；否则智能检测「有无其他程序在放声音」，
         // 没有才提升。注入发生在单例首次实例化时，此后开关变化都被实时反映。
+        // v0.2.116：加诊断日志，记录「不提升」的具体原因，便于定位锁屏/后台时不提升的根因。
         SpeakVolumeBoost.setShouldBoostProvider { ctx ->
-            if (!JikongPrefs.volumeBoostEnabled(ctx)) return@setShouldBoostProvider false
+            if (!JikongPrefs.volumeBoostEnabled(ctx)) {
+                Timber.i("音量提升决策：主开关关闭，跳过")
+                return@setShouldBoostProvider false
+            }
             if (JikongPrefs.volumeBoostForce(ctx)) return@setShouldBoostProvider true
-            !SpeakVolumeBoost.isOtherAppPlaying(ctx)
+            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx)
+            if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
+            !otherPlaying
         }
     }
 

@@ -17,6 +17,59 @@
 
 ---
 
+### v0.2.116 锁屏/后台播报音量提升不生效修复（setStreamVolume 时序 + 诊断日志）（2026-11-08 19:40 实施）
+
+**背景（用户 11-08 19:35→19:48 连续反馈，逐步澄清）**：用户装 v0.2.115 测试后反馈，最终定位为——**演示模式（前台双击仪表盘）音量提升生效、响度够；锁屏自动连接（后台）音量提升不生效，播报用的是原系统小音量**。日志实证：v0.2.115 的 3 次播报（19:29:38 演示、19:31:40 与 19:32:28 靠近自动连接）都打印了「音量提升」（`setStreamVolume` 返回成功），但用户实测**锁屏那次实际音量没变**。根因分析：`setStreamVolume(STREAM_MUSIC, max)` 在「stream 尚未活跃播放」时调用存在**不立即生效**的时序问题（Android 6.0+ 已知，Stack Overflow 实证「必须等 stream 开始播放后再 setVolume，否则不生效」），锁屏/后台时系统音频服务休眠、尤其明显；前台（演示模式）时系统音频活跃、立即生效。同批发现的次要问题：
+1. **诊断盲区**：`setStreamVolume` 后无回读、`end` 前无「播报期间实际音量」记录，无法从日志判定 setStreamVolume 是否真生效。
+2. `isOtherAppPlaying()` 想排除自己进程音频，但 `getClientUid()` 是 @hide（公开 SDK 拿不到，同 `requestLeConnectionUpdate` 的 hidden API 限制），只能退回按 usage 判断 + 诊断日志。
+
+**改前原文（关键块；锚点提交 `c1812fa` 存全文）**：
+1. `SpeakVolumeBoost.kt` `isOtherAppPlaying`（改前）：
+   ```kotlin
+   fun isOtherAppPlaying(context: Context): Boolean {
+       val am = context.getSystemService(AudioManager::class.java) ?: return false
+       return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+           val configs = runCatching { am.activePlaybackConfigurations }.getOrNull()
+               ?: return false
+           configs.any { cfg ->
+               cfg.audioAttributes.usage in OTHER_APP_PLAYING_USAGES
+           }
+       } else {
+           @Suppress("DEPRECATION")
+           runCatching { am.isMusicActive }.getOrDefault(false)
+       }
+   }
+   ```
+2. `JikongController.kt` 决策 provider（改前）：
+   ```kotlin
+   SpeakVolumeBoost.setShouldBoostProvider { ctx ->
+       if (!JikongPrefs.volumeBoostEnabled(ctx)) return@setShouldBoostProvider false
+       if (JikongPrefs.volumeBoostForce(ctx)) return@setShouldBoostProvider true
+       !SpeakVolumeBoost.isOtherAppPlaying(ctx)
+   }
+   ```
+3. `app/build.gradle.kts`：`versionName = "0.2.115"`。
+
+**改动清单**：
+- `SpeakVolumeBoost.kt`：
+  - `begin()`：`setStreamVolume(max)` 后**立即回读** `getStreamVolume` 打日志（`setStreamVolume 后回读=%d`），验证系统音量是否真变到最大。
+  - `end()`：恢复前先回读「播报期间实际音量」打日志（`恢复前实际=%d → %d`）——用户建议，据此可判定播报到底用了多大音量。
+  - 新增 `reapply(context)`：`boosted` 状态下再次 `setStreamVolume(max)` 并回读打日志，供 MediaPlayer/TTS「真正 start 之后」调用。
+  - `isOtherAppPlaying()`：去掉无法编译的 `clientUid`（@hide 拿不到），退回按 `usage` 判断 + 诊断日志（记录 `usage/contentType`）。
+- `JikongSpeaker.kt`：`playMp3` 在 `start()` 后调 `SpeakVolumeBoost.reapply(app)`；`doSpeak` 在 `UtteranceProgressListener.onStart` 回调里调 `reapply(app)`——都在「stream 真正活跃后」重申最大音量，规避 setStreamVolume 时序问题。
+- `JikongController.kt`：决策 provider 加诊断日志——主开关关打「音量提升决策：主开关关闭，跳过」；无其他程序打「音量提升决策：无其他程序播放，允许提升」。
+- `versionName` 0.2.115→0.2.116。
+- **不动**：JikongBleClient（12s 阈值 + HIGH + 实验④反射均原样）；握手 ramp 逻辑不变。
+- 另回填 `docs/research/jikong-handshake-fix.md` 实验④结论（反射失败，见下）。
+
+**回滚配方**：`git checkout c1812fa -- app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt app/src/main/java/my/bridge/com/jikong/JikongSpeaker.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts`；或 revert 本轮提交。
+
+**触发信号**：用户真机反馈「锁屏自动连接播报音量没调（用原小音量）」。
+
+**实施结果（2026-11-08 19:56 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（1m23s，仅存量 deprecation 警告，无害）。首轮编译踩坑 1 个：`AudioPlaybackConfiguration.clientUid` 未解析（`getClientUid()` 是 @hide，公开 SDK 拿不到，同 `requestLeConnectionUpdate` 的 hidden API 限制），改为退回按 `usage` 判断 + 诊断日志（记录 usage/contentType）。**未打包分发**（待打包验证 setStreamVolume 时序修复 + 诊断日志）。
+
+---
+
 ### v0.2.115 播报音量提升重构：所有播报都调 + 智能检测其他程序 + 强制开关（2026-11-08 19:05 实施）
 
 **背景（用户 11-08 18:48 反馈）**：用户实测发现「锁屏/熄屏时没调音量」，且明确纠正核心诉求——**所有播报都调节音量，不是只有连接成功首次收到数据才调**。日志实证：旧逻辑「锁定/熄屏/极空页」三条件下音量提升其实**部分生效**（6 次提升），但 21 次播报里有 15 次没提升（亮屏已解锁、不在极空页场景），体感像「只有首次才调」。用户拍板：

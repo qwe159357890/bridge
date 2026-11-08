@@ -64,9 +64,16 @@ object SpeakVolumeBoost {
         if (cur >= max) return false        // 已最大，无需提升
         val ok = runCatching { am.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0) }.isSuccess
         if (!ok) return false
+        // v0.2.116 诊断：setStreamVolume 后立即回读，验证系统音量是否真的变到最大。
+        // 用户实测「锁屏自动连接时音量没调（仍用原小音量）」，需确认是 setStreamVolume 未生效
+        // 还是 MediaPlayer 未跟随。
+        val after = runCatching { am.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
         original = cur
         boosted = true
-        Timber.i("后台静默播报音量提升：媒体 %d/%d → 最大，播报后恢复", cur, max)
+        Timber.i(
+            "后台静默播报音量提升：媒体 %d/%d → 最大（setStreamVolume 后回读=%d），播报后恢复",
+            cur, max, after,
+        )
         return true
     }
 
@@ -78,8 +85,27 @@ object SpeakVolumeBoost {
         val target = original
         original = -1
         val am = context.getSystemService(AudioManager::class.java) ?: return
+        // v0.2.116 诊断：记录「恢复前」的实际音量——这正是播报期间系统真正用的音量。
+        // 若这里回读仍等于原音量（而非 max），说明 setStreamVolume 提升根本没生效（锁屏/时序问题）。
+        val before = runCatching { am.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
         runCatching { am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0) }
-        Timber.i("后台静默播报音量恢复：媒体 → %d", target)
+        Timber.i("后台静默播报音量恢复：恢复前实际=%d → %d", before, target)
+    }
+
+    /**
+     * 重申音量提升（v0.2.116）：在 MediaPlayer/TTS 真正 start 之后再次 setStreamVolume(max)。
+     * 背景：Android 6.0+ 存在「setStreamVolume 在 stream 未活跃播放时调用不立即生效」的时序
+     * 问题，锁屏/后台尤其明显（用户实测：演示模式前台生效、锁屏自动连接不生效）。start 后
+     * 再重申一次，确保 stream 已活跃时把媒体音量顶到最大。
+     */
+    @Synchronized
+    fun reapply(context: Context) {
+        if (!boosted) return
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val ok = runCatching { am.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0) }.isSuccess
+        val after = runCatching { am.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
+        Timber.i("音量提升重申（start 后）：setStreamVolume(max=%d) %s，回读=%d", max, if (ok) "成功" else "失败", after)
     }
 
     /** 是否应提升音量（v0.2.115）：委托给注入的决策函数；未注入恒 false（安全默认，不提升）。 */
@@ -99,9 +125,18 @@ object SpeakVolumeBoost {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val configs = runCatching { am.activePlaybackConfigurations }.getOrNull()
                 ?: return false
-            configs.any { cfg ->
+            val others = configs.filter { cfg ->
                 cfg.audioAttributes.usage in OTHER_APP_PLAYING_USAGES
             }
+            if (others.isNotEmpty()) {
+                // 诊断日志：记录命中源（usage + contentType + toString），便于定位「锁屏时为何不提升」。
+                // 注：getClientUid/getClientPid 是 @hide，公开 SDK 拿不到 uid/包名，只能记 usage/contentType。
+                val desc = others.joinToString("; ") { cfg ->
+                    "usage=${cfg.audioAttributes.usage},contentType=${cfg.audioAttributes.contentType}"
+                }
+                Timber.i("音量提升智能检测：检测到其他程序在播放，跳过提升 → %s", desc)
+            }
+            others.isNotEmpty()
         } else {
             @Suppress("DEPRECATION")
             runCatching { am.isMusicActive }.getOrDefault(false)

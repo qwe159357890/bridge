@@ -242,6 +242,9 @@ object JikongSpeaker {
                 prepare()   // 本地文件，IO 线程同步 prepare 可接受
                 start()
             }
+            // v0.2.116：start 后重申音量提升——规避「setStreamVolume 在 stream 未活跃时调用
+            // 不生效」的时序问题（锁屏/后台尤其明显），确保播报真正用最大媒体音量。
+            SpeakVolumeBoost.reapply(app)
             player = p
             Timber.tag(TAG).i("在线语音播放：%s", file.name)
             true
@@ -282,7 +285,11 @@ object JikongSpeaker {
         SpeakVolumeBoost.begin(app)   // 锁屏时临时把媒体音量拉到最大（播完恢复）
         runCatching {
             engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
+                override fun onStart(utteranceId: String?) {
+                    // v0.2.116：TTS 真正开始播放时重申音量提升（规避锁屏/后台 setStreamVolume
+                    // 时序问题，确保播报用最大媒体音量）。
+                    SpeakVolumeBoost.reapply(app)
+                }
                 override fun onDone(utteranceId: String?) {
                     SpeakVolumeBoost.end(app)
                     Timber.tag(TAG).i("播报完成：%s", utteranceId)

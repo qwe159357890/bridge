@@ -77,9 +77,9 @@ git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.k
 | ②a | 只放宽 12s 重建阈值 → 20s（0x96 频率不动） | 12s 断开恰好卡在 BMS 苏醒（~14s）前，放宽后首建链直接等到苏醒出数据 | ❌ 未命中（97s/5 次连接，更差） | 0.2.111 | `82cdd83` | BMS 苏醒延迟随机（>23s），20s 等不到；重建又 3s status=8 失败，循环 5 次 |
 | ②b | 只降 0x96 补发频率 1.2s→4s | 0x96 轰炸在 MCU 苏醒瞬间打断唤醒 | ⏸ 暂搁置（方向转强制连接参数） | 0.2.112 | — | — |
 | ③ | 0x6C 时间同步帧（第 3 声蜂鸣） | 仅保真对照，预期与唤醒无关 | ⏸ 暂搁置 | 0.2.113 | — | — |
-| ④ | 反射 `requestLeConnectionUpdate` 强制 7.5ms 连接间隔（12s 阈值已回退，不再是变量） | 官方靠真 7.5ms 高频连接事件唤醒 BMS；公开 API HIGH 仅 11.25ms，反射强制真 7.5ms | 🔵 已改码，待真机验证 | 0.2.114 | — | 待测 |
+| ④ | 反射 `requestLeConnectionUpdate` 强制 7.5ms 连接间隔（12s 阈值已回退，不再是变量） | 官方靠真 7.5ms 高频连接事件唤醒 BMS；公开 API HIGH 仅 11.25ms，反射强制真 7.5ms | ❌ 反射失败（hidden API 限制阻断，`getMethod` 抛 NoSuchMethodException），7.5ms 未生效 | 0.2.114 | — | 见 §六实验④卡片 |
 
-**当前进度**：实验①已出结论（**半命中**）。实验②a（12s→20s）已真机验证=**未命中且更差**（见卡片）。实验④（反射 `requestLeConnectionUpdate` 强制 7.5ms + 12s 回退）已改码打包，**待真机验证**。②b、③ 暂搁置（方向转强制连接参数）。
+**当前进度**：实验①已出结论（**半命中**）。实验②a（12s→20s）已真机验证=**未命中且更差**（见卡片）。实验④已真机验证：**反射失败 + 12s 回退稳定生效**——`requestLeConnectionUpdate` 被 hidden API 限制阻断（`getMethod` 抛 `NoSuchMethodException`，7.5ms 未下发，降级 HIGH）；但 12s 阈值回退后，靠近自动连接稳定在 **~14s / 1 次重建**（19:31、19:32 两次日志实证：建链→半死链 12s→直连重建→出数据播报，蜂鸣 1 次）。**结论：12s 阈值 + HIGH 已是可接受体验，无需再追 7.5ms**。②b、③ 暂搁置。
 
 ---
 
@@ -145,8 +145,8 @@ git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.k
 - **★ 归因纪律**：反射可能失败（方法不存在/签名变/被拒），**日志必须区分**——
   - `实验④强制连接参数：requestLeConnectionUpdate 反射成功` → 请求已下发，看首建链是否一次出数据；
   - `实验④反射 requestLeConnectionUpdate 失败（降级 HIGH）` → 本实验未生效，等效只有 12s 回退，结论应记为「反射失败，7.5ms 未验证」。
-- **结果**：⬜ 待真机验证
-- **结论**：—
+- **结果**：❌ 反射失败（真机日志 2026-11-08 19:31/19:32 实证）——每次连接都打印 `实验④反射 requestLeConnectionUpdate 失败（降级 HIGH）：android.bluetooth.BluetoothGatt.requestLeConnectionUpdate [int, int, int, int, int, int]`。根因：Android 9+ 的 **hidden API 限制**把 `@hide` 方法从反射可见性里移除，`getMethod` 直接抛 `NoSuchMethodException`（方法在 AOSP 源码里是 `public` + `@hide`，但运行时被 blacklist 拦截）。普通反射无法绕过（需 meta-reflection / Unsafe / VMRuntime.setHiddenApiExemptions 等 hack 手段，Android 13+ 进一步收紧，收益低）。
+- **结论**：**7.5ms 未验证、未生效**，本实验等效「只有 12s 回退」。但**意外收获**：12s 回退 + HIGH（11.25~15ms）已把靠近自动连接稳定到 **~14s / 1 次重建 / 蜂鸣 1 次**（对比实验②a 20s 的 97s/5 次），这是**可接受体验**。**建议：不再追 7.5ms（hidden API 阻断，性价比极低），把 12s 阈值固化为最终方案**。若日后还想追「一次成功」，唯一靠谱路径是 §七 ★★★ HCI Snoop 字节级对比官方 APP。
 
 ---
 
