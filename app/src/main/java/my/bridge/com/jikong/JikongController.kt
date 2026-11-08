@@ -928,7 +928,9 @@ class JikongController private constructor() {
                     val rest = buf.copyOfRange(consumed, buf.size)
                     rxStream.reset()
                     rxStream.write(rest)
-                    dispatchFrame(frame.frame)
+                    // v0.2.118：CRC 坏帧 frame==null，已消费但跳过解析（不 dispatch），
+                    // 正常帧走原路照常分发，流式重组节奏完全不变。
+                    frame.frame?.let { dispatchFrame(it) }
                 }
                 // 防止缓冲区异常增长（无帧边界时）——超过 4KB 丢弃重建
                 if (rxStream.size() > 4096) rxStream.reset()

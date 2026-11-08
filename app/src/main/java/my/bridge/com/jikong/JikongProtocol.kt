@@ -122,6 +122,13 @@ object JikongProtocol {
         // 所有响应帧统一 300 字节（含 CRC @299）
         if (buf.size < RESPONSE_FRAME_LEN) return null // 半包，等更多字节
         val raw = buf.copyOfRange(0, RESPONSE_FRAME_LEN)
+        // v0.2.118：校验 CRC（前 299 字节累加和低 8 位 == d[299]）。半死链苏醒瞬间 BMS
+        // 可能吐出字节错位/假帧头的坏帧（真机误报 SOC=10 即此类），坏帧仍按 300 字节消费
+        // 以维持流式重组节奏不变，但 frame 置空由调用方跳过解析——正常帧路径完全不变。
+        if (!verifyCrc(raw)) {
+            Timber.w("极空帧 CRC 校验失败（帧类型 0x%02X），丢弃该帧不解析", type)
+            return ExtractedFrame(null, RESPONSE_FRAME_LEN)
+        }
         val frame = JikongFrame(
             protocol = "JK02",
             command = type,
@@ -129,6 +136,19 @@ object JikongProtocol {
             raw = raw,
         )
         return ExtractedFrame(frame, RESPONSE_FRAME_LEN)
+    }
+
+    /**
+     * 校验响应帧 CRC：d[299] 应等于前 299 字节（d[0..298]）累加和的低 8 位。
+     * 与命令帧 crc8 同一算法；已用真机抓包 30+ 帧逐字节实证 100% 匹配。
+     */
+    fun verifyCrc(raw: ByteArray): Boolean {
+        if (raw.size < RESPONSE_FRAME_LEN) return false
+        var sum = 0
+        for (i in 0 until RESPONSE_FRAME_LEN - 1) {
+            sum = (sum + (raw[i].toInt() and 0xFF)) and 0xFF
+        }
+        return (raw[RESPONSE_FRAME_LEN - 1].toInt() and 0xFF) == sum
     }
 
     /** 兼容旧 decode 接口（单帧解析，供测试/调试）。 */
@@ -152,8 +172,8 @@ data class JikongFrame(
     val tailOk: Boolean = true,
 )
 
-/** 流式重组提取结果：一帧 + 已消费字节数。 */
+/** 流式重组提取结果：一帧 + 已消费字节数。frame 为 null 表示 CRC 校验失败的坏帧（已消费、跳过解析）。 */
 data class ExtractedFrame(
-    val frame: JikongFrame,
+    val frame: JikongFrame?,
     val consumedLength: Int,
 )

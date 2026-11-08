@@ -1769,7 +1769,7 @@ private fun SettingsView(
     var odoDiscount by remember { mutableFloatStateOf(JikongPrefs.odoDiscount(context)) }
     // v0.2.107 靠近自动连接开关状态（★ 先于下方 Effect 声明；纯本地开关无远程同步需求）
     var proximityAuto by remember { mutableStateOf(JikongPrefs.proximityAutoConnect(context)) }
-    // v0.2.117 半死链握手长等待时长（秒，5~60，默认 12）
+    // v0.2.117 半死链握手长等待时长（秒，1~60，默认 12）
     var handshakeLongTimeoutSec by remember { mutableIntStateOf(JikongPrefs.handshakeLongTimeoutSec(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
     // v0.2.104：jikong_set_config（仪表盘/单位/电费/折扣）同用本 tick，一并重读
@@ -1864,7 +1864,7 @@ private fun SettingsView(
                     label = "半死链长等待时长",
                     value = "$handshakeLongTimeoutSec 秒",
                     onMinus = {
-                        handshakeLongTimeoutSec = (handshakeLongTimeoutSec - 1).coerceAtLeast(5)
+                        handshakeLongTimeoutSec = (handshakeLongTimeoutSec - 1).coerceAtLeast(1)
                         JikongPrefs.setHandshakeLongTimeoutSec(context, handshakeLongTimeoutSec)
                         controller.forceReport()
                     },

@@ -62,16 +62,14 @@ object SpeakVolumeBoost {
         val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         if (boosted) return true            // 重叠播报：已提升，不再重复记录原始音量
         if (cur >= max) return false        // 已最大，无需提升
-        val ok = runCatching { am.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0) }.isSuccess
-        if (!ok) return false
-        // v0.2.116 诊断：setStreamVolume 后立即回读，验证系统音量是否真的变到最大。
-        // 用户实测「锁屏自动连接时音量没调（仍用原小音量）」，需确认是 setStreamVolume 未生效
-        // 还是 MediaPlayer 未跟随。
-        val after = runCatching { am.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
+        // v0.2.118：改三段兜底（与命令下发 VolumeController 同款）——后台/锁屏时裸调
+        // setStreamVolume(stream, max, 0) 常被系统静默忽略（真机日志回读仍=原值），
+        // 而 FLAG_SHOW_UI / adjustStreamVolume 能真正生效。三段都失败也不影响播报本身。
+        val after = forceMax(am)
         original = cur
         boosted = true
         Timber.i(
-            "后台静默播报音量提升：媒体 %d/%d → 最大（setStreamVolume 后回读=%d），播报后恢复",
+            "后台静默播报音量提升：媒体 %d/%d → 最大（三段兜底后回读=%d），播报后恢复",
             cur, max, after,
         )
         return true
@@ -102,10 +100,38 @@ object SpeakVolumeBoost {
     fun reapply(context: Context) {
         if (!boosted) return
         val am = context.getSystemService(AudioManager::class.java) ?: return
-        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val ok = runCatching { am.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0) }.isSuccess
-        val after = runCatching { am.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
-        Timber.i("音量提升重申（start 后）：setStreamVolume(max=%d) %s，回读=%d", max, if (ok) "成功" else "失败", after)
+        val after = forceMax(am)
+        Timber.i("音量提升重申（start 后）：三段兜底后回读=%d", after)
+    }
+
+    /**
+     * 把媒体音量顶到最大（三段兜底，与 [VolumeController] 同款策略，v0.2.118）。
+     * ① 直接 setStreamVolume；② 回读未生效则带 FLAG_SHOW_UI 重试；③ 仍未生效用
+     * adjustStreamVolume 逐步逼近。返回最终实际音量；异常/无法读取返回 -1。
+     * 背景：后台/锁屏时裸调 setStreamVolume(stream, max, 0) 常被系统静默忽略
+     * （真机日志：回读仍=原值），而 FLAG_SHOW_UI / adjustStreamVolume 能真正生效。
+     */
+    private fun forceMax(am: AudioManager): Int {
+        val stream = AudioManager.STREAM_MUSIC
+        val max = runCatching { am.getStreamMaxVolume(stream) }.getOrDefault(-1)
+        if (max <= 0) return -1
+        // ① 直接设置
+        runCatching { am.setStreamVolume(stream, max, 0) }
+        var actual = runCatching { am.getStreamVolume(stream) }.getOrDefault(-1)
+        if (actual != max) {
+            Timber.w("音量提升：直接设置未生效（回读=%d/%d），带 FLAG_SHOW_UI 重试", actual, max)
+            runCatching { am.setStreamVolume(stream, max, AudioManager.FLAG_SHOW_UI) }
+            actual = runCatching { am.getStreamVolume(stream) }.getOrDefault(-1)
+        }
+        if (actual != max) {
+            Timber.w("音量提升：FLAG_SHOW_UI 仍未生效（回读=%d/%d），改用逐步调整", actual, max)
+            var guard = 0
+            while (runCatching { am.getStreamVolume(stream) }.getOrDefault(max) != max && guard++ < 40) {
+                runCatching { am.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, 0) }
+            }
+            actual = runCatching { am.getStreamVolume(stream) }.getOrDefault(-1)
+        }
+        return actual
     }
 
     /** 是否应提升音量（v0.2.115）：委托给注入的决策函数；未注入恒 false（安全默认，不提升）。 */
