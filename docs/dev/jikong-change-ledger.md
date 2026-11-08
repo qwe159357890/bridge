@@ -38,6 +38,9 @@
 **回滚配方**：`git revert` 本轮提交；或手改：JkUiState 删两 tick 字段、JikongController 删 speakDashboardNow/demoOdoRecords、buildReportStatus 删 speak_muted/demo_stats、Command.kt/CommandModule 删三条目、jikong.py 回白名单、admin 五处回退→admin npm run build；versionName 回 0.2.101。
 **触发信号**：后台点主题/小喇叭手机不生效 / 后台双击表盘手机不播 / 演示模式后台统计仍是真实台账 / 压差仍两位。
 
+**实施结果（2026-11-08 08:35 回填）**：编译/构建全过（admin vue-tsc+vite、客户端 compileDebugKotlin、server py_compile）。提交 `e7b8b3a` 直连推送；tag v0.2.102 直连推送成功（14c98d4），CI 打包成功，APK 0.2.102（aapt 实证，sha256 `6c339a9a…`，46,037,962 字节）分发 updates+Downloads+update.json。台账本轮 Edit 又吞了 v0.2.101 标题（同款事故第 4 次），已补回并核对了区块归属。
+**⚠ 依赖关系**：①后台新交互（播报/主题/小喇叭下发）需**服务端更新重启**（jikong.py 放行新 action）+ 手机升 0.2.102（新命令执行器）两端就绪才生效；②演示统计同步需手机 0.2.102 上报 demo_stats，旧 APK 时后台统计回 MySQL 真实台账；③主题/播报回读依赖 forceReport，命令执行后 ~1s 内后台刷新可见。
+
 ### v0.2.101 管理后台极空页与客户端 v0.2.100 对齐（2026-11-08 07:33 实施）
 
 **需求（用户 11-08 07:33）**：客户端多轮迭代后，管理后台「极空保护板」页未跟进——检查并确保与客户端 APP 极空页面百分百一致（只读镜像，交互类动作不搬运）。
