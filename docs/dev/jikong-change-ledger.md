@@ -17,6 +17,27 @@
 
 ---
 
+### v0.2.103 后台/客户端八项修复（2026-11-08 08:47 实施）
+
+**改前原文（逐字抄录，节选关键块）**：
+1. JikongPages HomeView：`DisposableEffect(dashEnabled) { if (dashEnabled) SpeedDash.start(context); onDispose { SpeedDash.stop(); if (controller.demoMode) controller.disconnect() } }`
+2. 根层：`DisposableEffect(Unit) { JkUiState.immersive = true; onDispose { JkUiState.immersive = false } }`
+3. cycleTheme：`JikongPrefs.setTheme(context, next)`（无上报）；onToggleMute：`JikongPrefs.setMuted(context, muted)`（无上报）
+4. admin index.vue：`@dblclick="onRemoteSpeak"`；远程控制卡含 mos-actions 三按钮；Tab3 语音播报只读镜像（无小喇叭行）；`onMounted { loadDeviceNames(); restartTimer() }`；`statsBase: const totalKmRaw = list[list.length - 1].odo_km - list[0].odo_km`
+5. reportStatus 去重：`val json = status.toJson().toString(); if (json == lastReportedJson) return`（app 块不参与）
+
+**需求（用户 08:46 反馈 8 项）**：①后台双击表盘选中文字 ②删「关充电/关放电/开均衡」按钮 ③手机改主题后台上不同步 ④后台看不到小喇叭 ⑤后台刷新网页先显示未连接 ⑥手机切内部 Tab 退出演示 ⑦刷新模拟数据疑未刷新实时/统计页 ⑧后台统计「记录区间里程」恒 --。
+
+**根因与修复**：
+- ⑥ HomeView 的 DisposableEffect onDispose 挂着演示退出——切内部 Tab 卸载 HomeView 误退出 → 上移根层 DisposableEffect(Unit)（仅离开极空页整体触发；后台退出仍走 ON_PAUSE）。
+- ③ reportStatus 按 status JSON 去重，app 块（theme/muted）变化不触发重报 → cycleTheme/onToggleMute 加 forceReport()。
+- ⑦ 是 ⑥ 的下游：切实时/统计页即退出演示回真实数据；refreshDemoData 本身 bump statusVersion（实时页订阅），修 ⑥ 后即正常。统计页台账独立于刷新模拟数据（设计如此）。
+- ⑧ statsBase 的 totalKmRaw = list[last]-list[0]，而台账「新在上」倒序 → 负数恒 -- → 改按 ts 升序后相减。
+- ① dblclick.prevent + .gauge-wrap user-select:none。② 删三按钮与 toggleMos/toggleBalance，卡片改「MOS / 均衡状态（只读）」。④ Tab3 语音播报镜像整体改可操作（小喇叭/播报开关/间隔/低电阈值/提醒间隔，绑 spk* 走 sendSpeakSettings）。⑤ onMounted 立即 loadState()。
+
+**回滚配方**：`git revert` 本轮提交；或手改：HomeView onDispose 加回演示退出并删根层 onDispose 的、cycleTheme/onToggleMute 删 forceReport、admin 四处回退→admin npm run build；versionName 回 0.2.102。
+**触发信号**：手机切内部 Tab 又退出演示 / 后台主题或小喇叭不同步 / 后台进页闪「未连接」/ 记录区间里程恒 -- / 双击表盘选中文字。
+
 ### v0.2.102 管理后台↔客户端双向对齐第二轮（远程播报/主题/小喇叭/演示统计/刷新频率/压差3位）（2026-11-08 08:10 实施）
 
 **需求（用户 08:05 反馈 7 项）**：①后台双击仪表盘→下发手机播报；②最大压差 3 位小数（后台+客户端核对）；③远程控制卡删「关充电 关放电 开均衡…保留在手机壳外」旧说明；④后台自动刷新频率可设置；⑤后台深/浅色切换必须同步客户端；⑥后台加小喇叭并可同步客户端；⑦客户端演示模式时后台统计页须与客户端一致（当前后台用的是 MySQL 真实台账）。总纲：后台必须和客户端一模一样，客户端能操作的后台也能操作（进入演示模式除外）。

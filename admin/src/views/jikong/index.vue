@@ -81,7 +81,8 @@
 
                   <!-- 中央仪表盘（300°弧 + 0~100 刻度带 + 外围数字 + SOC + 三胶囊）
                        v0.2.102：双击=远程触发手机播报（jikong_speak，话术与手机双击一致） -->
-                  <div class="gauge-wrap" title="双击：手机播报当前电量" @dblclick="onRemoteSpeak">
+                  <!-- v0.2.103：dblclick.prevent + user-select:none 防双击选中文字 -->
+                  <div class="gauge-wrap" title="双击：手机播报当前电量" @dblclick.prevent="onRemoteSpeak">
                     <svg viewBox="0 0 320 320" class="gauge-svg">
                       <defs>
                         <linearGradient id="gaugeGrad" gradientUnits="userSpaceOnUse" x1="34" y1="160" x2="286" y2="160">
@@ -450,25 +451,38 @@
                 <div class="jk-card" style="border-radius: 12px">
                   <div class="set-row" style="padding-bottom: 6px">
                     <div style="flex: 1">
+                      <div style="font-size: 14px; font-weight: 600">小喇叭</div>
+                      <div class="mini-label" style="margin-top: 2px">
+                        静音后手机不再自动播报（双击表盘播报不受影响）
+                      </div>
+                    </div>
+                    <el-switch v-model="spkMuted" size="small" style="margin-left: 8px" @change="sendSpeakSettings('小喇叭')" />
+                  </div>
+                  <div class="set-row" style="padding-bottom: 6px">
+                    <div style="flex: 1">
                       <div style="font-size: 14px; font-weight: 600">连接后播报电量</div>
                       <div class="mini-label" style="margin-top: 2px">
                         本页打开时播报电量：电量变化即播；相同且超播报间隔再播；低于阈值立即提醒并按预警间隔重复提醒。
                       </div>
                     </div>
-                    <el-switch :model-value="!!s?.app?.speak_enabled" disabled size="small" style="margin-left: 8px" />
+                    <el-switch v-model="spkEnabled" size="small" style="margin-left: 8px" @change="sendSpeakSettings('语音播报')" />
                   </div>
                   <div class="dash-row2" style="padding: 0 14px 12px">
                     <div class="dash-col">
                       <div class="mini-label">播报间隔</div>
-                      <div class="dash-mid">{{ s?.app?.speak_interval_min != null ? s.app.speak_interval_min + ' 分钟' : '--' }}</div>
+                      <el-select v-model="spkInterval" size="small" style="width: 100%" @change="sendSpeakSettings('播报间隔')">
+                        <el-option v-for="m in [1, 5, 10, 15, 30, 60]" :key="m" :label="m + ' 分钟'" :value="m" />
+                      </el-select>
                     </div>
                     <div class="dash-col">
                       <div class="mini-label">低电量阈值</div>
-                      <div class="dash-mid">{{ s?.app?.speak_low_soc != null ? s.app.speak_low_soc + ' %' : '--' }}</div>
+                      <el-input-number v-model="spkLowSoc" size="small" :min="1" :max="50" style="width: 100%" @change="sendSpeakSettings('低电阈值')" />
                     </div>
                     <div class="dash-col">
                       <div class="mini-label">预警提醒间隔</div>
-                      <div class="dash-mid">{{ s?.app?.speak_warn_repeat_min != null ? s.app.speak_warn_repeat_min + ' 分钟' : '--' }}</div>
+                      <el-select v-model="spkWarnRepeat" size="small" style="width: 100%" @change="sendSpeakSettings('提醒间隔')">
+                        <el-option v-for="m in [1, 5, 10, 30]" :key="m" :label="m + ' 分钟'" :value="m" />
+                      </el-select>
                     </div>
                   </div>
                 </div>
@@ -563,7 +577,7 @@
         <!-- ============ 手机壳之外：管理台专属（不在手机 1:1 范围内） ============ -->
         <div class="side-panels">
           <el-card shadow="never" class="side-card">
-            <template #header><span class="title">远程控制（管理台专属）</span></template>
+            <template #header><span class="title">MOS / 均衡状态（只读）</span></template>
             <div class="mos-row">
               <div class="mos-item">
                 <span class="dot" :class="connected && s?.charge_mos_on ? 'g' : 'gy'" />
@@ -577,17 +591,6 @@
                 <span class="dot" :class="connected && s?.balance_on ? 'g' : 'gy'" />
                 <span>主动均衡：{{ connected ? (s?.balance_on ? '开启' : '关闭') : '未知' }}</span>
               </div>
-            </div>
-            <div class="mos-actions">
-              <el-button size="small" :disabled="!connected" @click="toggleMos('charge', !s?.charge_mos_on)">
-                {{ s?.charge_mos_on ? '关充电' : '开充电' }}
-              </el-button>
-              <el-button size="small" :disabled="!connected" @click="toggleMos('discharge', !s?.discharge_mos_on)">
-                {{ s?.discharge_mos_on ? '关放电' : '开放电' }}
-              </el-button>
-              <el-button size="small" type="warning" :disabled="!connected" @click="toggleBalance(!s?.balance_on)">
-                {{ s?.balance_on ? '关均衡' : '开均衡' }}
-              </el-button>
             </div>
           </el-card>
 
@@ -1069,7 +1072,10 @@ const statsBase = computed(() => {
   const list = statsRecords.value
   if (list.length < 2) return null
   const valid = list.filter((r) => r.seg)
-  const totalKmRaw = list[list.length - 1].odo_km - list[0].odo_km
+  // v0.2.103：按时间升序求区间里程——列表是「新在上」倒序，直接 last-first 会得负数，
+  // 「记录区间里程」恒显示 --（2026-11-08 用户实证，演示台账 260km 也中招）。
+  const asc = [...list].sort((a, b) => a.ts_ms - b.ts_ms)
+  const totalKmRaw = asc[asc.length - 1].odo_km - asc[0].odo_km
   const totalWh = valid.reduce((a, r) => a + r.seg!.kwh * 1000, 0)
   const totalValidKm = valid.reduce((a, r) => a + r.seg!.d_odo_km, 0)
   const avgWh = totalValidKm > 0.5 ? totalWh / totalValidKm : 0
@@ -1175,28 +1181,6 @@ const curveAvgCost = computed(() => {
   return (b.avgWh / discount.value * price.value / 10).toFixed(2)
 })
 
-// ==================== 远程控制（管理台专属，保留自旧版） ====================
-async function toggleMos(target: 'charge' | 'discharge', on: boolean) {
-  try {
-    await jikongControl(selectedDevice.value, {
-      action: 'mos',
-      charge: target === 'charge',
-      discharge: target === 'discharge',
-      on,
-    })
-    ElMessage.success(`${target === 'charge' ? '充电' : '放电'} MOS 指令已下发`)
-    setTimeout(loadState, 1500)
-  } catch { /* 已提示 */ }
-}
-
-async function toggleBalance(on: boolean) {
-  try {
-    await jikongControl(selectedDevice.value, { action: 'balance', on })
-    ElMessage.success(`均衡${on ? '开启' : '关闭'}指令已下发`)
-    setTimeout(loadState, 1500)
-  } catch { /* 已提示 */ }
-}
-
 // ==================== 加载与轮询 ====================
 async function loadState() {
   if (!selectedDevice.value) { s.value = null; return }
@@ -1252,6 +1236,9 @@ async function loadDeviceNames() {
 
 onMounted(() => {
   loadDeviceNames()
+  // v0.2.103：进页立即拉一次状态——原先只靠 2s 轮询，刷新网页后首帧显示
+  // 「设备未连接保护板」空态约一个轮询周期（用户 2026-11-08 实证）。
+  loadState()
   restartTimer()
 })
 onUnmounted(() => {
@@ -1350,7 +1337,7 @@ const dashTotals = computed(() => {
 }
 
 /* 仪表盘 */
-.gauge-wrap { position: relative; width: 88.5%; margin: 2px auto 0; }
+.gauge-wrap { position: relative; width: 88.5%; margin: 2px auto 0; user-select: none; -webkit-user-select: none; }
 .gauge-svg { width: 100%; display: block; }
 .gauge-center {
   position: absolute; inset: 0;

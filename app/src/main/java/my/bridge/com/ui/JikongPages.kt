@@ -411,6 +411,9 @@ fun JikongPage() {
         val next = (themeMode + 1) % 3
         themeMode = next
         JikongPrefs.setTheme(context, next)
+        // v0.2.103：立即上报——reportStatus 按 status JSON 去重，主题变化不改 status，
+        // 不强制上报则管理后台永远同步不到新主题（用户 2026-11-08 实证）。
+        controller.forceReport()
     }
 
     // 沉浸态（v0.2.67，微信/销售页同款）：进入极空页隐藏主页顶部 Tab 栏与 APP 底部工具栏
@@ -418,7 +421,14 @@ fun JikongPage() {
     //   只有已连接才有 HomeView，杜绝未连接时白白开 GPS）
     DisposableEffect(Unit) {
         JkUiState.immersive = true
-        onDispose { JkUiState.immersive = false }
+        onDispose {
+            JkUiState.immersive = false
+            // v0.2.103：演示退出判定从 HomeView 迁到本层——原先挂在 HomeView 的
+            // DisposableEffect 上，切「实时/统计/设置」内部 Tab 会卸载 HomeView 误退出
+            // 演示（2026-11-08 用户实证）。本层只在离开极空页整体时触发，语义正确；
+            // 回 APP 后台由上方 ON_PAUSE 处理，行为不变。
+            if (controller.demoMode) controller.disconnect()
+        }
     }
 
     // 返回键统一梯子（v0.2.94 方案A，用户拍板，微信式逐级上退）：
@@ -792,14 +802,11 @@ private fun HomeView(
 
     // v0.2.83 仪表盘生命周期门控（红队修正：HomeView 只在已连接时存在）——
     // 进入首页（连接建立/回前台）且开关开才启动 GPS+积分；离开即注销，零后台成本。
-    // v0.2.98：演示模式没有真实连接（不会因断连退出），切离首页（回主页/进其它页）
-    // 即自动退出演示——回连接页，避免演示一直挂着（用户拍板）。
+    // v0.2.103：演示退出判定已上移到极空页根层（原先在此处 onDispose 里，切内部
+    // Tab 卸载 HomeView 会误退出演示）；这里只负责 GPS/积分的启停。
     DisposableEffect(dashEnabled) {
         if (dashEnabled) SpeedDash.start(context)
-        onDispose {
-            SpeedDash.stop()
-            if (controller.demoMode) controller.disconnect()
-        }
+        onDispose { SpeedDash.stop() }
     }
 
     // v0.2.97 TTS 分段预取（用户拍板「拉全后完全本地」）：进首页后台把 0..100+词组拉进
@@ -852,6 +859,8 @@ private fun HomeView(
                 onToggleMute = {
                     muted = !muted
                     JikongPrefs.setMuted(context, muted)
+                    // v0.2.103：静音状态立即上报（同主题：状态 JSON 不含 app 块，去重会拦）
+                    controller.forceReport()
                     Toast.makeText(
                         context,
                         if (muted) "已静音：之后不再播报（启动后首次电量播报除外）" else "已恢复播报",
