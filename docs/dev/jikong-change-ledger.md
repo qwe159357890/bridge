@@ -46,7 +46,9 @@
 **回滚配方**：`git revert` 本轮提交；或 `git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt app/build.gradle.kts`。
 **触发信号**：闲置 ≥10min 后靠近仍 3~4 轮 12s 才出数据（说明 HIGH 优先级不解决）/ 出现连接失败率升高（HIGH 优先级兼容性问题）。
 
-**实施结果（2026-11-08 14:32 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（2m42s，仅存量 BLE deprecated 告警）。提交 `eb6e8cc`（rebase 对齐后 `9ea241a`）清代理直连 push（98a4edf..9ea241a）。`release.py v0.2.110` 建 tag 触发 CI 打包成功（gh-proxy 代理下载）。APK 46,054,402 字节，aapt 实证 versionName=0.2.110（versionCode=1，update.json 自定义 versionCode=310），分发 updates/bridge-v0.2.110.apk + update.json（sha256 `9568d9b5…`）。**服务端零改动、无需重启**。**待用户真机验证**（§五 步骤：闲置 ≥10min 后靠近，观察是否第 1 条链路出数据、蜂鸣 ≤1 次）。
+**实施结果（2026-11-08 14:32 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（2m42s，仅存量 BLE deprecated 告警）。提交 `eb6e8cc`（rebase 对齐后 `9ea241a`）清代理直连 push（98a4edf..9ea241a）。`release.py v0.2.110` 建 tag 触发 CI 打包成功（gh-proxy 代理下载）。APK 46,054,402 字节，aapt 实证 versionName=0.2.110（versionCode=1，update.json 自定义 versionCode=310），分发 updates/bridge-v0.2.110.apk + update.json（sha256 `9568d9b5…`）。**服务端零改动、无需重启**。
+
+**真机验证结论（2026-11-08 15:05 回填，用户多轮多情况测试 + 日志实证）**：**半命中**。日志 14:52:38 靠近 → 14:52:52 收到 0x02 播报 = **14 秒**，「主动重建链路」只到**第 1/3 次**即成功（基线 v0.2.109 是 3~4 轮 ≈ 1 分钟），改善约 3~4 倍；MTU 协商到 303（此前 256）。但**首建链仍半死**：14:52:38 建链后 0x96 连发 11 次（14:52:40~50）无 0x02，14:52:51 触 12s 超时断开、14:52:52 直连重建立即出数据。**关键线索**：BMS 苏醒延迟约 13~14s，12s 超时恰好卡在苏醒前断开 → 指向实验②（放宽/移除 12s 耐心等，有望首建链直接等到数据 = 官方一次成功）。详见专档 `jikong-handshake-fix.md` 实验①。
 
 ---
 
