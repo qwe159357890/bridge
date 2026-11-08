@@ -44,7 +44,7 @@
 **回滚配方**：`git checkout <锚点提交> -- app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/src/main/AndroidManifest.xml app/src/main/java/my/bridge/com/BridgeApplication.kt app/build.gradle.kts && rm app/src/main/java/my/bridge/com/jikong/JikongProximityService.kt`；或 `git revert` 本轮提交。
 **触发信号**：开关打开后靠近保护板 >60s 仍不自动连 / 口袋里连上不播报 / 极空页点断开后仍自动重连（抑制失效）/ 走远回来不再重连 / 后台 jikong_state 断流 / 耗电异常增大（>1%/天增量）。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 12:06 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（3m19s，仅存量 BLE deprecated 告警）。提交 `a729f52` 清代理直连推送（5ca7e94..a729f52）；`release.py v0.2.107` 建 tag 触发 CI 打包成功，APK 经 gh-proxy 下载（46,054,402 字节，aapt 实证 versionName=0.2.107），分发 updates/bridge-v0.2.107.apk + update.json（version 0.2.107 / versionCode 307 / sha256 `47aeda75…`）。纯客户端改动，服务端无改动无需重启。真机验证走 check_update 升级（§3.10 十项清单，尤其 ⑤ autoConnect 首建链×12s 自愈组合、③ 手动断开抑制、⑨ 耗电 24h 对照）。
 
 ---
 
