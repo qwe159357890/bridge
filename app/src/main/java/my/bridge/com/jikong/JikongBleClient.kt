@@ -335,6 +335,9 @@ object JikongBleClient {
             if (isStale(g)) return
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Timber.tag(TAG).i("GATT 已连接，先协商 MTU 再发现服务")
+                // v0.2.110 实验①：连接建立后立即请求 HIGH 优先级（7.5ms 连接间隔），
+                // 复刻官方「高频连接事件持续唤醒休眠 MCU」的时序（v0.2.82 dexdump 逆向实证）。
+                runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }
                 servicesRequested = false
                 cccdRetries = 0
                 notifyLogBudget = 3
