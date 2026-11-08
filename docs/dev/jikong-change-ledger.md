@@ -17,6 +17,33 @@
 
 ---
 
+### v0.2.120 连接成功提示音（5选1+试听）+ 首连短戳可配置 + 音量提升引用计数（2026-11-08 21:55 实施）
+
+**背景（用户 11-08 21:10~21:50 多轮反馈 + 日志实证）**：装 v0.2.118 后多次靠近/远离测试，三项结论：音量三段兜底彻底修好（回读=30）；每次「autoConnect 首连（半死链）+ 1 次直连重建」即成功（~2~3s、3 声滴声），阶梯里「第 2 次短戳 + 长等待」从没被触发；CRC 拦到一次真坏帧（防误报有效）。据此拍板：
+1. 缩短首连等待，但让用户自设（默认 1s，可 0.1~1.0）。
+2. 保留长等待兜底。
+3. 新增「连接成功提示音」（默认双嘀，5 选 1 可试听），让用户不看日志也能听出「连接成功→首帧数据」耗时；调研确认「发现→连接」无独立 APP 可感知时间点（系统 autoConnect 内部连续动作），**无需发现提示音**。
+
+**改前原文（关键块；锚点提交 `1fd89ba` 存全文）**：
+1. `JikongController.kt` `startPolling`：前两次固定 `1_000L` 短戳（`val currentTimeoutMs = if (datalessRecycles < 2) 1_000L else longTimeoutMs`）。
+2. `SpeakVolumeBoost.kt`：`private var boosted = false`（布尔幂等），`begin` 用 `if (boosted) return true`、`end` 用 `if (!boosted) return`、`reapply` 用 `if (!boosted) return`。
+3. `JikongPrefs.kt` / `JikongSpeaker.kt` / `JikongPages.kt`：无提示音配置、无 beep 播放、无设置 UI。
+4. `app/build.gradle.kts`：`versionName = "0.2.118"`。
+
+**改后**：
+1. `JikongPrefs.kt` 新增 `handshakeShortTimeoutSec`（0.1~1.0，默认 1.0，按十分之一秒 Int 存储防浮点误差）+ `beepSoundId`（1~5，默认 2）。
+2. `JikongController.kt` `startPolling` 短戳改用 `handshakeShortTimeoutSec`；`onConnectionChanged` connected=true 时 `JikongSpeaker.beepConnected`（覆盖手动 connect 与靠近自动连接；demo 直接改 status 不触发回调）。
+3. `SpeakVolumeBoost.kt` `boosted:Boolean`→`boostCount:Int` 引用计数（begin +1 / end -1，减到 0 才恢复）——beep 与播报并发时不提前恢复音量。
+4. `JikongSpeaker.kt` 新增 `beepResId`/`beepName`/`playBeep`/`beepConnected`（独立 MediaPlayer 播 res/raw，复用三段兜底 + reapply）。
+5. `JikongPages.kt` 靠近自动连接卡新增「连接成功提示音」5 选 1（点选即试听）+「首连短戳时长」stepper（0.1~1.0）。
+6. 新增 `res/raw/beep_1_short`~`beep_5_dingdong`（5 个 PCM wav，共约 90KB）。
+7. 版本号 0.2.120。
+
+**回滚配方**：`git revert 0feadc9`（或手动还原上述 7 处「改前原文」）。
+**触发信号**：beep 与播报重叠时若音量提前回落（播报后半段变小声）→ 查引用计数配对；锁屏 beep 若听不清 → 看「三段兜底后回读」是否仍非 30；短戳 0.1 若导致频繁重建 → 回调默认 1.0。
+
+---
+
 ### v0.2.118 音量三段兜底 + 长等待 1~60 + 0x02 帧 CRC 校验防误报（2026-11-08 21:00 实施）
 
 **背景（用户 11-08 20:30 反馈 + 日志实证）**：装 v0.2.117 多次测试后反馈三点：
