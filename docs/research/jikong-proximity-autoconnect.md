@@ -394,6 +394,10 @@ fun setPageVisible(visible: Boolean) {
 
 **12s 自愈重建与 autoConnect 的组合**（§2.7-1 风险消解）：startPolling 的 `datalessRecycles` 路径调用 `JikongBleClient.disconnect()` 时，autoConnect GATT 上 disconnect 不 close → **系统立即自动重建链路**（等同原快档重连，且更快），重建成功经触点 ① 重新初始化。`dataRecyclePending` 标志在 proximity 模式下无需使用（不走 startReconnect）。**此组合链路是真机验证重点。**
 
+> **⚠ 真机验证推翻上述假设（v0.2.109 修复，2026-11-08 12:18~12:23 设备 f2c38ebee251a196 日志实证）**：
+> 「重挂 autoConnect 让系统自动重建」**唤醒不了半死链的休眠 BMS 模块**——实测反复「挂起→建链→只回 `AT\r\n`/0x01→12s 断开→再挂起」死循环，连续 3 次重建 + 3 次后「继续 ramp」仍无 0x02，永不播报。半死链的唤醒**必须靠直连重建**（connectGatt autoConnect=false，v0.2.80 手动连接实证第 2 条直连链路立即有数据）。
+> **修正**：触点②断开分流在 `dataRecyclePending=true`（12s 无 0x02 主动重建）时改走 `startProximityReconnect()`（对默认设备立即直连重建），而非 evaluateInPlace 重挂起；`false`（走远自然断开）仍保持重挂起。详见台账 v0.2.109 条目。
+
 ### 3.5 播报 gate 放开（§2.8 拍板实现）
 
 `maybeAnnounce()` 两处改动：
