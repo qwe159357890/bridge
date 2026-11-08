@@ -549,6 +549,13 @@ COMMANDS: list[dict[str, Any]] = [
           _param("speak_interval_min", "播报间隔(分钟)", PARAM_TYPE_NUMBER),
           _param("speak_low_soc", "低电阈值(%)", PARAM_TYPE_NUMBER),
           _param("speak_warn_repeat_min", "提醒间隔(分钟)", PARAM_TYPE_NUMBER)]),
+    _cmd("jikong_set_config", "极空同步显示设置", "jikong", "⚙️",
+         "管理后台「设置页」镜像可编辑部分同步到手机端（时速仪表盘开关/电耗单位/电费单价/里程折扣，"
+         "字段可选仅改传了的）",
+         [_param("dash_enabled", "时速仪表盘开关", PARAM_TYPE_SWITCH),
+          _param("unit_kwh100", "电耗单位(kWh/100km)", PARAM_TYPE_SWITCH),
+          _param("elec_price", "电费单价(元/度)", PARAM_TYPE_NUMBER),
+          _param("odo_discount", "里程折扣(0.1~1.0)", PARAM_TYPE_NUMBER)]),
 
     # ---- 界面自动化（v0.2.38 引入，对标 autox 无障碍引擎）----
     # 依赖设备开启「Bridge 辅助服务」（无障碍），且须为 canRetrieveWindowContent + canPerformGestures。

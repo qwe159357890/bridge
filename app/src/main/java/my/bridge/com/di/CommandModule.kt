@@ -346,6 +346,9 @@ object CommandModule {
         Command.JIKONG_SET_SPEAK to CommandExecutor { command ->
             executeJikongSetSpeak(context, command)
         },
+        Command.JIKONG_SET_CONFIG to CommandExecutor { command ->
+            executeJikongSetConfig(context, command)
+        },
         // ---- 界面自动化增强（v0.2.40：委托 automation/commands 执行器）----
         Command.UI_LONG_CLICK to CommandExecutor { command ->
             my.bridge.com.automation.commands.UiCommandExecutors.longClick(command)
@@ -3206,6 +3209,54 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 jikong_set_speak 执行失败")
             CommandResult(id, name, false, "同步播报设置失败：${e.message}")
+        }
+    }
+
+    /**
+     * jikong_set_config（v0.2.104）：后台「设置页」镜像可编辑部分同步到手机——
+     * 时速仪表盘开关 / 电耗单位 / 电费单价 / 里程折扣。字段可选仅改传了的；
+     * 应用后 remoteSpeakTick 自增（设置页/统计页订阅即时生效）+ forceReport 回报。
+     */
+    private fun executeJikongSetConfig(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val p = command.params
+        return try {
+            val applied = mutableListOf<String>()
+            p.get("dash_enabled")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asBoolean
+                my.bridge.com.jikong.JikongPrefs.setDashEnabled(context, v)
+                // 与手机设置页 toggleDash 同语义：立即启停（SpeedDash.start 幂等，
+                // 页面不可见时由 ON_RESUME 门控兜底）；关则无条件停。
+                if (v) my.bridge.com.jikong.SpeedDash.start(context)
+                else my.bridge.com.jikong.SpeedDash.stop()
+                applied.add(if (v) "时速仪表盘开" else "时速仪表盘关")
+            }
+            p.get("unit_kwh100")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asBoolean
+                my.bridge.com.jikong.JikongPrefs.setUnitKwh100(context, v)
+                applied.add(if (v) "电耗单位 kWh/100km" else "电耗单位 Wh/km")
+            }
+            p.get("elec_price")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asDouble.toFloat().coerceIn(0.05f, 10f)
+                my.bridge.com.jikong.JikongPrefs.setElecPrice(context, v)
+                applied.add("电费单价 %.2f 元/度".format(v))
+            }
+            p.get("odo_discount")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asDouble.toFloat().coerceIn(0.1f, 1f)
+                my.bridge.com.jikong.JikongPrefs.setOdoDiscount(context, v)
+                applied.add("里程折扣 %.1f".format(v))
+            }
+            if (applied.isEmpty()) {
+                CommandResult(id, name, false, "无有效参数（dash_enabled/unit_kwh100/elec_price/odo_discount）")
+            } else {
+                my.bridge.com.ui.JkUiState.remoteSpeakTick++
+                my.bridge.com.jikong.JikongController.instance.forceReport()
+                CommandResult(id, name, true, "设置已同步：" + applied.joinToString("；"))
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_set_config 执行失败")
+            CommandResult(id, name, false, "同步设置失败：${e.message}")
         }
     }
 }

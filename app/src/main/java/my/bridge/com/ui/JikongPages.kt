@@ -364,6 +364,18 @@ fun JikongPage() {
         dashEnabled = on
         JikongPrefs.setDashEnabled(context, on)
         if (on) SpeedDash.start(context) else SpeedDash.stop()
+        // v0.2.104：立即上报（reportStatus 按 status JSON 去重，Prefs 变化不在 status 里）
+        controller.forceReport()
+    }
+    // v0.2.104：管理后台改「时速仪表盘」开关（jikong_set_config）→ Prefs 已被改（执行器已
+    // 同步启停 SpeedDash）→ tick 自增 → 这里重读状态，HomeView 的 DisposableEffect(dashEnabled)
+    // 与设置页开关随重组自动跟随。
+    androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
+        val remote = JikongPrefs.dashEnabled(context)
+        if (remote != dashEnabled) {
+            dashEnabled = remote
+            if (remote) SpeedDash.start(context) else SpeedDash.stop()
+        }
     }
 
     // 页面可见性守卫：ON_RESUME 标记可见并开始轮询，ON_PAUSE 释放
@@ -1746,17 +1758,21 @@ private fun SettingsView(
     var speakIntervalMin by remember { mutableIntStateOf(JikongPrefs.speakIntervalMin(context)) }
     var speakLowSoc by remember { mutableIntStateOf(JikongPrefs.speakLowSoc(context)) }
     var speakWarnRepeatMin by remember { mutableIntStateOf(JikongPrefs.speakWarnRepeatMin(context)) }
+    // v0.2.90 单位/电费/里程折扣设置状态（★ 必须在下方 LaunchedEffect 之前声明）
+    var unitKwh100 by remember { mutableStateOf(JikongPrefs.unitKwh100(context)) }
+    var elecPrice by remember { mutableFloatStateOf(JikongPrefs.elecPrice(context)) }
+    var odoDiscount by remember { mutableFloatStateOf(JikongPrefs.odoDiscount(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
+    // v0.2.104：jikong_set_config（仪表盘/单位/电费/折扣）同用本 tick，一并重读
     androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
         speakEnabled = JikongPrefs.speakEnabled(context)
         speakIntervalMin = JikongPrefs.speakIntervalMin(context)
         speakLowSoc = JikongPrefs.speakLowSoc(context)
         speakWarnRepeatMin = JikongPrefs.speakWarnRepeatMin(context)
+        unitKwh100 = JikongPrefs.unitKwh100(context)
+        elecPrice = JikongPrefs.elecPrice(context)
+        odoDiscount = JikongPrefs.odoDiscount(context)
     }
-    // v0.2.90 单位/电费/里程折扣设置状态
-    var unitKwh100 by remember { mutableStateOf(JikongPrefs.unitKwh100(context)) }
-    var elecPrice by remember { mutableFloatStateOf(JikongPrefs.elecPrice(context)) }
-    var odoDiscount by remember { mutableFloatStateOf(JikongPrefs.odoDiscount(context)) }
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Text("仪表盘", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
         Spacer(Modifier.height(8.dp))
@@ -1819,6 +1835,8 @@ private fun SettingsView(
                         onCheckedChange = {
                             speakEnabled = it
                             JikongPrefs.setSpeakEnabled(context, it)
+                            // v0.2.104：立即上报（后台刷新即同步）
+                            controller.forceReport()
                         },
                     )
                 }
@@ -1829,10 +1847,12 @@ private fun SettingsView(
                     onMinus = {
                         speakIntervalMin = (speakIntervalMin - 1).coerceAtLeast(1)
                         JikongPrefs.setSpeakIntervalMin(context, speakIntervalMin)
+                        controller.forceReport()
                     },
                     onPlus = {
                         speakIntervalMin = (speakIntervalMin + 1).coerceAtMost(120)
                         JikongPrefs.setSpeakIntervalMin(context, speakIntervalMin)
+                        controller.forceReport()
                     },
                 )
                 Spacer(Modifier.height(2.dp))
@@ -1842,10 +1862,12 @@ private fun SettingsView(
                     onMinus = {
                         speakLowSoc = (speakLowSoc - 1).coerceAtLeast(1)
                         JikongPrefs.setSpeakLowSoc(context, speakLowSoc)
+                        controller.forceReport()
                     },
                     onPlus = {
                         speakLowSoc = (speakLowSoc + 1).coerceAtMost(50)
                         JikongPrefs.setSpeakLowSoc(context, speakLowSoc)
+                        controller.forceReport()
                     },
                 )
                 Spacer(Modifier.height(2.dp))
@@ -1855,10 +1877,12 @@ private fun SettingsView(
                     onMinus = {
                         speakWarnRepeatMin = (speakWarnRepeatMin - 1).coerceAtLeast(1)
                         JikongPrefs.setSpeakWarnRepeatMin(context, speakWarnRepeatMin)
+                        controller.forceReport()
                     },
                     onPlus = {
                         speakWarnRepeatMin = (speakWarnRepeatMin + 1).coerceAtMost(60)
                         JikongPrefs.setSpeakWarnRepeatMin(context, speakWarnRepeatMin)
+                        controller.forceReport()
                     },
                 )
                 Spacer(Modifier.height(4.dp))
@@ -1897,6 +1921,8 @@ private fun SettingsView(
                                 .clickable {
                                     unitKwh100 = sel
                                     JikongPrefs.setUnitKwh100(context, sel)
+                                    // v0.2.104：立即上报（后台刷新即同步）
+                                    controller.forceReport()
                                 }
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                         )
@@ -1910,10 +1936,12 @@ private fun SettingsView(
                     onMinus = {
                         elecPrice = (((elecPrice * 20).toInt() - 1).coerceAtLeast(1)) / 20f
                         JikongPrefs.setElecPrice(context, elecPrice)
+                        controller.forceReport()
                     },
                     onPlus = {
                         elecPrice = (((elecPrice * 20).toInt() + 1).coerceAtMost(200)) / 20f
                         JikongPrefs.setElecPrice(context, elecPrice)
+                        controller.forceReport()
                     },
                 )
                 Spacer(Modifier.height(4.dp))
@@ -1940,10 +1968,12 @@ private fun SettingsView(
                     onMinus = {
                         odoDiscount = (((odoDiscount * 10).toInt() - 1).coerceAtLeast(1)) / 10f
                         JikongPrefs.setOdoDiscount(context, odoDiscount)
+                        controller.forceReport()
                     },
                     onPlus = {
                         odoDiscount = (((odoDiscount * 10).toInt() + 1).coerceAtMost(10)) / 10f
                         JikongPrefs.setOdoDiscount(context, odoDiscount)
+                        controller.forceReport()
                     },
                 )
                 Spacer(Modifier.height(4.dp))
@@ -2130,6 +2160,9 @@ private fun StatsView(controller: JikongController) {
     val c = LocalJkColors.current
     val context = LocalContext.current
     controller.statusVersion.value // 订阅 BMS 数据版本：循环容量/总压实时值随 0x02 帧刷新
+    // v0.2.104：订阅远程设置 tick——后台 jikong_set_config 改折扣/电费后，此处重算立即生效
+    //（不订阅则 Prefs 快照值冻结在上次重组，要等下帧 BMS 数据才刷新）
+    JkUiState.remoteSpeakTick
 
     var recordsVersion by remember { mutableIntStateOf(0) } // 记录集版本（增删/同步后自增驱动重读）
     var odoText by remember { mutableStateOf("") }

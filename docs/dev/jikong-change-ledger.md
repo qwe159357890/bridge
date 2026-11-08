@@ -17,6 +17,30 @@
 
 ---
 
+### v0.2.104 后台小喇叭移至首页连接栏 + 设置页镜像全面可编辑（jikong_set_config）（2026-11-08 09:10 实施）
+
+**需求（用户 11-08 09:10 反馈 2 项）**：①删侧栏「语音播报（同步到手机）」卡，小喇叭改为后台首页右上角图标（与手机客户端同位置同交互，双向同步）；②后台设置页此前只能改「语音播报」，仪表盘/单位与花费/里程折扣也应可设置并下发客户端；客户端设置改动后后台刷新应同步。
+
+**改前原文（逐字抄录，节选关键块）**：
+1. `Command.kt`（152-162 行）：JIKONG_* 九个常量，无 set_config。
+2. `CommandModule.kt`：jikong 执行器映射至 JIKONG_SET_SPEAK 止；executeJikongSetSpeak 末尾 `remoteSpeakTick++ + forceReport`。
+3. `JikongPages.kt` JikongScreen：`toggleDash = { on -> dashEnabled = on; JikongPrefs.setDashEnabled(context, on); if (on) SpeedDash.start(context) else SpeedDash.stop() }`（无上报，无远程 tick 订阅）；SettingsView remoteSpeakTick Effect 只重读 4 个播报字段；SettingsView 各控件（播报开关/三 stepper/单位 chip/电费/折扣 stepper）写 Prefs 无 forceReport；StatsView 只订阅 statusVersion（折扣/电费读 Prefs 快照）。
+4. `server/app/api/v1/jikong.py` control：action 白名单 `("speak", "set_theme", "set_speak")`。
+5. `command_catalog.py`：jikong_* 十一条目，无 jikong_set_config。
+6. `admin/index.vue`：侧栏「语音播报（同步到手机）」卡（spk-row 五行，改动 sendSpeakSettings）；Tab3 仪表盘开关 `dashMirror` disabled、电耗单位 chip 只读、电费/折扣只读 span、语音播报卡含「小喇叭」行（手机设置页无此行）；connbar 仅 dot+conn-text+theme-btn；watch(app) 只回写 spk* 五字段（spkLastSendAt 回声窗口）。
+
+**改动清单**：
+- 客户端：`Command.kt` +JIKONG_SET_CONFIG；`CommandModule.kt` +映射与 executeJikongSetConfig（dash_enabled 同步启停 SpeedDash / unit_kwh100 / elec_price 0.05~10 / odo_discount 0.1~1.0，成功后 remoteSpeakTick++ + forceReport）；`JikongPages.kt` JikongScreen +remoteSpeakTick 订阅重读 dashEnabled、toggleDash +forceReport，SettingsView tick Effect 扩展重读单位/电费/折扣、播报开关/三间隔/单位/电费/折扣共 9 处 +forceReport，StatsView +JkUiState.remoteSpeakTick 订阅（折扣/花费即时重算）。
+- 服务端：`jikong.py` action 白名单 +set_config（params 透传）；`command_catalog.py` +jikong_set_config 条目。
+- 后台：connbar 加 🔊/🔇（.spk-btn，onMuteToggle→sendSpeakSettings）；删侧栏语音播报卡与 .spk-row CSS；Tab3 删「小喇叭」行（手机设置页无此行，保 1:1）、时速仪表盘开关改可编辑（cfgDash）、单位 chip 可点击（cfgUnit）、电费单价 el-input-number(step 0.05)、里程折扣 el-input-number(step 0.1)，统一 sendConfig('set_config' 全量四字段)；app watch 扩展回写 cfg* 四字段（cfgLastSendAt 独立 6s 回声窗口）；★ cfg* 声明置于 watch 之前（TDZ 位置铁律）。
+- 双向同步闭环：后台改 → jikong_set_speak/set_config 下发 → 手机 Prefs+tick 即时生效+forceReport 回报 → 后台 6s 回声窗口过后随刷新跟随；手机改 → 各控件 forceReport → app 块入报 → 后台刷新即同步。
+- versionName 0.2.103→0.2.104。
+
+**回滚配方**：`git revert` 本轮提交；或手改：Command.kt/CommandModule 删 set_config 条目、JikongPages 删两处 tick 订阅与 9 处 forceReport、jikong.py 回三 action 白名单、command_catalog 删条目、admin 回退 connbar/Tab3/侧栏卡/watch 四处→admin npm run build；versionName 回 0.2.103。
+**触发信号**：后台首页看不到小喇叭 / 后台改仪表盘·单位·电费·折扣手机不生效 / 手机改设置后台刷新不同步 / 后台极空页白屏（TDZ）。
+
+**实施结果（待回填）**：
+
 ### v0.2.103 后台/客户端八项修复（2026-11-08 08:47 实施）
 
 **改前原文（逐字抄录，节选关键块）**：

@@ -47,10 +47,16 @@
               <!-- ============ Tab 0：首页 ============ -->
               <template v-if="tab === 0">
                 <template v-if="connected && s">
-                  <!-- 连接状态栏（首页顶部，可滚动回看） -->
+                  <!-- 连接状态栏（首页顶部，可滚动回看）
+                       v0.2.104：小喇叭移到此处（与手机客户端同位置同交互，双向同步） -->
                   <div class="jk-connbar">
                     <span class="dot" :class="connected ? 'g' : 'gy'" />
                     <span class="conn-text" :class="connected ? 'g-text' : 'gy'">已连接 · {{ s.device_name || selectedDevice }}</span>
+                    <span
+                      class="spk-btn"
+                      :title="spkMuted ? '已静音：点击恢复手机自动播报' : '播报中：点击静音手机'"
+                      @click="onMuteToggle"
+                    >{{ spkMuted ? '🔇' : '🔊' }}</span>
                     <span class="theme-btn" @click="onThemeToggle">{{ themeLight ? '浅色' : '深色' }}</span>
                   </div>
 
@@ -432,7 +438,7 @@
                 </div>
               </template>
 
-              <!-- ============ Tab 3：参数设置（只读镜像，v0.2.101 与手机设置页 v0.2.89/90 结构一致） ============ -->
+              <!-- ============ Tab 3：参数设置（v0.2.104：镜像可编辑，改动 jikong_set_config/set_speak 下发手机） ============ -->
               <template v-else>
                 <div class="set-title">仪表盘</div>
                 <div class="jk-card" style="border-radius: 12px">
@@ -443,21 +449,12 @@
                         首页显示时速/续航/电耗卡片。使用 GPS 定位（仅页面打开时工作），会增加少量耗电；关闭后完全停止。
                       </div>
                     </div>
-                    <el-switch v-model="dashMirror" disabled size="small" style="margin-left: 8px" />
+                    <el-switch v-model="cfgDash" size="small" style="margin-left: 8px" @change="sendConfig('时速仪表盘')" />
                   </div>
                 </div>
 
                 <div class="set-title">语音播报</div>
                 <div class="jk-card" style="border-radius: 12px">
-                  <div class="set-row" style="padding-bottom: 6px">
-                    <div style="flex: 1">
-                      <div style="font-size: 14px; font-weight: 600">小喇叭</div>
-                      <div class="mini-label" style="margin-top: 2px">
-                        静音后手机不再自动播报（双击表盘播报不受影响）
-                      </div>
-                    </div>
-                    <el-switch v-model="spkMuted" size="small" style="margin-left: 8px" @change="sendSpeakSettings('小喇叭')" />
-                  </div>
                   <div class="set-row" style="padding-bottom: 6px">
                     <div style="flex: 1">
                       <div style="font-size: 14px; font-weight: 600">连接后播报电量</div>
@@ -495,20 +492,22 @@
                       <div class="mini-label" style="margin-top: 2px">单位切换只影响显示（首页仪表盘瞬时/平均电耗），内部计算一律 Wh/km</div>
                     </div>
                     <span
-                      class="mini-label"
+                      class="unit-btn"
                       :style="{
-                        background: !unitKwh100 ? c.blue : 'transparent',
-                        color: !unitKwh100 ? '#fff' : c.gray,
-                        borderRadius: '6px', padding: '4px 10px', fontWeight: 600,
+                        background: !cfgUnit ? c.blue : 'transparent',
+                        color: !cfgUnit ? '#fff' : c.gray,
+                        borderRadius: '6px', padding: '4px 10px', fontWeight: 600, cursor: 'pointer',
                       }"
+                      @click="cfgUnit = false; sendConfig('电耗单位')"
                     >Wh/km</span>
                     <span
-                      class="mini-label"
+                      class="unit-btn"
                       :style="{
-                        background: unitKwh100 ? c.blue : 'transparent',
-                        color: unitKwh100 ? '#fff' : c.gray,
-                        borderRadius: '6px', padding: '4px 10px', fontWeight: 600, marginLeft: '6px',
+                        background: cfgUnit ? c.blue : 'transparent',
+                        color: cfgUnit ? '#fff' : c.gray,
+                        borderRadius: '6px', padding: '4px 10px', fontWeight: 600, cursor: 'pointer', marginLeft: '6px',
                       }"
+                      @click="cfgUnit = true; sendConfig('电耗单位')"
                     >kWh/100km</span>
                   </div>
                   <div class="set-row" style="padding-top: 0">
@@ -516,7 +515,10 @@
                       <div style="font-size: 13px; color: v-bind('c.text')">电费单价</div>
                       <div class="mini-label" style="margin-top: 2px">用于统计页区间总花费与平均花费（元/100km）</div>
                     </div>
-                    <span class="dash-mid">{{ s?.app?.elec_price != null ? s.app.elec_price.toFixed(2) + ' 元/度' : '--' }}</span>
+                    <el-input-number
+                      v-model="cfgPrice" size="small" :step="0.05" :min="0.05" :max="10" :precision="2"
+                      style="width: 130px" @change="sendConfig('电费单价')"
+                    />
                   </div>
                 </div>
 
@@ -529,7 +531,10 @@
                         表显里程偏大时按折扣换算真实里程（只影响统计页显示层，台账数据库始终存原始输入）
                       </div>
                     </div>
-                    <span class="dash-mid">{{ s?.app?.odo_discount != null ? s.app.odo_discount.toFixed(1) : '--' }}</span>
+                    <el-input-number
+                      v-model="cfgDiscount" size="small" :step="0.1" :min="0.1" :max="1" :precision="1"
+                      style="width: 130px" @change="sendConfig('里程折扣')"
+                    />
                   </div>
                 </div>
 
@@ -594,43 +599,8 @@
             </div>
           </el-card>
 
-          <!-- v0.2.102：语音播报（与手机设置页/小喇叭同源，改动即时下发手机） -->
-          <el-card shadow="never" class="side-card">
-            <template #header><span class="title">语音播报（同步到手机）</span></template>
-            <div class="spk-row">
-              <div style="flex: 1">
-                <div class="spk-label">小喇叭{{ spkMuted ? '（已静音）' : '' }}</div>
-                <div class="mini-label">静音后手机不再自动播报（双击表盘播报不受影响）</div>
-              </div>
-              <el-switch v-model="spkMuted" size="small" @change="sendSpeakSettings('小喇叭')" />
-            </div>
-            <div class="spk-row">
-              <div style="flex: 1">
-                <div class="spk-label">语音播报</div>
-                <div class="mini-label">连接后按变化/间隔自动播报电量</div>
-              </div>
-              <el-switch v-model="spkEnabled" size="small" @change="sendSpeakSettings('语音播报')" />
-            </div>
-            <div class="spk-row">
-              <div class="spk-label" style="width: 96px">播报间隔</div>
-              <el-select v-model="spkInterval" size="small" style="flex: 1" @change="sendSpeakSettings('播报间隔')">
-                <el-option v-for="m in [1, 5, 10, 15, 30, 60]" :key="m" :label="m + ' 分钟'" :value="m" />
-              </el-select>
-            </div>
-            <div class="spk-row">
-              <div class="spk-label" style="width: 96px">低电阈值</div>
-              <el-input-number v-model="spkLowSoc" size="small" :min="1" :max="50" style="flex: 1" @change="sendSpeakSettings('低电阈值')" />
-            </div>
-            <div class="spk-row">
-              <div class="spk-label" style="width: 96px">提醒间隔</div>
-              <el-select v-model="spkWarnRepeat" size="small" style="flex: 1" @change="sendSpeakSettings('提醒间隔')">
-                <el-option v-for="m in [1, 5, 10, 30]" :key="m" :label="m + ' 分钟'" :value="m" />
-              </el-select>
-            </div>
-            <div class="mini-label" style="margin-top: 8px">
-              改动即时下发手机（jikong_set_speak），手机端设置页同步生效。
-            </div>
-          </el-card>
+          <!-- v0.2.104：原「语音播报（同步到手机）」侧卡已删——小喇叭移至首页连接栏右上角
+               （与手机客户端同位置），播报/显示设置并入手机壳内「设置」Tab（1:1 可编辑） -->
 
           <el-card shadow="never" class="side-card">
             <template #header><span class="title">保护 / 告警状态</span></template>
@@ -772,13 +742,29 @@ const spkInterval = ref(5)
 const spkLowSoc = ref(30)
 const spkWarnRepeat = ref(5)
 let spkLastSendAt = 0
+// v0.2.104：设置页镜像可编辑镜像值（★ 必须声明在下方 watch 之前——watch immediate 回调
+// 同步执行，引用未初始化的 const 会 TDZ 崩溃白屏，2026-11-08 位置铁律）
+const cfgDash = ref(false)
+const cfgUnit = ref(false)
+const cfgPrice = ref(1)
+const cfgDiscount = ref(1)
+let cfgLastSendAt = 0
+// 同一 watch 兼管两组镜像，两个回声窗口互不干扰
 watch(() => s.value?.app, (app) => {
-  if (!app || Date.now() - spkLastSendAt < 6000) return   // 刚下发的回声窗口内不回写
-  if (app.speak_muted != null) spkMuted.value = app.speak_muted
-  if (app.speak_enabled != null) spkEnabled.value = app.speak_enabled
-  if (app.speak_interval_min != null) spkInterval.value = app.speak_interval_min
-  if (app.speak_low_soc != null) spkLowSoc.value = app.speak_low_soc
-  if (app.speak_warn_repeat_min != null) spkWarnRepeat.value = app.speak_warn_repeat_min
+  if (!app) return
+  if (Date.now() - spkLastSendAt >= 6000) {   // 刚下发的回声窗口内不回写
+    if (app.speak_muted != null) spkMuted.value = app.speak_muted
+    if (app.speak_enabled != null) spkEnabled.value = app.speak_enabled
+    if (app.speak_interval_min != null) spkInterval.value = app.speak_interval_min
+    if (app.speak_low_soc != null) spkLowSoc.value = app.speak_low_soc
+    if (app.speak_warn_repeat_min != null) spkWarnRepeat.value = app.speak_warn_repeat_min
+  }
+  if (Date.now() - cfgLastSendAt >= 6000) {
+    if (app.dash_enabled != null) cfgDash.value = app.dash_enabled
+    if (app.unit_kwh100 != null) cfgUnit.value = app.unit_kwh100
+    if (app.elec_price != null) cfgPrice.value = app.elec_price
+    if (app.odo_discount != null) cfgDiscount.value = app.odo_discount
+  }
 }, { immediate: true })
 async function sendSpeakSettings(what: string) {
   spkLastSendAt = Date.now()
@@ -799,6 +785,33 @@ async function sendSpeakSettings(what: string) {
   }
 }
 
+// ---- v0.2.104：设置页镜像可编辑（时速仪表盘/电耗单位/电费单价/里程折扣）----
+// 改动 jikong_set_config 全量下发手机；手机端设置改动后 forceReport → 此处刷新即同步。
+// （cfg* 值本体声明在上方 app watch 处，此处只放下发函数）
+async function sendConfig(what: string) {
+  cfgLastSendAt = Date.now()
+  try {
+    await jikongControl(selectedDevice.value, {
+      action: 'set_config',
+      params: {
+        dash_enabled: cfgDash.value,
+        unit_kwh100: cfgUnit.value,
+        elec_price: cfgPrice.value,
+        odo_discount: cfgDiscount.value,
+      },
+    })
+    ElMessage.success(`${what} 已同步手机`)
+  } catch {
+    ElMessage.warning('下发失败（设备不在线？）')
+  }
+}
+
+/** 首页连接栏小喇叭（与手机客户端同位置）：点击切换静音并下发手机。 */
+function onMuteToggle() {
+  spkMuted.value = !spkMuted.value
+  sendSpeakSettings('小喇叭')
+}
+
 const deviceOptions = computed(() =>
   Object.entries(deviceNameMap.value).map(([id, name]) => ({ value: id, label: name || id })),
 )
@@ -810,10 +823,6 @@ const charging = computed(() => (s.value?.current ?? 0) > 0.1)
 const discharging = computed(() => (s.value?.current ?? 0) < -0.1)
 const soc = computed(() => Math.max(0, Math.min(100, s.value?.soc ?? 0)))
 const dashEnabled = computed(() => !!s.value?.app?.dash_enabled)
-const dashMirror = computed({
-  get: () => dashEnabled.value,
-  set: () => { /* 只读镜像（手机端开关） */ },
-})
 
 // ---------- v0.2.101：与手机 1:1 对齐所需（演示/单位/折扣/电费） ----------
 const demoMode = computed(() => !!s.value?.app?.demo_mode)
@@ -1460,9 +1469,8 @@ const dashTotals = computed(() => {
 .sum-sub { font-size: 8px; color: v-bind('c.gray'); margin-top: 1px; }
 
 /* v0.2.102：语音播报卡（后台↔手机同步） */
-.spk-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; }
-.spk-row + .spk-row { border-top: 1px solid v-bind('c.divider'); }
-.spk-label { font-size: 14px; font-weight: 600; color: v-bind('c.text'); }
+/* v0.2.104：首页连接栏小喇叭（与手机客户端同位置同交互） */
+.spk-btn { font-size: 14px; cursor: pointer; padding: 4px 6px; line-height: 1; }
 
 /* 阶段统计 chips（v0.2.93 手机端样式：无「近」字、禁换行） */
 .stage-chips { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: nowrap; }

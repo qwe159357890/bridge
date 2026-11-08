@@ -61,6 +61,13 @@ BMS(从机) --BLE(0xDD/NW帧)--> 客户端(jikong模块) --主WS(jikong_state)--
   `speak_low_soc`(1~50)/`speak_warn_repeat_min`(1~60)。
 - 手机设置页/小喇叭经 JkUiState.remoteSpeakTick 订阅即时刷新，并 forceReport 回报。
 
+### jikong_set_config 极空同步显示设置（v0.2.104）
+- 字段可选（仅改传了的）：`dash_enabled`（时速仪表盘开关，执行器同步启停 SpeedDash）/
+  `unit_kwh100`（电耗单位）/`elec_price`(0.05~10 元/度)/`odo_discount`(0.1~1.0)。
+- 服务端 `POST /api/jikong/{id}/control` action=`set_config` 透传 params。
+- 手机端经 JkUiState.remoteSpeakTick 订阅即时生效（设置页重读、统计页重算折扣/花费），
+  并 forceReport 回报；反向（手机设置页改动）各控件逐一 forceReport，后台刷新即同步。
+
 ## 坑与提醒
 
 1. **无真机最大风险**：BLE UUID 与帧字段偏移因固件版本而异，真机连不上时用 nRF Connect 抓一帧
