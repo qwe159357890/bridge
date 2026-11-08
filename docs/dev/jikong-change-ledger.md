@@ -17,6 +17,37 @@
 
 ---
 
+### v0.2.107 极空「靠近自动连接」：GATT autoConnect 挂起 + 前台服务承载（2026-11-08 11:50 实施）
+
+**需求（2026-11-08 拍板，需求/调研/设计全文见 `docs/research/jikong-proximity-autoconnect.md`）**：设置页新增「靠近自动连接」开关（默认关）。开后对默认设备挂 `connectGatt(autoConnect=true)`，手机靠近保护板 ≤30s 自动连上（前台/后台/被杀重启均覆盖），连上播报电量（**后台也播**，§2.8 拍板）+后台持续收数据；走远断开不抑制（系统自动持续重试）、回来照常重连+播报；仅用户在极空页点断开才抑制（直到重进极空页/进程重启）。省电第一：控制器级 3.75% 占空比监听，估 <0.5%/天、零流量。一期只做方案 A（B=PendingIntent 扫描保留二期，见调研 §2.9）。
+
+**改前原文（逐字抄录，节选关键块；改动文件均 git 跟踪中，锚点提交存全文）**：
+1. `JikongPrefs.kt`：无靠近连接相关键（对象止于 theme/dash/统计/播报/昵称/默认设备/单位/静音各段）。
+2. `JikongBleClient.kt`：connect() 直连 `dev.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)`；disconnect() = `gatt?.disconnect()` + `gatt?.close()` + `gatt=null` + `setConnected(false)`；cancelPendingConnect() 同样 close；无 attachAutoConnect/detachAutoConnect/autoConnectAttached。
+3. `JikongController.kt`：init 回调断开分支 `if (autoReconnectEnabled && (pageVisible || keepConnection)) { startReconnect(fast = dataRecyclePending) }`（无 proximity 分流）；connected 分支无初始化逻辑（成功初始化只在 connect()/startReconnect() 内）；setPageVisible(false) `if (!keepConnection) { autoReconnectEnabled=false; …; JikongBleClient.disconnect() } else { stopPolling() }`；disconnect() 无抑制概念（`autoReconnectEnabled=false; dataRecyclePending=false; …`）；maybeAnnounce `if (demoMode || !pageVisible) return`；appContext 仅 connect() 内缓存；buildReportStatus app 块止于 `addProperty("odo_discount", …)`。
+4. `JikongPages.kt` SettingsView(controller, dashEnabled, onDashToggle)：设置页无「靠近自动连接」开关。
+5. `app/src/main/AndroidManifest.xml`：无 `FOREGROUND_SERVICE_CONNECTED_DEVICE` 权限、无 JikongProximityService 声明。
+6. `BridgeApplication.kt` onCreate：极空挂载止于 `JikongSpeaker.attach(apiClient, deviceStore)`。
+7. `app/build.gradle.kts`：`versionName = "0.2.106"`。
+8. **新建** `app/src/main/java/my/bridge/com/jikong/JikongProximityService.kt`（新文件，无改前原文）。
+
+**改动清单**（按调研文档 §三 设计实施）：
+- `JikongPrefs.kt`：+KEY_PROXIMITY_AUTO_CONNECT（默认 false）+读写函数。
+- `JikongProximityService.kt`（新）：connectedDevice 四件套前台服务（NOTIFICATION_ID 2104 / 渠道 jikong_proximity_channel IMPORTANCE_LOW / START_STICKY）；核心 `evaluateInPlace()`（开关开+默认设备+未抑制+非演示+未连接+未挂起+无在飞连接 → attach；抑制/演示 → detach）；ACTION_STOP=detach+自停；蓝牙 STATE_CHANGED receiver 重挂；startForeground 失败即自停防 FGS 超时崩溃；`evaluate()`（start 前台服务）与 `evaluateInPlace()`（进程内直接执行，避开后台 startService 限制）双入口。
+- `JikongBleClient.kt`：+autoConnectAttached 状态；+attachAutoConnect()（connectGatt(autoConnect=true, TRANSPORT_LE)，先清陈旧 GATT 防泄漏）；+detachAutoConnect()（未连接才 disconnect+close；已连接不动链路）；disconnect()/cancelPendingConnect() 均清 autoConnectAttached。
+- `JikongController.kt`：+manualSuppressed（内存，不持久化=进程重启自然解除）+proximityAnnouncePending+proximityModeActive+attachContext()；触点① connected 分支识别 proximity 建链（非 connectInFlight、非 reconnectJob）执行与 connect() 成功同款初始化+置播报待发；触点② 断开分流——proximity 模式不走 startReconnect，改 evaluateInPlace 重挂（幂等：挂起仍在则系统自己在试）；触点③ disconnect() 演示退出不抑制（wasDemo 区分），真手动断开置抑制+停服务；触点④ setPageVisible(true) 解除抑制+evaluate，false 时 proximity 模式不断开不停轮询；maybeAnnounce gate 放开 `(!pageVisible && !proximityModeActive)` + forcedProximity 强制播一次（受小喇叭静音拦截）；connect() finally 重评估挂起；buildReportStatus app 块 +proximity_auto_connect/proximity_suppressed。
+- `JikongPages.kt`：SettingsView 仪表盘段后 +「靠近自动连接」开关卡（无默认设备回弹+Toast；切换 evaluate/stop + forceReport）。
+- `AndroidManifest.xml`：+FOREGROUND_SERVICE_CONNECTED_DEVICE 权限 +service 声明（connectedDevice 类型）。
+- `BridgeApplication.kt`：onCreate +evaluate（覆盖开开关/进程重建/开机三链路，内部查开关幂等）。
+- versionName 0.2.106→0.2.107。
+
+**回滚配方**：`git checkout <锚点提交> -- app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/src/main/AndroidManifest.xml app/src/main/java/my/bridge/com/BridgeApplication.kt app/build.gradle.kts && rm app/src/main/java/my/bridge/com/jikong/JikongProximityService.kt`；或 `git revert` 本轮提交。
+**触发信号**：开关打开后靠近保护板 >60s 仍不自动连 / 口袋里连上不播报 / 极空页点断开后仍自动重连（抑制失效）/ 走远回来不再重连 / 后台 jikong_state 断流 / 耗电异常增大（>1%/天增量）。
+
+**实施结果（待回填）**：
+
+---
+
 ### v0.2.106 时速卡两行「平均」列左对齐对齐后台（2026-11-08 10:10 实施）
 
 **需求（用户 11-08 10:07 反馈 1 项）**：客户端「平均时速(km/h)」「平均(kWh/100km)」没有左对齐，应与后台一致左对齐。
