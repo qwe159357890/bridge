@@ -17,6 +17,32 @@
 
 ---
 
+### v0.2.118 音量三段兜底 + 长等待 1~60 + 0x02 帧 CRC 校验防误报（2026-11-08 21:00 实施）
+
+**背景（用户 11-08 20:30 反馈 + 日志实证）**：装 v0.2.117 多次测试后反馈三点：
+1. 客户端不在前台时播报音量拉不上去；日志（`server.log` + MySQL `device_logs`）实证根因——`SpeakVolumeBoost` 只裸调 `setStreamVolume(max, 0)`，后台/锁屏时被系统静默忽略（日志「setStreamVolume 后回读=4」仍=原值），而命令下发 `VolumeController.set` 走三段兜底能生效（日志「音量第一次设置未生效…FLAG_SHOW_UI 重试→成功」）。
+2. 误报电量 10%（实际 54~58）：日志定位 `20:37:27` 播报「当前电量 10%」，是 autoConnect 建链后**首帧 0x02 字节错位**（没走超时重建、直接建链出数据），而 `extractFrame` 只按「帧头+固定 300B」切帧、**不校验 CRC**（协议 d[299]=前 299 字节累加和低 8 位，已用真机抓包 30+ 帧逐字节验证 100% 匹配），坏帧被当有效帧播报。
+3. 长等待时长最小值想放宽到 1s。
+
+**改前原文（关键块；锚点提交 `a07befa` 存全文）**：
+1. `SpeakVolumeBoost.kt` `begin`/`reapply` 裸调：`runCatching { am.setStreamVolume(STREAM_MUSIC, max, 0) }`（无兜底）。
+2. `JikongPrefs.kt`：`sec.coerceIn(5, 60)`；`JikongPages.kt`：`.coerceAtLeast(5)`。
+3. `JikongProtocol.kt` `extractFrame`：切 300B 后直接 `return ExtractedFrame(frame, RESPONSE_FRAME_LEN)`（无 CRC）；`data class ExtractedFrame(val frame: JikongFrame, …)`。
+4. `JikongController.kt` `handleData`：`dispatchFrame(frame.frame)`（非空直传）。
+5. `app/build.gradle.kts`：`versionName = "0.2.117"`。
+
+**改后**：
+1. `SpeakVolumeBoost.kt` 新增 `forceMax(am)` 三段兜底（①setStreamVolume→②FLAG_SHOW_UI→③adjustStreamVolume 逐步逼近，与 `VolumeController` 同款），`begin`/`reapply` 改调 `forceMax`。
+2. 范围改 `coerceIn(1, 60)` / `.coerceAtLeast(1)`。
+3. `JikongProtocol.kt` 新增 `verifyCrc(raw)`（d[299]==前 299 字节累加和低 8 位），`extractFrame` 切帧后校验，坏帧 `return ExtractedFrame(null, 300)`（仍消费 300B 维持重组节奏，frame 置空）；`ExtractedFrame.frame` 改可空 `JikongFrame?`。
+4. `JikongController.kt` `handleData`：`frame.frame?.let { dispatchFrame(it) }`（坏帧跳过解析）。
+5. 版本号 0.2.118。
+
+**回滚配方**：`git revert 2b43978`（或手动还原上述 5 处「改前原文」）；CRC 校验可单独回退 `extractFrame` 的 `verifyCrc` 分支 + `ExtractedFrame.frame` 非空 + `handleData` 直传。
+**触发信号**：若正常帧被 CRC 误杀（日志「极空帧 CRC 校验失败」频繁出现且数据流异常）→ 立即回退 CRC 改动；音量若仍不生效看日志「三段兜底后回读=X」是否仍非 30。
+
+---
+
 ### v0.2.117 半死链阶梯式唤醒超时（前两次 1s 短戳 + 可配置长等待）+ 握手日志可分析最优参数（2026-11-08 20:13 实施）
 
 **背景（用户 11-08 20:06 反馈 + 20:08 澄清）**：用户测 v0.2.116（12s 阈值 + HIGH）时，靠近蓝牙听到约 13 次蜂鸣（10~15 次之间）。**关键澄清：蜂鸣是「每秒一声」——BMS 苏醒过程的提示节奏，不是每次重建一声**，故 13 声 ≈ 13 秒的唤醒过程（与实验④「~14s 成功」吻合），不是 13 次重建。核心矛盾：BMS 苏醒需 ~13 秒，而当前 12s 阈值恰好卡在它差 1 秒就醒时断开重建。用户拍板：
