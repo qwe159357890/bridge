@@ -28,7 +28,7 @@
 **回滚配方**：`git revert` 本轮提交；或手改回 `Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally)`。
 **触发信号**：平均时速标签又回到列中间 / 两行平均标签起点错位复发。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 10:22 回填）**：assembleDebug BUILD SUCCESSFUL；本地 commit `b9d2343`。github.com:443 直连推送仍 Connection reset → api_push.py 通道成功（远端 main=74f0a77eaf 为 parent，API commit `dc54d92dee`）+ tag v0.2.106 触发 CI 打包成功，APK 0.2.106（aapt 实证，sha256 `b4f57444…`，46,037,958 字节）分发 updates+Downloads（删 0.2.105 旧包）+update.json。本地与远端 commit 链仍不同源（API 建父提交），待 git 直连恢复后 fetch 对齐。纯客户端 UI 改动，服务端无改动无需重启。
 
 ### v0.2.105 后台可远程刷新演示数据 + 播报时速单位修正（2026-11-08 09:45 实施）
 
