@@ -17,6 +17,40 @@
 
 ---
 
+### v0.2.109 靠近自动连接「半死链自愈失效」修复：proximity 模式立即直连重建（2026-11-08 12:35 实施）
+
+**问题（用户 11-08 12:32 真机反馈 + 上传日志，设备 f2c38ebee251a196）**：装 v0.2.108 后，靠近自动连接「连上了但一直收不到数据、不播报」。
+
+**根因（日志实证，tag=Jikong / JikongBle，2026-11-08 12:18~12:23）**：
+1. autoConnect 建链成功后 BMS 处于**半死链**（只回 `AT\r\n`/0x01 单体帧，进不了 0x02 实时流）——BMS 蓝牙模块休眠的固有行为，任何方式首连都可能遇到（v0.2.80 已实证）。
+2. 半死链自愈靠「12s 无 0x02 → 主动断开 → **立即直连重建**（connectGatt autoConnect=false）」——手动连接路径（11:12 日志）实证：第 2 条直连链路立即有 0x02；直连路径（12:23:37 进页触发的 connect）也立即有 0x02。
+3. 但 v0.2.107 触点②的断开分流把 `dataRecyclePending = false` 清掉、改走 `evaluateInPlace`（**重新挂起 autoConnect**）——重挂起唤醒不了休眠的 BMS，于是 12:18~12:23 反复「挂起→建链→半死（只 AT）→12s 断开→再挂起」恶性循环（日志：连续 3 次重建 + 3 次后「保持当前链路继续 ramp」仍无 0x02），永远拿不到 0x02 → 不播报。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交存全文）**：
+1. `JikongController.kt` 触点②断开分流（约 293-298 行）：
+   ```kotlin
+   if (autoReconnectEnabled && (pageVisible || keepConnection) && !proximityModeActive) {
+       startReconnect(fast = dataRecyclePending)
+   } else if (proximityModeActive && !manualSuppressed) {
+       dataRecyclePending = false
+       appContext?.let { JikongProximityService.evaluateInPlace(it) }
+   }
+   ```
+2. `startReconnect()` 方法后直接 `private fun stopPolling()`，无 `startProximityReconnect`。
+3. `app/build.gradle.kts`：`versionName = "0.2.108"`。
+
+**改动清单**：
+- `JikongController.kt`：触点②断开分流 proximity 分支内，`dataRecyclePending=true`（半死链自愈）时改走 `startProximityReconnect()`（立即直连重建）而非清标志+evaluateInPlace；`false`（走远自然断开）时保持 evaluateInPlace 重挂起不变。
+- `JikongController.kt`：+`startProximityReconnect()`——对默认设备做一次 `JikongBleClient.connect(ctx, mac)`（autoConnect=false 直连），成功 → `prevAnnounceSoc=-1` + `clearScanCache()` + `startPolling()` + `proximityAnnouncePending=true`（首帧强制播）；失败 → `evaluateInPlace` 恢复 autoConnect 挂起（等下次靠近）。
+- versionName 0.2.108→0.2.109。
+
+**回滚配方**：`git revert` 本轮提交；或 `git checkout <锚点提交> -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts`。
+**触发信号**：开关开后靠近保护板仍反复「连上→只 AT→断开」拿不到 0x02 / 语音始终不播报 / 半死链自愈后仍无数据流。
+
+**实施结果（待回填）**：
+
+---
+
 ### v0.2.108 极空「靠近自动连接」后台适配：镜像开关 + 状态展示（2026-11-08 12:15 实施）
 
 **需求（用户 11-08 12:12 拍板「档一档二都做」）**：v0.2.107 客户端已上报 `proximity_auto_connect`/`proximity_suppressed` 两字段（服务端原样透传），但管理后台未消费。档一=只读展示（模式开关状态 + 手动断开抑制态）；档二=可编辑镜像开关（后台下发 `jikong_set_proximity` 远程开/关，与手机设置页开关同语义）。
