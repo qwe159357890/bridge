@@ -17,6 +17,47 @@
 
 ---
 
+### v0.2.111 握手修复实验②a：12s 重建阈值放宽到 20s（2026-11-08 15:20 实施）
+
+**背景（实验①半命中后，用户 15:15 拍板）**：实验①（requestConnectionPriority HIGH）已把直连重建从 3~4 轮→1 轮（14s 出数据），但**首建链仍半死**：日志实证 BMS 苏醒延迟约 13~14s，而 12s 超时恰好卡在苏醒前断开重建。实验②a 单变量验证「放宽 12s 阈值」能否让首建链直接等到 BMS 苏醒出数据（= 官方一次成功，无需断开重建）。**用户明确：不能完全移除重建（要保底），故仅放宽阈值、3 次重建保底保留、0x96 补发频率保持 1.2s 不动**。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交存全文）**：
+1. `JikongController.kt` `startPolling()` 启动 ramp 的 12s 重建阈值块（约 645-662 行）：
+   ```kotlin
+   // v0.2.80 首连半死链自愈（用户真机实证）：蓝牙闲置 ~10 分钟后首连，
+   // 链路建立但数据通道打不通（BMS 蓝牙模块休眠未醒），旧流程要干等
+   // ~1min 直到 status=8 断开；而自动重连建的第 2 条链路立即有数据。
+   // ⇒ 12s 内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
+   // 重连），把 1 分钟缩短到 ~15s。连续重建限 3 次，防「休眠↔重建」死循环。
+   if (now - connectAt > 12_000) {
+       if (datalessRecycles < 3) {
+           datalessRecycles++
+           dataRecyclePending = true
+           Timber.tag(TAG).w(
+               "连接 %ds 仍无 0x02（疑似首连半死链），主动重建链路（第 %d/3 次）",
+               (now - connectAt) / 1000, datalessRecycles,
+           )
+           JikongBleClient.disconnect()  // → 快档自动重连 → startPolling
+           return@launch
+       }
+       Timber.tag(TAG).w("已连续重建 3 次仍无 0x02，保持当前链路继续 ramp（等模块自行苏醒）")
+   }
+   ```
+2. 0x96 补发频率 `now - lastTriggerAt > 1200`（1.2s）——**本次保持不动**（实验②b 再单独测）。
+3. `app/build.gradle.kts`：`versionName = "0.2.110"`。
+
+**改动清单（严格单变量：只改 12s 阈值）**：
+- `JikongController.kt`：`if (now - connectAt > 12_000)` → `20_000`（12s → 20s）；同步改注释「12s 内」→「20s 内」、「~15s」→「~22s」。
+- versionName 0.2.110→0.2.111。
+- **不动**：0x96 补发频率（1.2s）、3 次重建保底（`datalessRecycles < 3`）、`dataRecyclePending` 快档重连逻辑。
+
+**回滚配方**：`git revert` 本轮提交；或 `git checkout 9ea241a -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts`。
+**触发信号**：首建链在 20s 内直接出数据（无重建）→ 命中；若首建链 20s 后仍重建才出数据 → 未命中（12s 非元凶，改测实验②b 0x96 频率）。
+
+**实施结果（待回填）**：
+
+---
+
 ### v0.2.110 握手修复实验①：连接后 requestConnectionPriority(HIGH)（2026-11-08 14:25 实施）
 
 **背景（用户 11-08 13:49 真机反馈 + 专档追踪）**：装 v0.2.109 后，靠近「能立马发现并建链」，但收到数据（0x02）要 3~4 轮 12s 超时直连重建（近 1 分钟）才播报；保护板 3~4 次「滴滴滴」。官方 APP 一次交互即成功。详见 `docs/research/jikong-handshake-fix.md`（专档）+ 调研文档 §四。
