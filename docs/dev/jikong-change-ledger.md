@@ -54,7 +54,7 @@
 **回滚配方**：`git revert` 本轮提交；或 `git checkout 9ea241a -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts`。
 **触发信号**：首建链在 20s 内直接出数据（无重建）→ 命中；若首建链 20s 后仍重建才出数据 → 未命中（12s 非元凶，改测实验②b 0x96 频率）。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 15:28 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（3m3s）。提交 `e9312d7`（rebase 对齐后 `82cdd83`）清代理直连 push（b1312e6..82cdd83）。`release.py v0.2.111` 建 tag 触发 CI 打包成功（gh-proxy 代理下载）。APK 46,054,398 字节，aapt 实证 versionName=0.2.111（versionCode=1，update.json 自定义 versionCode=311），分发 updates/bridge-v0.2.111.apk + update.json（sha256 `cc95715d…`）。**服务端零改动、无需重启**。**待用户真机验证**（重点：首建链是否无重建、~14~20s 内直接出数据、蜂鸣 ≤1 次）。
 
 ---
 
