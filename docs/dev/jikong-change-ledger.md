@@ -17,6 +17,51 @@
 
 ---
 
+### v0.2.117 半死链阶梯式唤醒超时（前两次 1s 短戳 + 可配置长等待）+ 握手日志可分析最优参数（2026-11-08 20:13 实施）
+
+**背景（用户 11-08 20:06 反馈 + 20:08 澄清）**：用户测 v0.2.116（12s 阈值 + HIGH）时，靠近蓝牙听到约 13 次蜂鸣（10~15 次之间）。**关键澄清：蜂鸣是「每秒一声」——BMS 苏醒过程的提示节奏，不是每次重建一声**，故 13 声 ≈ 13 秒的唤醒过程（与实验④「~14s 成功」吻合），不是 13 次重建。核心矛盾：BMS 苏醒需 ~13 秒，而当前 12s 阈值恰好卡在它差 1 秒就醒时断开重建。用户拍板：
+1. **阶梯式唤醒超时**：连接后前两次用 1s 短超时快速「戳」醒 BMS（每次连接-断开都是一次唤醒脉冲），第三次起用 12s 长等待耐心等（用户明确「前两次都是 1 秒，不是 1s/2s」）。
+2. **长等待时长可配置**：设置页默认 12s，用户自定义。
+3. **日志可分析最优值**：打印「用户设置值 + 实际连接时长」，用户一次打包、多次尝试不同值、上传日志反推最优参数。
+
+**改前原文（关键块；锚点提交 `aada1de` 存全文）**：
+1. `JikongController.kt` `startPolling` 启动 ramp 的 12s 重建阈值块：
+   ```kotlin
+   if (now - connectAt > 12_000) {
+       if (datalessRecycles < 3) {
+           datalessRecycles++
+           dataRecyclePending = true
+           Timber.tag(TAG).w(
+               "连接 %ds 仍无 0x02（疑似首连半死链），主动重建链路（第 %d/3 次）",
+               (now - connectAt) / 1000, datalessRecycles,
+           )
+           JikongBleClient.disconnect()
+           return@launch
+       }
+       Timber.tag(TAG).w("已连续重建 3 次仍无 0x02，保持当前链路继续 ramp（等模块自行苏醒）")
+   }
+   ```
+2. `app/build.gradle.kts`：`versionName = "0.2.116"`。
+
+**改动清单**：
+- `JikongController.kt`：
+  - 新增字段 `handshakeSessionStartAt`（本次半死链会话起始时间，总耗时日志用）。
+  - `startPolling` 改阶梯超时：`currentTimeoutMs = if (datalessRecycles < 2) 1_000L else longTimeoutMs`（`longTimeoutMs = JikongPrefs.handshakeLongTimeoutSec × 1000`，默认 12s）。前两次连接（datalessRecycles 0/1）用 1s 短戳，第三次起用可配置长等待；`datalessRecycles == 0` 时记录 `handshakeSessionStartAt`。
+  - 重建日志加「本次超时 + 用户设置长等待」：`主动重建链路（第 %d/3 次，本次超时=%ds，用户设置长等待=%ds）`。
+  - `mergeFrame` 收到 0x02 且 `datalessRecycles > 0` 时打印成功日志：`半死链自愈成功：经历 %d 次重建，从第一次连接到出数据总耗时 %ds`。
+- `JikongPrefs.kt`：新增 `handshakeLongTimeoutSec`（默认 12，范围 5~60）+ `setHandshakeLongTimeoutSec`。
+- `JikongPages.kt`：设置页「靠近自动连接」卡内新增 stepper「半死链长等待时长」（5~60 秒）+ 说明文案。
+- `versionName` 0.2.116→0.2.117。
+- **不动**：JikongBleClient（HIGH + 实验④反射 7.5ms 原样）、0x96 频率、3 次重建保底、播报音量提升逻辑（v0.2.116）。
+
+**回滚配方**：`git checkout aada1de -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/src/main/java/my/bridge/com/jikong/JikongPrefs.kt app/src/main/java/my/bridge/com/ui/JikongPages.kt app/build.gradle.kts`；或 revert 本轮提交。
+
+**触发信号**：用户真机反馈「12s 阈值下靠近听到 ~13 声蜂鸣（每秒一声）」，要求阶梯式短戳唤醒 + 可配置长等待 + 日志反推最优参数。
+
+**实施结果（2026-11-08 20:22 回填，已本地+远程打包）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（2m59s，仅存量 delicate API 警告，无害）。本地 `assembleDebug` BUILD SUCCESSFUL（2m2s，APK 46,070,786 字节，aapt 实证 versionName=0.2.117）→ 落地 `server/data/updates/bridge-v0.2.117.apk`（删 v0.2.116 旧包）+ update.json（versionCode 317 / sha256 `a2cae6d0…`）。远程：清代理 `git push` 失败（github.com:443 超时 21s），改 API 通道 `gh_api.py push` 推 4 文件（远端 main `25352b4a`）+ 建 tag v0.2.117（HTTP 201）+ dispatch release.yml（HTTP 204）触发 CI 打包。**纯客户端改动，服务端零改动、无需重启**。**待用户真机验证**：靠近自动连接是否更快唤醒（前两次 1s 短戳 + 12s 长等），重点看日志 `主动重建链路（第 N/3 次，本次超时=Xs，用户设置长等待=Ys）` 与 `半死链自愈成功：经历 N 次重建，总耗时 Zs`，据此反推最优长等待时长。
+
+---
+
 ### v0.2.116 锁屏/后台播报音量提升不生效修复（setStreamVolume 时序 + 诊断日志）（2026-11-08 19:40 实施）
 
 **背景（用户 11-08 19:35→19:48 连续反馈，逐步澄清）**：用户装 v0.2.115 测试后反馈，最终定位为——**演示模式（前台双击仪表盘）音量提升生效、响度够；锁屏自动连接（后台）音量提升不生效，播报用的是原系统小音量**。日志实证：v0.2.115 的 3 次播报（19:29:38 演示、19:31:40 与 19:32:28 靠近自动连接）都打印了「音量提升」（`setStreamVolume` 返回成功），但用户实测**锁屏那次实际音量没变**。根因分析：`setStreamVolume(STREAM_MUSIC, max)` 在「stream 尚未活跃播放」时调用存在**不立即生效**的时序问题（Android 6.0+ 已知，Stack Overflow 实证「必须等 stream 开始播放后再 setVolume，否则不生效」），锁屏/后台时系统音频服务休眠、尤其明显；前台（演示模式）时系统音频活跃、立即生效。同批发现的次要问题：
