@@ -17,6 +17,45 @@
 
 ---
 
+### v0.2.113 锁屏/息屏回执文案去歧义 + 管理后台「查看详情」弹窗（2026-11-08 16:35 实施）
+
+**背景（用户 11-08 16:31 反馈，v0.2.112 真机验证后）**：①回执文案 `screen_on=false（屏幕点亮）` 自相矛盾——括号里「屏幕点亮」是固定字段说明，与 `false` 读起来冲突；②希望命令历史回执列加「查看详情」按钮，点开格式化展示状态。两条诉求分别落在两端：**回执文案在客户端**（手机端产生，需重打包 APK）；**详情弹窗在管理后台**（admin 前端，构建部署即生效，不依赖 APK）。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交 `7faa9a1` 存全文）**：
+1. `SpeakVolumeBoost.kt` `describeLock` / `describeScreen`：
+   ```kotlin
+   fun describeLock(context: Context): String {
+       val km = context.getSystemService(KeyguardManager::class.java)
+       val locked = runCatching { km?.isDeviceLocked == true }.getOrDefault(false)
+       val showing = runCatching { km?.inKeyguardRestrictedInputMode() == true }.getOrDefault(false)
+       return "锁屏状态：device_locked=$locked（是否需要解锁），" +
+           "keyguard_showing=$showing（锁屏界面显示中）"
+   }
+   fun describeScreen(context: Context): String {
+       val pm = context.getSystemService(PowerManager::class.java)
+       val screenOn = runCatching { pm?.isInteractive == true }.getOrDefault(false)
+       return "屏幕状态：screen_on=$screenOn（屏幕点亮）"
+   }
+   ```
+2. `admin/src/views/command/index.vue`「查看详情」按钮 `v-if`：
+   `canViewVntDetail(row) || canViewSshDetail(row) || canViewUiDetail(row) || canViewDeviceStatsDetail(row)`
+   及 `openDetail` 分流仅 4 分支（无 deviceState）。
+
+**改动清单**：
+- `SpeakVolumeBoost.kt`：`describeLock`/`describeScreen` 括号中文改为**按值动态结论**——`device_locked=true（已锁定）/false（未锁定）`、`keyguard_showing=true（锁屏界面显示中）/false（锁屏界面未显示）`、`screen_on=true（亮屏中）/false（息屏中）`。字段名 + `key=bool` 结构不变（详情弹窗仍按 `key=true|false` 正则解析）。
+- 新增 `admin/src/components/DeviceStateResultDialog.vue`（`get_lock_state`/`get_screen_state` 的「查看详情」弹窗，沿用 VNT/SSH/UI/电流量同款「按命令分治」约定）：元信息条 + 核心结论卡（该维度对 `shouldBoost = 锁定 || 熄屏` 的贡献：锁定/息屏 → 触发提升，未锁定/亮屏 → 不触发并提示查另一维度）+ 结构化字段网格 + 回执原文（复制）。
+- `admin/src/views/command/index.vue`：import + 组件引用 + `DEVICE_STATE_DETAIL_COMMANDS`/`canViewDeviceStateDetail` + `openDetail` 加第 5 分支 + 按钮 `v-if` 追加 `|| canViewDeviceStateDetail(row)`。
+- `docs/api/commands/control.md`：两命令回执示例同步为新文案。
+- `versionName` 0.2.112→0.2.113（客户端文案需重打包才在手机端生效）。
+- **不动**：JikongController / JikongBleClient / JikongProtocol（握手实验②a 的 20s 阈值、0x96 频率、3 次重建保底等全部原样保留）。
+
+**回滚配方**：`git revert` 本轮提交；或 `git checkout 7faa9a1 -- app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt app/build.gradle.kts admin/src/views/command/index.vue docs/api/commands/control.md`，另**手动删除**新增文件 `admin/src/components/DeviceStateResultDialog.vue`。
+**触发信号**：①回执仍显示「（屏幕点亮）」说明客户端未打包生效；②锁屏/息屏命令「查看详情」按钮不出现或弹窗解析不出字段（key 格式变动）；③音量提升结论方向相反（锁定/息屏应「会触发」）。
+
+**实施结果（2026-11-08 16:40 回填）**：客户端 `compileDebugKotlin` **BUILD SUCCESSFUL**（1m24s，仅 `inKeyguardRestrictedInputMode` 一处 deprecation，无害）；admin 前端 `npx vue-tsc -b` 类型检查通过（0 错误）+ `npm run build` **built in 21.54s**（新组件 DeviceStateResultDialog 已打进 dist）。`versionName` 已 bump 0.2.112→0.2.113。**两处待落地**：①admin 前端需重新部署 dist（「查看详情」按钮才在管理后台出现，不依赖 APK）；②客户端文案需打包 v0.2.113 APK（回执文案才变清晰）。均待用户确认部署/打包时机。
+
+---
+
 ### v0.2.112 锁屏播报音量临时提升（2026-11-08 15:40 实施）
 
 **背景（用户 11-08 15:35 穿插需求，与实验②a 并行，互不影响）**：合成侧已把响度拉满（服务端 -8 LUFS），但用户若把手机媒体音量调得很小，锁屏（未解锁）状态下播报（如靠近自动连接连上后的电量播报）依然很小听不清。需求三步：①播报前若处于锁屏状态，记录当前媒体音量；②临时拉到最大；③播报完成后恢复原值。**仅媒体流**（STREAM_MUSIC），不动铃声/闹钟/通知/系统流。**用户明确此需求与握手实验无交集**（只动「数据到手后的播报」环节，不碰 BLE/握手/收数据），不影响实验②a 判定（首建链是否 20s 内无重建直接出数据、蜂鸣次数）。

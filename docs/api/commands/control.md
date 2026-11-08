@@ -331,14 +331,14 @@ App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通�
 
 - 无参数。读取设备当前锁屏状态（是否锁定 / 锁屏界面是否显示中），纯只读，用于验证
   「锁屏播报音量提升」（`SpeakVolumeBoost`）的锁屏判断（实现 `SpeakVolumeBoost.describeLock()`）。
-- 回执文本格式：
-  `锁屏状态：device_locked=true（是否需要解锁），keyguard_showing=false（锁屏界面显示中）`
+- 回执文本格式（括号内为按值动态的中文结论，v0.2.113 起）：
+  `锁屏状态：device_locked=true（已锁定），keyguard_showing=false（锁屏界面未显示）`
 - 字段含义与实测对照：
 
 | 字段 | 来源 | 熄屏（有安全锁） | 亮屏·锁屏界面 | 解锁后 |
 |---|---|---|---|---|
-| `device_locked` | `KeyguardManager.isDeviceLocked()` | true | true | false |
-| `keyguard_showing` | `KeyguardManager.inKeyguardRestrictedInputMode()` | false | true | false |
+| `device_locked` | `KeyguardManager.isDeviceLocked()` | true（已锁定） | true（已锁定） | false（未锁定） |
+| `keyguard_showing` | `KeyguardManager.inKeyguardRestrictedInputMode()` | false（未显示） | true（显示中） | false（未显示） |
 
 - **注意**：`device_locked` 只在设备**设了安全锁**时有意义，无安全锁设备恒为 false
   （系统认为无需解锁）。所以「是否锁屏」须与「是否息屏」（`get_screen_state`）配合看——
@@ -350,9 +350,9 @@ App 后照常可见，仅该期间无原 App 通知，Bridge 自己发本地通�
 
 - 无参数。读取设备当前屏幕状态（是否点亮/息屏），纯只读，用于验证「锁屏播报音量提升」
   的息屏判断（实现 `SpeakVolumeBoost.describeScreen()`）。
-- 回执文本格式：
-  `屏幕状态：screen_on=false（屏幕点亮）`
-- 字段含义：`screen_on` = `PowerManager.isInteractive()`，true=屏幕点亮/设备可交互，false=熄屏。
+- 回执文本格式（括号内为按值动态的中文结论，v0.2.113 起）：
+  `屏幕状态：screen_on=false（息屏中）`
+- 字段含义：`screen_on` = `PowerManager.isInteractive()`，true=亮屏中/设备可交互，false=息屏中。
 - **实际判断策略（用户拍板「锁定或熄屏」）**：`shouldBoost = device_locked || !screen_on`，
   即「设备锁定 **或** 屏幕熄灭」才提升音量——覆盖有锁/无锁 + 熄屏，以及亮屏锁屏界面；
   仅在「亮屏已解锁（用户正在用手机）」时不提升，尊重用户当前音量。

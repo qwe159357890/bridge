@@ -70,19 +70,25 @@ object SpeakVolumeBoost {
         return locked || !screenOn
     }
 
-    /** 查询锁屏状态（get_lock_state 命令）：是否锁定 / 锁屏界面是否显示中。 */
+    /**
+     * 查询锁屏状态（get_lock_state 命令）。
+     * 回执文案按值动态给中文结论（避免「false + 屏幕点亮」这类自相矛盾的固定说明）。
+     */
     fun describeLock(context: Context): String {
         val km = context.getSystemService(KeyguardManager::class.java)
         val locked = runCatching { km?.isDeviceLocked == true }.getOrDefault(false)
         val showing = runCatching { km?.inKeyguardRestrictedInputMode() == true }.getOrDefault(false)
-        return "锁屏状态：device_locked=$locked（是否需要解锁），" +
-            "keyguard_showing=$showing（锁屏界面显示中）"
+        val lockedText = if (locked) "已锁定" else "未锁定"
+        val showingText = if (showing) "锁屏界面显示中" else "锁屏界面未显示"
+        return "锁屏状态：device_locked=$locked（$lockedText），" +
+            "keyguard_showing=$showing（$showingText）"
     }
 
-    /** 查询息屏状态（get_screen_state 命令）：屏幕是否点亮。 */
+    /** 查询息屏状态（get_screen_state 命令）：屏幕是否点亮（亮屏中/息屏中）。 */
     fun describeScreen(context: Context): String {
         val pm = context.getSystemService(PowerManager::class.java)
         val screenOn = runCatching { pm?.isInteractive == true }.getOrDefault(false)
-        return "屏幕状态：screen_on=$screenOn（屏幕点亮）"
+        val screenOnText = if (screenOn) "亮屏中" else "息屏中"
+        return "屏幕状态：screen_on=$screenOn（$screenOnText）"
     }
 }

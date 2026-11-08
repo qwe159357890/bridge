@@ -348,6 +348,9 @@
     <!-- 电/流量统计命令的「查看详情」弹窗（v0.2.54：电量环形图 + 流量卡片） -->
     <DeviceStatsResultDialog ref="deviceStatsDetail" :device-names="deviceNameMap" />
 
+    <!-- 锁屏/息屏状态查询命令的「查看详情」弹窗（v0.2.113：结构化字段 + 音量提升结论） -->
+    <DeviceStateResultDialog ref="deviceStateDetail" :device-names="deviceNameMap" />
+
     <el-card class="list-card">
       <template #header>
         <div class="card-header">
@@ -409,9 +412,9 @@
               >
                 查看
               </el-button>
-              <!-- v0.2.33+：VNT / SSH / UI / 电流量统计命令的回执单独设计详情弹窗；pending 行不显示 -->
+              <!-- v0.2.33+：VNT / SSH / UI / 电流量 / 锁屏息屏状态命令的回执单独设计详情弹窗；pending 行不显示 -->
               <el-button
-                v-if="canViewVntDetail(row) || canViewSshDetail(row) || canViewUiDetail(row) || canViewDeviceStatsDetail(row)"
+                v-if="canViewVntDetail(row) || canViewSshDetail(row) || canViewUiDetail(row) || canViewDeviceStatsDetail(row) || canViewDeviceStateDetail(row)"
                 size="small"
                 type="primary"
                 link
@@ -477,6 +480,7 @@ import VntResultDetailDialog from '@/components/VntResultDetailDialog.vue'
 import SshResultDetailDialog from '@/components/SshResultDetailDialog.vue'
 import UiResultDetailDialog from '@/components/UiResultDetailDialog.vue'
 import DeviceStatsResultDialog from '@/components/DeviceStatsResultDialog.vue'
+import DeviceStateResultDialog from '@/components/DeviceStateResultDialog.vue'
 import type {
   CommandCategory,
   CommandDef,
@@ -579,12 +583,21 @@ function canViewDeviceStatsDetail(row: CommandRecord): boolean {
   return DEVICE_STATS_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
 }
 
+// 锁屏/息屏状态查询命令的「查看详情」（v0.2.113）：结构化字段 + 音量提升结论，
+// 见 DeviceStateResultDialog.vue。
+const DEVICE_STATE_DETAIL_COMMANDS = ['get_lock_state', 'get_screen_state']
+const deviceStateDetail = ref<{ show: (row: CommandRecord) => void } | null>(null)
+function canViewDeviceStateDetail(row: CommandRecord): boolean {
+  return DEVICE_STATE_DETAIL_COMMANDS.includes(row.command) && !!row.result_message
+}
+
 // 「查看详情」统一入口：按命令族分流到对应弹窗。
 function openDetail(row: CommandRecord) {
   if (canViewVntDetail(row)) vntDetail.value?.show(row)
   else if (canViewSshDetail(row)) sshDetail.value?.show(row)
   else if (canViewUiDetail(row)) uiDetail.value?.show(row)
   else if (canViewDeviceStatsDetail(row)) deviceStatsDetail.value?.show(row)
+  else if (canViewDeviceStateDetail(row)) deviceStateDetail.value?.show(row)
 }
 
 // ---------------------------------------------------------------------------
