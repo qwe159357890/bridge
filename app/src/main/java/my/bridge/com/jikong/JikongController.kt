@@ -293,8 +293,16 @@ class JikongController private constructor() {
                     if (autoReconnectEnabled && (pageVisible || keepConnection) && !proximityModeActive) {
                         startReconnect(fast = dataRecyclePending)
                     } else if (proximityModeActive && !manualSuppressed) {
-                        dataRecyclePending = false
-                        appContext?.let { JikongProximityService.evaluateInPlace(it) }
+                        if (dataRecyclePending) {
+                            // v0.2.109 半死链自愈：立即直连重建（复刻手动连接已实证的唤醒路径），
+                            // 不重挂 autoConnect——重挂起唤醒不了休眠的 BMS 蓝牙模块，只会反复
+                            // 「挂起→建链→只回 AT→断开」死循环（v0.2.107 真机日志实证，见台账）。
+                            dataRecyclePending = false
+                            startProximityReconnect()
+                        } else {
+                            // 走远自然断开：重新挂起 autoConnect 等下次靠近（系统低占空比监听）
+                            appContext?.let { JikongProximityService.evaluateInPlace(it) }
+                        }
                     }
                 } else if (!connectInFlight && reconnectJob?.isActive != true && proximityModeActive) {
                     // v0.2.107 触点①：靠近自动连接建链成功（非手动 connect、非重连循环——
@@ -719,6 +727,34 @@ class JikongController private constructor() {
                     break
                 }
                 delay(retryMs)
+            }
+        }
+    }
+
+    /**
+     * v0.2.109 靠近自动连接模式下的半死链自愈：立即直连重建（autoConnect=false）。
+     * 半死链（BMS 蓝牙模块休眠未醒）只有「直连重建」能唤醒（v0.2.80 手动连接实证：断开
+     * 重连第 2 条直连链路立即有 0x02 数据流）；重挂 autoConnect 唤醒不了休眠模块，只会反复
+     * 「挂起→建链→只回 AT→断开」死循环（v0.2.107 真机日志实证）。由触点②断开分流在
+     * [dataRecyclePending]=true（12s 无 0x02 主动重建）时调用。
+     * 成功 → startPolling 拉数据 + 置首帧强制播；失败 → 恢复 autoConnect 挂起等下次靠近。
+     */
+    private fun startProximityReconnect() {
+        if (reconnectJob?.isActive == true) return
+        val ctx = appContext ?: return
+        val mac = JikongPrefs.defaultMac(ctx)
+        if (mac.isBlank()) return
+        reconnectJob = scope.launch {
+            val ok = runCatching { JikongBleClient.connect(ctx, mac) }.getOrDefault(false)
+            if (ok) {
+                prevAnnounceSoc = -1
+                clearScanCache()
+                proximityAnnouncePending = true   // 半死链自愈成功后首帧同样强制播一次
+                startPolling()
+                Timber.tag(TAG).i("半死链自愈：直连重建成功，恢复数据流")
+            } else {
+                Timber.tag(TAG).w("半死链自愈直连失败，恢复 autoConnect 挂起")
+                JikongProximityService.evaluateInPlace(ctx)
             }
         }
     }
