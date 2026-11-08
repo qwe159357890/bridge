@@ -11,6 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import my.bridge.com.R
 import my.bridge.com.core.network.api.BridgeApiClient
 import my.bridge.com.core.storage.DeviceStore
 import my.bridge.com.data.SpeakVolumeBoost
@@ -67,6 +68,69 @@ object JikongSpeaker {
     fun attach(apiClient: BridgeApiClient, deviceStore: DeviceStore) {
         this.apiClient = apiClient
         this.deviceStore = deviceStore
+    }
+
+    // ==================== 连接成功提示音（v0.2.120） ====================
+
+    /** 提示音 ID → res/raw 资源 ID。 */
+    fun beepResId(id: Int): Int = when (id) {
+        1 -> R.raw.beep_1_short
+        2 -> R.raw.beep_2_double
+        3 -> R.raw.beep_3_low
+        4 -> R.raw.beep_4_high
+        else -> R.raw.beep_5_dingdong
+    }
+
+    /** 提示音显示名（设置页选项用）。 */
+    fun beepName(id: Int): String = when (id) {
+        1 -> "短嘀"
+        2 -> "双嘀"
+        3 -> "低嘟"
+        4 -> "清脆叮"
+        else -> "叮咚"
+    }
+
+    /**
+     * 播放指定提示音（连接成功 beep 与设置页试听共用）。短 wav 用独立 MediaPlayer 播放，
+     * 不占用 [player] 播报实例，故 beep 与播报可并发（[SpeakVolumeBoost] 已改引用计数防
+     * 提前恢复音量）。同样走 STREAM_MUSIC + 三段兜底，锁屏/后台也能听清。
+     */
+    fun playBeep(context: Context, id: Int) {
+        val app = context.applicationContext
+        scope.launch {
+            SpeakVolumeBoost.begin(app)
+            runCatching {
+                val p = MediaPlayer.create(app, beepResId(id))
+                    ?: throw IllegalStateException("MediaPlayer.create 返回 null（资源缺失）")
+                p.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build(),
+                )
+                p.setOnCompletionListener {
+                    SpeakVolumeBoost.end(app)
+                    runCatching { it.release() }
+                }
+                p.setOnErrorListener { mp, _, _ ->
+                    SpeakVolumeBoost.end(app)
+                    runCatching { mp.release() }
+                    true
+                }
+                p.start()
+                SpeakVolumeBoost.reapply(app)   // start 后重申音量（同播报的时序兜底）
+                Timber.tag(TAG).i("提示音播放：id=%d（%s）", id, beepName(id))
+            }.onFailure { e ->
+                SpeakVolumeBoost.end(app)
+                Timber.tag(TAG).w(e, "提示音播放失败（已忽略）")
+            }
+        }
+    }
+
+    /** 播放当前配置的连接成功提示音（连接成功时由 JikongController 触发）。 */
+    fun beepConnected(context: Context) {
+        val app = context.applicationContext
+        playBeep(app, JikongPrefs.beepSoundId(app))
     }
 
     /** 播报一段文字（异步，立即返回）：在线缓存/合成优先，失败回退本地引擎。 */

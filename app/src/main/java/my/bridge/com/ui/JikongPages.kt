@@ -1771,6 +1771,10 @@ private fun SettingsView(
     var proximityAuto by remember { mutableStateOf(JikongPrefs.proximityAutoConnect(context)) }
     // v0.2.117 半死链握手长等待时长（秒，1~60，默认 12）
     var handshakeLongTimeoutSec by remember { mutableIntStateOf(JikongPrefs.handshakeLongTimeoutSec(context)) }
+    // v0.2.119 半死链首连短戳时长（0.1~1.0 秒，默认 1.0）
+    var handshakeShortTimeoutSec by remember { mutableFloatStateOf(JikongPrefs.handshakeShortTimeoutSec(context)) }
+    // v0.2.120 连接成功提示音（1~5，默认 2=双嘀）
+    var beepSoundId by remember { mutableIntStateOf(JikongPrefs.beepSoundId(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
     // v0.2.104：jikong_set_config（仪表盘/单位/电费/折扣）同用本 tick，一并重读
     androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
@@ -1858,8 +1862,22 @@ private fun SettingsView(
                         },
                     )
                 }
-                // v0.2.117 半死链长等待时长：前两次 1s 短戳唤醒，第三次起用此时长耐心等
+                // v0.2.117 半死链握手超时：首连短戳 + 长等待兜底
                 Spacer(Modifier.height(6.dp))
+                JkStepperRow(
+                    label = "首连短戳时长",
+                    value = "%.1f 秒".format(handshakeShortTimeoutSec),
+                    onMinus = {
+                        handshakeShortTimeoutSec = (Math.round(handshakeShortTimeoutSec * 10) - 1).coerceAtLeast(1) / 10f
+                        JikongPrefs.setHandshakeShortTimeoutSec(context, handshakeShortTimeoutSec)
+                        controller.forceReport()
+                    },
+                    onPlus = {
+                        handshakeShortTimeoutSec = (Math.round(handshakeShortTimeoutSec * 10) + 1).coerceAtMost(10) / 10f
+                        JikongPrefs.setHandshakeShortTimeoutSec(context, handshakeShortTimeoutSec)
+                        controller.forceReport()
+                    },
+                )
                 JkStepperRow(
                     label = "半死链长等待时长",
                     value = "$handshakeLongTimeoutSec 秒",
@@ -1876,7 +1894,41 @@ private fun SettingsView(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "靠近自动连接后，前两次用 1 秒短戳快速唤醒保护板，第三次起用此时长耐心等它苏醒出数据。可多试几个值，日志会记录每次实际连接时长，便于找到最优值。",
+                    "靠近自动连接后，前两次用「首连短戳时长」快速唤醒保护板，第三次起用「长等待时长」耐心等它苏醒出数据。短戳越小唤醒越快（实测 0.1~1 秒内都可用），长等待兜底防反复空转。可多试几个值，日志会记录每次实际连接时长，便于找到最优值。",
+                    fontSize = 11.sp, color = c.gray,
+                )
+                // v0.2.120 连接成功提示音：5 选 1，点选即试听
+                Spacer(Modifier.height(10.dp))
+                Text("连接成功提示音", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                ) {
+                    (1..5).forEach { id ->
+                        val selected = beepSoundId == id
+                        Text(
+                            JikongSpeaker.beepName(id),
+                            fontSize = 12.sp,
+                            color = if (selected) Color.White else c.gray,
+                            modifier = Modifier
+                                .background(
+                                    if (selected) JkBlue else c.bg,
+                                    RoundedCornerShape(6.dp),
+                                )
+                                .clickable {
+                                    beepSoundId = id
+                                    JikongPrefs.setBeepSoundId(context, id)
+                                    JikongSpeaker.playBeep(context, id)   // 选中即试听
+                                    controller.forceReport()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "连接成功时播一声提示音，紧接着首帧会「播报电量」；两个声音的间隔就是「连接成功 → 首帧数据」的耗时，无需看日志也能估算。点选音色即时试听。",
                     fontSize = 11.sp, color = c.gray,
                 )
             }

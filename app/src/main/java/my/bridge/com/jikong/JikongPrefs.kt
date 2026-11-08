@@ -265,12 +265,29 @@ object JikongPrefs {
         sp(context).edit().putBoolean(KEY_PROXIMITY_AUTO_CONNECT, enabled).apply()
     }
 
-    // ==================== 半死链握手超时（v0.2.117） ====================
+    // ==================== 半死链握手超时（v0.2.117 / v0.2.119） ====================
+
+    /**
+     * 半死链首连短戳等待时长（秒，0.1~1.0，默认 1.0）。
+     * 靠近自动连接后，前两次连接（首连 + 第 1 次重建）用此时长快速戳醒 BMS，
+     * 第三次起用长等待（[handshakeLongTimeoutSec]）耐心等。v0.2.119 起可配置：
+     * 真机实测 1 次重建即成功、短戳越短越快，放开 0.1~1.0 供用户找最优值。
+     */
+    private const val KEY_HANDSHAKE_SHORT_TIMEOUT_TENTHS = "jikong_handshake_short_timeout_tenths"
+
+    /** 首连短戳等待时长（秒，0.1~1.0，默认 1.0）。内部按十分之一秒整数存储，避免浮点误差。 */
+    fun handshakeShortTimeoutSec(context: Context): Float =
+        sp(context).getInt(KEY_HANDSHAKE_SHORT_TIMEOUT_TENTHS, 10).coerceIn(1, 10) / 10f
+
+    fun setHandshakeShortTimeoutSec(context: Context, sec: Float) {
+        val tenths = Math.round(sec.coerceIn(0.1f, 1.0f) * 10).coerceIn(1, 10)
+        sp(context).edit().putInt(KEY_HANDSHAKE_SHORT_TIMEOUT_TENTHS, tenths).apply()
+    }
 
     /**
      * 半死链长等待时长（秒，1~60，默认 12）。
-     * 靠近自动连接后，前两次连接用 1s 短戳快速唤醒 BMS，第三次起用此时长耐心等 BMS
-     * 苏醒出数据。用户可自定义，配合日志「用户设置值 + 实际连接时长」反推最优参数。
+     * 靠近自动连接后，前两次连接用首连短戳快速唤醒 BMS，第三次起用此时长耐心等 BMS
+     * 苏醒出数据（兜底，防短戳不够时反复空转）。用户可自定义，配合日志反推最优参数。
      */
     private const val KEY_HANDSHAKE_LONG_TIMEOUT_SEC = "jikong_handshake_long_timeout_sec"
 
@@ -279,5 +296,21 @@ object JikongPrefs {
 
     fun setHandshakeLongTimeoutSec(context: Context, sec: Int) {
         sp(context).edit().putInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, sec.coerceIn(1, 60)).apply()
+    }
+
+    // ==================== 连接成功提示音（v0.2.120） ====================
+
+    /**
+     * 连接成功提示音 ID（1~5，默认 2=双嘀）。
+     * 连接成功（GATT 建链、开始拉数据）时 beep 一声，配合首帧「播报电量」让用户无需看日志
+     * 也能听出「连接成功 → 首帧数据」的耗时。设置页可选 5 种音色并即时试听。
+     */
+    private const val KEY_BEEP_SOUND_ID = "jikong_beep_sound_id"
+
+    fun beepSoundId(context: Context): Int =
+        sp(context).getInt(KEY_BEEP_SOUND_ID, 2).coerceIn(1, 5)
+
+    fun setBeepSoundId(context: Context, id: Int) {
+        sp(context).edit().putInt(KEY_BEEP_SOUND_ID, id.coerceIn(1, 5)).apply()
     }
 }

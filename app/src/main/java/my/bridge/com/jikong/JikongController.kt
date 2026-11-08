@@ -320,6 +320,13 @@ class JikongController private constructor() {
                     proximityAnnouncePending = true   // §2.8 拍板：后台也播（下一帧强制播一次）
                     Timber.tag(TAG).i("靠近自动连接成功（autoConnect 建链），开始拉数据")
                 }
+                // v0.2.120：连接成功提示音——覆盖手动 connect 与靠近自动连接两条成功路径。
+                // 演示模式直接改 status、不触发本回调，故此处 connected=true 必为真实 BLE 连接。
+                // 半死链「autoConnect 首连 + 直连重建」会 beep 两声，第二声后紧跟电量播报，
+                // 正好直观体现「连接成功 → 首帧数据」的耗时。
+                if (connected) {
+                    appContext?.let { JikongSpeaker.beepConnected(it) }
+                }
                 reportStatus()
                 // 连接状态变化也要触发 UI 重组（否则断开后界面仍停留「已连接」，
                 // 表现为「点断开没反应」——其实已断开，只是没刷新）。
@@ -640,12 +647,16 @@ class JikongController private constructor() {
             runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
 
             val connectAt = System.currentTimeMillis()
-            // v0.2.117 阶梯式唤醒超时：前两次连接用 1s 短戳快速唤醒 BMS（datalessRecycles
+            // v0.2.117 阶梯式唤醒超时：前两次连接用「首连短戳」快速唤醒 BMS（datalessRecycles
             // 为 0/1 时），第三次起用可配置长等待（默认 12s）。datalessRecycles 在收到 0x02
-            // 时归零，故每次半死链会话都从「1s 短戳」重新开始。
+            // 时归零，故每次半死链会话都从「首连短戳」重新开始。
+            // v0.2.119：首连短戳时长可配置（0.1~1.0s，默认 1.0s）——真机实测 1 次重建即成功、
+            // 短戳越短越快；长等待继续保留作兜底。
+            val shortTimeoutSec = appContext?.let { JikongPrefs.handshakeShortTimeoutSec(it) } ?: 1.0f
+            val shortTimeoutMs = (shortTimeoutSec * 1000f).toLong()
             val longTimeoutSec = appContext?.let { JikongPrefs.handshakeLongTimeoutSec(it) } ?: 12
             val longTimeoutMs = longTimeoutSec * 1000L
-            val currentTimeoutMs = if (datalessRecycles < 2) 1_000L else longTimeoutMs
+            val currentTimeoutMs = if (datalessRecycles < 2) shortTimeoutMs else longTimeoutMs
             if (datalessRecycles == 0) handshakeSessionStartAt = connectAt  // 首次连接起算总耗时
             var lastTriggerAt = connectAt
             var last97At = if (ok97) lastTriggerAt else 0L
@@ -673,17 +684,17 @@ class JikongController private constructor() {
                         // ~1min 直到 status=8 断开；而自动重连建的第 2 条链路立即有数据。
                         // ⇒ 超时内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
                         // 重连）。连续重建限 3 次，防「休眠↔重建」死循环。
-                        // v0.2.117 阶梯式超时：前两次 1s 短戳、第三次起可配置长等待（默认 12s）。
-                        // 日志打印「用户设置值 + 本次实际等待时长 + 第几次连接」，供多次尝试
-                        // 不同设置反推最优参数。
+                        // v0.2.117 阶梯式超时：前两次首连短戳、第三次起可配置长等待（默认 12s）。
+                        // v0.2.119：短戳时长可配置，日志打印「用户设置短戳值 + 长等待值 + 本次
+                        // 实际超时 + 第几次连接」，供多次尝试不同设置反推最优参数。
                         if (now - connectAt > currentTimeoutMs) {
                             if (datalessRecycles < 3) {
                                 datalessRecycles++
                                 dataRecyclePending = true
                                 Timber.tag(TAG).w(
-                                    "连接 %ds 仍无 0x02（疑似首连半死链），主动重建链路（第 %d/3 次，本次超时=%ds，用户设置长等待=%ds）",
+                                    "连接 %ds 仍无 0x02（疑似首连半死链），主动重建链路（第 %d/3 次，本次超时=%.1fs，用户设置首连短戳=%.1fs，长等待=%ds）",
                                     (now - connectAt) / 1000, datalessRecycles,
-                                    currentTimeoutMs / 1000, longTimeoutSec,
+                                    currentTimeoutMs / 1000f, shortTimeoutSec, longTimeoutSec,
                                 )
                                 JikongBleClient.disconnect()  // → 快档自动重连 → startPolling
                                 return@launch

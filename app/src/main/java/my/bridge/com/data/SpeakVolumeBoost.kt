@@ -25,14 +25,18 @@ import timber.log.Timber
  * [setShouldBoostProvider] 注入——data 包不反向依赖 jikong 包。未注入时 [shouldBoost] 恒
  * false（安全默认，不提升）。
  *
- * 幂等设计：同一时刻多次 [begin] 只记录一次原始音量、不重复拉高；直到最后一次 [end]
- * 才真正恢复（对齐 JikongSpeaker「同一时刻只保留一个播放实例」的语义，防连续/重叠播报
- * 提前恢复或停留在最大）。媒体流不受免打扰（DND）限制，setStreamVolume 无安全异常风险。
+ * 引用计数设计（v0.2.120 由布尔幂等改引用计数）：同一时刻多次 [begin] 只记录一次原始
+ * 音量、不重复拉高；每次 [end] 计数 -1，减到 0 才真正恢复。这样「连接成功 beep」与
+ * 「电量播报」并发（beep 尚未播完、首帧播报已开始）时，beep 的 end 只减计数、不会提前
+ * 把还在播的播报音量拉低。媒体流不受免打扰（DND）限制，setStreamVolume 无安全异常风险。
  */
 object SpeakVolumeBoost {
 
-    /** 是否处于「已提升」状态。 */
-    private var boosted = false
+    /**
+     * 音量提升引用计数（>0 = 处于「已提升」态；0 = 未提升）。
+     * [begin] 每次 +1，[end] 每次 -1，减到 0 才真正恢复原音量。
+     */
+    private var boostCount = 0
 
     /** 提升前记录的媒体音量档位（未提升时为 -1）。 */
     private var original = -1
@@ -60,14 +64,17 @@ object SpeakVolumeBoost {
         val am = context.getSystemService(AudioManager::class.java) ?: return false
         val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (boosted) return true            // 重叠播报：已提升，不再重复记录原始音量
+        if (boostCount > 0) {               // 重叠声音：已提升，仅计数 +1，不重复记录原始音量
+            boostCount++
+            return true
+        }
         if (cur >= max) return false        // 已最大，无需提升
         // v0.2.118：改三段兜底（与命令下发 VolumeController 同款）——后台/锁屏时裸调
         // setStreamVolume(stream, max, 0) 常被系统静默忽略（真机日志回读仍=原值），
         // 而 FLAG_SHOW_UI / adjustStreamVolume 能真正生效。三段都失败也不影响播报本身。
         val after = forceMax(am)
         original = cur
-        boosted = true
+        boostCount = 1
         Timber.i(
             "后台静默播报音量提升：媒体 %d/%d → 最大（三段兜底后回读=%d），播报后恢复",
             cur, max, after,
@@ -75,11 +82,12 @@ object SpeakVolumeBoost {
         return true
     }
 
-    /** 恢复播报前记录的媒体音量（幂等，未处于提升态时无操作）。 */
+    /** 恢复播报前记录的媒体音量（引用计数：减到 0 才真正恢复，未处于提升态时无操作）。 */
     @Synchronized
     fun end(context: Context) {
-        if (!boosted) return
-        boosted = false
+        if (boostCount <= 0) return
+        boostCount--
+        if (boostCount > 0) return          // 还有其它声音在播，暂不恢复
         val target = original
         original = -1
         val am = context.getSystemService(AudioManager::class.java) ?: return
@@ -98,7 +106,7 @@ object SpeakVolumeBoost {
      */
     @Synchronized
     fun reapply(context: Context) {
-        if (!boosted) return
+        if (boostCount <= 0) return
         val am = context.getSystemService(AudioManager::class.java) ?: return
         val after = forceMax(am)
         Timber.i("音量提升重申（start 后）：三段兜底后回读=%d", after)
