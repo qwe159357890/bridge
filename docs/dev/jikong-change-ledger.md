@@ -41,6 +41,9 @@
 **实施结果（2026-11-08 08:35 回填）**：编译/构建全过（admin vue-tsc+vite、客户端 compileDebugKotlin、server py_compile）。提交 `e7b8b3a` 直连推送；tag v0.2.102 直连推送成功（14c98d4），CI 打包成功，APK 0.2.102（aapt 实证，sha256 `6c339a9a…`，46,037,962 字节）分发 updates+Downloads+update.json。台账本轮 Edit 又吞了 v0.2.101 标题（同款事故第 4 次），已补回并核对了区块归属。
 **⚠ 依赖关系**：①后台新交互（播报/主题/小喇叭下发）需**服务端更新重启**（jikong.py 放行新 action）+ 手机升 0.2.102（新命令执行器）两端就绪才生效；②演示统计同步需手机 0.2.102 上报 demo_stats，旧 APK 时后台统计回 MySQL 真实台账；③主题/播报回读依赖 forceReport，命令执行后 ~1s 内后台刷新可见。
 
+**★ 热修复（2026-11-08 08:38，admin-only，无发版）——极空页白屏**：用户 `npm run dev` 实证极空页白屏（路由记忆落在 /jikong 属正常，白屏是真问题）。**根因**：v0.2.102 在 `<script setup>` 里把两个 `watch(() => s.value…)` 放在 `const s = ref(…)` 声明之前——watch 注册即同步执行一次 getter，命中 const TDZ 抛 `Cannot access 's' before initialization`，setup 整体失败 → 组件白屏。vue-tsc 检不出闭包内后置引用，故编译通过仍会白屏。**修复**：双向同步块整体移到 `s`/`selectedDevice` 声明之后，并留「位置铁律」注释。dist 已重出。**教训**：script setup 中 watch/computed 引用响应式状态必须放在声明之后，勿按「功能分区」把块前置。
+**触发信号（白屏）**：dev 或 build 后极空页空白、控制台 `Cannot access 's' before initialization`。
+
 ### v0.2.101 管理后台极空页与客户端 v0.2.100 对齐（2026-11-08 07:33 实施）
 
 **需求（用户 11-08 07:33）**：客户端多轮迭代后，管理后台「极空保护板」页未跟进——检查并确保与客户端 APP 极空页面百分百一致（只读镜像，交互类动作不搬运）。
