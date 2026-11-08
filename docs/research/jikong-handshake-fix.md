@@ -72,11 +72,11 @@ git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.k
 
 | # | 变量（唯一改动） | 假设 | 状态 | 版本 | 锚点 | 结果 |
 |---|---|---|---|---|---|---|
-| ① | 连接后立即 `requestConnectionPriority(HIGH)` | 高频连接事件（7.5ms）持续唤醒 MCU，一次出数据 | ⬜ 待做 | 0.2.110 | — | — |
+| ① | 连接后立即 `requestConnectionPriority(HIGH)` | 高频连接事件（7.5ms）持续唤醒 MCU，一次出数据 | 🔵 已改码，待真机验证 | 0.2.110 | `9ea241a` | 待测 |
 | ② | 去掉启动 ramp 的 0x96 轰炸 + 放宽/移除 12s 重建（回到「耐心等」） | 0x96 轰炸 + 12s 断开在 MCU 苏醒瞬间打断唤醒 | ⬜ 待做 | 0.2.111 | — | — |
 | ③ | 0x6C 时间同步帧（第 3 声蜂鸣） | 仅保真对照，预期与唤醒无关 | ⬜ 待做 | 0.2.112 | — | — |
 
-**当前进度**：`0 / 3`（尚未开始实验）。
+**当前进度**：实验①已改码（`requestConnectionPriority(HIGH)` 单变量）+ 打包分发，**待用户真机验证**。②③ 未开始。
 
 ---
 
@@ -100,10 +100,11 @@ git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.k
 
 ### 实验①：requestConnectionPriority(HIGH)　—　0.2.110
 
-- **唯一改动**：`JikongBleClient` 在 `onConnectionStateChange(STATE_CONNECTED)` 回调里、发 0x97 之前，加 `gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)`。
+- **唯一改动**：`JikongBleClient` 在 `onConnectionStateChange(STATE_CONNECTED)` 回调里、发 `requestMtu(256)` 之前，加 `runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }`。
 - **保持不动**：0x96 ramp、12s 重建、挂起逻辑全部不变。
 - **假设**：官方靠 7.5ms 连接事件持续唤醒 MCU，我们默认 30~50ms 事件频率不够。
-- **结果**：⬜ 待测
+- **改码状态**：✅ 已改（提交 `9ea241a`，版本 0.2.110，编译 BUILD SUCCESSFUL）。
+- **结果**：⬜ 待真机验证（按 §五 步骤：闲置 ≥10min → 靠近 → 数第几轮 12s 出数据 + 蜂鸣次数）。
 - **结论**：—
 
 ### 实验②：去 0x96 轰炸 + 放宽/移除 12s 重建　—　0.2.111

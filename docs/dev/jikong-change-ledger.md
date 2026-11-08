@@ -46,9 +46,11 @@
 **回滚配方**：`git revert` 本轮提交；或 `git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt app/build.gradle.kts`。
 **触发信号**：闲置 ≥10min 后靠近仍 3~4 轮 12s 才出数据（说明 HIGH 优先级不解决）/ 出现连接失败率升高（HIGH 优先级兼容性问题）。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 14:32 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（2m42s，仅存量 BLE deprecated 告警）。提交 `eb6e8cc`（rebase 对齐后 `9ea241a`）清代理直连 push（98a4edf..9ea241a）。`release.py v0.2.110` 建 tag 触发 CI 打包成功（gh-proxy 代理下载）。APK 46,054,402 字节，aapt 实证 versionName=0.2.110（versionCode=1，update.json 自定义 versionCode=310），分发 updates/bridge-v0.2.110.apk + update.json（sha256 `9568d9b5…`）。**服务端零改动、无需重启**。**待用户真机验证**（§五 步骤：闲置 ≥10min 后靠近，观察是否第 1 条链路出数据、蜂鸣 ≤1 次）。
 
 ---
+
+### v0.2.109 靠近自动连接「半死链自愈失效」修复：proximity 模式立即直连重建（2026-11-08 12:35 实施）
 
 **问题（用户 11-08 12:32 真机反馈 + 上传日志，设备 f2c38ebee251a196）**：装 v0.2.108 后，靠近自动连接「连上了但一直收不到数据、不播报」。
 
