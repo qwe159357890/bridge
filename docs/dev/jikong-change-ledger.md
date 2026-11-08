@@ -38,7 +38,7 @@
 **回滚配方**：`git revert` 本轮提交；或手改：speakDashboardNow/词组表回「公里」、Command.kt/CommandModule 删 demo_refresh、jikong.py 回四 action 白名单、command_catalog 删条目、admin 回退横幅与 onDemoRefresh→admin npm run build；versionName 回 0.2.104。
 **触发信号**：后台演示横幅按钮点不动 / 点击后手机数据不变 / 双击播报时速仍读「公里」/ 手机端升级前播报「公里每小时」缺段走整句回退（正常，进首页预取后恢复分段连读）。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 10:02 回填）**：编译/构建全过（admin vue-tsc+vite、Kotlin assembleDebug、server py_compile；首轮 Kotlin daemon 意外重启疑似假成功，重跑 assembleDebug 实证 BUILD SUCCESSFUL）。提交 `2834b0b` 直连推送；tag v0.2.105 CI 打包成功，APK 0.2.105（aapt 实证，sha256 `d03dca79…`，46,037,962 字节）分发 updates+Downloads（删 0.2.104 旧包）+update.json。服务端 jikong.py/command_catalog.py 有改动（demo_refresh 放行），由用户自行重启后生效。播报新段「公里每小时」随手机升级 0.2.105 进首页预取补拉；升级前的旧 APK 遇「公里每小时」缺段自动走整句回退，不哑不卡。
 
 ### v0.2.104 后台小喇叭移至首页连接栏 + 设置页镜像全面可编辑（jikong_set_config）（2026-11-08 09:10 实施）
 
