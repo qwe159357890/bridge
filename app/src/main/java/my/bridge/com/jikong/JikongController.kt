@@ -844,7 +844,10 @@ class JikongController private constructor() {
         val warnDue = low && now - JikongPrefs.lastWarnAt(ctx) >=
             JikongPrefs.speakWarnRepeatMin(ctx) * 60_000L
         if (!(forced || forcedProximity || changed || due || warnDue)) {
-            Timber.tag(TAG).i("语音播报判定：不播（SOC=%d 未变、间隔未到、无预警到期）", soc)
+            // v0.2.121：删除「不播」每帧 INFO 日志——maybeAnnounce 每帧 0x02（约 400ms）
+            // 触发一次，「不播」是常态无排障价值，却占服务端日志窗口 83%（1663/2000），
+            // 把连接建立等关键日志挤出窗口。真正播报的「语音播报：」日志（下方）已保留
+            // 完整判定依据，无需重复记录否定分支。
             return
         }
         firstAnnouncePending = false
