@@ -349,6 +349,9 @@ object CommandModule {
         Command.JIKONG_SET_CONFIG to CommandExecutor { command ->
             executeJikongSetConfig(context, command)
         },
+        Command.JIKONG_SET_PROXIMITY to CommandExecutor { command ->
+            executeJikongSetProximity(context, command)
+        },
         Command.JIKONG_DEMO_REFRESH to CommandExecutor { command ->
             executeJikongDemoRefresh(command)
         },
@@ -3260,6 +3263,25 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 jikong_set_config 执行失败")
             CommandResult(id, name, false, "同步设置失败：${e.message}")
+        }
+    }
+
+    /**
+     * jikong_set_proximity（v0.2.107）：后台「靠近自动连接」卡开关同步到手机——
+     * auto_connect 开/关，联动前台服务启停。交由 JikongController.setProximityAutoConnect
+     * 统一处理（写 Prefs + evaluate/stop + forceReport），与手机设置页开关同语义。
+     */
+    private fun executeJikongSetProximity(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val v = command.params.get("auto_connect")?.takeIf { it.isJsonPrimitive }?.asBoolean
+                ?: return CommandResult(id, name, false, "缺少参数 auto_connect（开/关）")
+            my.bridge.com.jikong.JikongController.instance.setProximityAutoConnect(context, v)
+            CommandResult(id, name, true, "靠近自动连接已${if (v) "开启" else "关闭"}")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_set_proximity 执行失败")
+            CommandResult(id, name, false, "同步靠近自动连接失败：${e.message}")
         }
     }
 

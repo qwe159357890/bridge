@@ -86,6 +86,10 @@ export interface JikongStatus {
     speak_muted?: boolean
     elec_price?: number
     odo_discount?: number
+    /** v0.2.107：靠近自动连接模式开关（设置页总开关，默认关） */
+    proximity_auto_connect?: boolean
+    /** v0.2.107：手动断开抑制态（极空页点断开后置位，重进页面/重启 APP 解除；运行时状态非配置） */
+    proximity_suppressed?: boolean
   }
   /** v0.2.102：演示模式内存台账（与手机统计页演示同源；后台统计页演示期间用它替代 MySQL） */
   demo_stats?: {
@@ -143,7 +147,7 @@ export function getJikongOdometer(deviceId: string): Promise<{ device_id: string
 // ==================== 极空控制命令 ====================
 
 export interface JikongControlParams {
-  action: 'mos' | 'balance' | 'write_param' | 'speak' | 'set_theme' | 'set_speak' | 'set_config' | 'demo_refresh'
+  action: 'mos' | 'balance' | 'write_param' | 'speak' | 'set_theme' | 'set_speak' | 'set_config' | 'set_proximity' | 'demo_refresh'
   charge?: boolean
   discharge?: boolean
   on?: boolean

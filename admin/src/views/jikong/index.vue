@@ -445,6 +445,22 @@
 
               <!-- ============ Tab 3：参数设置（v0.2.104：镜像可编辑，改动 jikong_set_config/set_speak 下发手机） ============ -->
               <template v-else>
+                <div class="set-title">靠近自动连接</div>
+                <div class="jk-card" style="border-radius: 12px">
+                  <div class="set-row">
+                    <div style="flex: 1">
+                      <div style="font-size: 14px; font-weight: 600">靠近自动连接</div>
+                      <div class="mini-label" style="margin-top: 2px">
+                        手机靠近默认极空设备即自动连接并播报电量（无需打开本页，覆盖前台/后台/重启）。仅监听默认设备，蓝牙控制器级低功耗（约 &lt;0.5%/天，零流量）；关闭后恢复需手动进极空页连接。
+                      </div>
+                    </div>
+                    <el-switch v-model="cfgProximity" size="small" style="margin-left: 8px" @change="sendProximity('靠近自动连接')" />
+                  </div>
+                  <div v-if="proximitySuppressed" class="mini-label" :style="{ padding: '0 14px 12px', color: c.amber }">
+                    当前处于手动断开抑制：用户在极空页点断开，自动连接已暂停（重进极空页或重启 APP 恢复）。
+                  </div>
+                </div>
+
                 <div class="set-title">仪表盘</div>
                 <div class="jk-card" style="border-radius: 12px">
                   <div class="set-row">
@@ -766,6 +782,7 @@ const cfgDash = ref(false)
 const cfgUnit = ref(false)
 const cfgPrice = ref(1)
 const cfgDiscount = ref(1)
+const cfgProximity = ref(false)
 let cfgLastSendAt = 0
 // 同一 watch 兼管两组镜像，两个回声窗口互不干扰
 watch(() => s.value?.app, (app) => {
@@ -782,6 +799,7 @@ watch(() => s.value?.app, (app) => {
     if (app.unit_kwh100 != null) cfgUnit.value = app.unit_kwh100
     if (app.elec_price != null) cfgPrice.value = app.elec_price
     if (app.odo_discount != null) cfgDiscount.value = app.odo_discount
+    if (app.proximity_auto_connect != null) cfgProximity.value = app.proximity_auto_connect
   }
 }, { immediate: true })
 async function sendSpeakSettings(what: string) {
@@ -824,6 +842,20 @@ async function sendConfig(what: string) {
   }
 }
 
+// ---- v0.2.107：靠近自动连接镜像可编辑（开关下发 jikong_set_proximity，手机端联动前台服务启停） ----
+async function sendProximity(what: string) {
+  cfgLastSendAt = Date.now()
+  try {
+    await jikongControl(selectedDevice.value, {
+      action: 'set_proximity',
+      params: { auto_connect: cfgProximity.value },
+    })
+    ElMessage.success(`${what} 已同步手机`)
+  } catch {
+    ElMessage.warning('下发失败（设备不在线？）')
+  }
+}
+
 /** 首页连接栏小喇叭（与手机客户端同位置）：点击切换静音并下发手机。 */
 function onMuteToggle() {
   spkMuted.value = !spkMuted.value
@@ -841,6 +873,9 @@ const charging = computed(() => (s.value?.current ?? 0) > 0.1)
 const discharging = computed(() => (s.value?.current ?? 0) < -0.1)
 const soc = computed(() => Math.max(0, Math.min(100, s.value?.soc ?? 0)))
 const dashEnabled = computed(() => !!s.value?.app?.dash_enabled)
+
+// v0.2.107：靠近自动连接抑制态（只读展示；运行时状态，不做可编辑镜像）
+const proximitySuppressed = computed(() => !!s.value?.app?.proximity_suppressed)
 
 // ---------- v0.2.101：与手机 1:1 对齐所需（演示/单位/折扣/电费） ----------
 const demoMode = computed(() => !!s.value?.app?.demo_mode)

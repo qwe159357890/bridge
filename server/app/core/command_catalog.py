@@ -556,6 +556,10 @@ COMMANDS: list[dict[str, Any]] = [
           _param("unit_kwh100", "电耗单位(kWh/100km)", PARAM_TYPE_SWITCH),
           _param("elec_price", "电费单价(元/度)", PARAM_TYPE_NUMBER),
           _param("odo_discount", "里程折扣(0.1~1.0)", PARAM_TYPE_NUMBER)]),
+    _cmd("jikong_set_proximity", "极空靠近自动连接开关", "jikong", "📡",
+         "管理后台「靠近自动连接」卡开关同步到手机端（auto_connect 开/关，联动前台服务启停；"
+         "仅监听默认设备，控制器级低功耗）",
+         [_param("auto_connect", "靠近自动连接", PARAM_TYPE_SWITCH)]),
     _cmd("jikong_demo_refresh", "极空刷新演示数据", "jikong", "🎲",
          "管理后台远程触发手机端演示模式「刷新模拟数据」（BMS 总览+仪表盘联动随机重生成，"
          "刷新后立即回报，后台即刻同步新值；手机端非演示模式时回执失败说明）", []),

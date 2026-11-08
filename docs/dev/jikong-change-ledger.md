@@ -17,6 +17,36 @@
 
 ---
 
+### v0.2.108 极空「靠近自动连接」后台适配：镜像开关 + 状态展示（2026-11-08 12:15 实施）
+
+**需求（用户 11-08 12:12 拍板「档一档二都做」）**：v0.2.107 客户端已上报 `proximity_auto_connect`/`proximity_suppressed` 两字段（服务端原样透传），但管理后台未消费。档一=只读展示（模式开关状态 + 手动断开抑制态）；档二=可编辑镜像开关（后台下发 `jikong_set_proximity` 远程开/关，与手机设置页开关同语义）。
+
+**改前原文（关键块；改动文件均 git 跟踪，锚点提交存全文）**：
+1. `server/app/api/v1/jikong.py` 第 80 行：`elif body.action in ("speak", "set_theme", "set_speak", "set_config"):`；action 描述止于 `demo_refresh`；params 描述止于 `set_config`。
+2. `server/app/core/command_catalog.py`：`jikong_set_config` 条目止于 `_param("odo_discount", …)]),`，其后直接 `_cmd("jikong_demo_refresh", …)`。
+3. `core/core-network/…/ws/Command.kt`：`JIKONG_SET_CONFIG` 常量后直接 `JIKONG_DEMO_REFRESH`。
+4. `app/…/di/CommandModule.kt`：分发表 `JIKONG_SET_CONFIG` 后直接 `JIKONG_DEMO_REFRESH`；`executeJikongSetConfig` 方法后直接 `jikong_demo_refresh` 注释块。
+5. `app/…/jikong/JikongController.kt`：`attachContext()` 方法后直接 `/** 轮询间隔（毫秒）。 */`，无 setProximityAutoConnect。
+6. `admin/src/api/jikong.ts`：`JikongStatus.app` 止于 `odo_discount`；`JikongControlParams.action` 类型止于 `'demo_refresh'`。
+7. `admin/src/views/jikong/index.vue`：Tab3 开头 `<template v-else><div class="set-title">仪表盘</div>`；`cfgDiscount` 声明后直接 `let cfgLastSendAt = 0`；watch 内 `odo_discount` 回写后直接 `}`；`sendConfig` 后直接 `onMuteToggle`；`dashEnabled` computed 后直接 `// ---------- v0.2.101 …` 注释。
+
+**改动清单**：
+- `jikong.py`：action 描述 +`set_proximity`；params 描述同步；`elif body.action in (…, "set_proximity")` 纳入透传。
+- `command_catalog.py`：+`jikong_set_proximity` 命令（📡，param `auto_connect` PARAM_TYPE_SWITCH）。
+- `Command.kt`：+`JIKONG_SET_PROXIMITY = "jikong_set_proximity"`。
+- `CommandModule.kt`：分发表 +`JIKONG_SET_PROXIMITY → executeJikongSetProximity`；+`executeJikongSetProximity()`（读 `auto_connect` 布尔 → `JikongController.setProximityAutoConnect`）。
+- `JikongController.kt`：+`setProximityAutoConnect(context, enabled)`（写 Prefs + evaluate/stop + forceReport，不碰 manualSuppressed，与手机设置页开关同语义）。
+- `jikong.ts`：`JikongStatus.app` +`proximity_auto_connect`/`proximity_suppressed`；action 类型 +`'set_proximity'`。
+- `index.vue`：Tab3 顶部 +「靠近自动连接」卡（可编辑开关 `cfgProximity` + 抑制态只读提示）；+`cfgProximity` 状态、watch 回写、`sendProximity()`、`proximitySuppressed` computed。
+- versionName 0.2.107→0.2.108。
+
+**回滚配方**：`git revert` 本轮提交；或 `git checkout <锚点提交> -- <上述 7 文件> + app/build.gradle.kts`。
+**触发信号**：后台开关下发后手机不启停靠近服务 / 手机设置页与后台开关状态不一致（回声不同步）/ 后台看不到抑制态提示 / 命令 `jikong_set_proximity` 回执失败。
+
+**实施结果（待回填）**：
+
+---
+
 ### v0.2.107 极空「靠近自动连接」：GATT autoConnect 挂起 + 前台服务承载（2026-11-08 11:50 实施）
 
 **需求（2026-11-08 拍板，需求/调研/设计全文见 `docs/research/jikong-proximity-autoconnect.md`）**：设置页新增「靠近自动连接」开关（默认关）。开后对默认设备挂 `connectGatt(autoConnect=true)`，手机靠近保护板 ≤30s 自动连上（前台/后台/被杀重启均覆盖），连上播报电量（**后台也播**，§2.8 拍板）+后台持续收数据；走远断开不抑制（系统自动持续重试）、回来照常重连+播报；仅用户在极空页点断开才抑制（直到重进极空页/进程重启）。省电第一：控制器级 3.75% 占空比监听，估 <0.5%/天、零流量。一期只做方案 A（B=PendingIntent 扫描保留二期，见调研 §2.9）。

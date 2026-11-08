@@ -216,6 +216,22 @@ class JikongController private constructor() {
         if (appContext == null) appContext = context.applicationContext
     }
 
+    /**
+     * v0.2.107：设置「靠近自动连接」开关（后台 jikong_set_proximity 命令与手机设置页
+     * 共用入口，保证两端语义一致）：写 Prefs + 联动前台服务启停 + forceReport。
+     * 不碰 manualSuppressed（抑制只由「极空页点断开」置位、「重进极空页/进程重启」解除，
+     * 开关切换不影响抑制——与需求语义及手机设置页行为完全对齐）。
+     */
+    fun setProximityAutoConnect(context: Context, enabled: Boolean) {
+        attachContext(context)
+        val ctx = appContext ?: return
+        JikongPrefs.setProximityAutoConnect(ctx, enabled)
+        if (enabled) JikongProximityService.evaluate(ctx)
+        else JikongProximityService.stop(ctx)
+        // Prefs 变更必须手动上报（reportStatus 按 status JSON 去重）
+        forceReport()
+    }
+
     /** 轮询间隔（毫秒）。 */
     @Volatile
     var pollIntervalMs: Long = 2000

@@ -40,9 +40,10 @@ class JikongControlRequest(BaseModel):
     v0.2.102：新增 speak / set_theme / set_speak（管理后台↔手机同步类，params 透传）。
     v0.2.104：新增 set_config（设置页镜像可编辑：仪表盘/单位/电费/折扣，params 透传）。
     v0.2.105：新增 demo_refresh（远程刷新演示模拟数据，无参）。
+    v0.2.107：新增 set_proximity（靠近自动连接模式开关镜像，params 透传 auto_connect）。
     """
 
-    action: str = Field(..., description="mos / balance / write_param / speak / set_theme / set_speak / set_config / demo_refresh")
+    action: str = Field(..., description="mos / balance / write_param / speak / set_theme / set_speak / set_config / set_proximity / demo_refresh")
     charge: bool | None = Field(None, description="action=mos 时：是否含充电 MOS")
     discharge: bool | None = Field(None, description="action=mos 时：是否含放电 MOS")
     on: bool | None = Field(None, description="action=mos/balance 时：开/关")
@@ -50,8 +51,9 @@ class JikongControlRequest(BaseModel):
     value: int | None = Field(None, description="action=write_param 时：参数值")
     # v0.2.102：同步类命令参数透传（speak 无参；set_theme: mode；set_speak:
     # muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min；
-    # v0.2.104 set_config: dash_enabled/unit_kwh100/elec_price/odo_discount）
-    params: dict | None = Field(None, description="action=speak/set_theme/set_speak/set_config 时：透传参数")
+    # v0.2.104 set_config: dash_enabled/unit_kwh100/elec_price/odo_discount；
+    # v0.2.107 set_proximity: auto_connect）
+    params: dict | None = Field(None, description="action=speak/set_theme/set_speak/set_config/set_proximity 时：透传参数")
 
 
 @router.post("/{device_id}/control", dependencies=[Depends(require_admin)])
@@ -77,7 +79,7 @@ async def jikong_control(device_id: str, body: JikongControlRequest, request: Re
         params = {"on": body.on}
     elif body.action == "write_param":
         params = {"param_id": body.param_id, "value": body.value}
-    elif body.action in ("speak", "set_theme", "set_speak", "set_config"):
+    elif body.action in ("speak", "set_theme", "set_speak", "set_config", "set_proximity"):
         # v0.2.102：同步类命令参数原样透传（客户端执行器自行校验字段与取值范围）
         params = body.params or {}
     elif body.action == "demo_refresh":
