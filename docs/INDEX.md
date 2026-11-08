@@ -18,6 +18,7 @@
 |---|---|
 | [automation.md](guides/automation.md) | **自动化模块使用文档**（面向小白：这是什么、一次性授权配置、连接手机三步、Hello World、能力全景、能做与不能做、配置项、FAQ；功能怎么用见本文，怎么实现见 research/） |
 | [ssh-server.md](guides/ssh-server.md) | **SSH 服务器使用文档**（SFTP 文件管理 + 远程终端：启动方式、连接参数、快捷目录/内置 alias、存储档、能做与不能做（含为何装不了 zsh/oh-my-zsh）、配置项、FAQ） |
+| [jikong.md](guides/jikong.md) | **极空（JK BMS）保护板使用文档**（扫描连接/实时数据/语音播报/里程统计/靠近自动连接/连接提示音/演示模式：怎么连、四页怎么用、各设置项、能做与不能做、FAQ；功能怎么用见本文，怎么实现见 research/） |
 
 ### 架构类（architecture/）
 | 文档 | 说明 |
@@ -75,6 +76,10 @@
 | [automation-directory-separation.md](research/automation-directory-separation.md) | **自动化模块目录分离方案**（第一步：三端自动化代码收敛到 `com/automation` 包，11 子包 a11y/automator/query/input/device/notification/rpc/commands；服务端/前端拆分 + 迁移步骤 + 命名约定 + ColorFinder 去 OpenCV 坑。**批次 0 已迁移完成**） |
 | [automation-implementation-plan.md](research/automation-implementation-plan.md) | **自动化模块实施路线**（第三步：批次 0 目录分离 → 批次 1 关系查询+错误码 → 批次 2 动作层 ~30 命令 → 批次 3 设备+应用 → 批次 4 输入+找色+传感器+文件+媒体 → 批次 5 通知子域+RPC 端点 → 批次 6 SDK 视觉 → 批次 7 P2 后置。**批次 0-6 已实施（v0.2.40），批次 7 P2 暂不做**） |
 | [automation-summary.md](research/automation-summary.md) | **自动化模块阶段性总结**（已交付物总览、能力全景、与 Droidline/AutoX 对照结论、待真机验证清单 §五、遗留 TODO、下一步；功能怎么用见 `guides/automation.md`） |
+| [jikong-bms-integration.md](research/jikong-bms-integration.md) | **极空（JK BMS）保护板集成调研**（极空是什么、BLE 协议/UUID 反编译实证、官方 APP 界面、复刻+远程中转方案、命令清单、分期落地；**已实现 v0.2.55**：`jikong/` 全套 + `ui/JikongPages.kt` + 服务端/后台极空页） |
+| [jikong-proximity-autoconnect.md](research/jikong-proximity-autoconnect.md) | **极空「靠近自动连接」需求与调研**（需求最终版 V2、autoConnect 挂起方案选型、省电量化 <0.5%/天、实现设计 §三、握手剖析 §四；**已实现 v0.2.107→109**：`JikongProximityService` + 半死链直连重建自愈） |
+| [jikong-handshake-fix.md](research/jikong-handshake-fix.md) | **极空「半死链唤醒」握手修复专档**（问题冻结、基线锚点、单变量实验纪律、实验①~④矩阵与卡片、兜底方向；结论见 `jikong-summary.md` §四） |
+| [jikong-summary.md](research/jikong-summary.md) | **极空功能阶段性总结**（交付物总览、能力全景、真机验证结论、遗留 TODO、下一步；**功能阶段性完成**，功能怎么用见 `guides/jikong.md`） |
 
 ### 管理后台（admin/）
 | 文档 | 说明 |
