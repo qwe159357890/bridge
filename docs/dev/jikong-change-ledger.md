@@ -52,7 +52,7 @@
 **回滚配方**：`git revert` 本轮提交；或 `git checkout 7faa9a1 -- app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt app/build.gradle.kts admin/src/views/command/index.vue docs/api/commands/control.md`，另**手动删除**新增文件 `admin/src/components/DeviceStateResultDialog.vue`。
 **触发信号**：①回执仍显示「（屏幕点亮）」说明客户端未打包生效；②锁屏/息屏命令「查看详情」按钮不出现或弹窗解析不出字段（key 格式变动）；③音量提升结论方向相反（锁定/息屏应「会触发」）。
 
-**实施结果（2026-11-08 16:40 回填）**：客户端 `compileDebugKotlin` **BUILD SUCCESSFUL**（1m24s，仅 `inKeyguardRestrictedInputMode` 一处 deprecation，无害）；admin 前端 `npx vue-tsc -b` 类型检查通过（0 错误）+ `npm run build` **built in 21.54s**（新组件 DeviceStateResultDialog 已打进 dist）。`versionName` 已 bump 0.2.112→0.2.113。**两处待落地**：①admin 前端需重新部署 dist（「查看详情」按钮才在管理后台出现，不依赖 APK）；②客户端文案需打包 v0.2.113 APK（回执文案才变清晰）。均待用户确认部署/打包时机。
+**实施结果（2026-11-08 17:19 回填，已打包分发）**：客户端 `compileDebugKotlin` **BUILD SUCCESSFUL**（1m24s，仅 `inKeyguardRestrictedInputMode` 一处 deprecation，无害）；admin 前端 `npx vue-tsc -b` 类型检查通过（0 错误）+ `npm run build` **built in 21.54s**（新组件 DeviceStateResultDialog 已打进 dist）。`versionName` 已 bump 0.2.112→0.2.113。**admin 前端交付方式**：用户本地 `npm run dev`（开发态，改动即时生效，无需部署 dist）。**客户端打包分发**（用户 16:54 拍板）：本地 commit `b800841` → `api_push.py` 推送（远端 main `cecec1dfad`）+ 建 tag `v0.2.113`（**本次 tag 自动触发 Actions #270**，无需手动 dispatch）→ CI 打包 success（Build Debug APK + Create Release 均 success）→ 下载 **踩坑**：铁律镜像 `v4.gh-proxy.org` 连续 504（Release 资产限速，直连 release-assets 仅 27KB/s），探测 8 个镜像后换 `gh-proxy.com`（Range 0-0 返回 206 存活）成功下载 46,054,402 字节 → aapt 实证 versionName=0.2.113 → 落地 `server/data/updates/bridge-v0.2.113.apk` + update.json（versionCode=313=200+113，sha256 `d844c888…`）→ 唯一留存（删 bridge-v0.2.112/111.apk + releases 副本 + app/build 残留）。**待用户真机验证**：①客户端「检查更新」装 v0.2.113；②锁屏/熄屏回执文案是否显示动态中文结论；③管理后台「查看详情」弹窗。
 
 ---
 
