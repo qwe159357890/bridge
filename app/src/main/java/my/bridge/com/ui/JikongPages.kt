@@ -1187,7 +1187,8 @@ private fun SpeedDashCard(
                     fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.green, style = tight,
                 )
             }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+            // v0.2.106：中列去 CenterHorizontally（后台 dash-col 默认左对齐，两行「平均」起点才能垂直对齐）
+            Column(Modifier.weight(1f)) {
                 Text("平均时速(km/h)", fontSize = 11.sp, color = c.gray)
                 Text(
                     if (avgSpeed > 0f) "%.1f".format(avgSpeed) else "--",

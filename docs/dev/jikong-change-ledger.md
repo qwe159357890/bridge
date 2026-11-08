@@ -17,6 +17,19 @@
 
 ---
 
+### v0.2.106 时速卡两行「平均」列左对齐对齐后台（2026-11-08 10:10 实施）
+
+**需求（用户 11-08 10:07 反馈 1 项）**：客户端「平均时速(km/h)」「平均(kWh/100km)」没有左对齐，应与后台一致左对齐。
+
+**改前原文（逐字抄录）**：`JikongPages.kt` 行 1（1190 行）：`Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) { Text("平均时速(km/h)", ...) }`——中列整体居中；行 2 中列 `Column(Modifier.weight(1f))` 默认 Start。后台 `.dash-col { flex: 1 }` 无 text-align（默认左对齐）。
+
+**改动清单**：行 1 中列去掉 `horizontalAlignment = Alignment.CenterHorizontally`，改默认 Start。根因：后台三列全部左对齐，客户端仅中列居中 → 两行「平均」标签起点错位。行 2 本就左对齐无需改。
+
+**回滚配方**：`git revert` 本轮提交；或手改回 `Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally)`。
+**触发信号**：平均时速标签又回到列中间 / 两行平均标签起点错位复发。
+
+**实施结果（待回填）**：
+
 ### v0.2.105 后台可远程刷新演示数据 + 播报时速单位修正（2026-11-08 09:45 实施）
 
 **需求（用户 11-08 09:45 反馈 2 项）**：①后台演示横幅「刷新模拟数据（手机端）」不可用——应可点击并真实触发客户端刷新、刷新后立刻同步；②双击播报时速读作「时速 6公里」，单位应为「6公里每小时」（速度类单位错误）。
