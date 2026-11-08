@@ -17,7 +17,38 @@
 
 ---
 
-### v0.2.109 靠近自动连接「半死链自愈失效」修复：proximity 模式立即直连重建（2026-11-08 12:35 实施）
+### v0.2.110 握手修复实验①：连接后 requestConnectionPriority(HIGH)（2026-11-08 14:25 实施）
+
+**背景（用户 11-08 13:49 真机反馈 + 专档追踪）**：装 v0.2.109 后，靠近「能立马发现并建链」，但收到数据（0x02）要 3~4 轮 12s 超时直连重建（近 1 分钟）才播报；保护板 3~4 次「滴滴滴」。官方 APP 一次交互即成功。详见 `docs/research/jikong-handshake-fix.md`（专档）+ 调研文档 §四。
+
+**根因假设**：官方在 STATE_CONNECTED 后立即 `requestConnectionPriority(HIGH)`（7.5ms 连接间隔，v0.2.82 dexdump 逆向实证），靠「高频连接事件」持续唤醒休眠的 MCU；而我们走系统默认 30~50ms 连接间隔，唤醒不够 → 半死链反复。实验①单变量验证：只加这一句，其余不动。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交存全文）**：
+1. `JikongBleClient.kt` `onConnectionStateChange` STATE_CONNECTED 分支（约 336-348 行）——**当前无任何 requestConnectionPriority 调用**（grep 全库证实），连接建立后直接 `requestMtu(256)`：
+   ```kotlin
+   override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+       if (isStale(g)) return
+       if (newState == BluetoothProfile.STATE_CONNECTED) {
+           Timber.tag(TAG).i("GATT 已连接，先协商 MTU 再发现服务")
+           servicesRequested = false
+           cccdRetries = 0
+           notifyLogBudget = 3
+           // 请求更大 MTU（极空单帧超 20B，增大 MTU 减少分包，提升稳定性）。
+           // discoverServices 移到 onMtuChanged 里串行执行。
+           val requested = runCatching { g.requestMtu(256) }.getOrDefault(false)
+   ```
+2. `app/build.gradle.kts`：`versionName = "0.2.109"`。
+
+**改动清单**：
+- `JikongBleClient.kt`：STATE_CONNECTED 分支、发 `requestMtu(256)` 之前，加一句 `runCatching { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) }`（runCatching 包裹防个别 ROM 抛异常打断后续流程）。
+- versionName 0.2.109→0.2.110。
+
+**回滚配方**：`git revert` 本轮提交；或 `git checkout 0f16419 -- app/src/main/java/my/bridge/com/jikong/JikongBleClient.kt app/build.gradle.kts`。
+**触发信号**：闲置 ≥10min 后靠近仍 3~4 轮 12s 才出数据（说明 HIGH 优先级不解决）/ 出现连接失败率升高（HIGH 优先级兼容性问题）。
+
+**实施结果（待回填）**：
+
+---
 
 **问题（用户 11-08 12:32 真机反馈 + 上传日志，设备 f2c38ebee251a196）**：装 v0.2.108 后，靠近自动连接「连上了但一直收不到数据、不播报」。
 
