@@ -556,6 +556,9 @@ COMMANDS: list[dict[str, Any]] = [
           _param("unit_kwh100", "电耗单位(kWh/100km)", PARAM_TYPE_SWITCH),
           _param("elec_price", "电费单价(元/度)", PARAM_TYPE_NUMBER),
           _param("odo_discount", "里程折扣(0.1~1.0)", PARAM_TYPE_NUMBER)]),
+    _cmd("jikong_demo_refresh", "极空刷新演示数据", "jikong", "🎲",
+         "管理后台远程触发手机端演示模式「刷新模拟数据」（BMS 总览+仪表盘联动随机重生成，"
+         "刷新后立即回报，后台即刻同步新值；手机端非演示模式时回执失败说明）", []),
 
     # ---- 界面自动化（v0.2.38 引入，对标 autox 无障碍引擎）----
     # 依赖设备开启「Bridge 辅助服务」（无障碍），且须为 canRetrieveWindowContent + canPerformGestures。

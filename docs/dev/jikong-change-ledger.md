@@ -17,6 +17,29 @@
 
 ---
 
+### v0.2.105 后台可远程刷新演示数据 + 播报时速单位修正（2026-11-08 09:45 实施）
+
+**需求（用户 11-08 09:45 反馈 2 项）**：①后台演示横幅「刷新模拟数据（手机端）」不可用——应可点击并真实触发客户端刷新、刷新后立刻同步；②双击播报时速读作「时速 6公里」，单位应为「6公里每小时」（速度类单位错误）。
+
+**改前原文（逐字抄录）**：
+1. `JikongController.kt` speakDashboardNow（695-718 行）：`segs.add("时速"); segs.add(数字); segs.add("公里")`；fallback `sb.append("，时速 %.0f 公里".format(speed))`。
+2. `JikongSpeaker.kt` prefetchAll phrases（124 行）：`"当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电"`。
+3. `Command.kt`（163 行前）：JIKONG_* 十常量（无 demo_refresh）；`CommandModule.kt` 映射至 JIKONG_SET_CONFIG 止。
+4. `server/app/api/v1/jikong.py` control：action 白名单 `("speak", "set_theme", "set_speak", "set_config")`（demo_refresh 未放行）。
+5. `command_catalog.py`：无 jikong_demo_refresh 条目。
+6. `admin/index.vue` 演示横幅：`<span class="demo-refresh" style="cursor: default">刷新模拟数据（手机端）</span>`（纯占位不可点）；`.demo-refresh { font-size: 12px; color: gray; opacity: 0.7; }`。
+
+**改动清单**：
+- 播报单位：speakDashboardNow 时速段「公里」→「公里每小时」（续航「公里」保持距离语义）；fallback 整句同步；JikongSpeaker 预取词组表 +「公里每小时」。★ 缓存键判定：新文本 md5(text|voice|v6seg) 独立，已缓存旧段零变化 → **无需升 v7seg**，进首页 prefetchAll 幂等补拉新段即可（与 0.2.100 升键场景不同——那次是旧段内容坏了必须重拉）。
+- 远程刷新：`Command.kt` +JIKONG_DEMO_REFRESH；`CommandModule.kt` +executeJikongDemoRefresh（非演示模式回执失败说明；refreshDemoData 自带 statusVersion 自增+reportStatus，执行器再 forceReport 双保险）；`jikong.py` 放行 action=demo_refresh（无参）；`command_catalog.py` +条目。
+- 后台：横幅按钮改可点击（amber 加粗 cursor:pointer，:active 反馈，文案去「（手机端）」与手机横幅一致）；onDemoRefresh → jikongControl(demo_refresh) → 成功后立即 loadState()（客户端已 forceReport，点了立刻变）。
+- versionName 0.2.104→0.2.105。
+
+**回滚配方**：`git revert` 本轮提交；或手改：speakDashboardNow/词组表回「公里」、Command.kt/CommandModule 删 demo_refresh、jikong.py 回四 action 白名单、command_catalog 删条目、admin 回退横幅与 onDemoRefresh→admin npm run build；versionName 回 0.2.104。
+**触发信号**：后台演示横幅按钮点不动 / 点击后手机数据不变 / 双击播报时速仍读「公里」/ 手机端升级前播报「公里每小时」缺段走整句回退（正常，进首页预取后恢复分段连读）。
+
+**实施结果（待回填）**：
+
 ### v0.2.104 后台小喇叭移至首页连接栏 + 设置页镜像全面可编辑（jikong_set_config）（2026-11-08 09:10 实施）
 
 **需求（用户 11-08 09:10 反馈 2 项）**：①删侧栏「语音播报（同步到手机）」卡，小喇叭改为后台首页右上角图标（与手机客户端同位置同交互，双向同步）；②后台设置页此前只能改「语音播报」，仪表盘/单位与花费/里程折扣也应可设置并下发客户端；客户端设置改动后后台刷新应同步。

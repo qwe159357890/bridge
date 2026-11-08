@@ -60,11 +60,16 @@
                     <span class="theme-btn" @click="onThemeToggle">{{ themeLight ? '浅色' : '深色' }}</span>
                   </div>
 
-                  <!-- v0.2.101：演示模式横幅（与手机 v0.2.98 同款；后台只读，刷新在手机端操作） -->
+                  <!-- v0.2.101：演示模式横幅（与手机 v0.2.98 同款）
+                       v0.2.105：刷新按钮可用——jikong_demo_refresh 远程触发手机端重生成并立即回报 -->
                   <div v-if="demoMode" class="jk-demobanner">
                     <span class="dot" :style="{ background: c.amber }" />
                     <span class="demo-text">演示模式 · 模拟数据（切离本页或后台自动退出）</span>
-                    <span class="demo-refresh" style="cursor: default">刷新模拟数据（手机端）</span>
+                    <span
+                      class="demo-refresh"
+                      title="远程触发手机端刷新模拟数据，刷新后立即同步"
+                      @click="onDemoRefresh"
+                    >刷新模拟数据</span>
                   </div>
 
                   <!-- 充电/放电/均衡 一行三列 -->
@@ -732,6 +737,19 @@ async function onRemoteSpeak() {
   try {
     await jikongControl(selectedDevice.value, { action: 'speak' })
     ElMessage.success('播报指令已下发，手机将播报当前电量')
+  } catch { /* 已提示 */ }
+}
+
+/**
+ * v0.2.105：演示模式「刷新模拟数据」→ jikong_demo_refresh 远程触发手机端
+ * 随机重生成；手机端刷新后立即 forceReport，这里成功后立刻 loadState() 拉新值
+ * （不等下个自动刷新周期），配合客户端回报实现「点了立刻变」。
+ */
+async function onDemoRefresh() {
+  try {
+    await jikongControl(selectedDevice.value, { action: 'demo_refresh' })
+    await loadState()
+    ElMessage.success('手机端模拟数据已刷新并同步')
   } catch { /* 已提示 */ }
 }
 
@@ -1461,7 +1479,8 @@ const dashTotals = computed(() => {
   padding: 4px 12px; margin-top: 8px;
 }
 .demo-text { flex: 1; font-size: 11px; color: v-bind('c.amber'); }
-.demo-refresh { font-size: 12px; color: v-bind('c.gray'); opacity: 0.7; }
+.demo-refresh { font-size: 12px; color: v-bind('c.amber'); font-weight: 600; cursor: pointer; }
+.demo-refresh:active { opacity: 0.6; }
 
 /* 统计页概要五卡（v0.2.101：值+单位同行、原值小字） */
 .sum-val-row { display: flex; align-items: baseline; justify-content: center; gap: 2px; }

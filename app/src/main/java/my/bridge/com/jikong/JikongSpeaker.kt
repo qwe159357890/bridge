@@ -121,7 +121,7 @@ object JikongSpeaker {
         val app = context.applicationContext
         scope.launch {
             val phrases = listOf(
-                "当前电量", "百分之", "时速", "公里", "剩余续航", "电量低，请注意充电",
+                "当前电量", "百分之", "时速", "公里", "公里每小时", "剩余续航", "电量低，请注意充电",
             )
             val texts = (0..100).map { it.toString() } + phrases
             val startedAt = System.currentTimeMillis()

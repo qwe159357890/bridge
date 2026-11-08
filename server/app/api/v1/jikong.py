@@ -39,9 +39,10 @@ class JikongControlRequest(BaseModel):
 
     v0.2.102：新增 speak / set_theme / set_speak（管理后台↔手机同步类，params 透传）。
     v0.2.104：新增 set_config（设置页镜像可编辑：仪表盘/单位/电费/折扣，params 透传）。
+    v0.2.105：新增 demo_refresh（远程刷新演示模拟数据，无参）。
     """
 
-    action: str = Field(..., description="mos / balance / write_param / speak / set_theme / set_speak / set_config")
+    action: str = Field(..., description="mos / balance / write_param / speak / set_theme / set_speak / set_config / demo_refresh")
     charge: bool | None = Field(None, description="action=mos 时：是否含充电 MOS")
     discharge: bool | None = Field(None, description="action=mos 时：是否含放电 MOS")
     on: bool | None = Field(None, description="action=mos/balance 时：开/关")
@@ -79,6 +80,9 @@ async def jikong_control(device_id: str, body: JikongControlRequest, request: Re
     elif body.action in ("speak", "set_theme", "set_speak", "set_config"):
         # v0.2.102：同步类命令参数原样透传（客户端执行器自行校验字段与取值范围）
         params = body.params or {}
+    elif body.action == "demo_refresh":
+        # v0.2.105：远程刷新演示模拟数据（无参；手机端非演示模式时回执失败说明）
+        params = {}
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

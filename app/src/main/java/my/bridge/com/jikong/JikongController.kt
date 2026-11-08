@@ -688,8 +688,8 @@ class JikongController private constructor() {
 
     /**
      * v0.2.102：立即播报仪表盘数值（管理后台双击表盘 → jikong_speak 命令 → 本方法；
-     * 手机端双击表盘/时速卡同走此路）。话术与 v0.2.92~98 逐版演进结果一致：
-     * 当前电量 N%【+低电提醒】+有时速追加 时速X公里+剩余续航Y公里。
+     * 手机端双击表盘/时速卡同走此路）。话术：当前电量 N%【+低电提醒】+
+     * 有时速追加 时速X公里每小时+剩余续航Y公里（v0.2.105 时速单位修正，续航仍是距离单位）。
      * 显式触发语义：绕过小喇叭静音（与手机双击一致）；demoMode/未读到 SOC 则不播。
      */
     fun speakDashboardNow(context: Context) {
@@ -700,7 +700,7 @@ class JikongController private constructor() {
         if (low) segs.add("电量低，请注意充电")
         val speed = SpeedDash.speedKmh
         if (speed > 0f) {
-            segs.add("时速"); segs.add(kotlin.math.round(speed).toInt().toString()); segs.add("公里")
+            segs.add("时速"); segs.add(kotlin.math.round(speed).toInt().toString()); segs.add("公里每小时")
             val range = SpeedDash.rangeKm
             if (range >= 0f) {
                 segs.add("剩余续航"); segs.add(kotlin.math.round(range).toInt().toString()); segs.add("公里")
@@ -709,7 +709,7 @@ class JikongController private constructor() {
         val sb = StringBuilder("当前电量 $soc%")
         if (low) sb.append("，电量低，请注意充电")
         if (speed > 0f) {
-            sb.append("，时速 %.0f 公里".format(speed))
+            sb.append("，时速 %.0f 公里每小时".format(speed))
             val range = SpeedDash.rangeKm
             if (range >= 0f) sb.append("，剩余续航 %.0f 公里".format(range))
         }

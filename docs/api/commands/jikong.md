@@ -68,6 +68,17 @@ BMS(从机) --BLE(0xDD/NW帧)--> 客户端(jikong模块) --主WS(jikong_state)--
 - 手机端经 JkUiState.remoteSpeakTick 订阅即时生效（设置页重读、统计页重算折扣/花费），
   并 forceReport 回报；反向（手机设置页改动）各控件逐一 forceReport，后台刷新即同步。
 
+### jikong_demo_refresh 极空刷新演示数据（v0.2.105）
+- 无参。远程触发手机端演示模式「刷新模拟数据」（与手机横幅按钮同一 `refreshDemoData`：
+  BMS 总览+仪表盘联动随机重生成）；手机端非演示模式回执失败说明。
+- 手机端刷新后 statusVersion 自增（本机页面即时变）+ forceReport（demo 数据变化必过
+  JSON 去重）；后台点击后立即 loadState() 拉新值，实现「点了立刻变」。
+
+### 播报话术（v0.2.105 时速单位修正）
+- 双击表盘播报：当前电量 N%【+低电提醒】+有时速追加 **时速X公里每小时**+剩余续航Y公里。
+- 时速单位「公里每小时」已入预取词组表（新段独立 md5 缓存键，旧段缓存不失效，
+  无需升 v7seg；进首页时 prefetchAll 幂等补拉）。
+
 ## 坑与提醒
 
 1. **无真机最大风险**：BLE UUID 与帧字段偏移因固件版本而异，真机连不上时用 nRF Connect 抓一帧

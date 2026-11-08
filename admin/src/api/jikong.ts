@@ -143,7 +143,7 @@ export function getJikongOdometer(deviceId: string): Promise<{ device_id: string
 // ==================== 极空控制命令 ====================
 
 export interface JikongControlParams {
-  action: 'mos' | 'balance' | 'write_param' | 'speak' | 'set_theme' | 'set_speak' | 'set_config'
+  action: 'mos' | 'balance' | 'write_param' | 'speak' | 'set_theme' | 'set_speak' | 'set_config' | 'demo_refresh'
   charge?: boolean
   discharge?: boolean
   on?: boolean

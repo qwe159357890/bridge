@@ -349,6 +349,9 @@ object CommandModule {
         Command.JIKONG_SET_CONFIG to CommandExecutor { command ->
             executeJikongSetConfig(context, command)
         },
+        Command.JIKONG_DEMO_REFRESH to CommandExecutor { command ->
+            executeJikongDemoRefresh(command)
+        },
         // ---- 界面自动化增强（v0.2.40：委托 automation/commands 执行器）----
         Command.UI_LONG_CLICK to CommandExecutor { command ->
             my.bridge.com.automation.commands.UiCommandExecutors.longClick(command)
@@ -3257,6 +3260,29 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 jikong_set_config 执行失败")
             CommandResult(id, name, false, "同步设置失败：${e.message}")
+        }
+    }
+
+    /**
+     * jikong_demo_refresh（v0.2.105）：管理后台「刷新模拟数据」远程触发手机端
+     * 演示数据随机重生成（BMS 总览+仪表盘联动注入，与手机横幅按钮同一逻辑）。
+     * refreshDemoData 内部自带 statusVersion 自增 + reportStatus（demo 数据变化
+     * 必过 JSON 去重），此处再 forceReport 双保险，后台刷新即刻同步新值。
+     */
+    private fun executeJikongDemoRefresh(command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        val controller = my.bridge.com.jikong.JikongController.instance
+        if (!controller.demoMode) {
+            return CommandResult(id, name, false, "手机端不在演示模式，无法刷新模拟数据")
+        }
+        return try {
+            controller.refreshDemoData()
+            controller.forceReport()
+            CommandResult(id, name, true, "演示模拟数据已刷新并回报（SOC=${controller.status.soc}%）")
+        } catch (e: Exception) {
+            Timber.e(e, "命令 jikong_demo_refresh 执行失败")
+            CommandResult(id, name, false, "刷新演示数据失败：${e.message}")
         }
     }
 }
