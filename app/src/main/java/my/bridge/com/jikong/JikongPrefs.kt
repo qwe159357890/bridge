@@ -220,4 +220,21 @@ object JikongPrefs {
 
     /** edge-tts 在线合成音色（服务端 /api/tts 用；本地回退不受影响）。 */
     const val TTS_VOICE = "zh-CN-XiaoxiaoNeural"
+
+    // ==================== 靠近自动连接（v0.2.107） ====================
+
+    /** 靠近自动连接开关。默认关（保持现状：必须进极空页才触发连接/回连）。 */
+    const val KEY_PROXIMITY_AUTO_CONNECT = "jikong_proximity_auto_connect"
+
+    /**
+     * 开=对默认设备挂 GATT autoConnect 后台监听（蓝牙控制器低占空比监听广播，
+     * 靠近即自动连接，详见 docs/research/jikong-proximity-autoconnect.md）；
+     * 关=完全维持现状。未设默认设备时开=无效（UI 层回弹提示）。
+     */
+    fun proximityAutoConnect(context: Context): Boolean =
+        sp(context).getBoolean(KEY_PROXIMITY_AUTO_CONNECT, false)
+
+    fun setProximityAutoConnect(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(KEY_PROXIMITY_AUTO_CONNECT, enabled).apply()
+    }
 }

@@ -183,6 +183,39 @@ class JikongController private constructor() {
     @Volatile
     private var dataRecyclePending = false
 
+    // ---- 靠近自动连接（v0.2.107）----
+
+    /**
+     * 用户在极空页手动断开的抑制标志：抑制期间不再自动挂起 autoConnect。
+     * **内存标志不持久化**——进程重启自然复位，恰好实现「重启 APP 解除抑制」语义；
+     * 重进极空页由 [setPageVisible] 解除。演示退出不置位（wasDemo 区分）。
+     */
+    @Volatile
+    var manualSuppressed: Boolean = false
+        private set
+
+    /**
+     * 靠近建链成功待播报标志：下一帧强制播一次（§2.8 拍板「后台也播」）。
+     * 受小喇叭静音拦截（尊重主动静音，区别于 firstAnnouncePending 的绕静音语义）。
+     */
+    @Volatile
+    private var proximityAnnouncePending = false
+
+    /** 新模式是否生效（开关开 + 已设默认设备）。 */
+    val proximityModeActive: Boolean
+        get() = appContext?.let {
+            JikongPrefs.proximityAutoConnect(it) && JikongPrefs.defaultMac(it).isNotBlank()
+        } == true
+
+    /**
+     * 注入应用上下文（靠近连接服务启动时调用）。autoConnect 建链可能早于任何手动
+     * 连接（appContext 原只在 connect() 缓存），缺上下文会导致 proximityModeActive
+     * 判定、播报、重挂全部失效。
+     */
+    fun attachContext(context: Context) {
+        if (appContext == null) appContext = context.applicationContext
+    }
+
     /** 轮询间隔（毫秒）。 */
     @Volatile
     var pollIntervalMs: Long = 2000
@@ -239,9 +272,24 @@ class JikongController private constructor() {
                     // v0.2.79 自动重连：非用户主动断开（开关仍为 true）且页面在前台时自动恢复。
                     // 真机 2026-11-06 日志实证：三次会话均以 GATT status=8（连接监督超时=信号丢失）
                     // 断开，存活 16s/25s/97s——用户要求「只要不主动断开就一直尝试，180s 内一次没成功才放弃」。
-                    if (autoReconnectEnabled && (pageVisible || keepConnection)) {
+                    // v0.2.107 分流：靠近自动连接模式下不走 APP 层重连循环——交系统 autoConnect
+                    // 持续重试（无窗口限制）；挂起若已被 close（直连链路断开/自愈重建路径）则就地重挂。
+                    if (autoReconnectEnabled && (pageVisible || keepConnection) && !proximityModeActive) {
                         startReconnect(fast = dataRecyclePending)
+                    } else if (proximityModeActive && !manualSuppressed) {
+                        dataRecyclePending = false
+                        appContext?.let { JikongProximityService.evaluateInPlace(it) }
                     }
+                } else if (!connectInFlight && reconnectJob?.isActive != true && proximityModeActive) {
+                    // v0.2.107 触点①：靠近自动连接建链成功（非手动 connect、非重连循环——
+                    // 二者各自的成功路径已做初始化）。执行与 connect() 成功同款初始化。
+                    if (demoMode) { SpeedDash.clearDemoInjection(); demoOdoRecords.clear() }
+                    demoMode = false
+                    prevAnnounceSoc = -1
+                    clearScanCache()
+                    startPolling()
+                    proximityAnnouncePending = true   // §2.8 拍板：后台也播（下一帧强制播一次）
+                    Timber.tag(TAG).i("靠近自动连接成功（autoConnect 建链），开始拉数据")
                 }
                 reportStatus()
                 // 连接状态变化也要触发 UI 重组（否则断开后界面仍停留「已连接」，
@@ -291,6 +339,12 @@ class JikongController private constructor() {
                 ok
             } finally {
                 connectInFlight = false
+                // v0.2.107：手动连接尝试结束后重评估挂起——失败（走远了/连不上）时恢复
+                // 默认设备监听；连上其它设备时 evaluateInPlace 因已连接不挂，待其断开
+                // 后由断开分支恢复（§3.10-7 语义）。
+                if (proximityModeActive && !JikongBleClient.connected) {
+                    appContext?.let { JikongProximityService.evaluateInPlace(it) }
+                }
             }
         }
     }
@@ -299,6 +353,12 @@ class JikongController private constructor() {
         // 用户主动断开：关闭自动重连（v0.2.77，用户明确要求「不主动断开才自动重连」）
         autoReconnectEnabled = false
         dataRecyclePending = false
+        // v0.2.107：靠近自动连接模式下，「真手动断开」置抑制（直到重进极空页/进程重启）。
+        // ★ 须在 JikongBleClient.disconnect() **之前**置位——断开触发的
+        // onConnectionChanged(false) 会查此标志决定是否重挂。演示退出不抑制
+        // （wasDemo 区分：demo 本无 BLE 连接，退出≠用户拒绝自动连接）。
+        val wasDemo = demoMode
+        if (proximityModeActive && !wasDemo) manualSuppressed = true
         reconnectJob?.cancel()
         reconnectJob = null
         stopPolling()
@@ -320,6 +380,13 @@ class JikongController private constructor() {
             reportStatus()
             statusVersion.value = statusVersion.value + 1
             Timber.tag(TAG).i("退出演示模式（用户点击断开）")
+        }
+        // v0.2.107：手动断开 → 停靠近连接服务（GATT 已被 close，系统重连彻底停止，
+        // 抑制达成）；演示退出 → 不抑制，重评估恢复挂起（用户可能正走向保护板）。
+        if (manualSuppressed) {
+            appContext?.let { JikongProximityService.stop(it) }
+        } else if (wasDemo && proximityModeActive) {
+            appContext?.let { JikongProximityService.evaluate(it) }
         }
     }
 
@@ -480,9 +547,21 @@ class JikongController private constructor() {
     fun setPageVisible(visible: Boolean) {
         pageVisible = visible
         if (visible) {
+            // v0.2.107：重进极空页 = 解除手动断开抑制（用户拍板语义），重评估挂起
+            if (manualSuppressed) {
+                manualSuppressed = false
+                Timber.tag(TAG).i("重新进入极空页，解除靠近连接抑制")
+                if (proximityModeActive) {
+                    appContext?.let { JikongProximityService.evaluate(it) }
+                }
+            }
             if (JikongBleClient.connected) startPolling()
         } else {
-            if (!keepConnection) {
+            if (proximityModeActive) {
+                // v0.2.107：新模式页面切走不断开、不停轮询——后台持续收数据/上报是
+                // 需求本体（轮询循环仅 400ms delay + 偶发写命令，代价可忽略）。
+                // 连接若断开由系统 autoConnect 重试，无需 APP 层动作。
+            } else if (!keepConnection) {
                 // 离开页面即主动释放连接（省电优先）：等同用户离开，不算意外断开，
                 // 关闭自动重连，避免后台反复回连耗电（v0.2.77）。
                 autoReconnectEnabled = false
@@ -652,12 +731,16 @@ class JikongController private constructor() {
         if (soc !in 0..100) return
         val prev = prevAnnounceSoc
         prevAnnounceSoc = soc        // 每帧都推进「上一帧」，与页面可见性无关（真实前帧语义）
-        if (demoMode || !pageVisible) return
+        if (demoMode || (!pageVisible && !proximityModeActive)) return
+        // v0.2.107：新模式下页面不可见也判定（§2.8 拍板「后台也播」）；普通模式保持
+        // 现状（仅页面可见播）。
         val ctx = appContext ?: return
         if (!JikongPrefs.speakEnabled(ctx)) return
         // v0.2.90：小喇叭静音（持久化）拦截一切播报；唯一例外=进程启动后首次（forced），
         // 「连接成功并收到剩余电量」的那一次永远播（用户拍板），真正播出才消耗强制机会。
+        // v0.2.107 forcedProximity（靠近建链强制播）**受静音拦截**——尊重主动静音。
         val forced = firstAnnouncePending
+        val forcedProximity = proximityAnnouncePending
         if (!forced && JikongPrefs.muted(ctx)) return
         val now = System.currentTimeMillis()
         val lastSoc = JikongPrefs.lastSpokenSoc(ctx)
@@ -667,11 +750,12 @@ class JikongController private constructor() {
         val low = soc < JikongPrefs.speakLowSoc(ctx)
         val warnDue = low && now - JikongPrefs.lastWarnAt(ctx) >=
             JikongPrefs.speakWarnRepeatMin(ctx) * 60_000L
-        if (!(forced || changed || due || warnDue)) {
+        if (!(forced || forcedProximity || changed || due || warnDue)) {
             Timber.tag(TAG).i("语音播报判定：不播（SOC=%d 未变、间隔未到、无预警到期）", soc)
             return
         }
         firstAnnouncePending = false
+        proximityAnnouncePending = false
         // v0.2.98：去掉「百分之」段（3段2停顿→2段1停顿；edge-tts 读纯数字为「七十二」，
         // 「当前电量七十二」语义完整）；fallback 保持原整句文案（含 %，整句链路自读「百分之」）。
         val segs = mutableListOf("当前电量", soc.toString())
@@ -1126,6 +1210,10 @@ class JikongController private constructor() {
                         addProperty("speak_muted", JikongPrefs.muted(ctx))
                         addProperty("elec_price", JikongPrefs.elecPrice(ctx))
                         addProperty("odo_discount", JikongPrefs.odoDiscount(ctx))
+                        // v0.2.107：靠近自动连接模式状态（管理后台可见；注意 reportStatus
+                        // 按 status JSON 去重，此块变化需 forceReport 才上报）
+                        addProperty("proximity_auto_connect", JikongPrefs.proximityAutoConnect(ctx))
+                        addProperty("proximity_suppressed", manualSuppressed)
                     })
                 }
             } catch (_: Exception) { }

@@ -98,6 +98,7 @@ import my.bridge.com.jikong.BleDevice
 import my.bridge.com.jikong.JikongBleClient
 import my.bridge.com.jikong.JikongController
 import my.bridge.com.jikong.JikongPrefs
+import my.bridge.com.jikong.JikongProximityService
 import my.bridge.com.jikong.JikongSpeaker
 import my.bridge.com.jikong.JkMileageRecord
 import my.bridge.com.jikong.JikongStatsStore
@@ -1763,6 +1764,8 @@ private fun SettingsView(
     var unitKwh100 by remember { mutableStateOf(JikongPrefs.unitKwh100(context)) }
     var elecPrice by remember { mutableFloatStateOf(JikongPrefs.elecPrice(context)) }
     var odoDiscount by remember { mutableFloatStateOf(JikongPrefs.odoDiscount(context)) }
+    // v0.2.107 靠近自动连接开关状态（★ 先于下方 Effect 声明；纯本地开关无远程同步需求）
+    var proximityAuto by remember { mutableStateOf(JikongPrefs.proximityAutoConnect(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
     // v0.2.104：jikong_set_config（仪表盘/单位/电费/折扣）同用本 tick，一并重读
     androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
@@ -1805,6 +1808,48 @@ private fun SettingsView(
         if (SpeedDash.gpsPermissionNeeded) {
             Spacer(Modifier.height(4.dp))
             Text("缺少精确定位权限：请到系统设置或首页卡片中授权。", fontSize = 11.sp, color = c.amber)
+        }
+
+        // v0.2.107 靠近自动连接：开=对默认设备挂 autoConnect 后台监听（控制器级低占空比，
+        // 省电），靠近保护板自动连接并播报电量（后台也播）；走远断开自动重试；仅极空页
+        // 手动点断开会暂停（重进本页/重启 APP 恢复）。关=完全维持现状。
+        Spacer(Modifier.height(16.dp))
+        Text("靠近自动连接", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Spacer(Modifier.height(8.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("靠近默认保护板自动连接", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "无需打开极空页，靠近默认设备即自动连接并播报电量；走远自动断开、回来自动重连；在本页点断开后暂停，重新进入本页恢复。后台监听极省电、不耗流量。",
+                        fontSize = 11.sp, color = c.gray,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = proximityAuto,
+                    onCheckedChange = { on ->
+                        if (on && JikongPrefs.defaultMac(context).isBlank()) {
+                            // 功能依赖默认设备：无默认设备回弹 + 提示
+                            Toast.makeText(context, "请先连接设备并设为默认设备", Toast.LENGTH_SHORT).show()
+                        } else {
+                            proximityAuto = on
+                            JikongPrefs.setProximityAutoConnect(context, on)
+                            if (on) JikongProximityService.evaluate(context)
+                            else JikongProximityService.stop(context)
+                            // Prefs 变更必须手动上报（reportStatus 按 status JSON 去重）
+                            controller.forceReport()
+                        }
+                    },
+                )
+            }
         }
 
         // v0.2.89 语音播报：开关 + 播报间隔 + 低电量阈值 + 预警提醒间隔。

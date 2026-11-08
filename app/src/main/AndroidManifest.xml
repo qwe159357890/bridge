@@ -14,6 +14,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- VNT 组网前台服务（v0.2.30）：Android 14+ specialUse 类型必须配套声明此权限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 极空靠近自动连接前台服务（v0.2.107）：Android 14+ 后台 BLE 连接必须
+         connectedDevice 类型前台服务 + 此权限 + BLUETOOTH_CONNECT 运行时权限（已有） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <!-- 桌面角标能力声明（各厂商桌面据此把应用收进「桌面角标」管理列表；
          均为普通权限无需运行时申请。真机对比结论：HBuilderX 应用能出现在
          一加 9 Pro「桌面角标」列表里，正是因为 uni-app 运行时默认声明了
@@ -164,6 +167,15 @@
             android:name="my.bridge.com.keepalive.KeepAliveJobService"
             android:exported="true"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 极空靠近自动连接前台服务（v0.2.107）：connectedDevice 四件套
+             （FOREGROUND_SERVICE_CONNECTED_DEVICE 权限见上 + 本类型声明 +
+             startForeground 传类型位掩码 + BLUETOOTH_CONNECT 运行时权限前提）。
+             由设置开关控制启停；START_STICKY 被杀重建时按当前 Prefs 重新评估。 -->
+        <service
+            android:name="my.bridge.com.jikong.JikongProximityService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- 保活：开机 / 更新自启 -->
         <receiver

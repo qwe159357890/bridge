@@ -103,6 +103,12 @@ class BridgeApplication : Application() {
         // 极空语音播报（v0.2.90）：注入 REST 客户端 + 设备凭据（在线 edge-tts 合成 + 缓存）
         my.bridge.com.jikong.JikongSpeaker.attach(apiClient, deviceStore)
 
+        // 极空靠近自动连接（v0.2.107）：开关开则拉起监听服务。覆盖三条链路：
+        // 用户开开关（设置页即时 evaluate）、进程被杀重建（Application 重建走这里）、
+        // 开机（BootReceiver → KeepAliveService → 进程创建 → Application.onCreate）。
+        // evaluate 内部查开关，关时不启动（幂等，无脑调用安全）。
+        my.bridge.com.jikong.JikongProximityService.evaluate(this)
+
         Timber.i("BridgeApplication 初始化完成")
     }
 }

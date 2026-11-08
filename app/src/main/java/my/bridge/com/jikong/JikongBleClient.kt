@@ -104,6 +104,15 @@ object JikongBleClient {
     var lastDisconnectStatus: Int = -1
         private set
 
+    /**
+     * v0.2.107：autoConnect 挂起中（挂起≠连接：GATT 对象在、链路未建立）。
+     * 挂起后蓝牙控制器按低占空比监听默认设备广播，命中即自动建链（零 CPU、零流量）；
+     * 走远断开系统自动持续重试；close GATT 即彻底停止（手动断开抑制的语义根基）。
+     */
+    @Volatile
+    var autoConnectAttached: Boolean = false
+        private set
+
     // ---- 回调 ----
     /** 收到 BLE 通知的原始字节回调（运行在 Binder 线程，调用方自行切线程）。 */
     var onDataReceived: ((ByteArray) -> Unit)? = null
@@ -241,6 +250,56 @@ object JikongBleClient {
     }
 
     private var connectWaiter: kotlinx.coroutines.CancellableContinuation<Boolean>? = null
+
+    // ==================== autoConnect 挂起（v0.2.107 靠近自动连接） ====================
+
+    /**
+     * 对指定设备挂起 autoConnect：不挂 waiter、无超时（可能几十秒后才建链，
+     * 等控制器回调即可）。建链成功走 gattCallback 全链路（MTU→发现服务→CCCD
+     * →setConnected(true)），与手动连接共用一套回调。
+     * @return true=已挂起（或此前已挂起，幂等）；false=条件不满足未挂起
+     */
+    @SuppressLint("MissingPermission")
+    fun attachAutoConnect(context: Context, address: String): Boolean {
+        if (connected) return false                    // 已连接无需挂起
+        if (autoConnectAttached) return true           // 幂等
+        val a = ensureAdapter(context) ?: return false
+        if (!a.isEnabled) return false
+        val dev = runCatching { a.getRemoteDevice(address) }.getOrNull() ?: return false
+        // 清理陈旧 GATT（直连断链后的死对象），避免句柄泄漏
+        runCatching { gatt?.disconnect() }
+        runCatching { gatt?.close() }
+        gatt = null
+        connectedDeviceAddress = address
+        connectedDeviceName = runCatching { dev.name }.getOrNull() ?: address
+        lastDisconnectStatus = -1
+        gatt = dev.connectGatt(context, true, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        autoConnectAttached = true
+        Timber.tag(TAG).i("autoConnect 已挂起（目标 $address），控制器后台监听广播中")
+        return true
+    }
+
+    /**
+     * 摘除挂起。仅 disconnect 不够——autoConnect GATT 会被系统自动重连复活，必须 close。
+     * 已连接时不动链路（正常断开走 [disconnect]，由 controller 的抑制流程调用）。
+     */
+    @SuppressLint("MissingPermission")
+    fun detachAutoConnect() {
+        if (!autoConnectAttached) return
+        autoConnectAttached = false
+        if (!connected) {
+            runCatching { gatt?.disconnect() }
+            runCatching { gatt?.close() }
+            gatt = null
+            writeChar = null
+            notifyChar = null
+            Timber.tag(TAG).i("autoConnect 挂起已摘除")
+        } else {
+            // 已连接：链路保持（connected=true 期间挂起标记本就无意义，系统不会
+            // 同时对同一 GATT 既连接又后台重试）
+            Timber.tag(TAG).i("autoConnect 标记已清（当前已连接，链路不动）")
+        }
+    }
 
     // v0.2.79 首连无数据修复：GATT 操作必须严格串行（MTU → 服务发现 → CCCD 订阅 → 读写）。
     // 旧代码 requestMtu 与 discoverServices 背靠背同时发起，部分协议栈上随后排队的 CCCD
@@ -492,6 +551,7 @@ object JikongBleClient {
     /** 断开连接并释放资源。 */
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        autoConnectAttached = false   // v0.2.107：close 即终止系统后台重连，挂起标记同步失效
         writeWaiters.values.forEach { it.complete(false) }
         writeWaiters.clear()
         // v0.2.93：旧连接等待者必须立即 resume(false) 放掉——只置 null 的话，旧 connect()
@@ -514,6 +574,7 @@ object JikongBleClient {
      * 与新请求竞争。仅应在 controller.connect 入口（未连接态）调用。
      */
     fun cancelPendingConnect() {
+        autoConnectAttached = false   // v0.2.107：close 掉的 GATT 含挂起态，同步清标记
         connectWaiter?.let { w -> connectWaiter = null; runCatching { w.resume(false) } }
         rxBuffer.reset()
         runCatching { gatt?.disconnect() }
