@@ -57,7 +57,7 @@
 
 **触发信号**：无（纯功能重构，非 bug 修复）。
 
-**实施结果（2026-11-08 19:15 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（5m52s，仅存量 deprecation 警告，无害）。首轮编译踩坑 1 个：`AudioPlaybackConfiguration` 无 `isActive` 属性（`getActivePlaybackConfigurations()` 返回的本身就是「活跃播放」列表），删掉 `cfg.isActive &&` 后通过。**未打包分发**（待用户确认打包时机）。
+**实施结果（2026-11-08 19:28 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（5m52s，仅存量 deprecation 警告，无害）。首轮编译踩坑 1 个：`AudioPlaybackConfiguration` 无 `isActive` 属性（`getActivePlaybackConfigurations()` 返回的本身就是「活跃播放」列表），删掉 `cfg.isActive &&` 后通过。**已打包分发（用户 19:24 拍板「本地 + 远程同时打包，本地成功即落地」）**：本地 `assembleDebug` BUILD SUCCESSFUL（2m13s，APK 46,054,398 字节，aapt 实证 versionName=0.2.115）→ 直接落地 `server/data/updates/bridge-v0.2.115.apk`（删 v0.2.114/113 旧包）+ update.json（versionCode 315 / sha256 `111f7404…`）；远程 `api_push.py v0.2.115` 同时推送（远端 main `00a2f67af2`）+ 建 tag 触发 CI（作为 GitHub Release 归档，无需下载落地）。**纯客户端改动，服务端零改动、无需重启**。
 
 **背景（用户 11-08 17:29 反馈）**：两块诉求，同版本合并打包（用户拍板）：
 - **A｜音量增补**：v0.2.112 的「锁定或熄屏」音量提升已够后台静默场景，但用户还要求**客户端前台且处于极空页**时也临时拉满音量播报（主动打开极空页看数据时播报也要清晰）。
