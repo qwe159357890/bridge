@@ -246,7 +246,9 @@
 | 6 | `app/src/main/AndroidManifest.xml` | +`FOREGROUND_SERVICE_CONNECTED_DEVICE` 权限 + service 声明 | 配置 |
 | 7 | `BridgeApplication.kt` | onCreate 检查开关 → 启动服务（覆盖开机/进程重建链路） | 挂载 |
 | 8 | `jikong/JikongController.kt` buildReportStatus | app 块 +`proximity_auto_connect`/`proximity_suppressed` 字段 | 上报 |
-| 9（可选） | `admin` + 服务端 `jikong.py` | 后台设置页镜像开关（jikong_set_config 扩展），需服务端放行+重启 | 可选二期 |
+| 9 | `admin` + 服务端 `jikong.py` | 后台镜像开关（`jikong_set_proximity`，v0.2.108 实施，需服务端重启） | 新增 |
+| 10 | `Command.kt` + `di/CommandModule.kt` | +`JIKONG_SET_PROXIMITY` 命令分发 + `executeJikongSetProximity` | 新增 |
+| 11 | `jikong/JikongController.kt` | +`setProximityAutoConnect()`（写 Prefs+evaluate/stop+forceReport，与手机设置页同语义） | 新增 |
 
 ### 3.2 JikongProximityService（新文件，范式照 SshServerService）
 
@@ -416,7 +418,7 @@ proximityAnnouncePending = false
 - **SettingsView 新增开关行**（照 v0.2.83 dashEnabled 范式，1800 行 Switch 样式）：「靠近自动连接」+ 说明文案「靠近默认保护板自动连接并播报电量；在极空页断开后暂停，直至重新进入页面」。
 - 切换时：写 `JikongPrefs.setProximityAutoConnect` → `JikongProximityService.evaluate/stop` → **forceReport()（铁律：Prefs 变更必须手动上报）**。
 - 无默认设备时点开：回弹开关 + Toast「请先连接设备并设为默认」。
-- **上报扩展**：buildReportStatus 的 app 块 + `proximity_auto_connect: Boolean`、`proximity_suppressed: Boolean`（管理后台可见模式状态；admin 端字段与显示镜像列为可选二期，与 jikong_set_config 扩展同批）。
+- **上报扩展**：buildReportStatus 的 app 块 + `proximity_auto_connect: Boolean`、`proximity_suppressed: Boolean`（管理后台可见模式状态；admin 端字段与显示镜像已于 v0.2.108 实施——后台 Tab3「靠近自动连接」卡可编辑开关 + 抑制态只读提示，服务端 `jikong_set_proximity` 命令透传，需重启服务端）。
 
 ### 3.7 Manifest / 挂载
 

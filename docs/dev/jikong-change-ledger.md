@@ -43,7 +43,7 @@
 **回滚配方**：`git revert` 本轮提交；或 `git checkout <锚点提交> -- <上述 7 文件> + app/build.gradle.kts`。
 **触发信号**：后台开关下发后手机不启停靠近服务 / 手机设置页与后台开关状态不一致（回声不同步）/ 后台看不到抑制态提示 / 命令 `jikong_set_proximity` 回执失败。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 12:31 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（2m）；admin `npm run build`（vue-tsc + vite）成功（仅 chunk 体积警告）；服务端 `py_compile` OK。提交 `2f97316` 清代理直连推送（0d8ad05..2f97316）；`release.py v0.2.108` 建 tag 触发 CI 打包成功，APK 经 gh-proxy 下载（46,054,402 字节，aapt 实证 versionName=0.2.108），分发 updates/bridge-v0.2.108.apk + update.json（versionCode 308 / sha256 `51cb014f…`）。**⚠ 服务端 jikong.py + command_catalog.py 有改动，需用户手动重启服务端才生效**（客户端/后台无需重启，后台 dist 重新构建后由用户部署）。
 
 ---
 
