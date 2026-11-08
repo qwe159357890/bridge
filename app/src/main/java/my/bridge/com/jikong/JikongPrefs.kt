@@ -264,4 +264,20 @@ object JikongPrefs {
     fun setProximityAutoConnect(context: Context, enabled: Boolean) {
         sp(context).edit().putBoolean(KEY_PROXIMITY_AUTO_CONNECT, enabled).apply()
     }
+
+    // ==================== 半死链握手超时（v0.2.117） ====================
+
+    /**
+     * 半死链长等待时长（秒，5~60，默认 12）。
+     * 靠近自动连接后，前两次连接用 1s 短戳快速唤醒 BMS，第三次起用此时长耐心等 BMS
+     * 苏醒出数据。用户可自定义，配合日志「用户设置值 + 实际连接时长」反推最优参数。
+     */
+    private const val KEY_HANDSHAKE_LONG_TIMEOUT_SEC = "jikong_handshake_long_timeout_sec"
+
+    fun handshakeLongTimeoutSec(context: Context): Int =
+        sp(context).getInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, 12)
+
+    fun setHandshakeLongTimeoutSec(context: Context, sec: Int) {
+        sp(context).edit().putInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, sec.coerceIn(5, 60)).apply()
+    }
 }
