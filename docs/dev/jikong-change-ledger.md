@@ -47,7 +47,7 @@
 **回滚配方**：`git revert` 本轮提交；或 `git checkout <锚点提交> -- app/src/main/java/my/bridge/com/jikong/JikongController.kt app/build.gradle.kts`。
 **触发信号**：开关开后靠近保护板仍反复「连上→只 AT→断开」拿不到 0x02 / 语音始终不播报 / 半死链自愈后仍无数据流。
 
-**实施结果（待回填）**：
+**实施结果（2026-11-08 13:02 回填）**：`compileDebugKotlin` BUILD SUCCESSFUL（2m50s）。提交 `0f16419` 清代理直连 push（7501333..0f16419）。`release.py v0.2.109` 建 tag 触发 CI 打包成功（期间 GitHub API 读 actions/runs 列表两次 IncompleteRead 网络抖动，重跑 + 最终用 v4.gh-proxy.org 代理下载 APK）。APK 46,054,402 字节，aapt 实证 versionName=0.2.109，分发 updates/bridge-v0.2.109.apk + update.json（versionCode 309 / sha256 `d9ab9e73…`）。**客户端改动生效，服务端零改动、无需重启**。真机验证：用户 check_update 升级到 0.2.109 后，靠近保护板应能直连重建唤醒半死链 → 收到 0x02 → 播报电量。
 
 ---
 
