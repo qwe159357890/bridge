@@ -66,7 +66,7 @@
 
 **触发信号**：用户真机反馈「锁屏自动连接播报音量没调（用原小音量）」。
 
-**实施结果（2026-11-08 19:56 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（1m23s，仅存量 deprecation 警告，无害）。首轮编译踩坑 1 个：`AudioPlaybackConfiguration.clientUid` 未解析（`getClientUid()` 是 @hide，公开 SDK 拿不到，同 `requestLeConnectionUpdate` 的 hidden API 限制），改为退回按 `usage` 判断 + 诊断日志（记录 usage/contentType）。**未打包分发**（待打包验证 setStreamVolume 时序修复 + 诊断日志）。
+**实施结果（2026-11-08 19:59 回填，已打包分发）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（1m23s，仅存量 deprecation 警告，无害）。首轮编译踩坑 1 个：`AudioPlaybackConfiguration.clientUid` 未解析（`getClientUid()` 是 @hide，公开 SDK 拿不到，同 `requestLeConnectionUpdate` 的 hidden API 限制），改为退回按 `usage` 判断 + 诊断日志（记录 usage/contentType）。**打包分发（用户 19:51 拍板本地+远程同时打包）**：本地 `assembleDebug` BUILD SUCCESSFUL（1m56s，APK 46,070,782 字节，aapt 实证 versionName=0.2.116）→ 落地 `server/data/updates/bridge-v0.2.116.apk`（删 v0.2.115/114 旧包）+ update.json（versionCode 316 / sha256 `240adc86…`，一致性校验 OK）；远程 `api_push.py v0.2.116` 同时推送（远端 main `dff9b840d5`）+ 建 tag 触发 CI 归档。**纯客户端改动，服务端零改动、无需重启**。**待用户真机验证**：锁屏自动连接播报是否音量拉满（重点看新日志 `音量提升重申（start 后）：…回读=` 与 `音量恢复：恢复前实际=` 判定 setStreamVolume 是否真生效）。
 
 ---
 
