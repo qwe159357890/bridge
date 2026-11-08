@@ -79,12 +79,12 @@
       <div class="command-picker">
         <!-- 左：分类导航（占满左列高度） -->
         <div class="category-pane">
-          <div class="category-title">命令分类</div>
+          <div class="category-title">{{ isSearching ? '命令分类（搜索中跨分类，暂不筛选）' : '命令分类' }}</div>
           <div
             v-for="cat in categories"
             :key="cat.key"
             class="category-item"
-            :class="{ active: activeCategory === cat.key }"
+            :class="{ active: activeCategory === cat.key, dimmed: isSearching }"
             @click="selectCategory(cat.key)"
           >
             <span class="cat-icon">{{ cat.icon }}</span>
@@ -103,11 +103,11 @@
               clearable
               style="width: 280px"
             />
-            <span class="pane-title">{{ activeCategoryLabel }} · {{ filteredCommands.length }} 个命令</span>
+            <span class="pane-title">{{ paneTitleText }}</span>
           </div>
 
           <div v-if="filteredCommands.length === 0" class="empty-commands">
-            该分类下暂无命令
+            {{ isSearching ? '未找到匹配的命令' : '该分类下暂无命令' }}
           </div>
           <div v-else class="command-grid">
             <!-- 「扫码下载」卡片：悬停放大二维码，点击跳转铺满窗口二维码页；
@@ -126,6 +126,7 @@
                     <!-- 微型二维码图标（真实二维码 SVG，内容=落地页地址） -->
                     <div class="command-icon qr-icon" v-html="qrIconSvg"></div>
                     <div class="command-name">{{ cmd.label }}</div>
+                    <div v-if="isSearching" class="command-cat">{{ categoryLabelOf(cmd.category) }}</div>
                   </div>
                 </template>
                 <div class="qr-hover-body">
@@ -147,6 +148,7 @@
                 >
                   <div class="command-icon">{{ cmd.icon }}</div>
                   <div class="command-name">{{ cmd.label }}</div>
+                  <div v-if="isSearching" class="command-cat">{{ categoryLabelOf(cmd.category) }}</div>
                 </div>
               </el-tooltip>
             </template>
@@ -713,16 +715,27 @@ const categoryCommands = computed(() => {
   return commandDefs.value.filter((c) => c.category === activeCategory.value)
 })
 
-// 搜索过滤后的命令
+// 是否处于搜索态（关键字非空）。搜索时跨全部分类，左侧分类导航暂不参与过滤。
+const isSearching = computed(() => keyword.value.trim().length > 0)
+
+// 搜索过滤后的命令：未搜索时按当前分类；搜索时跨全部分类（名称/说明/英文名均匹配）
 const filteredCommands = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   if (!kw) return categoryCommands.value
-  return categoryCommands.value.filter(
+  return commandDefs.value.filter(
     (c) =>
       c.label.toLowerCase().includes(kw) ||
       c.name.toLowerCase().includes(kw) ||
       c.description.toLowerCase().includes(kw),
   )
+})
+
+// 顶部计数文案：搜索时提示「跨分类」，未搜索时显示当前分类名
+const paneTitleText = computed(() => {
+  if (isSearching.value) {
+    return `搜索「${keyword.value.trim()}」 · 跨分类 ${filteredCommands.value.length} 个命令`
+  }
+  return `${activeCategoryLabel.value} · ${filteredCommands.value.length} 个命令`
 })
 
 const canSend = computed(() => !!form.deviceId && !!selectedCommand.value)
@@ -1710,6 +1723,11 @@ function countOf(catKey: string) {
   return commandDefs.value.filter((c) => c.category === catKey).length
 }
 
+function categoryLabelOf(catKey: string) {
+  const cat = categories.value.find((c) => c.key === catKey)
+  return cat ? cat.label : catKey
+}
+
 function commandLabelOf(name: string) {
   const def = commandDefs.value.find((c) => c.name === name)
   return def ? `${def.icon} ${def.label}` : name
@@ -2399,6 +2417,13 @@ onBeforeRouteLeave(() => {
   border-right: 3px solid #409eff;
   margin-right: -1px;
 }
+/* 搜索态：分类导航视觉淡化（搜索跨全部分类，分类暂不参与筛选；点击仍可切回分类视图） */
+.category-item.dimmed {
+  opacity: 0.45;
+}
+.category-item.dimmed.active {
+  opacity: 0.65;
+}
 .cat-icon {
   margin-right: 8px;
   font-size: 16px;
@@ -2472,6 +2497,15 @@ onBeforeRouteLeave(() => {
   font-weight: 600;
   color: #303133;
   margin-bottom: 4px;
+}
+/* 搜索态：卡片右上标注所属分类（跨分类结果一目了然） */
+.command-cat {
+  font-size: 11px;
+  color: #409eff;
+  background: #ecf5ff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  display: inline-block;
 }
 /* 悬停放大的二维码弹层（el-popover 内容） */
 .qr-hover-body {
