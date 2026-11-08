@@ -59,7 +59,7 @@
 
 **触发信号**：B 实验④归因看日志——`实验④强制连接参数：requestLeConnectionUpdate 反射成功` vs `实验④反射 requestLeConnectionUpdate 失败（降级 HIGH）`。
 
-**实施结果（2026-11-08 17:53 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（1m28s，仅存量 deprecation 警告，无害）。**未打包分发**。
+**实施结果（2026-11-08 18:18 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**（1m28s，仅存量 deprecation 警告）。打包环节：CI #271 打包成功、Release 已建，但 gh-proxy 全镜像 504（release-assets CDN 又波动）+ artifact 通道 Azure blob 直连限速（47KB/s 下 35MB 需 12 分钟）→ 用户拍板**改本地 assembleDebug 打包**（3m42s BUILD SUCCESSFUL，APK 46,054,402 字节，aapt 实证 versionName=0.2.114），落地 `server/data/updates/bridge-v0.2.114.apk` + update.json（versionCode 314 / sha256 `1ff37770…`）。唯一留存：旧版本 + 编译产物已清理。**已分发**。
 
 ---
 
