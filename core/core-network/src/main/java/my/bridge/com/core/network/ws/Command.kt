@@ -37,6 +37,8 @@ data class Command(
         const val GET_VOLUME = "get_volume"
         const val STREAM_STOP = "stream_stop"
         const val LOCK_SCREEN = "lock_screen"
+        const val GET_LOCK_STATE = "get_lock_state"
+        const val GET_SCREEN_STATE = "get_screen_state"
         const val RESTART_APP = "restart_app"
         const val SCREENSHOT = "screenshot"
         const val RECORD_SCREEN = "record_screen"

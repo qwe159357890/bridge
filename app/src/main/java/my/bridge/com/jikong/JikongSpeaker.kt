@@ -13,6 +13,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import my.bridge.com.core.network.api.BridgeApiClient
 import my.bridge.com.core.storage.DeviceStore
+import my.bridge.com.data.SpeakVolumeBoost
 import timber.log.Timber
 import java.io.File
 import java.security.MessageDigest
@@ -74,7 +75,7 @@ object JikongSpeaker {
         val app = context.applicationContext
         scope.launch {
             val file = fetchOnline(app, text, seg = 0)
-            if (file != null && playMp3(file)) return@launch
+            if (file != null && playMp3(app, file)) return@launch
             localSpeak(app, text)
         }
     }
@@ -104,7 +105,7 @@ object JikongSpeaker {
                     out.outputStream().use { o -> files.forEach { f -> f.inputStream().use { it.copyTo(o) } } }
                     out.length() > files.sumOf { it.length() } / 2   // 拼接产物 sanity 校验
                 }.getOrDefault(false)
-                if (merged && playMp3(out)) return@launch
+                if (merged && playMp3(app, out)) return@launch
             }
             speak(app, fallback)
         }
@@ -213,35 +214,49 @@ object JikongSpeaker {
         }
     }
 
-    /** 播放 mp3（IO 线程调用）。返回 false = 播放失败（调用方回退本地引擎）。 */
-    private fun playMp3(file: File): Boolean = runCatching {
-        player?.let { p -> runCatching { p.stop(); p.release() } }
-        val p = MediaPlayer().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)          // STREAM_MUSIC（用户拍板）
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            setDataSource(file.absolutePath)
-            setOnCompletionListener {
-                runCatching { it.release() }
-                if (player === it) player = null
+    /** 播放 mp3（IO 线程调用）。返回 false = 播放失败（调用方回退本地引擎）。
+     *  锁屏时先把媒体音量临时拉到最大（[SpeakVolumeBoost]），播完/出错/异常统一恢复。 */
+    private fun playMp3(app: Context, file: File): Boolean {
+        SpeakVolumeBoost.begin(app)
+        return runCatching {
+            player?.let { p -> runCatching { p.stop(); p.release() } }
+            val p = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)          // STREAM_MUSIC（用户拍板）
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                setDataSource(file.absolutePath)
+                setOnCompletionListener {
+                    SpeakVolumeBoost.end(app)
+                    runCatching { it.release() }
+                    if (player === it) player = null
+                }
+                setOnErrorListener { mp, _, _ ->
+                    SpeakVolumeBoost.end(app)
+                    runCatching { mp.release() }
+                    if (player === mp) player = null
+                    true
+                }
+                prepare()   // 本地文件，IO 线程同步 prepare 可接受
+                start()
             }
-            prepare()   // 本地文件，IO 线程同步 prepare 可接受
-            start()
-        }
-        player = p
-        Timber.tag(TAG).i("在线语音播放：%s", file.name)
-        true
-    }.onFailure { e -> Timber.tag(TAG).w(e, "在线语音播放失败，将回退本地引擎") }.getOrDefault(false)
+            player = p
+            Timber.tag(TAG).i("在线语音播放：%s", file.name)
+            true
+        }.onFailure { e ->
+            SpeakVolumeBoost.end(app)
+            Timber.tag(TAG).w(e, "在线语音播放失败，将回退本地引擎")
+        }.getOrDefault(false)
+    }
 
     // ==================== 本地回退链路（长驻系统 TTS，v0.2.88 原样保留） ====================
 
     private fun localSpeak(context: Context, text: String) {
         val cur = tts
         if (cur != null) {
-            if (ready) doSpeak(cur, text) else pending = text
+            if (ready) doSpeak(context.applicationContext, cur, text) else pending = text
             return
         }
         pending = text
@@ -258,20 +273,23 @@ object JikongSpeaker {
                 runCatching { tts?.language = Locale.SIMPLIFIED_CHINESE }
                 val text0 = pending
                 pending = null
-                if (text0 != null && tts != null) doSpeak(tts!!, text0)
+                if (text0 != null && tts != null) doSpeak(context.applicationContext, tts!!, text0)
             }
         }
     }
 
-    private fun doSpeak(engine: TextToSpeech, text: String) {
+    private fun doSpeak(app: Context, engine: TextToSpeech, text: String) {
+        SpeakVolumeBoost.begin(app)   // 锁屏时临时把媒体音量拉到最大（播完恢复）
         runCatching {
             engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
+                    SpeakVolumeBoost.end(app)
                     Timber.tag(TAG).i("播报完成：%s", utteranceId)
                 }
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
+                    SpeakVolumeBoost.end(app)
                     Timber.tag(TAG).w("播报出错：%s", utteranceId)
                 }
             })
@@ -279,9 +297,13 @@ object JikongSpeaker {
                 text, TextToSpeech.QUEUE_FLUSH, null, "jk_speak_${System.currentTimeMillis()}",
             )
             if (accepted != TextToSpeech.SUCCESS) {
+                SpeakVolumeBoost.end(app)   // 引擎拒绝播报，立即恢复
                 Timber.tag(TAG).w("TTS 引擎拒绝播报请求（可能引擎未就绪）")
             }
-        }.onFailure { Timber.tag(TAG).w(it, "播报异常（已忽略）") }
+        }.onFailure {
+            SpeakVolumeBoost.end(app)   // 播报异常同样恢复
+            Timber.tag(TAG).w(it, "播报异常（已忽略）")
+        }
     }
 
     private fun md5(s: String): String =

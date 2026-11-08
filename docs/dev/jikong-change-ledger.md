@@ -17,6 +17,78 @@
 
 ---
 
+### v0.2.112 锁屏播报音量临时提升（2026-11-08 15:40 实施）
+
+**背景（用户 11-08 15:35 穿插需求，与实验②a 并行，互不影响）**：合成侧已把响度拉满（服务端 -8 LUFS），但用户若把手机媒体音量调得很小，锁屏（未解锁）状态下播报（如靠近自动连接连上后的电量播报）依然很小听不清。需求三步：①播报前若处于锁屏状态，记录当前媒体音量；②临时拉到最大；③播报完成后恢复原值。**仅媒体流**（STREAM_MUSIC），不动铃声/闹钟/通知/系统流。**用户明确此需求与握手实验无交集**（只动「数据到手后的播报」环节，不碰 BLE/握手/收数据），不影响实验②a 判定（首建链是否 20s 内无重建直接出数据、蜂鸣次数）。
+
+**改前原文（关键块；改动文件 git 跟踪中，锚点提交 `e3ed523` 存全文）**：
+1. `JikongSpeaker.kt` `playMp3`（在线 mp3 播放）：
+   ```kotlin
+   private fun playMp3(file: File): Boolean = runCatching {
+       player?.let { p -> runCatching { p.stop(); p.release() } }
+       val p = MediaPlayer().apply {
+           setAudioAttributes(
+               AudioAttributes.Builder()
+                   .setUsage(AudioAttributes.USAGE_MEDIA)          // STREAM_MUSIC（用户拍板）
+                   .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                   .build(),
+           )
+           setDataSource(file.absolutePath)
+           setOnCompletionListener {
+               runCatching { it.release() }
+               if (player === it) player = null
+           }
+           prepare()   // 本地文件，IO 线程同步 prepare 可接受
+           start()
+       }
+       player = p
+       Timber.tag(TAG).i("在线语音播放：%s", file.name)
+       true
+   }.onFailure { e -> Timber.tag(TAG).w(e, "在线语音播放失败，将回退本地引擎") }.getOrDefault(false)
+   ```
+2. `JikongSpeaker.kt` `doSpeak`（本地 TTS 回退）：
+   ```kotlin
+   private fun doSpeak(engine: TextToSpeech, text: String) {
+       runCatching {
+           engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+               override fun onStart(utteranceId: String?) {}
+               override fun onDone(utteranceId: String?) {
+                   Timber.tag(TAG).i("播报完成：%s", utteranceId)
+               }
+               @Deprecated("Deprecated in Java")
+               override fun onError(utteranceId: String?) {
+                   Timber.tag(TAG).w("播报出错：%s", utteranceId)
+               }
+           })
+           val accepted = engine.speak(
+               text, TextToSpeech.QUEUE_FLUSH, null, "jk_speak_${System.currentTimeMillis()}",
+           )
+           if (accepted != TextToSpeech.SUCCESS) {
+               Timber.tag(TAG).w("TTS 引擎拒绝播报请求（可能引擎未就绪）")
+           }
+       }.onFailure { Timber.tag(TAG).w(it, "播报异常（已忽略）") }
+   }
+   ```
+3. `localSpeak` 调用点：`if (ready) doSpeak(cur, text) else pending = text`、`if (text0 != null && tts != null) doSpeak(tts!!, text0)`；`speak`/`speakSegs` 调用点：`playMp3(file)`、`playMp3(out)`。
+4. `app/build.gradle.kts`：`versionName = "0.2.111"`。
+
+**改动清单**：
+- 新增 `app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt`（object 单例）：`shouldBoost(context)`=「设备锁定 **或** 屏幕熄灭」（`KeyguardManager.isDeviceLocked() || !PowerManager.isInteractive()`，**用户拍板「锁定或熄屏」**——覆盖有锁/无锁 + 熄屏及亮屏锁屏界面，仅亮屏已解锁不动）；`begin(context)` 命中时记录媒体音量并 `setStreamVolume(STREAM_MUSIC, max, 0)`；`end(context)`=恢复原档。幂等（`boosted`+`original` 双字段，重叠/连续播报只记录一次、最后一次 end 才恢复）；媒体流不受 DND 限制，无 SecurityException 风险（runCatching 兜底）。
+- `JikongSpeaker.kt`：`playMp3`/`doSpeak` 签名加 `app: Context`，播放前 `begin`，`onCompletion`/`onError`/`onDone`/拒绝播报/异常统一 `end`；两处调用点（speak、speakSegs、localSpeak 两处）传 `applicationContext`。
+- `versionName` 0.2.111→0.2.112。
+- **测试验证命令（两个，用户要求分开测「是否锁屏」「是否息屏」）**：
+  - `get_lock_state`（查询锁屏状态）：`SpeakVolumeBoost.describeLock()` 回执 `device_locked`（是否需要解锁）+`keyguard_showing`（锁屏界面显示中）；`Command.kt` 加 `GET_LOCK_STATE`；`CommandModule.kt` 加 `executeGetLockState`；`command_catalog.py` 加 `_cmd("get_lock_state", "查询锁屏状态", "control", "🔐", …)`。
+  - `get_screen_state`（查询息屏状态）：`SpeakVolumeBoost.describeScreen()` 回执 `screen_on`（屏幕是否点亮）；`Command.kt` 加 `GET_SCREEN_STATE`；`CommandModule.kt` 加 `executeGetScreenState`；`command_catalog.py` 加 `_cmd("get_screen_state", "查询息屏状态", "control", "📴", …)`。
+  - 管理后台命令页动态读 catalog，两命令自动出现，无需改前端；文档 `control.md` 加 §get_lock_state + §get_screen_state + `README.md` 加索引。
+- **不动**：JikongController / JikongBleClient / JikongProtocol（握手实验②a 的 20s 阈值、0x96 频率、3 次重建保底等全部原样保留）。
+
+**回滚配方**：`git revert` 本轮提交；或 `git checkout e3ed523 -- app/src/main/java/my/bridge/com/jikong/JikongSpeaker.kt app/build.gradle.kts core/core-network/src/main/java/my/bridge/com/core/network/ws/Command.kt app/src/main/java/my/bridge/com/di/CommandModule.kt server/app/core/command_catalog.py docs/api/commands/control.md docs/api/commands/README.md`，另**手动删除**新增文件 `app/src/main/java/my/bridge/com/data/SpeakVolumeBoost.kt`。
+**触发信号**：①锁屏播报后音量未恢复（永久停在最大）；②亮屏解锁播报被误调音量（应只在锁屏生效）；③播报无声/破音（音量提升逻辑干扰播放）；④实验②a 判定被干扰（理论上不可能——本改动不碰握手，但作为观察项）。
+
+**实施结果（2026-11-08 16:05 回填）**：`compileDebugKotlin` **BUILD SUCCESSFUL**。首轮编译踩坑 1 个：`setOnErrorListener` 用 `_, _, _` 三个通配符导致 lambda 无隐式 `it`（`it.release()` 无法解析，`Cannot infer type`），改显式参数 `mp, _, _` 修复。随后按用户拍板把判断改为「锁定或熄屏」、拆成 `get_lock_state`+`get_screen_state` 双命令（catalog + Command + CommandModule + SpeakVolumeBoost.describeLock/describeScreen + 文档），客户端二次编译 **BUILD SUCCESSFUL**（2m6s，仅 `inKeyguardRestrictedInputMode` 一处 deprecation 提示，无害）；服务端 `command_catalog.py` py_compile 通过。**未打包分发**——等用户在管理后台用双命令分别实测「锁屏」「息屏」判断无误后再打包。
+
+---
+
 ### v0.2.111 握手修复实验②a：12s 重建阈值放宽到 20s（2026-11-08 15:20 实施）
 
 **背景（实验①半命中后，用户 15:15 拍板）**：实验①（requestConnectionPriority HIGH）已把直连重建从 3~4 轮→1 轮（14s 出数据），但**首建链仍半死**：日志实证 BMS 苏醒延迟约 13~14s，而 12s 超时恰好卡在苏醒前断开重建。实验②a 单变量验证「放宽 12s 阈值」能否让首建链直接等到 BMS 苏醒出数据（= 官方一次成功，无需断开重建）。**用户明确：不能完全移除重建（要保底），故仅放宽阈值、3 次重建保底保留、0x96 补发频率保持 1.2s 不动**。

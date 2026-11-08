@@ -17,6 +17,8 @@
 | `stop_music` | 停止音乐 | [control.md#pause_music--resume_music--stop_music](control.md#pause_music--resume_music--stop_music-播放控制) |
 | `set_volume` | 调节音量 | [control.md#set_volume-调节音量](control.md#set_volume-调节音量) |
 | `get_volume` | 获取音量 | [control.md#get_volume-获取音量](control.md#get_volume-获取音量) |
+| `get_lock_state` | 查询锁屏状态 | [control.md#get_lock_state-查询锁屏状态](control.md#get_lock_state-查询锁屏状态) |
+| `get_screen_state` | 查询息屏状态 | [control.md#get_screen_state-查询息屏状态](control.md#get_screen_state-查询息屏状态) |
 | `lock_screen` | 锁屏 | [control.md#lock_screen-锁屏](control.md#lock_screen-锁屏) |
 | `restart_app` | 重启客户端 | [control.md#restart_app-重启客户端](control.md#restart_app-重启客户端) |
 | `send_sms` | 发送短信 | [control.md#send_sms-发送短信](control.md#send_sms-发送短信) |

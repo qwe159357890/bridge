@@ -40,6 +40,7 @@ import my.bridge.com.data.SmsDefaultHelper
 import my.bridge.com.data.SmsReader
 import my.bridge.com.data.SmsRepository
 import my.bridge.com.data.SmsSender
+import my.bridge.com.data.SpeakVolumeBoost
 import my.bridge.com.data.VolumeController
 import my.bridge.com.interact.DeviceVibrator
 import my.bridge.com.interact.NotificationPoster
@@ -189,6 +190,12 @@ object CommandModule {
         },
         Command.LOCK_SCREEN to CommandExecutor { command ->
             executeLockScreen(context, command)
+        },
+        Command.GET_LOCK_STATE to CommandExecutor { command ->
+            executeGetLockState(context, command)
+        },
+        Command.GET_SCREEN_STATE to CommandExecutor { command ->
+            executeGetScreenState(context, command)
         },
         Command.RESTART_APP to CommandExecutor { command ->
             executeRestartApp(context, command)
@@ -1685,6 +1692,40 @@ object CommandModule {
         } catch (e: Exception) {
             Timber.e(e, "命令 get_volume 执行失败")
             CommandResult(id, name, false, e.message ?: "读取音量失败")
+        }
+    }
+
+    /**
+     * 执行 get_lock_state：读取设备当前锁屏状态（是否锁定 / 锁屏界面显示中），
+     * 用于验证「锁屏播报音量提升」的锁屏判断。纯只读，无参数。
+     */
+    private fun executeGetLockState(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val message = SpeakVolumeBoost.describeLock(context)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_lock_state 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取锁屏状态失败")
+        }
+    }
+
+    /**
+     * 执行 get_screen_state：读取设备当前屏幕状态（是否点亮/息屏），
+     * 用于验证「锁屏播报音量提升」的息屏判断。纯只读，无参数。
+     */
+    private fun executeGetScreenState(context: Context, command: Command): CommandResult {
+        val id = command.commandId
+        val name = command.command
+        return try {
+            val message = SpeakVolumeBoost.describeScreen(context)
+            Timber.i("命令 %s：%s", name, message)
+            CommandResult(id, name, true, message)
+        } catch (e: Exception) {
+            Timber.e(e, "命令 get_screen_state 执行失败")
+            CommandResult(id, name, false, e.message ?: "读取屏幕状态失败")
         }
     }
 
