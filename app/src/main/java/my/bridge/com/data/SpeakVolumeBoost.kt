@@ -42,6 +42,14 @@ object SpeakVolumeBoost {
     private var original = -1
 
     /**
+     * 「连接成功保持窗口」标记（v0.2.122）：连接成功时 beep（提示音）与首帧电量播报之间
+     * 存在时间 gap（beep 仅 0.12~0.34s，首帧数据 0.85s~几十秒才到）。若 beep 的 [end] 在
+     * 首帧播报 [begin] 之前触发，会把音量提前恢复，导致「连接成功但播报没拉满」。
+     * 此窗口让 beep 的 [end] 不再真正恢复音量，改由「首帧播报完成」或「超时兜底」释放。
+     */
+    private var connectHold = false
+
+    /**
      * 「是否应提升音量」决策函数（v0.2.115）：由 JikongController 注入（读 JikongPrefs 开关
      * + 调 [isOtherAppPlaying]）。为避免 data 包反向依赖 jikong 包，用注入 lambda 解耦；
      * 未注入时恒 false（安全默认，不提升）。
@@ -88,8 +96,62 @@ object SpeakVolumeBoost {
         if (boostCount <= 0) return
         boostCount--
         if (boostCount > 0) return          // 还有其它声音在播，暂不恢复
+        if (connectHold) {                  // v0.2.122：连接成功窗口内不恢复，交首帧播报/超时释放
+            return
+        }
+        restoreOriginal(context)
+    }
+
+    /**
+     * 开启「连接成功保持窗口」（v0.2.122）：连接成功时拉满媒体音量并保持，让 beep 与首帧
+     * 电量播报共享同一音量窗口。期间任何 [end] 都不会真正恢复音量，直到 [releaseConnectHold]
+     * 被调用（首帧播报完成）或超时兜底（[releaseConnectHold] 由调用方负责）。
+     */
+    @Synchronized
+    fun beginConnectHold(context: Context): Boolean {
+        if (!shouldBoost(context)) return false
+        val am = context.getSystemService(AudioManager::class.java) ?: return false
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (boostCount > 0) {               // 已有声音在播（如 beep 已 begin），仅接管窗口标记
+            connectHold = true
+            return true
+        }
+        if (cur >= max) return false        // 已最大，无需提升
+        val after = forceMax(am)
+        original = cur
+        boostCount = 1
+        connectHold = true
+        Timber.i(
+            "连接成功音量窗口开启：媒体 %d/%d → 最大（回读=%d），首帧播报后释放",
+            cur, max, after,
+        )
+        return true
+    }
+
+    /**
+     * 释放「连接成功保持窗口」（v0.2.122）：首帧播报完成后调用，真正恢复媒体音量。
+     * 无窗口/未提升时无操作。
+     */
+    @Synchronized
+    fun releaseConnectHold(context: Context) {
+        if (!connectHold) return
+        connectHold = false
+        // 释放窗口后，若当前已无其它声音在播（引用计数仅剩 hold 自己），恢复原音量；
+        // 若首帧播报仍在进行（其 begin 又 +1），则只减计数、不恢复，交播报的 end 收尾。
+        if (boostCount <= 1) {
+            // 仅剩 hold（或计数已被 end 清到 0 但音量未恢复）→ 直接恢复
+            if (original != -1) restoreOriginal(context)
+        } else {
+            boostCount--
+        }
+    }
+
+    /** 真正恢复原音量（内部工具，抽取自 [end] 与 [releaseConnectHold] 的公共收尾）。 */
+    private fun restoreOriginal(context: Context) {
         val target = original
         original = -1
+        boostCount = 0
         val am = context.getSystemService(AudioManager::class.java) ?: return
         // v0.2.116 诊断：记录「恢复前」的实际音量——这正是播报期间系统真正用的音量。
         // 若这里回读仍等于原音量（而非 max），说明 setStreamVolume 提升根本没生效（锁屏/时序问题）。

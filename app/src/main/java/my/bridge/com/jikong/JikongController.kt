@@ -44,6 +44,12 @@ class JikongController private constructor() {
         /** 扫描暂存陈旧阈值（v0.2.91 防僵尸）：进入极空页时距上次扫描超过此值即清空列表。 */
         const val SCAN_STALE_MS = 10 * 60_000L
 
+        /** 连接成功音量窗口：首帧数据到达后延迟释放（覆盖首帧播报时长，v0.2.122）。 */
+        const val HOLD_AFTER_DATA_MS = 3_000L
+
+        /** 连接成功音量窗口：无数据时的超时兜底释放（半死链不醒，v0.2.122）。 */
+        const val HOLD_FALLBACK_MS = 8_000L
+
         /** 自动重连重试间隔（快速档，GATT status=8 信号监督超时触发时使用，v0.2.78）。 */
         const val RECONNECT_FAST_RETRY_MS = 800L
 
@@ -176,9 +182,23 @@ class JikongController private constructor() {
 
     private var reconnectJob: Job? = null
 
+    /**
+     * 连接成功音量窗口的释放任务（v0.2.122）：连接成功后开启 [SpeakVolumeBoost.beginConnectHold]，
+     * 让 beep 与首帧播报共享拉满音量；本任务负责「首帧播报完成后延迟释放」+「超时兜底释放」。
+     */
+    private var connectHoldJob: Job? = null
+
     /** 主动重建链路的连续次数（收到 0x02 即归零；防死循环重建，v0.2.80）。 */
     @Volatile
     private var datalessRecycles = 0
+
+    /**
+     * 半死链 ramp 阶段的降频计数器（v0.2.122）：半死链 3 次重建后进入「持续 ramp 等待模块
+     * 苏醒」态，[startPolling] 的 while 循环每 1.2s 会各打一条「已连续重建 3 次」与
+     * 「启动阶段未见 0x02」日志，实测单次半死链会话就刷 248 条，把连接关键日志挤出窗口。
+     * 此计数器让这两条日志只在「首次进入」或「每 N 次」打一条，其余静默。
+     */
+    private var rampLogBudget = 0
 
     /** 本次半死链会话起始时间（第一次连接的 connectAt，v0.2.117 总耗时日志用）。 */
     @Volatile
@@ -286,6 +306,11 @@ class JikongController private constructor() {
                 s.deviceAddress = JikongBleClient.connectedDeviceAddress
                 s.lastUpdateAt = System.currentTimeMillis()
                 if (!connected) {
+                    // v0.2.122：断开时立即释放连接成功音量窗口（若还在）——避免断开瞬间
+                    // 音量仍被拉满残留（正常首帧数据/超时都会释放，这里是断连兜底）。
+                    connectHoldJob?.cancel()
+                    connectHoldJob = null
+                    appContext?.let { SpeakVolumeBoost.releaseConnectHold(it) }
                     // 断开时复位实时数据，避免管理后台看到陈旧数值
                     s.totalVoltage = 0f; s.current = 0f; s.soc = 0
                     s.cellVoltages = emptyList(); s.temperatures = emptyList()
@@ -324,8 +349,17 @@ class JikongController private constructor() {
                 // 演示模式直接改 status、不触发本回调，故此处 connected=true 必为真实 BLE 连接。
                 // 半死链「autoConnect 首连 + 直连重建」会 beep 两声，第二声后紧跟电量播报，
                 // 正好直观体现「连接成功 → 首帧数据」的耗时。
+                // v0.2.122：连接成功开启「音量保持窗口」——beep（仅 0.12~0.34s）与首帧电量
+                // 播报（首帧数据 0.85s~几十秒才到）之间存在时间 gap，若 beep 的 end 在首帧播报
+                // 前触发会把音量提前恢复，导致「连接成功但播报没拉满」。窗口让二者共享拉满音量，
+                // 由首帧播报完成或超时兜底释放。
                 if (connected) {
-                    appContext?.let { JikongSpeaker.beepConnected(it) }
+                    appContext?.let { ctx ->
+                        if (SpeakVolumeBoost.beginConnectHold(ctx)) {
+                            scheduleConnectHoldRelease(ctx, HOLD_FALLBACK_MS)
+                        }
+                        JikongSpeaker.beepConnected(ctx)
+                    }
                 }
                 reportStatus()
                 // 连接状态变化也要触发 UI 重组（否则断开后界面仍停留「已连接」，
@@ -437,6 +471,26 @@ class JikongController private constructor() {
             appContext?.let { JikongProximityService.stop(it) }
         } else if (wasDemo && proximityModeActive) {
             appContext?.let { JikongProximityService.evaluate(it) }
+        }
+    }
+
+    /**
+     * 调度「连接成功音量窗口」的释放（v0.2.122）。
+     *
+     * 两条释放路径共用本方法，均会取消旧任务重排（后到者覆盖先到者）：
+     * 1. 连接成功时（[onConnectionChanged] 的 beep 前）先挂一个「超时兜底」——若一直收不到
+     *    首帧数据（半死链不醒），兜底时长（[HOLD_FALLBACK_MS]=8s）到即释放，避免音量永久拉满；
+     * 2. 首帧数据到达时（[mergeFrame] 收 0x02）重排为「首帧播报完成」——[HOLD_AFTER_DATA_MS]=3s
+     *    后释放，确保首帧播报也用满音量。
+     *
+     * [releaseConnectHold] 幂等，重复调用安全；窗口已被释放时再触发为 no-op。
+     */
+    private fun scheduleConnectHoldRelease(context: Context, delayMs: Long) {
+        val ctx = context.applicationContext
+        connectHoldJob?.cancel()
+        connectHoldJob = scope.launch {
+            delay(delayMs)
+            SpeakVolumeBoost.releaseConnectHold(ctx)
         }
     }
 
@@ -700,6 +754,7 @@ class JikongController private constructor() {
                                 return@launch
                             }
                             Timber.tag(TAG).w("已连续重建 3 次仍无 0x02，保持当前链路继续 ramp（等模块自行苏醒）")
+                            rampLogBudget = 0   // v0.2.122：进入 ramp 态，重置降频计数
                         }
                         // v0.2.79：设备信息还没拿到（0x97 首发失败）→ 按「0x97→500ms→0x96」
                         // 完整时序重试，否则首连后 型号/硬件/软件版本 一直空白。
@@ -709,7 +764,12 @@ class JikongController private constructor() {
                             runCatching { JikongBleClient.write(JikongProtocol.buildDeviceInfo()) }
                             delay(500)
                         }
-                        Timber.tag(TAG).w("启动阶段未见 0x02，重发 0x96 触发数据流")
+                        // v0.2.122：降频——「未见 0x02 重发 0x96」在半死链 ramp 态每 1.2s 一条，
+                        // 实测单次会话刷 134 条，把连接关键日志挤出窗口。改为每 10 次（约 12s）
+                        // 才打一条，其余静默；收到 0x02 时 rampLogBudget 归零，下次会话重新计数。
+                        if (rampLogBudget++ % 10 == 0) {
+                            Timber.tag(TAG).w("启动阶段未见 0x02，重发 0x96 触发数据流（第 %d 次）", rampLogBudget)
+                        }
                         runCatching { JikongBleClient.write(JikongProtocol.buildCellInfo()) }
                     }
                 }
@@ -1005,6 +1065,10 @@ class JikongController private constructor() {
                     )
                 }
                 datalessRecycles = 0   // v0.2.80：数据通了，重建计数归零
+                rampLogBudget = 0       // v0.2.122：数据通了，ramp 降频计数归零
+                // v0.2.122：首帧数据已到——重新调度「音量窗口释放」：等当前帧触发的首帧播报
+                // 播完（HOLD_AFTER_DATA_MS）后再释放连接成功音量窗口，确保首帧播报也用满音量。
+                appContext?.let { scheduleConnectHoldRelease(it, HOLD_AFTER_DATA_MS) }
                 maybeAnnounce(s)       // v0.2.89：每帧判定播报（变化/间隔/预警，规则见函数注释）
             }
             JikongProtocol.FRAME_SETTINGS -> parseSettingsFrame(s, frame.data)  // 0x01

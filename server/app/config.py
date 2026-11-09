@@ -213,7 +213,7 @@ class LogsConfig(BaseModel):
         default=30, ge=0, description="日志保留天数，超龄定期清理（0 = 永不清理）",
     )
     max_entries_per_device: int = Field(
-        default=2000, ge=0, description="单设备最多保留日志条数（兜底；0 = 不限）",
+        default=20000, ge=0, description="单设备最多保留日志条数（兜底；0 = 不限）",
     )
     page_size: int = Field(
         default=20, ge=1, le=200, description="管理后台日志分页每页条数",

@@ -60,7 +60,7 @@ class LogStore:
     """日志存储（MySQL 持久化，不可用/未配置时降级内存）。
 
     :param max_entries_per_device: 单设备保留的最大日志行数（0 = 不限）。
-        默认 2000（兜底），主清理策略是 retention_days 按天清理；
+        默认 20000（兜底），主清理策略是 retention_days 按天清理；
         见 config.LogsConfig 说明。
     :param max_content_chars: 单行日志消息最大字符数（超长截断尾部，防请求体过大）
     :param retention_days: 日志保留天数，超龄定期清理（0 = 永不清理，仅按行数上限裁剪）
@@ -88,7 +88,7 @@ class LogStore:
 
     def __init__(
         self,
-        max_entries_per_device: int = 2000,
+        max_entries_per_device: int = 20000,
         max_content_chars: int = 200_000,
         retention_days: int = 30,
         host: str = "",
@@ -707,7 +707,7 @@ def _parse_line(line: str) -> tuple[str, str, str]:
         return "I", "", line
 
 
-def build_log_store(mysql_cfg, retention_days: int = 30, max_entries_per_device: int = 2000) -> LogStore:
+def build_log_store(mysql_cfg, retention_days: int = 30, max_entries_per_device: int = 20000) -> LogStore:
     """按配置组装日志存储实例（app/main.py 装配用）。"""
     return LogStore(
         host=mysql_cfg.host,

@@ -17,6 +17,31 @@
 
 ---
 
+### v0.2.122 连接成功音量保持窗口 + 半死链 ramp 日志降频（2026-11-09 21:15 实施）
+
+**背景（用户 11-09 反馈 + 日志实证）**：
+1. **音量 bug**：连接成功会播提示音（beep，仅 0.12~0.34s），但「连接成功后短时间就收到数据时播报声音没调最大」——日志实证（19:04:28 那次成功连接）：beep 在 28.8s 播完、29.1s 恢复音量（10/30→10），而首帧电量播报 29.9s 才到，用低音量念完。根因是 beep 的 `end` 在首帧播报 `begin` 之前触发，把音量提前恢复了。v0.2.120 的引用计数只处理「声音重叠」场景，处理不了「beep 结束与播报开始之间的时间 gap」。
+2. **日志刷屏**：半死链 ramp 态「启动阶段未见 0x02，重发 0x96」×134 +「已连续重建 3 次仍无 0x02」×114，每 1.2s 各一条，单次会话刷 248 条，把连接关键日志挤出 2000 条窗口（服务端日志窗口实测仅覆盖 ~2 小时）。
+
+**改前原文（关键块；锚点提交 `35c23f5`/`8be0bbf` = v0.2.121 存全文）**：
+1. `SpeakVolumeBoost.kt`：`end` 里 `if (boostCount > 0) return` 后直接 `restoreOriginal(context)`；无 `connectHold` / `beginConnectHold` / `releaseConnectHold`。
+2. `JikongController.kt` `onConnectionChanged(connected=true)`：`appContext?.let { JikongSpeaker.beepConnected(it) }`（beep 单独 begin/end 音量）。
+3. `JikongController.kt` `startPolling`：748 行 `Timber.w("已连续重建 3 次仍无 0x02…")` 与 758 行 `Timber.w("启动阶段未见 0x02，重发 0x96…")` 均无降频，每 1.2s 各打一条。
+4. `server/config.yaml` / `config.py` / `log_store.py`：`max_entries_per_device = 2000`。
+5. `app/build.gradle.kts`：`versionName = "0.2.121"`。
+
+**改后**：
+1. `SpeakVolumeBoost.kt`：新增 `connectHold:Boolean` 标记 + `beginConnectHold`/`releaseConnectHold`；`end` 在 connectHold 窗口内不恢复；抽取 `restoreOriginal` 公共收尾。
+2. `JikongController.kt`：`onConnectionChanged(true)` 先 `beginConnectHold` → 再 `beepConnected`；新增 `scheduleConnectHoldRelease(delayMs)`（首帧数据到 3s 释放 / 无数据 8s 兜底）；断开时立即 `releaseConnectHold` 防残留；新增常量 `HOLD_AFTER_DATA_MS=3000`、`HOLD_FALLBACK_MS=8000`、`connectHoldJob` 字段。
+3. `JikongController.kt`：新增 `rampLogBudget` 降频计数器，「启动阶段未见 0x02」改每 10 次打一条；收到 0x02 时 `rampLogBudget` 归零。
+4. `server/config.yaml`+`config.py`+`log_store.py`：`max_entries_per_device` 2000→20000。
+5. 版本号 0.2.122。
+
+**回滚配方**：`git revert <本次提交 SHA>`（或手动还原上述 5 处「改前原文」）。
+**触发信号**：① 连接成功后播报仍小声 → 查「连接成功音量窗口开启/释放」日志时序；② 音量空等残留（断开后媒体音量没恢复）→ 查断连 `releaseConnectHold`；③ 半死链排障时 ramp 日志过少 → 回调降频间隔（10 次→1 次）。
+
+---
+
 ### v0.2.120 连接成功提示音（5选1+试听）+ 首连短戳可配置 + 音量提升引用计数（2026-11-08 21:55 实施）
 
 **背景（用户 11-08 21:10~21:50 多轮反馈 + 日志实证）**：装 v0.2.118 后多次靠近/远离测试，三项结论：音量三段兜底彻底修好（回读=30）；每次「autoConnect 首连（半死链）+ 1 次直连重建」即成功（~2~3s、3 声滴声），阶梯里「第 2 次短戳 + 长等待」从没被触发；CRC 拦到一次真坏帧（防误报有效）。据此拍板：
