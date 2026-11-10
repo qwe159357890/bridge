@@ -17,6 +17,34 @@
 
 ---
 
+### v0.2.124 重叠播报排除自身 player 误判（2026-11-10 08:00 实施）
+
+**背景（用户 11-10 反馈 + 代码推演）**：重叠播报时（第一段电量/时速播报未播完，第二段播报进来），`shouldBoost` 里的 `isOtherAppPlaying` 会把「自己 app 上一段未播完的 mp3」误判为「其他程序在播放」，导致第二段 `begin` 返回 false（不提升音量、不 +1 计数）。随后 `playMp3` 复用单实例 `player` 停掉第一段时，v0.2.123 新增的补偿 `end` 把 boostCount 1→0 触发 `restoreOriginal`，音量从满掉回原档（11）。连锁结果：第二段全程用原音量 11 播报（偏小），且第一段被 stop 的瞬间音量跳变（几乎无感，因随即被 stop）。
+
+**改前原文（关键块；锚点提交 `3a09d22` 存全文）**：
+1. `JikongSpeaker.kt`：无 `isSelfPlaying()` 方法；`player` 为私有单实例字段。
+2. `JikongController.kt` `shouldBoostProvider`（约 393 行）：
+   ```kotlin
+   val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx)
+   if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
+   !otherPlaying
+   ```
+
+**改后**：
+1. `JikongSpeaker.kt` 新增 `isSelfPlaying(): Boolean = player?.isPlaying == true`（仅暴露播放态，不暴露 player 本身）。
+2. `JikongController.kt` `shouldBoostProvider` 中排除自身 player：
+   ```kotlin
+   val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx) && !JikongSpeaker.isSelfPlaying()
+   if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
+   !otherPlaying
+   ```
+   不触碰 data 包 `SpeakVolumeBoost` 的纯能力，也不改引用计数 / connectHold 逻辑。
+
+**回滚配方**：还原上述两处「改前原文」。
+**触发信号**：① 重叠播报第二段仍偏小 → 查 `isSelfPlaying` 是否未排除自身；② 第三方音乐播放时播报错误提升音量 → 查 `isSelfPlaying` 是否误判为 true（如 player 泄漏未置 null）。
+
+---
+
 ### v0.2.122 连接成功音量保持窗口 + 半死链 ramp 日志降频（2026-11-09 21:15 实施）
 
 **背景（用户 11-09 反馈 + 日志实证）**：

@@ -308,9 +308,15 @@ class JikongController private constructor() {
                 if (!connected) {
                     // v0.2.122：断开时立即释放连接成功音量窗口（若还在）——避免断开瞬间
                     // 音量仍被拉满残留（正常首帧数据/超时都会释放，这里是断连兜底）。
-                    connectHoldJob?.cancel()
-                    connectHoldJob = null
-                    appContext?.let { SpeakVolumeBoost.releaseConnectHold(it) }
+                    // v0.2.123：半死链主动重建（dataRecyclePending=true，见 startPolling 里
+                    // 1s 无 0x02 主动 disconnect）也走本回调——但那是「连续连接过程的一部分」，
+                    // 不应在重建中间释放音量窗口（否则下次直连重建成功后的首帧播报音量已掉）。
+                    // 故仅当非半死链重建时才释放；重建路径让窗口保留，等下次连接成功/首帧/超时释放。
+                    if (!dataRecyclePending) {
+                        connectHoldJob?.cancel()
+                        connectHoldJob = null
+                        appContext?.let { SpeakVolumeBoost.releaseConnectHold(it) }
+                    }
                     // 断开时复位实时数据，避免管理后台看到陈旧数值
                     s.totalVoltage = 0f; s.current = 0f; s.soc = 0
                     s.cellVoltages = emptyList(); s.temperatures = emptyList()
@@ -384,7 +390,9 @@ class JikongController private constructor() {
                 return@setShouldBoostProvider false
             }
             if (JikongPrefs.volumeBoostForce(ctx)) return@setShouldBoostProvider true
-            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx)
+            // v0.2.124：排除「自己 app 上一段未播完的播报 mp3」，避免重叠播报时被误判成
+            // 「其他程序」→ 第二段不提升音量且 stop 上一段时提前恢复，导致第二段偏小。
+            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx) && !JikongSpeaker.isSelfPlaying()
             if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
             !otherPlaying
         }
@@ -702,13 +710,13 @@ class JikongController private constructor() {
 
             val connectAt = System.currentTimeMillis()
             // v0.2.117 阶梯式唤醒超时：前两次连接用「首连短戳」快速唤醒 BMS（datalessRecycles
-            // 为 0/1 时），第三次起用可配置长等待（默认 12s）。datalessRecycles 在收到 0x02
+            // 为 0/1 时），第三次起用可配置长等待（默认 6s）。datalessRecycles 在收到 0x02
             // 时归零，故每次半死链会话都从「首连短戳」重新开始。
             // v0.2.119：首连短戳时长可配置（0.1~1.0s，默认 1.0s）——真机实测 1 次重建即成功、
             // 短戳越短越快；长等待继续保留作兜底。
             val shortTimeoutSec = appContext?.let { JikongPrefs.handshakeShortTimeoutSec(it) } ?: 1.0f
             val shortTimeoutMs = (shortTimeoutSec * 1000f).toLong()
-            val longTimeoutSec = appContext?.let { JikongPrefs.handshakeLongTimeoutSec(it) } ?: 12
+            val longTimeoutSec = appContext?.let { JikongPrefs.handshakeLongTimeoutSec(it) } ?: 6
             val longTimeoutMs = longTimeoutSec * 1000L
             val currentTimeoutMs = if (datalessRecycles < 2) shortTimeoutMs else longTimeoutMs
             if (datalessRecycles == 0) handshakeSessionStartAt = connectAt  // 首次连接起算总耗时
@@ -738,7 +746,7 @@ class JikongController private constructor() {
                         // ~1min 直到 status=8 断开；而自动重连建的第 2 条链路立即有数据。
                         // ⇒ 超时内仍无任何 0x02 就主动断开重建（dataRecyclePending → 快档
                         // 重连）。连续重建限 3 次，防「休眠↔重建」死循环。
-                        // v0.2.117 阶梯式超时：前两次首连短戳、第三次起可配置长等待（默认 12s）。
+                        // v0.2.117 阶梯式超时：前两次首连短戳、第三次起可配置长等待（默认 6s）。
                         // v0.2.119：短戳时长可配置，日志打印「用户设置短戳值 + 长等待值 + 本次
                         // 实际超时 + 第几次连接」，供多次尝试不同设置反推最优参数。
                         if (now - connectAt > currentTimeoutMs) {

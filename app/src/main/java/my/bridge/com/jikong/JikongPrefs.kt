@@ -285,14 +285,14 @@ object JikongPrefs {
     }
 
     /**
-     * 半死链长等待时长（秒，1~60，默认 12）。
+     * 半死链长等待时长（秒，1~60，默认 6）。
      * 靠近自动连接后，前两次连接用首连短戳快速唤醒 BMS，第三次起用此时长耐心等 BMS
      * 苏醒出数据（兜底，防短戳不够时反复空转）。用户可自定义，配合日志反推最优参数。
      */
     private const val KEY_HANDSHAKE_LONG_TIMEOUT_SEC = "jikong_handshake_long_timeout_sec"
 
     fun handshakeLongTimeoutSec(context: Context): Int =
-        sp(context).getInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, 12)
+        sp(context).getInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, 6)
 
     fun setHandshakeLongTimeoutSec(context: Context, sec: Int) {
         sp(context).edit().putInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, sec.coerceIn(1, 60)).apply()

@@ -133,6 +133,14 @@ object JikongSpeaker {
         playBeep(app, JikongPrefs.beepSoundId(app))
     }
 
+    /**
+     * 是否正在播放播报 mp3（v0.2.124）：供 [my.bridge.com.jikong.JikongController] 的
+     * 音量提升决策排除「自己 app 上一段未播完的播报」——否则重叠播报时上一段会被
+     * `isOtherAppPlaying` 误判成「其他程序」，导致第二段不提升音量（且 stop 上一段时
+     * 补偿 end 提前把音量恢复，第二段全程偏小）。只暴露播放态、不暴露 player 实例。
+     */
+    fun isSelfPlaying(): Boolean = player?.isPlaying == true
+
     /** 播报一段文字（异步，立即返回）：在线缓存/合成优先，失败回退本地引擎。 */
     @Synchronized
     fun speak(context: Context, text: String) {
@@ -283,7 +291,15 @@ object JikongSpeaker {
     private fun playMp3(app: Context, file: File): Boolean {
         SpeakVolumeBoost.begin(app)
         return runCatching {
-            player?.let { p -> runCatching { p.stop(); p.release() } }
+            player?.let { p ->
+                // v0.2.123 修复引用计数泄漏：复用单实例 player 时 stop() 上一段若未自然
+                // 播完，其 onCompletion 不会触发 → 上一段的 SpeakVolumeBoost.end 泄漏，
+                // boostCount 永久残留 > 0，之后所有 begin 走「重叠」分支（只 +1 不真正拉满）、
+                // 所有 end 减不到 0 不恢复，音量永久卡在拉满值回不到原档位（用户实证
+                // 「音量调节后没恢复到之前大小」）。stop 前手动补一次 end 补偿上一段。
+                SpeakVolumeBoost.end(app)
+                runCatching { p.stop(); p.release() }
+            }
             val p = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
