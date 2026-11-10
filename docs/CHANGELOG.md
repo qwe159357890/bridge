@@ -22,9 +22,9 @@
 
 ---
 
-## 2026-11-09~10 · 📱🖥️ v0.2.121→v0.2.127 音量引用计数根治 + 管理后台嵌入式集成 + 移动端/横屏适配 + 定位导航拉起
+## 2026-11-09~10 · 📱🖥️ v0.2.121→v0.2.130 音量引用计数根治 + 管理后台嵌入式集成 + 移动端/横屏适配 + 导航拉起 + 全项目日志治理 + 生产环境切换
 
-**节点意义**：极空「阶段性完成」之后进入收尾打磨期，三条脉络并行——①语音播报音量提升从「引用计数」暴露三处深层 bug（stop 不触发 onCompletion 泄漏、connectHold 与计数语义不对称、半死链重建提前释放窗口），逐一根治到「纯抑制标记 + 补偿 + 守卫」的最终形态；②管理后台从「独立 Web 服务」进化为「客户端底部导航第 4 Tab 嵌入式集成」（WebView 加载可配置 URL），并补齐移动端/横屏适配与「播报音量提升」镜像同步缺口；③体验增强——定位结果一键拉起高德/百度/腾讯地图导航、管理页横屏开关。另有日志治理暗线：删掉「不播」刷屏日志、调大日志窗口 2000→20000。
+**节点意义**：极空「阶段性完成」之后进入收尾打磨期，三条脉络并行——①语音播报音量提升从「引用计数」暴露三处深层 bug（stop 不触发 onCompletion 泄漏、connectHold 与计数语义不对称、半死链重建提前释放窗口），逐一根治到「纯抑制标记 + 补偿 + 守卫」的最终形态；②管理后台从「独立 Web 服务」进化为「客户端底部导航第 4 Tab 嵌入式集成」（WebView 加载可配置 URL），并补齐移动端/横屏适配与「播报音量提升」镜像同步缺口；③体验增强——定位结果一键拉起高德/百度/腾讯地图导航、管理页横屏开关。另有日志治理暗线：删掉「不播」刷屏日志、调大日志窗口 2000→20000。后续两条脉络把本里程碑延长到 v0.2.130：④全项目日志治理（脉络6，砍过程性重复、保状态骨架）；⑤**从测试环境切换到生产环境并完成全链路验收**（脉络8）——项目首次以公网 `https://appclient.039039.xyz:15443` 为默认运行环境，测试值从此只留在注释与界面提示里，切环境必须手动改三处。
 
 **⭐ 恢复锚点（本次收尾基线）**：
 - tag **`v0.2.127`**（→ 代码提交 `696b225` + 版本号 `bdc4176` + update.json `b977c39`）＝ 音量根治 + 管理后台集成 + 移动端/横屏适配 + 导航拉起全部最新代码。
@@ -96,10 +96,29 @@
 **⭐ 分发锚点（v0.2.130）**：
 - tag `v0.2.130` → CI run `42806943481`（Build Internal Test APK，success），Release 资产 `app-debug.apk` 由 Actions 自动上传。
 - 分发：唯一留存 `server/data/updates/bridge-v0.2.130.apk`（sha256 `5e50d4d7…`，46,195,621 字节）；`update.json` = v0.2.130 / versionCode 330，手机「检查更新」即可升级。
-- 同期把 `docs/admin/environment-matrix.md` 改成白话版（链路图 + 图标 + 改前改后 + 生产/测试步骤 + 截图操作指引）；docs 不进 APK，故 tag 后补的纯文档措辞提交不影响产物。
+- 同期把 `docs/admin/environment-matrix.md` 改成白话版（Mermaid 链路图 + 图标 + 改前改后 + 生产/测试步骤 + **纯文字界面路径速查，不使用截图**）；docs 不进 APK，故 tag 后补的纯文档措辞提交不影响产物。
 
 **★ 关键经验沉淀**：**「多一跳能用」不等于「设计正确」**——依赖重定向会把 GET/POST 语义、证书信任、WebSocket 升级行为全交给客户端实现细节；地址配置直接带协议、由客户端自己决定 ws/wss 才可预测。且**实证优先于推演**：本轮三次判断修正（自签证书、301 必然断链、POST 必挂）均被 curl 实测与用户服务端日志推翻，涉及网络部署的结论必须先测再下。
 
+
+### 脉络8 · 从测试环境切换到生产环境并完成全链路验收（v0.2.130 部署落地，无新增 APK）
+
+**节点意义**：此前所有验证都在「本机 `npm run dev` + 局域网 15160 / 5173」的测试环境完成；本脉络把三处默认值、nginx 托管、APK 分发、进程托管逐项落到公网生产 `https://appclient.039039.xyz:15443`，并用「只读外部体检 + 服务端回执日志 + 真机界面」三层证据确认切换成功。**从这一版起，生产是默认环境，测试值只保留在注释与界面提示里**，切环境必须手动改三处。
+
+- **v0.2.130 · 默认值与实际部署分开做**：仓库三处默认值统一为直连 15443（脉络7）；但**默认值改了不等于服务器生效**——用户另行在服务器上手动更新 `config.yaml`（`public_base_url`）、nginx 站点 conf、重新 build 并上传 `admin/dist`，重启后端 + reload nginx。仓库副本与服务器运行副本是两份文件，必须分别改。
+- **v0.2.130 · nginx 反代补齐**：`docs/admin/bridge-admin.conf` 模板补 `/api/`、`/ws`、`/d`、`/download`、`/static/`、`/health`、WebSocket `Upgrade` 头、`X-Forwarded-Host $http_host`（含端口，写成 `$host` 会让二维码丢 `:15443`）、SPA `try_files`、index.html 禁缓存 + assets 长缓存、200m 上传上限。与 `wxhelper.conf` 同 `server_name` + 端口时须二选一，不能整份丢进 `conf.d/`。
+- **v0.2.130 · 分发**：CI run `42806943481` success；唯一留存 `server/data/updates/bridge-v0.2.130.apk`（sha256 `5e50d4d7…`，46,195,621 字节），`update.json` = 0.2.130 / versionCode 330。按「严格打包下载铁律」清掉 `releases/` 副本、Gradle 产物与 v0.2.129 旧包。
+- **v0.2.130 · 进程托管**：参照桌面 `autoxServer.conf` 新增 `docs/server/bridge-supervisor.conf`；去掉 `sudo` 与无效的 `username`、`startsecs` 55→5，补 `stopasgroup`/`killasgroup`（`uv run` 派生子进程，防「stop 成功但 15160 仍被占」）、`stopwaitsecs=30`、日志切割。用户已部署：`supervisorctl status` 显示 `appclient:appclient-server RUNNING`；`appclient-tts-prewarm` 是一次性 TTS 预热任务（106 段），`STOPPED / Not started` 是设计预期、非故障。
+
+**★ 验收证据（三层，2026-11-10 19:42~19:57）**：
+
+1. **只读外部体检**（未登录服务器）：`/health` → `{"status":"ok","active_connections":1,"registered_devices":2}`；`/api/download/info` → `apk_url = https://…:15443/d`；首页 `200` 且 `Cache-Control: no-cache, no-store, must-revalidate`；深层路由 `/some/deep/route` → `200`（SPA fallback）。四项全过，切换 supervisor 后复验仍 ok。
+2. **服务端回执日志**（19:44:51~52）：`POST /api/commands` 登记 `speak` → 1.18 秒后设备回执 `success（已播报 3 字）` → 事件总线广播 `command_result` 给 5 个管理连接。⚠️ `/api/admin/ws` 是管理侧事件总线，设备端主通道是另一条 `/ws`（`app/api/ws.py`），别把前者的 `connection open` 当成设备在线证据。
+3. **真机界面**：升级后服务地址自动变 `https://…:15443`（15080 特例收敛命中）、**不弹首次配置引导页**（老 key 保留使 `saved != null`）。
+
+**★ 边界（仍未取到的证据，不影响可用性）**：设备端主 WS 走 `wss://…:15443` 的**握手行 / nginx 101 记录**尚未抓取（需设备重连时看 nginx access log）；日志治理后的**真机日志量**未复核；TTS 预热任务未跑（可选）；服务器上 `config.yaml` 与 nginx conf 的**文件本体**未逐行核对，只验了外部行为。生产长期稳定性（蜂窝切换、重启后自拉起）仍需观察。
+
+**⭐ 生产落地锚点**：tag `v0.2.130`（分发锚点见脉络 7）、`update.json` 仍指向 0.2.130；本轮收尾后本地与远端 **Git 树已校验一致**（API 通道重建 commit 的 hash 与本地不同属正常，判同步要比对 tree/blob sha，不能只比对工作区文件）。回滚配方见 `docs/dev/deploy-defaults-ledger.md` §4/§7。
 
 ### 关键经验沉淀
 
@@ -110,6 +129,9 @@
 - **transform:scale 不改变布局占位**：缩固定尺寸元素（如手机壳 390×844）需负 margin 补偿多余高度，且缩放后视觉溢出仍需外层容器 overflow 滚动兜底。
 - **WebView 拉起外部 App 必须在 `shouldOverrideUrlLoading` 拦截非 http scheme 并 `startActivity`**：WebView 无法处理 `androidamap://` 等 scheme 会静默失败，只有显式拦截 + ACTION_VIEW 才能真正调起地图 App。
 - **升级判断只看 versionName 不看 versionCode**：服务端 `_scan_latest` 从文件名/update.json 解析版本、`available = current < latest_version`（段比较），客户端也只比对 versionName；versionCode 是遗留字段不参与判断。
+- **「改默认值」不等于「切环境」**：仓库里的 `config.yaml` 与服务器上正在跑的那份是两份文件；二维码 / admin URL / 服务地址三处互不联动，且**已保存值不会被新默认值覆盖**。切生产要逐处改 + 重启后端 + reload nginx + 真机确认，切回测试同理，没有一键开关。
+- **切换进程托管前先停旧进程、启动器要按进程组杀**：supervisor 接管已在运行的服务时，不清掉手工 / nohup 进程必然端口冲突；`uv run` 这类会派生子进程的启动器必须 `stopasgroup`/`killasgroup`，否则出现「显示已停、端口仍被占」的假停止。
+- **通过 API 通道推文件会绕过 Git 行尾归一化**：本机 `core.autocrlf=true`、无 `.gitattributes` 时，API 上传的是工作区 CRLF 字节，本地 Git 树是 LF 版 —— 文本相同但 blob sha 不同、两棵树不相等。做「本地=远程」校验必须比对 Git tree / blob sha，只比对工作区文件会漏掉这类差异。
 
 ---
 

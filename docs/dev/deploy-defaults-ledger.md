@@ -227,11 +227,10 @@ rm -f docs/admin/bridge-admin.conf docs/admin/environment-matrix.md docs/dev/dep
 
 ## §5 触发回滚的信号
 
-- 设备端「设置 → 连接」显示 `appclient.039039.xyz:15080` 但握手/在线状态一直失败，
-  且 `nginx access.log` 里 15080 出现大量 301 → 说明 conf 的端口策略没生效或设备端仍被跳转。
-- 客户端「管理」Tab 白屏 → 自签证书问题（非本次代码回滚能解，需换可信证书或把 admin URL 改 15080 明文）。
+- 设备端「设置 → 连接」仍显示裸 `appclient.039039.xyz:15080`（无协议）→ 说明装的不是 v0.2.130 或迁移未生效；v0.2.130 的 `validate()` 会直接拒绝裸地址。若握手持续失败且 `nginx access.log` 里 15080 大量 301 → 检查 conf 端口策略与设备端是否仍被跳转。
+- 客户端「管理」Tab 白屏 → 按 `docs/admin/environment-matrix.md` §八 FAQ 排查：URL 未带协议 / dist 非最新 build / nginx 缺 SPA fallback / 浏览器缓存旧 index.html。⚠️ **「证书自签」这条已被实测推翻**（15443 是 Let's Encrypt 签发的 `*.039039.xyz` 受信任证书，`curl` 实测 `SSLVerify=0`），不要再按自签方向处理。
 - 扫码下载二维码指向的地址打不开 → 检查 `public_base_url` 与 nginx `location = /d`。
-- 首次安装引导页预填地址连不上 → 检查 `WsConfig.HOST_DEFAULT/PORT_DEFAULT`。
+- 首次安装引导页预填地址连不上 → 检查 `WsConfig.BASE_URL_DEFAULT`（v0.2.130 起 `HOST_DEFAULT` / `PORT_DEFAULT` 已合并为单值）。
 
 ## §6 编译与验收
 
@@ -243,4 +242,81 @@ rm -f docs/admin/bridge-admin.conf docs/admin/environment-matrix.md docs/dev/dep
   - 裸 `appclient.039039.xyz:15080` / 带路径 / 带查询 / `ftp://` / 空串 → 全部按预期拒绝
   - 迁移：老 `appclient.039039.xyz:15080` → `https://…:15443`；老 `039039.xyz:15160` → `http://039039.xyz:15160`；新 key 原样返回；无数据 → null（判定首次安装）
 - 生产实测：证书 `Let's Encrypt / CN=*.039039.xyz`、`SSLVerify=0`；15080 所有路径（含 POST）均 301；用户 18:07 服务端日志 tts 播报命令回执 `success`。
+- **真机 / 生产验证已回填（2026-11-10 19:42~19:57，用户确认 + 服务端日志 + 只读体检）**：
+  - ✅ 升级后服务地址自动变为 `https://appclient.039039.xyz:15443`（15080 迁移特例命中）
+  - ✅ 不弹首次配置引导页（老 key 保留，`saved != null`）
+  - ✅ 命令下发全链路通：`POST /api/commands` 登记 `speak` → 1.18s 后回执 `success（已播报 3 字）` → 事件总线广播 `command_result` 给 5 个管理连接
+  - ✅ 服务器侧部署生效：`config.yaml` / nginx conf / `admin/dist` 用户已手动更新并重启；只读体检四项全过（`/health` 返回后端 JSON、`apk_url` 含 `:15443`、首页 200 + no-cache、深层路由 200）
+  - ✅ 进程托管：`supervisorctl status` 显示 `appclient:appclient-server RUNNING`
+  - ⏳ **仍未取到**：设备端主 WS 走 `wss://…:15443` 的握手行 / nginx 101 记录；日志治理后的真机日志量；改回测试地址 `http://039039.xyz:15160` 连本机后端的回切验证。
+
+---
+
+## §7 本轮里程碑收尾修订 · 改前留档（2026-11-10 20:0x）
+
+> 范围：`docs/CHANGELOG.md`、`docs/INDEX.md`、本台账 §5/§6 的收尾修订。
+> 全部是 git 已跟踪文件，完整改前原文可由 `git show 2cafb27:<path>` 逐字取回；
+> 按 §2.8 先例，此处固化**关键行 / 关键结论**（回滚锚点），避免与 git 双写全文。
+> 改前基线：本地 `2cafb27`、远端 `8f464a0`。
+
+### 7.1 改前原文（逐字固化，勿改本节）
+
+`docs/CHANGELOG.md` 里程碑标题（第 25 行）：
+
+```markdown
+## 2026-11-09~10 · 📱🖥️ v0.2.121→v0.2.127 音量引用计数根治 + 管理后台嵌入式集成 + 移动端/横屏适配 + 定位导航拉起
+```
+
+`docs/CHANGELOG.md` 节点意义末尾（第 27 行末句）：
+
+```markdown
+另有日志治理暗线：删掉「不播」刷屏日志、调大日志窗口 2000→20000。
+```
+
+`docs/CHANGELOG.md` 分发锚点第 3 条（第 99 行）：
+
+```markdown
+- 同期把 `docs/admin/environment-matrix.md` 改成白话版（链路图 + 图标 + 改前改后 + 生产/测试步骤 + 截图操作指引）；docs 不进 APK，故 tag 后补的纯文档措辞提交不影响产物。
+```
+
+`docs/CHANGELOG.md`：`### 关键经验沉淀` 之前**没有**脉络 8；沉淀列表共 6 条，末条为「升级判断只看 versionName 不看 versionCode」。
+
+本台账 §5 改前三条结论（已被实测推翻 / 已过时，逐字）：
+
+```markdown
+- 设备端「设置 → 连接」显示 `appclient.039039.xyz:15080` 但握手/在线状态一直失败，
+  且 `nginx access.log` 里 15080 出现大量 301 → 说明 conf 的端口策略没生效或设备端仍被跳转。
+- 客户端「管理」Tab 白屏 → 自签证书问题（非本次代码回滚能解，需换可信证书或把 admin URL 改 15080 明文）。
+- 首次安装引导页预填地址连不上 → 检查 `WsConfig.HOST_DEFAULT/PORT_DEFAULT`。
+```
+
+本台账 §6 改前末条（逐字）：
+
+```markdown
 - **待真机验证**：升级后服务地址自动变为 `https://appclient.039039.xyz:15443`（迁移命中）、不弹首次配置引导页、主 WS 走 `wss` 直连 15443、命令回执正常；改测试地址 `http://039039.xyz:15160` 后能连本机后端。
+```
+
+`docs/INDEX.md`：改前「管理后台（admin/）」表只有 `[design.md]` 一行；「后端服务（server/）」表只有 `[design.md]` 一行；「开发规范（dev/）」表中 `release-pipeline.md` 为纯文本无链接，且 `deploy-defaults-ledger.md` / `log-governance-ledger.md` 未登记。
+
+### 7.2 改后状态（已回填）
+
+| 文件 | 改后 |
+|---|---|
+| `docs/CHANGELOG.md` | 里程碑标题延到 `v0.2.130` 并补两条主线；节点意义补「生产切换」；分发锚点「截图操作指引」改为「纯文字界面路径速查」；新增**脉络 8**（部署落地 / 三层验收 / 边界待验证 / 生产落地锚点）；关键经验沉淀补 3 条 |
+| `docs/dev/deploy-defaults-ledger.md` | §5 修正 3 条过时结论；§6「待真机验证」回填为 5 项已过 + 3 项待取；新增本节 §7 |
+| `docs/INDEX.md` | 按「新增文档后必须登记」约定补登记 `admin/` 3 篇、`dev/` 2 篇、`server/` 2 篇，并给 `release-pipeline.md` 加链接 |
+
+### 7.3 回滚配方
+
+```bash
+# 回到改前基线（同时撤销脉络 8 与全部回填）
+git checkout 2cafb27 -- docs/CHANGELOG.md docs/dev/deploy-defaults-ledger.md docs/INDEX.md
+```
+
+> 若只想撤「截图附录删除」而保留脉络 8，需单独把 `environment-matrix.md` 回退到 `392a0cd` 版本（见 `git log --oneline -- docs/admin/environment-matrix.md`）。
+
+### 7.4 触发回滚的信号
+
+- 用户要求恢复「带截图/配图的环境对照表」或恢复旧里程碑标题；
+- 发现脉络 8 里的生产落地事实（端口、证书、supervisor 状态）与实际不符，需整段重写；
+- 生产环境回退到测试环境运行，需把 §6 的「已回填」重新标回「待验证」。

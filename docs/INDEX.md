@@ -39,7 +39,9 @@
 | 文档 | 说明 |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | **变更记录（版本里程碑与关键修复脉络）** |
-| release-pipeline.md | 构建与发布链路（git 推送 + GitHub Actions 打包 + 签名密钥管理） |
+| [release-pipeline.md](dev/release-pipeline.md) | **构建与发布链路**（git 推送 + GitHub Actions 打包 + 签名密钥管理 + **严格打包下载铁律**：APK 唯一留存、`update.json` 的 sha/size 与留存包一致、本地=远程） |
+| [deploy-defaults-ledger.md](dev/deploy-defaults-ledger.md) | **部署默认值改前留档台账**（三处默认值 / nginx conf 改前原文逐字固化 + 改后回填 + 回滚配方 + 触发信号 + 编译与生产验收；§7 为里程碑收尾修订留档） |
+| [log-governance-ledger.md](dev/log-governance-ledger.md) | **全项目日志治理台账**（v0.2.130：`LogThrottle` 重连风暴节流 + 网络回调日志删除 + BLE hex dump 开关 + 智能控制启动汇总；含「为什么不是只记错误」） |
 | [heartbeat-inventory.md](dev/heartbeat-inventory.md) | **心跳与周期任务台账**（6 条长连接的心跳/传输 ping/判死/重连全景，含 VNT 黑盒保活与 **v0.2.38 监督重连**（可重试失败不停服务 + 退避 + NetworkCallback 立即重试）+ 各连接周期硬约束 + 耗电量级模型 + 优化点与实测方法；调任何周期前先查这里） |
 | [crash-ledger.md](dev/crash-ledger.md) | **崩溃台账**（三次根因时间线 + `startForegroundService` 义务按次计铁律 + 全量审计表 + 排障工具链 + **新前台服务接入检查清单 §5**；新服务接入前对照） |
 | [vnt-integration-change-ledger.md](dev/vnt-integration-change-ledger.md) | **VNT 集成改前留档台账**（§一~四 = v0.2.30 P1+P2 全部既有文件改前原文逐字固化 + 回滚配方 + 触发回滚信号 + 新增文件删除清单 + 改后回填；**§五 = v0.2.31** 诊断证据链、改前原文/哈希、新增文件、回滚配方；**§六 = v0.2.32** A1 纯替换 1.x 全量改前留档 + 删除清单 + 回滚配方 + 改后回填；**§七 = v0.2.38** 断线自动重连的改前原文/哈希、监督循环改造、回滚配方与真机验收清单） |
@@ -59,6 +61,8 @@
 | 文档 | 说明 |
 |---|---|
 | [design.md](server/design.md) | **后端服务设计**（WebSocket 连接管理：心跳/断线/重连/唯一连接/顶旧连接 + 消息推送 + 设备鉴权/昵称 + 命令下发 + 日志上传读取 + REST 管理接口 + 路由包组织） |
+| [bridge-supervisor.conf](server/bridge-supervisor.conf) | **supervisord 进程配置模板**（后端 `uv run main.py` 守护 + 一次性 TTS 预热任务 + 测试机 Vite dev 可选段；去 `sudo`、进程组杀、日志切割、部署前置与回滚） |
+| [aurelay-relay-troubleshooting.md](server/aurelay-relay-troubleshooting.md) · [aurelay-relay-reconnect-troubleshooting.md](server/aurelay-relay-reconnect-troubleshooting.md) | 音频中继排障 / WiFi↔蜂窝切换重连时序证据专档（历史） |
 
 ### 调研报告（research/）
 | 文档 | 说明 |
@@ -85,6 +89,9 @@
 | 文档 | 说明 |
 |---|---|
 | [design.md](admin/design.md) | **管理后台设计**（Vue3 + Element Plus Web 前端：设备管理/命令下发/日志查看/消息推送/连接监控/仪表盘 + 简单管理员鉴权 + 对接服务端 REST 接口） |
+| [client-embed-admin.md](admin/client-embed-admin.md) | **客户端内嵌管理后台设计**（形态 A：admin 由 nginx / 开发机托管、`VITE_API_BASE` 留空走同源相对路径、App WebView 加载可配置 URL、返回键与移动端/横屏适配） |
+| [environment-matrix.md](admin/environment-matrix.md) | **生产 / 测试环境配置对照（白话版 · SSOT）**（三处地址取值、Mermaid 链路图、端口地图、15080/301 实测结论、改前改后、生产/测试步骤、界面位置纯文字路径、只读验收命令） |
+| [bridge-admin.conf](admin/bridge-admin.conf) | **nginx 站点配置模板**（15443 静态 dist + `/api` `/ws` `/d` `/download` `/static` `/health` 反代、WebSocket Upgrade 头、`X-Forwarded-Host $http_host`、SPA fallback、缓存策略；末尾附验证清单，与 `wxhelper.conf` 同 server_name 时二选一） |
 
 ---
 
