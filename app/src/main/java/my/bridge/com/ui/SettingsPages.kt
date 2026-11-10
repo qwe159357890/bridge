@@ -1257,8 +1257,7 @@ fun ConnectionSettings() {
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
-    val serverHost by viewModel.serverHost.collectAsStateWithLifecycle()
-    val serverPort by viewModel.serverPort.collectAsStateWithLifecycle()
+    val serverAddress by viewModel.serverAddress.collectAsStateWithLifecycle()
     val uploadResult by viewModel.uploadResult.collectAsStateWithLifecycle()
 
     var showNameDialog by remember { mutableStateOf(false) }
@@ -1300,7 +1299,7 @@ fun ConnectionSettings() {
                 SettingValueRow(
                     icon = "🌐",
                     title = "服务地址",
-                    value = "${serverHost.ifBlank { "读取中…" }}:${serverPort}",
+                    value = serverAddress.ifBlank { "读取中…" },
                 ) {
                     showAddressDialog = true
                 }
@@ -1323,7 +1322,7 @@ fun ConnectionSettings() {
         }
         item {
             Text(
-                text = "设备标识来自系统 ANDROID_ID，重装应用不变。昵称仅作展示名，用于服务端识别设备；不设置时默认显示设备标识。服务地址修改后会自动重连；心跳/重连参数由客户端与服务端硬编码，无需配置。",
+                text = "设备标识来自系统 ANDROID_ID，重装应用不变。昵称仅作展示名，用于服务端识别设备；不设置时默认显示设备标识。服务地址必须是完整 URL（含协议）：生产 https://appclient.039039.xyz:15443，测试（本机 npm run dev）http://039039.xyz:15160；https 会自动走 wss，修改后自动重连。心跳/重连参数由客户端与服务端硬编码，无需配置。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
@@ -1370,11 +1369,10 @@ fun ConnectionSettings() {
     // 服务地址编辑弹窗
     if (showAddressDialog) {
         AddressEditDialog(
-            initialHost = serverHost,
-            initialPort = serverPort,
+            initialAddress = serverAddress,
             onCancel = { showAddressDialog = false },
-            onConfirm = { host, port ->
-                viewModel.saveServerAddress(host, port)
+            onConfirm = { address ->
+                viewModel.saveServerAddress(address)
                 showAddressDialog = false
             },
         )
@@ -1383,13 +1381,11 @@ fun ConnectionSettings() {
 
 @Composable
 private fun AddressEditDialog(
-    initialHost: String,
-    initialPort: String,
+    initialAddress: String,
     onCancel: () -> Unit,
-    onConfirm: (host: String, port: String) -> Unit,
+    onConfirm: (String) -> Unit,
 ) {
-    var host by remember { mutableStateOf(initialHost) }
-    var port by remember { mutableStateOf(initialPort) }
+    var address by remember { mutableStateOf(initialAddress) }
     var error by remember { mutableStateOf<String?>(null) }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
@@ -1397,27 +1393,22 @@ private fun AddressEditDialog(
         text = {
             Column {
                 androidx.compose.material3.OutlinedTextField(
-                    value = host,
+                    value = address,
                     onValueChange = {
-                        host = it
+                        address = it
                         error = null
                     },
-                    label = { Text("服务器地址") },
+                    label = { Text("服务器地址（完整 URL）") },
                     singleLine = true,
                     isError = error != null,
-                    placeholder = { Text("如 10.0.2.2 或 example.com") },
+                    placeholder = { Text("https://appclient.039039.xyz:15443") },
                 )
                 Spacer(Modifier.height(8.dp))
-                androidx.compose.material3.OutlinedTextField(
-                    value = port,
-                    onValueChange = {
-                        port = it
-                        error = null
-                    },
-                    label = { Text("端口") },
-                    singleLine = true,
-                    isError = error != null,
-                    placeholder = { Text("如 15160") },
+                Text(
+                    "必须带协议。生产：https://appclient.039039.xyz:15443；" +
+                        "测试（本机 npm run dev）：http://039039.xyz:15160",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (error != null) {
                     Spacer(Modifier.height(8.dp))
@@ -1432,11 +1423,11 @@ private fun AddressEditDialog(
         confirmButton = {
             androidx.compose.material3.TextButton(
                 onClick = {
-                    val err = my.bridge.com.core.network.ws.ServerAddress.validate(host, port)
+                    val err = my.bridge.com.core.network.ws.ServerAddress.validate(address)
                     if (err != null) {
                         error = err
                     } else {
-                        onConfirm(host.trim(), port.trim())
+                        onConfirm(my.bridge.com.core.network.ws.ServerAddress.normalize(address))
                     }
                 }
             ) { Text("保存并重连") }

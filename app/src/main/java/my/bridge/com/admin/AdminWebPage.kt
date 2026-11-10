@@ -181,7 +181,10 @@ fun AdminWebPage(onExitToHome: () -> Unit = {}) {
                     value = input,
                     onValueChange = { input = it },
                     label = { Text("管理后台地址") },
-                    placeholder = { Text("http://192.168.31.226:5173") },
+                    placeholder = { Text(my.bridge.com.admin.AdminPrefs.DEFAULT_ADMIN_URL) },
+                    supportingText = {
+                        Text("生产：https://appclient.039039.xyz:15443；测试（本机 npm run dev）：http://192.168.31.226:5173")
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

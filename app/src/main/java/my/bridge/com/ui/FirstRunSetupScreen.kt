@@ -30,12 +30,13 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.core.network.ws.WsConfig
 
 /**
  * 首次配置引导页（v0.2.51）。
  *
  * 解决「默认无界面模式 + 不填服务器就连不上 + 连不上就进不了界面填服务器」的死循环：
- * 首次安装（`DeviceStore.serverHost()` 为 null，从未配置）时强制进入本页，
+ * 首次安装（`DeviceStore.serverAddress()` 为 null，从未配置）时强制进入本页，
  * **测试连接成功才放行**进入正式界面；失败留在本页，绝不进入死锁。
  *
  * 本页**不受无界面模式拦截**（属「初始化」而非「无界面」）。
@@ -47,8 +48,9 @@ fun FirstRunSetupScreen(
     val viewModel: ConnectionViewModel = hiltViewModel()
     val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
 
-    var host by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("15160") }
+    // v0.2.130：单框完整 URL（必须带协议），预填生产默认值。
+    // 测试环境（本机 npm run dev）改为 http://039039.xyz:15160 或 http://192.168.31.226:15160。
+    var address by remember { mutableStateOf(WsConfig.BASE_URL_DEFAULT) }
     var testing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var ok by remember { mutableStateOf(false) }
@@ -82,31 +84,20 @@ fun FirstRunSetupScreen(
         Spacer(Modifier.height(24.dp))
 
         OutlinedTextField(
-            value = host,
+            value = address,
             onValueChange = {
-                host = it
+                address = it
                 error = null
                 ok = false
             },
-            label = { Text("服务器地址") },
+            label = { Text("服务器地址（完整 URL）") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             isError = error != null,
-            placeholder = { Text("如 example.com 或 192.168.1.10") },
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = port,
-            onValueChange = {
-                port = it
-                error = null
-                ok = false
+            placeholder = { Text("https://appclient.039039.xyz:15443") },
+            supportingText = {
+                Text("必须带协议。生产：https://appclient.039039.xyz:15443；测试（本机 npm run dev）：http://039039.xyz:15160")
             },
-            label = { Text("端口") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            isError = error != null,
-            placeholder = { Text("默认 15160") },
         )
         Spacer(Modifier.height(12.dp))
         Text(
@@ -131,17 +122,17 @@ fun FirstRunSetupScreen(
                 testing = true
                 ok = false
                 // 测试连接：先校验格式，再调 REST registerDevice 探测可达性
-                viewModel.testServerConnection(host, port) { success, msg ->
+                viewModel.testServerConnection(address) { success, msg ->
                     testing = false
                     if (success) {
                         ok = true
-                        DiagLog.i("首次配置", "服务器连接测试成功：$host:$port")
+                        DiagLog.i("首次配置", "服务器连接测试成功：$address")
                     } else {
                         error = msg
                     }
                 }
             },
-            enabled = !testing && host.isNotBlank() && port.isNotBlank(),
+            enabled = !testing && address.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(48.dp),
         ) {
             if (testing) {

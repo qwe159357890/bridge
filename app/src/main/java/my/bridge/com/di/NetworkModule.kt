@@ -120,14 +120,10 @@ object NetworkModule {
                 deviceStore.deviceId().also { identity.deviceId = it }
             },
             loadServerAddress = {
-                val host = deviceStore.serverHost()
-                val port = deviceStore.serverPort()
-                if (host != null || port != null) {
-                    ServerAddress.set(
-                        host ?: ServerAddress.host(),
-                        port ?: ServerAddress.port(),
-                    )
-                }
+                // v0.2.130：完整 URL 单值（必须带协议）。DeviceStore.serverAddress()
+                // 内部兼容老版本 host/port 双 key，自动补 http:// 前缀，
+                // 升级后既不丢地址、也不会误判为首次安装而弹引导页。
+                deviceStore.serverAddress()?.let { ServerAddress.set(it) }
             },
         )
 }

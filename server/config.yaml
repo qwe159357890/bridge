@@ -51,7 +51,12 @@ updates:
   # 「扫码下载」二维码里用的对外地址（含协议+端口）。留空 = 下载页运行时用请求的
   # Host 头自动推导（同一 WiFi 下扫码即可）。跨网/公网扫码时填真实可达地址，
   # 例如 http://192.168.31.5:15160 或 https://app.example.com
-  public_base_url: "http://039039.xyz:15160"
+  # ★ 环境对照（权威表见 docs/admin/environment-matrix.md）：
+  #   生产（nginx 托管 admin）：https://appclient.039039.xyz:15443   ← 当前默认值
+  #   测试（本机 npm run dev）：http://039039.xyz:15160 或 http://192.168.31.226:15160
+  #   说明：测试环境二维码指向后端 15160 的 /download 落地页与 /d 短链，
+  #   不经过 Vite dev server（5173 只服务 admin 前端）。改本值后需重启后端。
+  public_base_url: "https://appclient.039039.xyz:15443"
 
 music:
   dir: "data/music"              # 音乐共享目录（play_music 裸文件名音源）
