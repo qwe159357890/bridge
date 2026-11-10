@@ -5,6 +5,26 @@
         <span class="title">📍 定位结果{{ deviceName ? ` - ${deviceName}` : '' }}</span>
         <div class="loc-header-right">
           <span v-if="status === 'ok'" class="loc-time">{{ record?.last_fix_time }}</span>
+          <!-- 导航：高德优先，百度/腾讯可选（v0.2.127，客户端 WebView 会拦截 scheme 拉起地图 App） -->
+          <el-dropdown
+            v-if="status === 'ok' && record"
+            trigger="click"
+            size="small"
+            @command="onNavigate"
+          >
+            <el-button size="small" type="primary" plain :icon="Position">
+              导航
+              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="amap">高德地图</el-dropdown-item>
+                <el-dropdown-item command="baidu">百度地图</el-dropdown-item>
+                <el-dropdown-item command="qq">腾讯地图</el-dropdown-item>
+                <el-dropdown-item command="geo" divided>系统地图（通用）</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button :icon="Close" size="small" circle title="关闭" @click="hide" />
         </div>
       </div>
@@ -42,9 +62,10 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Close, Loading } from '@element-plus/icons-vue'
+import { ArrowDown, Close, Loading, Position } from '@element-plus/icons-vue'
 import { latestLocation, reverseGeocode, type LocationRecord } from '@/api/locations'
 import { loadAmap } from '@/utils/amap'
+import { buildGeoUri, buildNavUri, toNavCoord, tryOpenUri, type MapApp } from '@/utils/navigation'
 
 /**
  * 定位结果卡片（命令下发页用）。
@@ -121,6 +142,14 @@ async function show(deviceId: string, name: string, sentAtMs: number) {
 function hide() {
   visible.value = false
   pollToken++ // 使进行中的轮询失效
+}
+
+/** 导航：跳转对应地图 App（v0.2.127）。 */
+function onNavigate(app: MapApp | 'geo') {
+  if (!record.value) return
+  const target = { coord: toNavCoord(record.value), name: deviceName.value || undefined }
+  const uri = app === 'geo' ? buildGeoUri(target) : buildNavUri(app, target)
+  tryOpenUri(uri)
 }
 
 /** 记录是否属于本次下发（server_time 晚于下发时刻，容忍 1 分钟时钟偏差）。 */

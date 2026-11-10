@@ -1,6 +1,9 @@
 package my.bridge.com.admin
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -58,10 +61,45 @@ import my.bridge.com.ui.BackPressPrefs
 @Composable
 fun AdminWebPage(onExitToHome: () -> Unit = {}) {
     val context = LocalContext.current
+    // 从 Context 逐级解包 Activity（activity-compose 1.9 无 LocalActivity，用 ContextWrapper 取）
+    val activity = remember(context) { context.findActivity() }
     var url by remember { mutableStateOf(AdminPrefs.url(context)) }
     var input by remember { mutableStateOf(url) }
     var editing by remember { mutableStateOf(url.isBlank()) }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    // 横屏锁定开关（v0.2.127）：持久化到 AdminPrefs，进入页面时恢复上次状态
+    var landscape by remember { mutableStateOf(AdminPrefs.isLandscape(context)) }
+
+    // 应用横屏锁定到当前 Activity（无 Activity 时静默跳过，如预览场景）
+    val applyOrientation: (Boolean) -> Unit = { lock ->
+        activity?.requestedOrientation = if (lock) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // 切换横屏锁定：更新状态 + 持久化 + 应用到 Activity
+    val toggleLandscape: () -> Unit = {
+        val next = !landscape
+        landscape = next
+        AdminPrefs.setLandscape(context, next)
+        applyOrientation(next)
+        Toast.makeText(
+            context,
+            if (next) "已锁定横屏" else "已恢复自动旋转",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    // 首次进入按持久化的横屏偏好应用一次（无需等用户点击）
+    DisposableEffect(Unit) {
+        applyOrientation(landscape)
+        onDispose {
+            // 离开管理页：恢复自动旋转，不把横屏锁定带到其它 Tab
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
 
     val load: (String) -> Unit = { target ->
         if (AdminPrefs.isValid(target)) {
@@ -116,6 +154,15 @@ fun AdminWebPage(onExitToHome: () -> Unit = {}) {
                 IconButton(onClick = { webView?.reload() }) {
                     Icon(Icons.Filled.Refresh, contentDescription = "刷新", tint = Color(0xFF1A6EE8))
                 }
+                // 横屏切换（v0.2.127）：锁定横屏 ↔ 自动旋转，状态持久化
+                Text(
+                    if (landscape) "退出横屏" else "横屏",
+                    fontSize = 13.sp,
+                    color = if (landscape) Color(0xFF1A6EE8) else Color(0xFF909399),
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .clickable { toggleLandscape() },
+                )
                 Text(
                     "改地址",
                     fontSize = 13.sp,
@@ -164,7 +211,19 @@ fun AdminWebPage(onExitToHome: () -> Unit = {}) {
                                 override fun shouldOverrideUrlLoading(
                                     view: WebView,
                                     request: WebResourceRequest,
-                                ): Boolean = false // 站内跳转仍在 WebView 内
+                                ): Boolean {
+                                    val u = request.url
+                                    val scheme = u.scheme?.lowercase()
+                                    // 地图导航等外部 App scheme：拦截并拉起对应 App（v0.2.127）
+                                    // admin 前端「导航」按钮会跳转 androidamap:// / baidumap:// / qqmap:// / geo:
+                                    // 这些 scheme WebView 自身无法处理，必须转交系统。
+                                    if (scheme in NAV_SCHEMES) {
+                                        openExternalApp(ctx, u)
+                                        return true
+                                    }
+                                    // 站内 http/https 跳转仍在 WebView 内
+                                    return false
+                                }
                             }
                             webChromeClient = WebChromeClient()
                             webView = this
@@ -204,4 +263,31 @@ private fun configureSettings(settings: WebSettings) {
     // 支持缩放（移动端看密集表格可能需要）
     settings.builtInZoomControls = true
     settings.displayZoomControls = false
+}
+
+/** 需转交系统拉起对应 App 的 scheme（地图导航等，v0.2.127）。 */
+private val NAV_SCHEMES = setOf("androidamap", "baidumap", "qqmap", "geo")
+
+/** 从 Context 逐级解包 Activity（activity-compose 1.9 无 LocalActivity）。 */
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+/** 用系统 Intent 拉起外部 App（地图导航等）。失败则 Toast 提示未安装。 */
+private fun openExternalApp(context: android.content.Context, uri: Uri) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        // 未安装对应 App / 无 handler
+        android.widget.Toast.makeText(
+            context,
+            "未找到可处理该链接的应用（请确认已安装地图 App）",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
 }

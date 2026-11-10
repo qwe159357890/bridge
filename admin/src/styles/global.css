@@ -102,13 +102,102 @@
     margin-bottom: 8px;
   }
 
-  /* ===== 表格：设最小宽度 + 容器横向滚动，避免密集列挤爆窄屏 ===== */
+  /* ===== 卡片头：窄屏纵向排列（标题在上、操作区在下换行），避免标题与控件并排挤爆 =====
+     这些类名是全站通用约定（.card-header / .header-actions / .search），各页面 scoped
+     样式里重复定义为 flex 横排；这里用 !important 统一在窄屏覆盖为纵向/换行。 */
+  .card-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px;
+  }
+  .header-actions {
+    flex-wrap: wrap !important;
+    width: 100%;
+  }
+  /* 搜索框等固定宽度控件在窄屏自适应铺满 */
+  .header-actions .search,
+  .header-actions .el-input,
+  .header-actions .el-select {
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
+  .header-actions .el-button {
+    flex: 0 0 auto;
+  }
+
+  /* ===== jikong 极空页工具栏（.toolbar/.tools 是极空页专用约定，非全站通用）===== */
+  .toolbar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px;
+  }
+  .tools {
+    flex-wrap: wrap !important;
+    width: 100%;
+  }
+
+  /* ===== command 命令下发页（桌面端双栏布局，窄屏改纵向堆叠）===== */
+  /* 顶栏：标题 + 设备选择 换行堆叠（与 .card-header 同构的 .top-bar） */
+  .top-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px;
+  }
+  .top-bar-right {
+    flex-wrap: wrap !important;
+    width: 100%;
+  }
+  /* 设备选择器固定 240px → 窄屏自适应 */
+  .top-bar-right .el-select,
+  .top-bar-right .device-picker {
+    width: 100% !important;
+  }
+  /* 命令选择器：左分类导航 + 右卡片墙 由横向 flex 改为纵向堆叠 */
+  .command-picker {
+    flex-direction: column !important;
+  }
+  .category-pane {
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid #e4e7ed;
+    padding: 8px 0 !important;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .category-title {
+    width: 100%;
+    padding: 4px 12px 6px !important;
+  }
+  .category-item {
+    padding: 8px 12px !important;
+  }
+  /* 命令搜索工具栏：搜索框 280px 固定 → 换行自适应 */
+  .command-toolbar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px;
+  }
+  .command-toolbar .el-input {
+    width: 100% !important;
+  }
+  .command-pane {
+    padding: 12px !important;
+  }
+  /* 命令卡片网格在窄屏下最少 2 列，避免过挤 */
+  .command-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+  }
+
+  /* ===== 表格：窄屏横向滚动，而不是让表格撑破卡片造成页面级溢出 =====
+     正确做法：卡片 body 作为滚动容器（overflow-x:auto），表格保持最小宽度在容器内滚动。
+     仅对含表格的卡片生效；无表格卡片不受影响。 */
+  .el-card .el-card__body {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
   .el-table {
     min-width: 640px;
-  }
-  .el-table__body-wrapper,
-  .el-table__header-wrapper {
-    overflow-x: auto;
   }
 
   /* ===== 表单：窄屏 label 纵向排列（覆盖 label-width 固定值，改为顶部对齐）===== */
@@ -129,11 +218,9 @@
   }
   /* 行内表单在窄屏下收紧间距、允许换行 */
   .el-form--inline .el-form-item {
-    margin-right: 8px;
-  }
-  .el-form--inline .el-form-item {
     display: inline-flex;
     margin-right: 8px;
+    flex-wrap: wrap;
   }
 
   /* ===== 按钮/输入控件：移动端增大触控目标 ===== */
@@ -144,5 +231,45 @@
   .el-textarea__inner,
   .el-select {
     font-size: 16px; /* 防 iOS 聚焦自动缩放 */
+  }
+}
+
+/* ===== 横屏适配（v0.2.127）：宽但矮，重点是高度方向的溢出 =====
+   仅横屏（orientation: landscape）+ 高度受限（≤500px）时生效，PC 桌面窗口与竖屏均不受影响。
+   与上面的竖屏窄屏断点（max-width:768px）互不冲突：横屏宽 844px 不会命中窄屏规则，
+   故这里单独处理横屏特有的「高度溢出」问题。 */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* 内容区高度方向收紧 padding，并允许纵向滚动（横屏矮视口下内容必然超出，滚动查看） */
+  .el-main {
+    padding: 10px 12px;
+    overflow-y: auto;
+  }
+
+  /* 地图类元素降高度（定位结果卡、位置历史弹窗、连接监控等） */
+  .loc-map {
+    height: 200px;
+  }
+  .map {
+    height: 180px;
+  }
+
+  /* 命令下发页顶栏：横屏下标题与设备选择区仍可能挤，允许换行防标题竖排 */
+  .top-bar {
+    flex-wrap: wrap !important;
+    gap: 8px;
+  }
+  .top-bar .title {
+    white-space: nowrap;
+  }
+
+  /* 极空页：手机壳（固定 390×844）在横屏矮视口下等比缩小到 0.5，配合 .el-main 纵向滚动
+     可看全貌；保留 1:1 复刻内容。transform-origin 左上，负 margin 补偿多余高度避免下方大片空白。 */
+  .stage .phone {
+    transform: scale(0.5);
+    transform-origin: top left;
+    margin-bottom: calc(-844px * 0.5);
+  }
+  .stage {
+    align-items: flex-start;
   }
 }

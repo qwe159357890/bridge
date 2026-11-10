@@ -208,6 +208,7 @@ onMounted(() => {
 }
 .login-card {
   width: 400px;
+  max-width: calc(100vw - 32px);
   padding: 12px 20px 8px;
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);

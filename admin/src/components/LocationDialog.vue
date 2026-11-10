@@ -62,8 +62,21 @@
         <template #default="{ row }">±{{ Math.round(row.accuracy) }}m</template>
       </el-table-column>
       <el-table-column prop="report_count" label="次数" width="64" />
-      <el-table-column label="操作" width="72" fixed="right">
+      <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
+          <el-dropdown trigger="click" size="small" @command="(app: any) => onNavigate(app, row)">
+            <el-button size="small" type="primary" link>
+              导航<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="amap">高德地图</el-dropdown-item>
+                <el-dropdown-item command="baidu">百度地图</el-dropdown-item>
+                <el-dropdown-item command="qq">腾讯地图</el-dropdown-item>
+                <el-dropdown-item command="geo" divided>系统地图</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button size="small" type="danger" link @click="removeOne(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -80,8 +93,10 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { listLocations, deleteLocations, type LocationRecord } from '@/api/locations'
 import { loadAmap } from '@/utils/amap'
+import { buildGeoUri, buildNavUri, toNavCoord, tryOpenUri, type MapApp } from '@/utils/navigation'
 
 const props = defineProps<{
   visible: boolean
@@ -259,6 +274,13 @@ async function clearAll() {
     overlayGroup = null
   }
   await load()
+}
+
+/** 导航：跳转对应地图 App（v0.2.127）。 */
+function onNavigate(app: MapApp | 'geo', row: LocationRecord) {
+  const target = { coord: toNavCoord(row), name: props.deviceName || undefined }
+  const uri = app === 'geo' ? buildGeoUri(target) : buildNavUri(app, target)
+  tryOpenUri(uri)
 }
 </script>
 

@@ -17,6 +17,9 @@ object AdminPrefs {
     /** admin 访问地址（如 http://192.168.31.226:5173 或 nginx 部署的地址）。 */
     private const val KEY_URL = "admin_url"
 
+    /** 横屏锁定开关（v0.2.127）：true = 锁定横屏，false = 跟随系统自动旋转。 */
+    private const val KEY_LANDSCAPE = "admin_landscape"
+
     private fun sp(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
 
@@ -37,5 +40,14 @@ object AdminPrefs {
         } else {
             sp(context).edit().putString(KEY_URL, normalized).apply()
         }
+    }
+
+    /** 读取横屏锁定开关。 */
+    fun isLandscape(context: Context): Boolean =
+        sp(context).getBoolean(KEY_LANDSCAPE, false)
+
+    /** 写入横屏锁定开关。 */
+    fun setLandscape(context: Context, landscape: Boolean) {
+        sp(context).edit().putBoolean(KEY_LANDSCAPE, landscape).apply()
     }
 }
