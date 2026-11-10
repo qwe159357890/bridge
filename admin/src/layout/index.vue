@@ -312,11 +312,9 @@ function scheduleReconnect() {
 }
 
 onMounted(() => {
-  try {
-    isCollapse.value = localStorage.getItem('bridge_admin_aside_collapse') === '1'
-  } catch {
-    /* 忽略 */
-  }
+  // v0.2.125 修复：不再用 localStorage 无条件覆盖 initCollapse() 的按屏宽判定。
+  // 初始折叠态已由 initCollapse() 决定（有记忆用记忆，无记忆按 <768px 默认收缩），
+  // onMounted 只需确保 asideWidth 与当前折叠态一致。
   if (isCollapse.value) {
     asideWidth.value = '36px'
   } else {

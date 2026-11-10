@@ -76,28 +76,73 @@
   line-height: 1.2;
 }
 
-/* ===== 移动端适配（v0.2.125，层次 A：布局级，见 docs/admin/client-embed-admin.md §3.2）=====
+/* ===== 移动端适配（v0.2.125，层次 A 加强：布局级，见 docs/admin/client-embed-admin.md §3.2）=====
    仅窄屏断点覆盖，PC 端（>768px）零影响。 */
+
 @media (max-width: 768px) {
   /* 内容区缩小 padding，最大化可用宽度 */
   .el-main {
     padding: 12px;
   }
-  /* 表格允许横向滚动，避免窄屏溢出 */
-  .el-table__body-wrapper,
-  .el-table__header-wrapper {
-    overflow-x: auto;
-  }
+
   /* 卡片底部间距收紧 */
   .page-card {
     margin-bottom: 12px;
   }
+
   /* 顶部 header：移动端隐藏面包屑（保留标题区与用户区） */
   .header .el-breadcrumb {
     display: none;
   }
+
+  /* ===== 栅格：窄屏下强制单列堆叠（覆盖固定 :span 的 4 列/3 列布局）===== */
+  .el-row .el-col[class*='el-col-'] {
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+    margin-bottom: 8px;
+  }
+
+  /* ===== 表格：设最小宽度 + 容器横向滚动，避免密集列挤爆窄屏 ===== */
+  .el-table {
+    min-width: 640px;
+  }
+  .el-table__body-wrapper,
+  .el-table__header-wrapper {
+    overflow-x: auto;
+  }
+
+  /* ===== 表单：窄屏 label 纵向排列（覆盖 label-width 固定值，改为顶部对齐）===== */
+  .el-form-item {
+    display: block;
+    margin-bottom: 14px;
+  }
+  .el-form-item__label {
+    float: none;
+    display: block;
+    width: auto !important;
+    text-align: left;
+    padding-bottom: 4px;
+    line-height: 1.4;
+  }
+  .el-form-item__content {
+    margin-left: 0 !important;
+  }
   /* 行内表单在窄屏下收紧间距、允许换行 */
   .el-form--inline .el-form-item {
     margin-right: 8px;
+  }
+  .el-form--inline .el-form-item {
+    display: inline-flex;
+    margin-right: 8px;
+  }
+
+  /* ===== 按钮/输入控件：移动端增大触控目标 ===== */
+  .el-button {
+    min-height: 36px;
+  }
+  .el-input__inner,
+  .el-textarea__inner,
+  .el-select {
+    font-size: 16px; /* 防 iOS 聚焦自动缩放 */
   }
 }

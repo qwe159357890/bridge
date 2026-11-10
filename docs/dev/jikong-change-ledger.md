@@ -17,7 +17,47 @@
 
 ---
 
-### v0.2.124b 管理后台补「播报音量提升」镜像/同步缺口（2026-11-10 08:15 实施）
+### v0.2.125b 修复 connectHold 与引用计数不配对导致的音量卡满不回（2026-11-10 09:30 实施）
+
+**背景（用户 11-10 09:15 反馈 + 日志实证）**：靠近自动连接连响**两次**蜂鸣（半死链 autoConnect 首连 + 直连重建各 beep 一次）→ 电量播报完成后，媒体音量**没有从最大恢复**（用户手动按音量减键查看，仍接近满）。日志实证：09:12 那次测试「音量提升决策/重申」日志齐全，但**缺「音量恢复」日志**（`后台静默播报音量恢复` 未出现），说明 `end`/`releaseConnectHold` 始终没能把 `boostCount` 减到 0。
+
+**根因（设计缺陷，`SpeakVolumeBoost.kt` 内 beginConnectHold 与 releaseConnectHold 计数语义不对称）**：
+- `beginConnectHold` 在 `boostCount > 0` 时走「接管分支」：**只置 `connectHold=true`，不 +1 计数**（认为 hold 不额外占一层）。
+- `releaseConnectHold` 在 `boostCount > 1` 时走 `else { boostCount-- }`：**假设 connectHold 一定占了 1 次计数**。
+- 两边对「connectHold 是否占一次计数」的假设矛盾。半死链重建导致 `connected` 反复翻转（两次 beginConnectHold）+ 两次 beep + 电量播报穿插时，`releaseConnectHold` 的 `boostCount--` 会**多减/错减**，最终 `boostCount` 卡在 >0，`end` 永远减不到 0 → 音量永不恢复。
+
+**改前原文（关键块）**：
+1. `SpeakVolumeBoost.kt` `beginConnectHold`（约 116-119 行）：
+   ```kotlin
+   if (boostCount > 0) {               // 已有声音在播（如 beep 已 begin），仅接管窗口标记
+       connectHold = true
+       return true
+   }
+   ```
+2. `SpeakVolumeBoost.kt` `releaseConnectHold`（约 137-148 行）：
+   ```kotlin
+   fun releaseConnectHold(context: Context) {
+       if (!connectHold) return
+       connectHold = false
+       if (boostCount <= 1) {
+           if (original != -1) restoreOriginal(context)
+       } else {
+           boostCount--
+       }
+   }
+   ```
+
+**改后**（`SpeakVolumeBoost.kt`，connectHold 彻底与 boostCount 解耦）：
+1. `beginConnectHold`：去掉「接管分支（boostCount>0 只置 flag）」与「建立分支的 `boostCount=1`」，改为**幂等 + 纯抑制标记**——`if (connectHold) return true`；否则读 cur，`cur>=max` 返回 false，否则 `forceMax` + `original=cur` + `connectHold=true`，**不碰 boostCount**。
+2. `releaseConnectHold`：去掉 `else { boostCount-- }`，改为 `connectHold=false` 后仅当 `boostCount<=0 && original!=-1` 才 `restoreOriginal`。
+3. `begin`：加 `if (!connectHold) original = cur` 保护——connectHold 激活时（hold 已正确记录原始音量）即使 hold 拉满失败、cur 仍 < max，也不覆盖 original。
+
+**自洽性说明**：connectHold 拉满音量后，beep/播报的 `begin` 读到 `cur>=max` 直接 return false（不 +1），其 `end` 因 `boostCount==0` 也是 no-op；计数完全由正常播报链路自理，connectHold 只在 `releaseConnectHold` 时统一收尾恢复。半死链重建两次 beginConnectHold 因幂等分支无害。
+
+**回滚配方**：还原上述三处「改前原文」。
+**触发信号**：① 靠近自动连接（半死链重建）播报后音量卡满不回 → 查「音量恢复」日志是否缺失 + `connectHold`/`boostCount` 是否错位；② 正常单次连接播报后音量不恢复 → 查 `end`/`releaseConnectHold` 计数是否错位。
+
+---
 
 **背景（用户 11-10 要求检查管理后台）**：客户端 v0.2.115 在手机设置页新增「播报时提升音量」主开关 + 「强制提升」子开关，并在状态上报 `app` 里加了 `volume_boost_enabled` / `volume_boost_force` 两字段，但管理后台既没展示也没法远程改——形成「后台 1:1 复刻 + 远程镜像」的双向缺口（命令执行器 `jikong_set_speak` 也未处理这两字段）。
 

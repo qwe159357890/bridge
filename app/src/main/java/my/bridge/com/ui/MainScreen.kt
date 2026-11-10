@@ -192,8 +192,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
             salesNavVisible = true
             return@BackHandler
         }
-        // v0.2.125：管理后台页（内嵌 WebView）返回键兜底——页内 BackHandler 优先接管
-        // （WebView 后退栈/编辑态），落到此处说明无后退栈，直接回主页。
+        // v0.2.125：管理后台页返回键已由页内 BackHandler 全权接管（「再按一次返回主页」），
+        // 正常组合时不会落到这里；此分支仅作页面未组合时的极兜底。
         if (selectedBottom == 3) {
             selectedBottom = 0
             return@BackHandler
@@ -263,7 +263,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         salesNavVisible = true
                     },
                 )
-                3 -> AdminWebPage()
+                3 -> AdminWebPage(
+                    // v0.2.125：管理页返回键 = 第 1 次提示、窗口内第 2 次回主页（与销售页一致）
+                    onExitToHome = { selectedBottom = 0 },
+                )
                 4 -> SettingsPage(
                     currentTab = settingsTab,
                     homeTabOrder = homeTabOrder,

@@ -7,6 +7,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import my.bridge.com.ui.BackPressPrefs
 
 /**
  * 「管理后台」内嵌页（v0.2.125，见 docs/admin/client-embed-admin.md）。
@@ -53,7 +56,7 @@ import androidx.compose.ui.viewinterop.AndroidView
  * - 返回键 → WebView 有后退栈则 goBack，否则退出到上一级（非沉浸，保留底部导航）。
  */
 @Composable
-fun AdminWebPage() {
+fun AdminWebPage(onExitToHome: () -> Unit = {}) {
     val context = LocalContext.current
     var url by remember { mutableStateOf(AdminPrefs.url(context)) }
     var input by remember { mutableStateOf(url) }
@@ -70,10 +73,21 @@ fun AdminWebPage() {
         }
     }
 
-    // 返回键：仅在「编辑态」或「WebView 有后退栈」时拦截；否则不拦截，
-    // 交回 MainScreen 的返回梯子（非沉浸页，保留底部导航）。
-    val interceptBack = editing || (webView?.canGoBack() == true)
-    BackHandler(enabled = interceptBack) {
+    // 返回键链（对齐销售页范式，Compose BackHandler 后进先出）：
+    // ① 主界面兜底：第 1 次 Toast「再按一次返回主页」，窗口内第 2 次 → onExitToHome()；
+    //    注册在最前 = 优先级最低。
+    var lastBackAt by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
+            onExitToHome()
+        } else {
+            lastBackAt = now
+            Toast.makeText(context, "再按一次返回主页", Toast.LENGTH_SHORT).show()
+        }
+    }
+    // ② 编辑态 / WebView 后退栈优先接管（注册靠后，优先级更高）。
+    BackHandler(enabled = editing || webView?.canGoBack() == true) {
         val wv = webView
         if (editing) {
             editing = false

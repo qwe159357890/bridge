@@ -81,7 +81,11 @@ object SpeakVolumeBoost {
         // setStreamVolume(stream, max, 0) 常被系统静默忽略（真机日志回读仍=原值），
         // 而 FLAG_SHOW_UI / adjustStreamVolume 能真正生效。三段都失败也不影响播报本身。
         val after = forceMax(am)
-        original = cur
+        // v0.2.125b：connectHold 激活时说明原始音量已由 beginConnectHold 正确记录，
+        // 这里（hold 拉满失败、cur 仍 < max 的极端降级）不覆盖 original，避免恢复错值。
+        if (!connectHold) {
+            original = cur
+        }
         boostCount = 1
         Timber.i(
             "后台静默播报音量提升：媒体 %d/%d → 最大（三段兜底后回读=%d），播报后恢复",
@@ -103,25 +107,28 @@ object SpeakVolumeBoost {
     }
 
     /**
-     * 开启「连接成功保持窗口」（v0.2.122）：连接成功时拉满媒体音量并保持，让 beep 与首帧
-     * 电量播报共享同一音量窗口。期间任何 [end] 都不会真正恢复音量，直到 [releaseConnectHold]
-     * 被调用（首帧播报完成）或超时兜底（[releaseConnectHold] 由调用方负责）。
+     * 开启「连接成功保持窗口」（v0.2.122；v0.2.125b 修正计数语义）。
+     *
+     * connectHold 是**纯抑制标记**：只记录原始音量 + 拉满 + 阻止 [end] 在窗口内恢复，
+     * **不占一次 boostCount**。这样它与 [begin]/[end] 的引用计数完全解耦，不会在半死链
+     * 重建（connected 反复翻转）+ 两次 beep + 播报穿插时错位（用户 11-10 实证的「播报完
+     * 音量卡满不回」根因）。
+     *
+     * 幂等：connectHold 已激活时重复调用直接返回 true（重建路径会多次触发本方法）。
      */
     @Synchronized
     fun beginConnectHold(context: Context): Boolean {
         if (!shouldBoost(context)) return false
         val am = context.getSystemService(AudioManager::class.java) ?: return false
+        if (connectHold) return true            // 已激活，幂等
         val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (boostCount > 0) {               // 已有声音在播（如 beep 已 begin），仅接管窗口标记
-            connectHold = true
-            return true
-        }
-        if (cur >= max) return false        // 已最大，无需提升
+        if (cur >= max) return false            // 已最大，无需提升
         val after = forceMax(am)
-        original = cur
-        boostCount = 1
+        original = cur                          // 记录原始音量（供 release 时恢复）
         connectHold = true
+        // 不碰 boostCount：beep/播报的 begin 读到 cur==max 会 return false，天然不 +1；
+        // 其 end 因 boostCount==0 也是 no-op。计数完全由正常播报链路自理。
         Timber.i(
             "连接成功音量窗口开启：媒体 %d/%d → 最大（回读=%d），首帧播报后释放",
             cur, max, after,
@@ -130,20 +137,25 @@ object SpeakVolumeBoost {
     }
 
     /**
-     * 释放「连接成功保持窗口」（v0.2.122）：首帧播报完成后调用，真正恢复媒体音量。
-     * 无窗口/未提升时无操作。
+     * 释放「连接成功保持窗口」（v0.2.122；v0.2.125b 修正计数语义）。
+     *
+     * connectHold 是**纯抑制标记**——它只阻止 [end] 在窗口内恢复音量，**本身不占一次
+     * boostCount**（[beginConnectHold] 的「接管分支」不会 +1）。因此释放窗口时**只清标记，
+     * 不增减计数**：若此刻已无其它声音在播（boostCount 已归 0 但音量因窗口抑制尚未恢复），
+     * 则补一次恢复；若仍有声音在播（boostCount > 0），则交给那个声音自己的 [end] 收尾
+     * （此时 connectHold 已清，end 能正常恢复）。
+     *
+     * 改前（v0.2.122）此处有 `else { boostCount-- }`，会与「接管分支不 +1」不对称，
+     * 在半死链重建（connected 反复翻转）+ 两次 beep + 播报穿插时错减计数 → boostCount
+     * 卡 >0 → 音量永不恢复（用户 11-10 实证：播报完音量仍接近满）。
      */
     @Synchronized
     fun releaseConnectHold(context: Context) {
         if (!connectHold) return
         connectHold = false
-        // 释放窗口后，若当前已无其它声音在播（引用计数仅剩 hold 自己），恢复原音量；
-        // 若首帧播报仍在进行（其 begin 又 +1），则只减计数、不恢复，交播报的 end 收尾。
-        if (boostCount <= 1) {
-            // 仅剩 hold（或计数已被 end 清到 0 但音量未恢复）→ 直接恢复
-            if (original != -1) restoreOriginal(context)
-        } else {
-            boostCount--
+        // 仅当「已无活跃声音」时才补恢复；否则交还在播声音的 end 收尾。
+        if (boostCount <= 0 && original != -1) {
+            restoreOriginal(context)
         }
     }
 
