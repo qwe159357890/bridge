@@ -3,8 +3,9 @@
 > 建立：2026-11-10（用户拍板三处默认值）
 > 修订：2026-11-10 18:10 —— 服务地址改「完整 URL 单框」；实测 15080 的 301 链路本就可用，
 > 早期「15080 必须明文、禁止跳转」的判断已撤回，设备端改默认直连 15443。
-> 再修订：2026-11-10 19:1x —— 按用户要求改成白话版：补链路图、图标、改前/改后对照，
-> 并新增「配图怎么来、截图怎么做、在哪截」附录（§九）。
+> 再修订：2026-11-10 19:1x —— 按用户要求改成白话版：补链路图、图标、改前/改后对照。
+> 19:4x —— 按用户要求**删掉配图附录**，界面位置一律用文字路径描述（§九）；
+> 服务器侧 `config.yaml`、nginx conf、`admin/dist` 用户已确认手动更新并重启完毕（§五）。
 >
 > **权威定位**：本文是「二维码地址 / admin URL / 服务地址」三处环境取值的**唯一对照依据**。
 > 代码注释只写要点并指向本文，不双写细节。
@@ -54,7 +55,7 @@ flowchart LR
 - 生产时 nginx 是**一个大门**：网页、接口、WebSocket、APK 下载全从 `15443` 进，nginx 再转给内网 `15160` 的 Python 后端。
 - 测试时 Vite 只是**前端预览服务器**：只有「管理页」走 5173；二维码和设备端连接**必须直连后端 15160**，不能填 5173 —— 因为 `admin/vite.config.ts` 只代理了 `/api`、`/health`、`/download`、`/static`，**没有代理设备端用的 `/ws`**。
 
-> 这张图是 Mermaid 代码块，GitHub / VS Code 的 Markdown 预览会直接画出来；改文字即改图，**不需要截图**。若你的阅读器不渲染 Mermaid，看下面 §二 的端口表即可。
+> 这张图是 Mermaid 代码块，GitHub / VS Code 的 Markdown 预览会直接画出来；改文字即改图，维护成本低。若你的阅读器不渲染 Mermaid，看下面 §二 的端口表即可。
 
 ---
 
@@ -147,7 +148,29 @@ flowchart TD
 4. 🧩 **App 管理页**：「管理」Tab →「改地址」→ 填 `https://appclient.039039.xyz:15443`。
 5. 📡 **App 服务地址**：「设置 → 连接 → 服务地址」→ 填 `https://appclient.039039.xyz:15443`（设备端走 `wss` 直连）。
 
+**当前落地状态（2026-11-10 19:4x，用户确认）**：服务器上的 `server/config.yaml`、nginx 站点 conf、`admin/dist`（重新 build 后上传）**都已手动更新，后端与 nginx 也都已重启**。上面 5 步保留为以后重新部署时的操作手册；本轮只剩 App 端两处地址确认和下面的验收。
+
 **验收**（详见 conf 末尾 8 条清单）：`/` 返回 index.html；`/health` 返回后端 JSON 而不是前端页面；`/api/download/info` 的 `apk_url` 含 `:15443` 与 `/d`；浏览器深层路由刷新不 404；命令下发页实时回执正常；`/d` 返回 APK。
+
+只读验收命令（**在任意能上外网的机器上跑即可，不用登录服务器，也不会改动任何配置**）：
+
+```bash
+BASE="https://appclient.039039.xyz:15443"
+curl -s "$BASE/health" | head -c 300                 # 应是后端 JSON，不是 index.html
+curl -s "$BASE/api/download/info" | head -c 400      # 看 apk_url 是否含 :15443 与 /d
+curl -I "$BASE/"                                    # 200；index.html 不应被长缓存
+curl -s -o /dev/null -w "深层路由 HTTP %{http_code}\n" "$BASE/some/deep/route"   # 应 200（SPA fallback），不是 404
+```
+
+> 这些只是「体检」命令，用来确认刚才的部署真的生效；改配置、合并 server 块、reload 那类动作属于部署操作，本轮已由用户完成。
+
+**只读实测结果（2026-11-10 19:42，本机 curl，未登录服务器）**：
+- `/health` → `{"status":"ok","active_connections":1,"registered_devices":2,"uptime_seconds":1943}` → 后端确已重启（约 32 分钟前），且当前有设备在线；
+- `/api/download/info` → `apk_url = https://appclient.039039.xyz:15443/d`、`page_url = …:15443/download` → 二维码前缀含 `:15443`，正确；
+- 首页 → `HTTP 200`，`Cache-Control: no-cache, no-store, must-revalidate`，`Last-Modified` 为当天 19:09 → 新 dist 已生效且 index.html 禁缓存；
+- 深层路由 `/some/deep/route` → `HTTP 200` → SPA `try_files` 兜底生效，刷新不会 404。
+
+**四项全过，服务器侧部署确认生效。**
 
 ---
 
@@ -190,70 +213,26 @@ flowchart TD
 
 ---
 
-## 九、附录 A · 文档里的图从哪来、截图怎么做、在哪截
+## 九、附录 A · 界面位置速查（纯文字路径）
 
-> 这一节回答「上面那种链路图怎么放进文档」「界面截图怎么截、截哪个页面、存哪里」。
+> 本文**只用文字和 Mermaid 图，不依赖任何图片文件**。所有「在哪改 / 在哪看」都用能照着点的文字路径写清楚；
+> 链路图直接以 Mermaid 代码块写在正文里（§一 / §三 / §四），改字即改图；
+> 命令输出、服务端日志一律贴文本，可复制、可搜索。
 
-### A.1 先分清三种「图」，别什么都截图
-
-| 类型 | 推荐做法 | 放哪 |
-|---|---|---|
-| 🗺️ 链路图 / 流程图 | **直接写 Mermaid 代码块**（本文 §一、§三、§四 就是），预览器自动渲染，改字即改图 | 就在 `.md` 里 |
-| 📱 界面截图 | 见 A.2 / A.3 | `docs/admin/images/` |
-| 💻 命令输出 / 日志 | 贴 fenced code block 文本，**不要截图**（可复制、可搜索、不会糊） | 就在 `.md` 里 |
-
-**把对话里那种 SVG 链路图变成文档图片的三条路**：
-1. ✅ **推荐**：不转图，把内容改写成 Mermaid 代码块（本文已经做好），零维护成本。
-2. 把 SVG 源码存成 `docs/admin/images/link-map.svg`，在 Markdown 里写 `![链路图](images/link-map.svg)`。
-3. 浏览器打开该 SVG → 用截图工具截成 PNG，或用 Inkscape / 在线转换导出 PNG，放进 `images/`。
-   （对话里那张图是内联渲染的示意 SVG，**没有落盘成文件**；需要时照抄本文档的 Mermaid 源码即可重新画出同样的图。）
-
-### A.2 📍 在哪截：建议的 6 个取景位置
-
-| # | 想说明什么 | 在哪台设备 / 哪个页面 | 取景要点 |
+| # | 要看 / 要改什么 | 文字路径（照着点） | 看到什么才算对 |
 |---|---|---|---|
-| 1 | 服务地址单框 + 生产值 | 手机 App →「设置」→「连接」→ 点「服务地址」**弹窗** | 保留输入框里的完整 URL 和下方「必须带协议…」提示文字 |
-| 2 | 管理页地址可配 | 手机 App → 底部「管理」Tab → 点「改地址」 | 保留默认 URL 与生产/测试两行说明 |
-| 3 | 首次配置引导页 | 测试机**清数据后首启**（`adb shell pm clear my.bridge.com`，⚠️ 会清掉本机配置，只用测试机） | 保留「服务器地址（完整 URL）」单框与预填值 |
-| 4 | 管理后台首页 | PC 浏览器打开 `https://appclient.039039.xyz:15443`，或手机 WebView 内嵌页 | 保留地址栏域名+端口，方便对照生产值 |
-| 5 | 扫码下载落地页 | 手机扫二维码后的页面，或 PC 浏览器 `/download` | 保留二维码与版本号 |
-| 6 | 命令回执 / 连接状态 | 管理后台命令下发页；服务端日志直接读 `server/logs/server.log`（贴文本，别截图） | 保留时间戳，便于和白话说明对齐 |
+| 1 | 📡 服务地址 | 手机 App →「设置」→「连接」→ 点「服务地址」→ **弹窗** | 只有**一个**输入框，预填 `https://appclient.039039.xyz:15443`，下方有「必须带 http(s)://」和生产/测试两行提示；不再是「主机 + 端口」双框 |
+| 2 | 🧩 管理页地址 | 手机 App → 底部「管理」Tab → 点「改地址」→ 输入框 | 里面是完整 URL；测试时改成 `http://192.168.31.226:5173` |
+| 3 | ⚙️ 首次配置引导页 | 测试机清除数据后首次启动 App（`adb shell pm clear my.bridge.com`，⚠️ 会清掉本机配置，只在测试机做）→ 首启引导页 | 「服务器地址（完整 URL）」单框、预填生产值 |
+| 4 | 🔗 二维码地址 | **不在 App 里**：服务器上的 `server/config.yaml` → `updates.public_base_url` | 生产为 `https://appclient.039039.xyz:15443`；改完**必须重启后端** |
+| 5 | 🌐 nginx 站点配置 | **不在 App 里**：服务器 nginx 的站点 conf（现有 `wxhelper.conf` 或新建的 `bridge-admin.conf`） | 15443 的 server 块含 `/api/`、`/ws`、`/d`、`/download`、`/static/`、`/health`、`try_files`；改完 `nginx -t` 再 `nginx -s reload` |
+| 6 | 🖥️ 管理后台首页 | PC 浏览器地址栏输 `https://appclient.039039.xyz:15443`；或手机 App →「管理」Tab 内嵌页 | 域名带 `:15443`，菜单正常显示、不是白屏 |
+| 7 | 📥 扫码下载落地页 | 手机扫后台二维码 → 打开的页面；或 PC 浏览器 `https://appclient.039039.xyz:15443/download` | 二维码与版本号正常，下载链接落在 15443 |
+| 8 | ✅ 命令回执 / 连接状态 | 管理后台 → 命令下发页看实时回执；服务端日志读 `server/logs/server.log`（按天轮转 7 份） | 回执 `success`；日志里能看到设备 ID 与时间戳 |
+| 9 | 🧪 测试环境前端 | 本机 `cd admin && npm run dev` → 浏览器 `http://192.168.31.226:5173` | Vite 起在 5173；**只有管理页**走这里 |
 
-### A.3 🛠️ 怎么截：三种方式（按省事程度）
-
-**① 手机物理按键（最省事）**：`电源键 + 音量下` → 相册 → 数据线 / 微信传到电脑 → 放进 `images/`。
-
-**② adb 截屏（最清晰、可批量，推荐）**：
-
-```bash
-ADB="F:/pythonWork/appClient/tools/adb/platform-tools/adb.exe"
-"$ADB" devices                                  # 先确认设备在线
-"$ADB" shell screencap -p /sdcard/bridge_addr.png
-"$ADB" pull /sdcard/bridge_addr.png "F:/pythonWork/appClient/docs/admin/images/service-address-production.png"
-"$ADB" shell rm /sdcard/bridge_addr.png
-```
-
-> ⚠️ 三个坑：① **必须用项目自带的 adb**，PATH 上那个是 1.0.32 古董版；② Windows 下别用 `adb exec-out screencap -p > x.png`，CRLF 会污染 PNG，用「先存手机再 pull」；③ App 内「截屏/录屏**命令**」每次都要设备端确认（持久镜像幕布），但 `adb shell screencap` 是系统级截屏，**不走那个确认流程**。
-
-**③ PC 浏览器截图**：Windows `Win + Shift + S` 框选；或 F12 → 命令菜单 →「捕获屏幕截图」；macOS `Cmd + Shift + 4`。
-
-**脱敏**：截图前把 token、设备 ID（ANDROID_ID）、手机号、管理后台账号密码打码或裁掉。
-
-### A.4 📁 存哪里、怎么引用
-
-- 目录：`docs/admin/images/`（新建；只放 `.png` / `.svg`，单张建议 < 500KB）。
-- 命名：小写英文 + 连字符，如 `service-address-production.png`、`admin-url-edit.png`、`download-page-qrcode.png`。
-- 引用语法：`![设置-连接-服务地址](images/service-address-production.png)`。
-- ⚠️ **别放** `admin/dist/`（`npm run build` 会清空）、`server/data/updates/`（那是 APK 唯一留存目录）、`releases/`（下载产物不入库）。
-
-### A.5 截图清单模板（补图时直接抄）
-
-```markdown
-| 图 | 文件 | 取自 | 说明 |
-|---|---|---|---|
-| 服务地址单框 | images/service-address-production.png | 手机 App 设置 → 连接 → 服务地址弹窗 | 生产值 + 必须带协议提示 |
-| 管理页改地址 | images/admin-url-edit.png | 手机 App 管理 Tab → 改地址 | 默认 URL 与测试值说明 |
-```
+> 路径记法：`→` 表示下一步点击；「Tab / 弹窗 / 输入框」都写全，避免和设置页里其它开关混淆。
+> ⚠️ 别把仓库里的 `server/config.yaml` 当成服务器上正在跑的那份（§三末尾）；`docs/admin/bridge-admin.conf` 只是模板，不是已部署文件。
 
 ---
 
