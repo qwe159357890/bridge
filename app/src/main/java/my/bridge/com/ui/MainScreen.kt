@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Icon
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.admin.AdminWebPage
 
 // 品牌色 / 未选中色（与界面原型 ui-mockup.html 对齐）
 private val BrandBlue = Color(0xFF1A6EE8)
@@ -190,6 +192,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
             salesNavVisible = true
             return@BackHandler
         }
+        // v0.2.125：管理后台页（内嵌 WebView）返回键兜底——页内 BackHandler 优先接管
+        // （WebView 后退栈/编辑态），落到此处说明无后退栈，直接回主页。
+        if (selectedBottom == 3) {
+            selectedBottom = 0
+            return@BackHandler
+        }
         val onLanding = if (selectedBottom == 0) homeTab == 0 else settingsTab == 0
         if (!onLanding) {
             // 非首 tab：切回当前页的首 tab
@@ -255,7 +263,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         salesNavVisible = true
                     },
                 )
-                3 -> SettingsPage(
+                3 -> AdminWebPage()
+                4 -> SettingsPage(
                     currentTab = settingsTab,
                     homeTabOrder = homeTabOrder,
                     homeTabNames = homeTabNames,
@@ -356,6 +365,7 @@ private val bottomTabs = listOf(
     BottomTab("主页", Icons.Filled.Home),
     BottomTab("微信", Icons.AutoMirrored.Filled.Chat),
     BottomTab("销售", Icons.Filled.Store),
+    BottomTab("管理", Icons.Filled.Dashboard),
     BottomTab("设置", Icons.Filled.Settings),
 )
 

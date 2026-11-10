@@ -75,3 +75,29 @@
   color: #303133;
   line-height: 1.2;
 }
+
+/* ===== 移动端适配（v0.2.125，层次 A：布局级，见 docs/admin/client-embed-admin.md §3.2）=====
+   仅窄屏断点覆盖，PC 端（>768px）零影响。 */
+@media (max-width: 768px) {
+  /* 内容区缩小 padding，最大化可用宽度 */
+  .el-main {
+    padding: 12px;
+  }
+  /* 表格允许横向滚动，避免窄屏溢出 */
+  .el-table__body-wrapper,
+  .el-table__header-wrapper {
+    overflow-x: auto;
+  }
+  /* 卡片底部间距收紧 */
+  .page-card {
+    margin-bottom: 12px;
+  }
+  /* 顶部 header：移动端隐藏面包屑（保留标题区与用户区） */
+  .header .el-breadcrumb {
+    display: none;
+  }
+  /* 行内表单在窄屏下收紧间距、允许换行 */
+  .el-form--inline .el-form-item {
+    margin-right: 8px;
+  }
+}

@@ -118,7 +118,18 @@ const route = useRoute()
 const auth = useAuthStore()
 
 // ---------------- 侧边栏收缩/展开（localStorage 记忆） ----------------
-const isCollapse = ref(false)
+// v0.2.125：移动端适配——初始值尊重用户手动记忆；无记忆时按屏幕宽度判定（<768px 默认收缩）
+const isCollapse = ref(initCollapse())
+
+function initCollapse(): boolean {
+  try {
+    const saved = localStorage.getItem('bridge_admin_aside_collapse')
+    if (saved != null) return saved === '1'
+  } catch {
+    /* 隐私模式忽略 */
+  }
+  return window.innerWidth < 768
+}
 // 侧栏宽度：收缩态固定 36px；展开态根据最长菜单项文字自动测量（见 measureAsideWidth）
 const asideWidth = ref('220px')
 
