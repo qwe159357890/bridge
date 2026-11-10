@@ -130,7 +130,7 @@ flowchart TD
   S["📱 升级到 v0.2.130<br/>启动时读地址"] --> Q{"有新 key<br/>server_base_url ?"}
   Q -->|有| U["✅ 原样使用（不清空、不覆盖）"]
   Q -->|没有| R{"有老 host / port ?"}
-  R -->|是：appclient.039039.xyz:15080| M["🔁 一次性收敛为<br/>https://appclient.039039.xyz:15443"]
+  R -->|是（15080 特例）| M["🔁 一次性收敛为<br/>https://appclient.039039.xyz:15443"]
   R -->|是：其它地址| L["🔁 补 http:// 拼回<br/>例如 http://192.168.31.226:15160"]
   R -->|也没有| D["⚙️ 用默认生产值<br/>且判定为首次安装 → 弹引导页"]
 ```
@@ -206,7 +206,7 @@ flowchart TD
 1. ✅ **推荐**：不转图，把内容改写成 Mermaid 代码块（本文已经做好），零维护成本。
 2. 把 SVG 源码存成 `docs/admin/images/link-map.svg`，在 Markdown 里写 `![链路图](images/link-map.svg)`。
 3. 浏览器打开该 SVG → 用截图工具截成 PNG，或用 Inkscape / 在线转换导出 PNG，放进 `images/`。
-   （对话里那张图是内联渲染的示意 SVG，**没有落盘成文件**，需要时从本文档的 Mermaid 源码 reproduction 即可。）
+   （对话里那张图是内联渲染的示意 SVG，**没有落盘成文件**；需要时照抄本文档的 Mermaid 源码即可重新画出同样的图。）
 
 ### A.2 📍 在哪截：建议的 6 个取景位置
 
