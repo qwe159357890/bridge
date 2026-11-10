@@ -50,7 +50,8 @@ class JikongControlRequest(BaseModel):
     param_id: int | None = Field(None, description="action=write_param 时：参数 id")
     value: int | None = Field(None, description="action=write_param 时：参数值")
     # v0.2.102：同步类命令参数透传（speak 无参；set_theme: mode；set_speak:
-    # muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min；
+    # muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min/
+    # volume_boost_enabled/volume_boost_force（v0.2.124 补音量提升两开关）；
     # v0.2.104 set_config: dash_enabled/unit_kwh100/elec_price/odo_discount；
     # v0.2.107 set_proximity: auto_connect）
     params: dict | None = Field(None, description="action=speak/set_theme/set_speak/set_config/set_proximity 时：透传参数")

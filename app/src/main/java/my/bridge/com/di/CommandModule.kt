@@ -3246,8 +3246,20 @@ object CommandModule {
                 my.bridge.com.jikong.JikongPrefs.setSpeakWarnRepeatMin(context, v)
                 applied.add("提醒间隔 ${v} 分钟")
             }
+            // v0.2.124：播报音量提升（主开关 + 强制开关，v0.2.115 手机设置页新增，
+            // 后台「语音播报」卡镜像/同步）
+            p.get("volume_boost_enabled")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asBoolean
+                my.bridge.com.jikong.JikongPrefs.setVolumeBoostEnabled(context, v)
+                applied.add(if (v) "播报音量提升开" else "播报音量提升关")
+            }
+            p.get("volume_boost_force")?.takeIf { it.isJsonPrimitive }?.let {
+                val v = it.asBoolean
+                my.bridge.com.jikong.JikongPrefs.setVolumeBoostForce(context, v)
+                applied.add(if (v) "强制提升开" else "强制提升关")
+            }
             if (applied.isEmpty()) {
-                CommandResult(id, name, false, "无有效参数（muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min）")
+                CommandResult(id, name, false, "无有效参数（muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min/volume_boost_enabled/volume_boost_force）")
             } else {
                 my.bridge.com.ui.JkUiState.remoteSpeakTick++
                 my.bridge.com.jikong.JikongController.instance.forceReport()

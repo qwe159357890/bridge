@@ -84,6 +84,10 @@ export interface JikongStatus {
     speak_warn_repeat_min?: number
     /** v0.2.102：小喇叭静音（后台「语音播报」卡镜像/同步） */
     speak_muted?: boolean
+    /** v0.2.124：播报音量提升主开关（v0.2.115 手机设置页新增，后台镜像/同步） */
+    volume_boost_enabled?: boolean
+    /** v0.2.124：强制提升子开关（跳过其他程序检测，无条件拉满） */
+    volume_boost_force?: boolean
     elec_price?: number
     odo_discount?: number
     /** v0.2.107：靠近自动连接模式开关（设置页总开关，默认关） */

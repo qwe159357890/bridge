@@ -17,6 +17,27 @@
 
 ---
 
+### v0.2.124b 管理后台补「播报音量提升」镜像/同步缺口（2026-11-10 08:15 实施）
+
+**背景（用户 11-10 要求检查管理后台）**：客户端 v0.2.115 在手机设置页新增「播报时提升音量」主开关 + 「强制提升」子开关，并在状态上报 `app` 里加了 `volume_boost_enabled` / `volume_boost_force` 两字段，但管理后台既没展示也没法远程改——形成「后台 1:1 复刻 + 远程镜像」的双向缺口（命令执行器 `jikong_set_speak` 也未处理这两字段）。
+
+**改前原文（关键块）**：
+1. `CommandModule.kt` `executeJikongSetSpeak`：仅处理 muted/speak_enabled/speak_interval_min/speak_low_soc/speak_warn_repeat_min，无 volume_boost 处理。
+2. `admin/src/api/jikong.ts` `JikongStatus.app`：无 `volume_boost_enabled` / `volume_boost_force` 字段。
+3. `admin/src/views/jikong/index.vue`：无 volBoostEnabled/volBoostForce 状态、无 watch 回写、无下发参数、无 UI 开关。
+4. `server/app/api/v1/jikong.py`：`set_speak` 注释未提 volume_boost 两字段。
+
+**改后**：
+1. `CommandModule.kt` `executeJikongSetSpeak`：新增 `volume_boost_enabled`/`volume_boost_force` 处理（写 Prefs + 回执文案 + 无参错误提示文案同步补全）。
+2. `admin/src/api/jikong.ts`：`app` 补 `volume_boost_enabled?` / `volume_boost_force?`。
+3. `admin/src/views/jikong/index.vue`：新增 `volBoostEnabled`/`volBoostForce` ref（默认 true/false）+ watch 回写 + `sendSpeakSettings` 下发参数补两字段 + 「语音播报」卡加两个开关（强制开关 disabled 联动主开关，与手机设置页同语义）。
+4. `server/app/api/v1/jikong.py`：`set_speak` 注释补 volume_boost 两字段（params 本就透传，无代码逻辑改动）。
+
+**回滚配方**：还原上述四处「改前原文」。
+**触发信号**：① 后台切音量提升开关手机不生效 → 查命令回执是否报「无有效参数」；② 手机改开关后台不同步 → 查 `forceReport` 与 watch 回声窗口（6s）。
+
+---
+
 ### v0.2.124 重叠播报排除自身 player 误判（2026-11-10 08:00 实施）
 
 **背景（用户 11-10 反馈 + 代码推演）**：重叠播报时（第一段电量/时速播报未播完，第二段播报进来），`shouldBoost` 里的 `isOtherAppPlaying` 会把「自己 app 上一段未播完的 mp3」误判为「其他程序在播放」，导致第二段 `begin` 返回 false（不提升音量、不 +1 计数）。随后 `playMp3` 复用单实例 `player` 停掉第一段时，v0.2.123 新增的补偿 `end` 把 boostCount 1→0 触发 `restoreOriginal`，音量从满掉回原档（11）。连锁结果：第二段全程用原音量 11 播报（偏小），且第一段被 stop 的瞬间音量跳变（几乎无感，因随即被 stop）。

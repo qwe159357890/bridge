@@ -503,6 +503,25 @@
                       </el-select>
                     </div>
                   </div>
+                  <!-- v0.2.124：播报音量提升（主开关 + 强制开关，镜像 v0.2.115 手机设置页） -->
+                  <div class="set-row" style="padding: 0 14px 6px">
+                    <div style="flex: 1">
+                      <div style="font-size: 14px; font-weight: 600">播报时提升音量</div>
+                      <div class="mini-label" style="margin-top: 2px">
+                        每次播报前临时把媒体音量拉到最大、播完恢复；若检测到其他程序正在放声音（听歌/看视频/导航）则不拉，避免打断。
+                      </div>
+                    </div>
+                    <el-switch v-model="volBoostEnabled" size="small" style="margin-left: 8px" @change="sendSpeakSettings('音量提升')" />
+                  </div>
+                  <div class="set-row" style="padding: 0 14px 12px">
+                    <div style="flex: 1">
+                      <div style="font-size: 14px; font-weight: 600">强制提升</div>
+                      <div class="mini-label" style="margin-top: 2px">
+                        打开后不检测其他程序，所有播报只要音量不是最大就拉满；仅在「播报时提升音量」开启时生效。
+                      </div>
+                    </div>
+                    <el-switch v-model="volBoostForce" size="small" style="margin-left: 8px" :disabled="!volBoostEnabled" @change="sendSpeakSettings('强制提升')" />
+                  </div>
                 </div>
 
                 <div class="set-title">单位与花费</div>
@@ -775,6 +794,9 @@ const spkEnabled = ref(false)
 const spkInterval = ref(5)
 const spkLowSoc = ref(30)
 const spkWarnRepeat = ref(5)
+// v0.2.124：播报音量提升（主开关 + 强制开关，v0.2.115 手机设置页新增，后台镜像/同步）
+const volBoostEnabled = ref(true)
+const volBoostForce = ref(false)
 let spkLastSendAt = 0
 // v0.2.104：设置页镜像可编辑镜像值（★ 必须声明在下方 watch 之前——watch immediate 回调
 // 同步执行，引用未初始化的 const 会 TDZ 崩溃白屏，2026-11-08 位置铁律）
@@ -793,6 +815,8 @@ watch(() => s.value?.app, (app) => {
     if (app.speak_interval_min != null) spkInterval.value = app.speak_interval_min
     if (app.speak_low_soc != null) spkLowSoc.value = app.speak_low_soc
     if (app.speak_warn_repeat_min != null) spkWarnRepeat.value = app.speak_warn_repeat_min
+    if (app.volume_boost_enabled != null) volBoostEnabled.value = app.volume_boost_enabled
+    if (app.volume_boost_force != null) volBoostForce.value = app.volume_boost_force
   }
   if (Date.now() - cfgLastSendAt >= 6000) {
     if (app.dash_enabled != null) cfgDash.value = app.dash_enabled
@@ -813,6 +837,8 @@ async function sendSpeakSettings(what: string) {
         speak_interval_min: spkInterval.value,
         speak_low_soc: spkLowSoc.value,
         speak_warn_repeat_min: spkWarnRepeat.value,
+        volume_boost_enabled: volBoostEnabled.value,
+        volume_boost_force: volBoostForce.value,
       },
     })
     ElMessage.success(`${what} 已同步手机`)
