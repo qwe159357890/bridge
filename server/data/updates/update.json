@@ -1,12 +1,12 @@
 {
-  "version": "0.2.128",
-  "versionCode": 328,
-  "url": "/updates/bridge-v0.2.128.apk",
+  "version": "0.2.129",
+  "versionCode": 329,
+  "url": "/updates/bridge-v0.2.129.apk",
   "notes": [
-    "修复：靠近自动连接时两次蜂鸣+播报后音量卡满不恢复（连接成功音量窗口释放任务被数据帧无限取消重排，改为首帧调度一次）。"
+    "修复：连接成功首帧播报后音量「假恢复」——恢复音量的 setStreamVolume 在部分机型（一加/ColorOS）后台被系统静默忽略，日志显示已恢复但实际卡满。现恢复方向与提升方向对称三段兜底（直接设置 → FLAG_SHOW_UI → 逐步调整），确保音量真正回到原值。"
   ],
-  "sha256": "e726edefb929388feea6612547cdae7054aadcaa46d6431242acface4e94723b",
+  "sha256": "fc72724617249da83e7c22a56a72525408dac905db67e66485dad1301761fa45",
   "size": 46195621,
-  "released_at": "2026-11-10 16:00:00",
+  "released_at": "2026-11-10 16:30:00",
   "min_supported": "0.2.60"
 }
