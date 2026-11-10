@@ -52,6 +52,10 @@
 - **v0.2.127 · 定位结果一键导航**：`LocationResultCard`（单点定位）+ `LocationDialog`（位置历史）加「导航」下拉（高德/百度/腾讯/系统地图）；客户端 WebView `shouldOverrideUrlLoading` 拦截 `androidamap/baidumap/qqmap/geo` scheme → `Intent.ACTION_VIEW` 拉起地图 App（未装 Toast 提示）。坐标用 GCJ-02（高德/腾讯直吃、百度 App 内部自动纠偏）。
 - **v0.2.127 · 管理页横屏开关**：工具条加「横屏/退出横屏」按钮，`AdminPrefs` 持久化，锁定 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`/恢复 `UNSPECIFIED`，离开管理页自动恢复不污染其它 Tab。
 
+### 脉络4 · connectHold 释放任务被数据帧无限取消重排（v0.2.128）
+
+- **v0.2.128 · 首帧调度音量窗口释放（根治）**：v0.2.122 起的「首帧数据到达时重排 3s 释放任务」写在 `FRAME_DATA`（0x02）分支里、每收一帧（约 400ms）都 `scheduleConnectHoldRelease` 一次，而该函数每次先 `cancel` 旧任务再重排 → 数据流持续时 3s 任务被下一帧无限取消、永远不到期，`releaseConnectHold` 永不执行，音量从原值拉到 30 后卡满不回（用户 11-10 14:29 靠近自动连接实证：两次成功蜂鸣 + 播报后音量卡 30，直至手动按音量键才变）。修复：以 `hasDataFrame` 的 false→true 跳变识别首帧，只在首帧调度一次 `HOLD_AFTER_DATA_MS` 释放。
+
 ### 关键经验沉淀
 
 - **Android 音量引用计数要警惕「stop 不回调 + 语义不对称」两处泄漏**：`MediaPlayer.stop()` 不触发 `onCompletion`，复用单实例时上一段未播完的 `end()` 会永久泄漏计数；「接管分支不 +1 但释放分支减 1」这类不对称是卡满/卡低的高发源。根治：把「窗口/抑制标记」与「引用计数」彻底解耦，标记只置位不占计数。

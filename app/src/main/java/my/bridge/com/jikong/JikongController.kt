@@ -1060,9 +1060,20 @@ class JikongController private constructor() {
                     s.deviceAddress = JikongBleClient.connectedDeviceAddress
                     autoReconnectEnabled = true
                 }
+                // v0.2.128：仅在「首帧 0x02」到达时调度一次连接成功音量窗口释放。
+                // 修复：改前本行写在下方 FRAME_DATA 分支里、每收一帧 0x02（约 400ms 一帧）
+                // 都重排一次 3s 释放任务，而 scheduleConnectHoldRelease 每次先 cancel 旧任务——
+                // 数据流持续时 3s 任务被下一帧无限取消重排、永远不到期，releaseConnectHold
+                // 永不执行，connectHold 永不释放，音量从原值拉到 30 后卡满不回（用户 11-10
+                // 14:29 靠近自动连接实证：播报完音量卡 30，直至手动按音量键才变）。
+                // 现以 hasDataFrame 的 false→true 跳变识别首帧，只在首帧调度一次。
+                val firstDataFrame = !hasDataFrame
                 parseDataFrame(s, frame.data)          // 0x02
                 lastDataFrameAt = System.currentTimeMillis()
                 hasDataFrame = true
+                if (firstDataFrame) {
+                    appContext?.let { scheduleConnectHoldRelease(it, HOLD_AFTER_DATA_MS) }
+                }
                 if (datalessRecycles > 0) {
                     // v0.2.117：半死链自愈成功日志——打印「重建次数 + 从第一次连接到出数据总耗时」
                     val totalSec = if (handshakeSessionStartAt > 0L)
@@ -1074,9 +1085,6 @@ class JikongController private constructor() {
                 }
                 datalessRecycles = 0   // v0.2.80：数据通了，重建计数归零
                 rampLogBudget = 0       // v0.2.122：数据通了，ramp 降频计数归零
-                // v0.2.122：首帧数据已到——重新调度「音量窗口释放」：等当前帧触发的首帧播报
-                // 播完（HOLD_AFTER_DATA_MS）后再释放连接成功音量窗口，确保首帧播报也用满音量。
-                appContext?.let { scheduleConnectHoldRelease(it, HOLD_AFTER_DATA_MS) }
                 maybeAnnounce(s)       // v0.2.89：每帧判定播报（变化/间隔/预警，规则见函数注释）
             }
             JikongProtocol.FRAME_SETTINGS -> parseSettingsFrame(s, frame.data)  // 0x01
