@@ -63,6 +63,49 @@ class RelaySwitchClient {
     @Synchronized
     private fun nextCommandId(): Long = ++commandSequence
 
+    // ---- v0.2.130 日志治理：启动窗口汇总（用户拍板第 4 条） ----
+    // 启动时会在 1~2 秒内收到「设备列表 ×2（REST + WS）+ 逐台 status ×N」共十几条，
+    // 全是同一批初始数据，逐条打日志既占窗口又无排障价值。改为窗口内静默累计、
+    // 窗口结束打一条汇总；窗口外的运行期状态变更仍逐条记录（不误伤）。
+    private val STARTUP_WINDOW_MS = 2500L
+    private var startupWindowUntil = 0L
+    private var startupFetchCount = 0
+    private var startupDeviceCount = 0
+    private var startupStatusCount = 0
+
+    /** 启动窗口内累计一条事件，不打日志；返回 true=已被汇总吸收（调用方无需再打日志）。 */
+    @Synchronized
+    private fun absorbStartup(kind: String, devices: Int = 0): Boolean {
+        if (System.currentTimeMillis() >= startupWindowUntil) return false
+        when (kind) {
+            "fetch" -> { startupFetchCount++; if (devices > 0) startupDeviceCount = devices }
+            "list" -> if (devices > 0) startupDeviceCount = devices
+            "status" -> startupStatusCount++
+        }
+        return true
+    }
+
+    /** start() 时开一个汇总窗口，到期打唯一一条汇总。 */
+    private fun beginStartupSummary() {
+        synchronized(this) {
+            startupWindowUntil = System.currentTimeMillis() + STARTUP_WINDOW_MS
+            startupFetchCount = 0
+            startupDeviceCount = 0
+            startupStatusCount = 0
+        }
+        mainHandler.postDelayed({
+            val (f, d, s) = synchronized(this@RelaySwitchClient) {
+                val r = Triple(startupFetchCount, startupDeviceCount, startupStatusCount)
+                startupWindowUntil = 0L
+                r
+            }
+            DiagLog.i(
+                "智能控制",
+                "启动同步完成：设备列表拉取 $f 次，共 $d 台设备，状态推送 $s 条（逐条日志已汇总）",
+            )
+        }, STARTUP_WINDOW_MS + 100L)
+    }
+
     // ------------------------------------------------------------------
     // 生命周期（对应 initApp / disconnectWebSocket）
     // ------------------------------------------------------------------
@@ -83,6 +126,8 @@ class RelaySwitchClient {
             .build()
 
         // 照 initApp：先拉设备列表，再连 WS（connect 内部 onOpen 还会再拉一次并订阅）
+        // v0.2.130：开启启动汇总窗口，把下面重复的设备列表/status 逐条日志收成一条。
+        beginStartupSummary()
         fetchDevices(app)
         connectOnce(app)
         DiagLog.i("智能控制", "继电器客户端启动")
@@ -404,7 +449,10 @@ class RelaySwitchClient {
                     statusData.keys().forEach { key -> map[key] = statusData.optInt(key) }
                     RelaySwitchState.updateStatus(deviceId, map)
                     RelaySwitchState.confirmStatus(deviceId, map.keys)
-                    DiagLog.i("智能控制", "收到 status device=$deviceId data=$map")
+                    // v0.2.130：启动窗口内的批量 status 由汇总吸收；窗口外逐条记录。
+                    if (!absorbStartup("status")) {
+                        DiagLog.i("智能控制", "收到 status device=$deviceId data=$map")
+                    }
                 }
                 // 对应 case 'device_online'
                 RelaySwitchProtocol.TYPE_DEVICE_ONLINE -> {
@@ -433,7 +481,10 @@ class RelaySwitchClient {
                     val order = parseOrder(data)
                     val list = parseDeviceArray(arr)
                     RelaySwitchState.updateDevices(list, order)
-                    DiagLog.i("智能控制", "收到设备列表 ${list.size} 个")
+                    // v0.2.130：启动窗口内的设备列表由汇总吸收。
+                    if (!absorbStartup("list", list.size)) {
+                        DiagLog.i("智能控制", "收到设备列表 ${list.size} 个")
+                    }
                 }
                 // 对应 case 'error'：Toast 提示
                 RelaySwitchProtocol.TYPE_ERROR -> {
@@ -468,7 +519,11 @@ class RelaySwitchClient {
                 val arr = result.optJSONArray("devices") ?: return@Thread
                 val list = parseDeviceArray(arr)
                 RelaySwitchState.updateDevices(list, parseOrder(result))
-                DiagLog.i("智能控制", "已拉取设备列表 url=$url 共 ${list.size} 个")
+                // v0.2.130：启动窗口内 REST 拉取由汇总吸收（WS onOpen 还会再拉一次，
+                // 改前两份「已拉取设备列表 url=...」是纯重复）。
+                if (!absorbStartup("fetch", list.size)) {
+                    DiagLog.i("智能控制", "已拉取设备列表 url=$url 共 ${list.size} 个")
+                }
             } catch (e: Exception) {
                 DiagLog.w("智能控制", "拉取设备列表失败 url=$url：${e.message}")
             } finally {

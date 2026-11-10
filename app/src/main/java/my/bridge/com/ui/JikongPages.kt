@@ -1775,6 +1775,8 @@ private fun SettingsView(
     var handshakeShortTimeoutSec by remember { mutableFloatStateOf(JikongPrefs.handshakeShortTimeoutSec(context)) }
     // v0.2.120 连接成功提示音（1~5，默认 2=双嘀）
     var beepSoundId by remember { mutableIntStateOf(JikongPrefs.beepSoundId(context)) }
+    // v0.2.130 BLE 原始报文诊断日志开关（默认关，纯本地设置无远程同步需求）
+    var bleHexDumpEnabled by remember { mutableStateOf(JikongPrefs.bleHexDumpEnabled(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
     // v0.2.104：jikong_set_config（仪表盘/单位/电费/折扣）同用本 tick，一并重读
     androidx.compose.runtime.LaunchedEffect(JkUiState.remoteSpeakTick) {
@@ -2212,6 +2214,38 @@ private fun SettingsView(
                         "生命周期累计平均（装机起累积、随里程越来越准）> 会话 EMA 暖场 > 参考值 20 Wh/km。" +
                         "所有数值为估算，仅供参考。保护板参数修改需设备密码，本应用不提供。",
                     fontSize = 11.sp, color = c.gray,
+                )
+            }
+        }
+
+        // v0.2.130 日志治理：BLE 原始报文诊断开关（默认关，排障时显式打开）。
+        Spacer(Modifier.height(12.dp))
+        Text("诊断", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = JkGreen)
+        Spacer(Modifier.height(6.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = c.card),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("BLE 原始报文日志", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "仅在排查蓝牙协议问题时打开：每次连接记录前 3 条通知的原始字节流。" +
+                            "默认关闭（日志会上传服务端并占用排障窗口）。",
+                        fontSize = 11.sp, color = c.gray,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = bleHexDumpEnabled,
+                    onCheckedChange = {
+                        bleHexDumpEnabled = it
+                        JikongPrefs.setBleHexDumpEnabled(context, it)
+                    },
                 )
             }
         }

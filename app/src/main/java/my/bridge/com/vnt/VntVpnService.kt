@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import my.bridge.com.MainActivity
 import my.bridge.com.R
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.core.common.LogThrottle
 import top.wherewego.vnt.jni.CallBack
 import top.wherewego.vnt.jni.Config
 import top.wherewego.vnt.jni.IpUtils
@@ -228,8 +229,10 @@ class VntVpnService : VpnService() {
             override fun onAvailable(network: Network) {
                 // 只置标志，不在回调里做任何重活（回调跑在系统线程）；
                 // 监督循环的退避等待以 250ms 粒度轮询该标志（最长 60s，开销可忽略）。
+                // v0.2.130 日志治理：改前此处每次网络波动都打一条 I 日志（实测 42 分钟
+                // 18 条，是全项目最高频的单点），但它只说明「置了个布尔标志」，真正的
+                // 恢复结果由下面「VNT 已连接」状态变更日志体现，无独立排障价值 → 删除。
                 networkJustRecovered = true
-                DiagLog.i(TAG, "默认网络可用，重连等待将立即结束并重置退避")
             }
         }
         runCatching { cm.registerDefaultNetworkCallback(cb) }
@@ -297,8 +300,10 @@ class VntVpnService : VpnService() {
             }
             attempt++
             val delaySec = BACKOFF_SEC[(attempt - 1).coerceAtMost(BACKOFF_SEC.size - 1)]
-            DiagLog.w(
-                TAG,
+            // v0.2.130：同一失败原因连续重连时静默计数，只在首轮/原因变化时详记。
+            // 签名取 res.reason（不含 attempt 次数），失败原因变化视为状态翻转重新详记。
+            LogThrottle.event(
+                "vnt-retry", res.reason, "W", TAG,
                 "组网失败（可重试）：${res.reason}；第 $attempt 次重连将在 ${delaySec}s 后进行",
             )
             VntMeshController.onReconnecting(attempt, delaySec, res.reason)
@@ -368,7 +373,11 @@ class VntVpnService : VpnService() {
 
             val callback = object : CallBack {
                 override fun success() {
-                    DiagLog.i(TAG, "native 回调 success（注册完成）")
+                    // v0.2.130：每轮重连都会触发，签名固定 → 连续风暴时静默计数。
+                    LogThrottle.event(
+                        "vnt-cb-success", "registered", "I", TAG,
+                        "native 回调 success（注册完成）",
+                    )
                 }
 
                 override fun createTun(info: DeviceInfo?) {
@@ -376,18 +385,31 @@ class VntVpnService : VpnService() {
                 }
 
                 override fun connect(info: ConnectInfo?) {
-                    DiagLog.i(TAG, "连接服务端：${info?.address}（第 ${info?.count} 次）")
+                    // v0.2.130：签名含服务端地址（地址变化=状态翻转要重新详记），
+                    // 不含 count（每次递增会导致节流永不生效）。
+                    LogThrottle.event(
+                        "vnt-cb-connect", "addr=${info?.address}", "I", TAG,
+                        "连接服务端：${info?.address}（第 ${info?.count} 次）",
+                    )
                 }
 
                 override fun handshake(info: HandshakeInfo?): Boolean {
                     serverVersion = info?.version
-                    DiagLog.i(TAG, "握手：服务端版本=${info?.version}，指纹=${info?.finger}")
+                    // v0.2.130：签名含版本+指纹，服务端升级/换端时重新详记。
+                    LogThrottle.event(
+                        "vnt-cb-handshake", "v=${info?.version} fp=${info?.finger}", "I", TAG,
+                        "握手：服务端版本=${info?.version}，指纹=${info?.finger}",
+                    )
                     return true                 // 确认握手
                 }
 
                 override fun register(info: RegisterInfo?): Boolean {
                     val ip = info?.let { IpUtils.intToIpAddress(it.virtualIp) } ?: "?"
-                    DiagLog.i(TAG, "注册成功：$ip")
+                    // v0.2.130：签名含虚拟 IP，换 IP 时重新详记。
+                    LogThrottle.event(
+                        "vnt-cb-register", "ip=$ip", "I", TAG,
+                        "注册成功：$ip",
+                    )
                     return true                 // 确认注册信息
                 }
 
@@ -429,6 +451,14 @@ class VntVpnService : VpnService() {
                         hadConnected.set(true)
                         VntMeshController.onConnected(ip, prefix, cfg, mtu, serverVersion)
                         promoteForeground("已连接 · $ip", connected = true)
+                        // v0.2.130：连接成功 = 风暴收尾。先打汇总（若此前有静默轮次），
+                        // 再打状态变更骨架日志；两者都是排障必需，不参与节流。
+                        LogThrottle.summaryIfAny("vnt-retry", TAG, "组网重连")
+                        // 清「失败类」键：保证下一轮新风暴的首条失败/错误仍详记；
+                        // 过程类键（连接服务端/握手/注册/success/stop）保留长期节流，
+                        // 不因每次重连成功就重新打印一遍。
+                        LogThrottle.reset("vnt-attempt-fail")
+                        LogThrottle.reset("vnt-cb-error")
                         DiagLog.i(TAG, "VNT 已连接：$ip/$prefix，服务端版本 ${serverVersion ?: "?"}")
                     }
                     return f.fd
@@ -441,7 +471,8 @@ class VntVpnService : VpnService() {
                 override fun error(info: ErrorInfo?) {
                     val e = info ?: return
                     val text = "${e.code}" + (e.msg?.let { "：$it" } ?: "")
-                    DiagLog.e(TAG, "native 回调错误：$text")
+                    // v0.2.130：同一错误码+消息连续出现时静默计数，换错误时重新详记。
+                    LogThrottle.event("vnt-cb-error", text, "E", TAG, "native 回调错误：$text")
                     // ★ 构造期间 vnt 尚未赋值，绝不能在这里调 v.stop()
                     //   （官方 MyVpnService 这里会 NPE，属其已知缺陷）。
                     val ready = synchronized(nativeLock) { vnt != null }
@@ -455,7 +486,7 @@ class VntVpnService : VpnService() {
                 }
 
                 override fun stop() {
-                    DiagLog.i(TAG, "native 回调 stop")
+                    LogThrottle.event("vnt-cb-stop", "stopped", "I", TAG, "native 回调 stop")
                 }
             }
 
@@ -485,8 +516,13 @@ class VntVpnService : VpnService() {
             }
             return null                                        // 用户停止 / 被接管
         } catch (e: Throwable) {
-            DiagLog.e(TAG, "组网尝试失败", e)
+            // v0.2.130：异常签名取「类名+消息+错误码」，同一故障连续重连时静默计数。
+            // 注意 DiagLog.e(tag, msg, throwable) 会附堆栈；节流命中时不产生任何行。
             val code = runtimeErrorCode ?: startupErrorCode
+            val sig = "${e.javaClass.simpleName}|${e.message}|$code"
+            if (LogThrottle.shouldEmit("vnt-attempt-fail", sig, TAG)) {
+                DiagLog.e(TAG, "组网尝试失败", e)
+            }
             val retryable = when {
                 e is FatalVntException -> false                // VPN 授权被抢
                 code == ErrorInfo.ErrorCodeEnum.TokenError -> false

@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import my.bridge.com.BuildConfig
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.core.common.LogThrottle
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -138,13 +139,14 @@ class WechatWsClient {
         intentionalClose = false
         opened = false
         val gen = ++generation
-        DiagLog.i(TAG, "连接 WS：$url")
+        // v0.2.130：URL 内 token 固定，签名取 url 本身；重连风暴时静默计数。
+        LogThrottle.event("wxws-connect", "url=$url", "I", TAG, "连接 WS：$url")
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (gen != generation) return
                 opened = true
-                DiagLog.i(TAG, "WS 已连接，发送 register")
+                LogThrottle.event("wxws-register", "opened", "I", TAG, "WS 已连接，发送 register")
                 // 5 秒内必须 register
                 sendRegister(deviceId, deviceName)
                 scheduleHeartbeat()
@@ -158,7 +160,9 @@ class WechatWsClient {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (gen != generation) return
-                DiagLog.w(TAG, "WS 失败：${t.message}")
+                // v0.2.130：同一失败原因连续出现时静默计数，换原因重新详记。
+                val sig = (t.message ?: "连接失败").substringBefore("(").trim()
+                LogThrottle.event("wxws-fail", sig, "W", TAG, "WS 失败：${t.message}")
                 teardown()
                 listener?.onDisconnected(t.message ?: "连接失败")
             }

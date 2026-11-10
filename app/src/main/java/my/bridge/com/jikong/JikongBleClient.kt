@@ -223,6 +223,7 @@ object JikongBleClient {
      */
     @SuppressLint("MissingPermission")
     suspend fun connect(context: Context, address: String, timeoutMs: Long = 10000): Boolean {
+        refreshHexDumpPref(context)
         disconnect()
         val a = ensureAdapter(context) ?: return false
         val dev = a.getRemoteDevice(address) ?: return false
@@ -261,6 +262,7 @@ object JikongBleClient {
      */
     @SuppressLint("MissingPermission")
     fun attachAutoConnect(context: Context, address: String): Boolean {
+        refreshHexDumpPref(context)
         if (connected) return false                    // 已连接无需挂起
         if (autoConnectAttached) return true           // 幂等
         val a = ensureAdapter(context) ?: return false
@@ -310,9 +312,23 @@ object JikongBleClient {
 
     private var cccdRetries = 0
 
-    /** 通知 hex 日志预算（每会话前 3 条，防灌爆上传缓冲，v0.2.81）。 */
+    /**
+     * 通知 hex 日志预算（每会话前 3 条，防灌爆上传缓冲，v0.2.81）。
+     * v0.2.130：改为受 [JikongPrefs.bleHexDumpEnabled] 控制——默认关 ⇒ 预算 0，
+     * **一条日志行都不产生**（DiagLogTree 会把 Timber.d 也桥接上传，降级无效）。
+     * 排障时在极空设置页「诊断」打开，每次连接记前 3 条原始字节。
+     */
     @Volatile
-    private var notifyLogBudget = 3
+    private var notifyLogBudget = 0
+
+    /** v0.2.130：缓存诊断开关，Binder 线程的通知回调无需再取 context。 */
+    @Volatile
+    private var hexDumpEnabled = false
+
+    /** 每次建链前刷新诊断开关（设置页改动后，下一次连接即生效）。 */
+    fun refreshHexDumpPref(context: Context) {
+        hexDumpEnabled = JikongPrefs.bleHexDumpEnabled(context)
+    }
 
     private val gattCallback = object : BluetoothGattCallback() {
         /**
@@ -343,7 +359,7 @@ object JikongBleClient {
                 forceLeConnectionParams(g)
                 servicesRequested = false
                 cccdRetries = 0
-                notifyLogBudget = 3
+                notifyLogBudget = if (hexDumpEnabled) 3 else 0
                 // 请求更大 MTU（极空单帧超 20B，增大 MTU 减少分包，提升稳定性）。
                 // discoverServices 移到 onMtuChanged 里串行执行。
                 val requested = runCatching { g.requestMtu(256) }.getOrDefault(false)
@@ -432,7 +448,8 @@ object JikongBleClient {
             status: Int,
         ) {
             if (isStale(g)) return   // v0.2.93：陈旧 CCCD 回执不触发重订阅风暴
-            Timber.tag(TAG).d("descriptor 写回 status=$status")
+            // v0.2.130：纯调试信息，默认不产生日志行；失败路径另有 W 级日志兜底。
+            if (hexDumpEnabled) Timber.tag(TAG).d("descriptor 写回 status=$status")
             // v0.2.79：CCCD 订阅失败会导致通知永远收不到（首连无数据的另一元凶），
             // 旧代码只打日志不重试。失败时重新订阅（限 3 次，防风暴）。
             if (status != BluetoothGatt.GATT_SUCCESS && cccdRetries < 3) {

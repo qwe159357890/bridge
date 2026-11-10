@@ -17,6 +17,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.bridge.com.core.common.DiagLog
+import my.bridge.com.core.common.LogThrottle
 import my.bridge.com.MainActivity
 import org.json.JSONObject
 
@@ -242,7 +243,8 @@ object WechatRuntime : WechatWsClient.Listener {
     }
 
     private fun reconnectNow(reason: String) {
-        DiagLog.i(TAG, "重连（$reason）")
+        // v0.2.130：网络抖动时「网络恢复」重连会连续触发，同一原因静默计数。
+        LogThrottle.event("wx-reconnect", reason, "I", TAG, "重连（$reason）")
         ws.disconnect()
         scope.launch { connect() }
     }
@@ -277,7 +279,8 @@ object WechatRuntime : WechatWsClient.Listener {
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 if (stopped) return
-                DiagLog.i(TAG, "网络可用，检查连接")
+                // v0.2.130：与 VNT 侧同款治理——「网络可用」每次波动都触发，
+                // 只是触发一次检查，恢复结果由「WS 已连接」体现，无独立排障价值 → 删除。
                 if (WechatPrefs.configured(ctx) && !ws.isConnected()) reconnectNow("网络恢复")
             }
         }
@@ -306,6 +309,12 @@ object WechatRuntime : WechatWsClient.Listener {
         reconnectJob?.cancel()
         val ctx = app
         if (ctx != null && clientId.isNotBlank()) WechatPrefs.setLocalClientId(ctx, clientId)
+        // v0.2.130：连接成功=状态翻转点，属「状态变更骨架」，每次都详记（clientId 是
+        // 关键排障信息），只在此打一条风暴汇总收尾；同时重置断开键，保证下一轮新风暴
+        // 的首条失败仍能详记（不被上一轮的签名误静默）。
+        LogThrottle.summaryIfAny("wx-reconnect", TAG, "微信 WS 重连")
+        LogThrottle.reset("wx-disconnect")
+        LogThrottle.reset("wxws-fail")
         DiagLog.i(TAG, "WS 已连接 clientId=$clientId")
         // 重连成功后校准一次未读，防止断线期间漏计
         if (ctx != null) {
@@ -320,7 +329,10 @@ object WechatRuntime : WechatWsClient.Listener {
     override fun onDisconnected(reason: String) {
         // 同样无条件更新状态，保证 UI 一定看到「断开」，不会被遗留的 CONNECTING 卡住。
         WechatState.setConnState(WechatConnState.DISCONNECTED)
-        DiagLog.w(TAG, "WS 断开：$reason")
+        // v0.2.130：断线风暴同一原因静默计数；reason 归一化取冒号前主因，
+        // 避免 "Software caused connection abort (errno=xxx)" 里易变数字让节流失效。
+        val sig = reason.substringBefore("(").trim()
+        LogThrottle.event("wx-disconnect", sig, "W", TAG, "WS 断开：$reason")
         // 已主动释放（退出微信 / 离开即释放）：不要自动重连，否则退出会被重连机制立刻撤销
         if (stopped) return
         scheduleReconnect()

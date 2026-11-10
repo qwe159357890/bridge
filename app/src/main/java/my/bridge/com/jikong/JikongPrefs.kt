@@ -22,6 +22,14 @@ object JikongPrefs {
     /** 时速仪表盘开关（v0.2.83）：开=首页显示时速/续航卡片并启动 GPS；关=完全零成本。 */
     const val KEY_DASH_ENABLED = "jikong_dash_enabled"
 
+    /**
+     * BLE 原始报文（hex dump）诊断日志开关（v0.2.130 日志治理）：默认关。
+     * 打开后每次 GATT 连接记前 3 条通知原始字节流，供 BLE 协议排障。
+     * ★ 注意：DiagLogTree 会把 Timber.d 也桥接进上传链路，所以「降为 D 级」并不减
+     * 少服务端日志量——必须做成默认不产生日志行的开关。
+     */
+    const val KEY_BLE_HEX_DUMP = "jikong_ble_hex_dump"
+
     /** 累计统计（SpeedDash 持久化）：总里程 km / 总耗电 Wh / 历史平均电耗 Wh/km（暖启动种子）。 */
     private const val KEY_TOTAL_KM = "jikong_total_km"
     private const val KEY_TOTAL_WH = "jikong_total_wh"
@@ -48,6 +56,14 @@ object JikongPrefs {
 
     fun setDashEnabled(context: Context, enabled: Boolean) {
         sp(context).edit().putBoolean(KEY_DASH_ENABLED, enabled).apply()
+    }
+
+    /** BLE 原始报文诊断日志开关（v0.2.130）。默认关，排障时在设置页显式打开。 */
+    fun bleHexDumpEnabled(context: Context): Boolean =
+        sp(context).getBoolean(KEY_BLE_HEX_DUMP, false)
+
+    fun setBleHexDumpEnabled(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(KEY_BLE_HEX_DUMP, enabled).apply()
     }
 
     fun totalKm(context: Context): Float = sp(context).getFloat(KEY_TOTAL_KM, 0f)
