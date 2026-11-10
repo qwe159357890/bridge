@@ -22,6 +22,47 @@
 
 ---
 
+## 2026-11-09~10 · 📱🖥️ v0.2.121→v0.2.127 音量引用计数根治 + 管理后台嵌入式集成 + 移动端/横屏适配 + 定位导航拉起
+
+**节点意义**：极空「阶段性完成」之后进入收尾打磨期，三条脉络并行——①语音播报音量提升从「引用计数」暴露三处深层 bug（stop 不触发 onCompletion 泄漏、connectHold 与计数语义不对称、半死链重建提前释放窗口），逐一根治到「纯抑制标记 + 补偿 + 守卫」的最终形态；②管理后台从「独立 Web 服务」进化为「客户端底部导航第 4 Tab 嵌入式集成」（WebView 加载可配置 URL），并补齐移动端/横屏适配与「播报音量提升」镜像同步缺口；③体验增强——定位结果一键拉起高德/百度/腾讯地图导航、管理页横屏开关。另有日志治理暗线：删掉「不播」刷屏日志、调大日志窗口 2000→20000。
+
+**⭐ 恢复锚点（本次收尾基线）**：
+- tag **`v0.2.127`**（→ 代码提交 `696b225` + 版本号 `bdc4176` + update.json `b977c39`）＝ 音量根治 + 管理后台集成 + 移动端/横屏适配 + 导航拉起全部最新代码。
+- 恢复命令：`git checkout v0.2.127` 即回到本次收尾基线。
+- 分发：APK `bridge-v0.2.127.apk`（sha256 `8ba89a12…`），versionCode 327，手机「检查更新」升级。
+
+### 脉络1 · 播报音量引用计数三连根治（v0.2.121→122→123→124→125b→126）
+
+- **v0.2.121 · 日志刷屏降噪**：删 `JikongController` `maybeAnnounce`「不播」分支的 INFO 日志（每 0x02 帧约 400ms 一条，10 分钟 1500 条把建链关键日志挤出 2000 条窗口）。全客户端 474 处 Timber 审计确认这是唯一循环内高频刷屏点。
+- **v0.2.122 · connectHold 音量保持窗口 + 日志窗口调大**：beep（0.12~0.34s）与首帧播报（0.85s~几十秒）之间有 gap，v0.2.120 的引用计数只管「声音重叠」管不了「时间 gap」→ 新增 `beginConnectHold`/`releaseConnectHold`（连接成功起窗口、首帧 3s/无数据 8s 兜底释放）。同版服务端 `max_entries_per_device` 2000→20000。
+- **v0.2.123 · Bug A 半死链重建提前释放窗口**：半死链主动重建的 `disconnect()` 触发 `onConnectionChanged(false)` → 断开回调 `releaseConnectHold` 把窗口提前释放，重建中间音量从 30 掉回 11 → 断开回调加 `!dataRecyclePending` 守卫。
+- **v0.2.123 · Bug B 引用计数泄漏（主因）**：`JikongSpeaker.playMp3` 复用单实例 `player`，`stop()` 不触发 `onCompletion` → 上一段未播完的 `end()` 泄漏 → `boostCount` 永久 >0 → 音量卡满回不去。修复：stop 上一段前补一次 `end()`。
+- **v0.2.124 · 重叠播报误判排除自身**：`isOtherAppPlaying` 把自己 app 上一段未播完的 mp3 误判为「其他程序」→ 第二段不提升。方案 A：`JikongSpeaker.isSelfPlaying()` + shouldBoostProvider 里 `isOtherAppPlaying && !isSelfPlaying()`。
+- **v0.2.125b · connectHold 与计数语义不对称（根治）**：`beginConnectHold` 接管分支不 +1、`releaseConnectHold` 的 else 却 `boostCount--`，两边矛盾 → 半死链 connected 反复翻转两次 beginConnectHold + 两次 beep + 播报穿插时错减计数卡满。修复：**connectHold 改纯抑制标记不占 boostCount**（begin 幂等只 forceMax/记 original/置 flag；release 去掉 else 减计数、仅 boostCount<=0 才补恢复；begin 在 hold 激活时不覆盖 original）。
+
+### 脉络2 · 管理后台嵌入式集成（v0.2.124b→125→126→127）
+
+- **v0.2.124b · 补「播报音量提升」镜像/同步缺口**：客户端 v0.2.115 新增的 `volume_boost_enabled`/`volume_boost_force` 两字段，admin 后台既没展示也不能远程改 → `CommandModule.kt` 命令执行器补处理 + `admin` 前端加两开关镜像。
+- **v0.2.125 · 客户端嵌入管理后台（方案4 形态A）**：调研定「admin 由 nginx/开发机托管（VITE_API_BASE 空=相对路径同源）+ 客户端 WebView 加载可配置 URL」。新增 `AdminPrefs` + `AdminWebPage`（domStorageEnabled 保登录态 + 返回键），底部导航加第 4 Tab「管理」（index 3）。权威文档 `docs/admin/client-embed-admin.md`。
+- **v0.2.126 · 返回键对齐销售页 + admin 移动端适配加强**：`AdminWebPage` 改「再按一次返回主页」；删 `layout/index.vue` onMounted 覆盖 initCollapse 的 localStorage 逻辑（这是之前适配没生效的根因）。
+- **v0.2.127 · 移动端/横屏适配全面修复 + 导航拉起**：用 Chrome headless + CDP 模拟 390px 逐页截图实测，定位「适配没生效」三处根因——登录页 `.login-card` 写死 400px 溢出、各页卡片头类名不统一（`.card-header`/`.toolbar`/`.top-bar` 等私有类横排 flex 挤成竖排）、表格横滚姿势错（`min-width` 撑破卡片而非 `.el-card__body` 容器滚动）。修复：global.css `@media(max-width:768px)` 全局 `!important` 覆盖 + 横屏断点 `@media(orientation:landscape) and (max-height:500px)`（手机壳 scale 0.5 + 负 margin 补偿）。
+
+### 脉络3 · 定位导航拉起 + 管理页横屏开关（v0.2.127）
+
+- **v0.2.127 · 定位结果一键导航**：`LocationResultCard`（单点定位）+ `LocationDialog`（位置历史）加「导航」下拉（高德/百度/腾讯/系统地图）；客户端 WebView `shouldOverrideUrlLoading` 拦截 `androidamap/baidumap/qqmap/geo` scheme → `Intent.ACTION_VIEW` 拉起地图 App（未装 Toast 提示）。坐标用 GCJ-02（高德/腾讯直吃、百度 App 内部自动纠偏）。
+- **v0.2.127 · 管理页横屏开关**：工具条加「横屏/退出横屏」按钮，`AdminPrefs` 持久化，锁定 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`/恢复 `UNSPECIFIED`，离开管理页自动恢复不污染其它 Tab。
+
+### 关键经验沉淀
+
+- **Android 音量引用计数要警惕「stop 不回调 + 语义不对称」两处泄漏**：`MediaPlayer.stop()` 不触发 `onCompletion`，复用单实例时上一段未播完的 `end()` 会永久泄漏计数；「接管分支不 +1 但释放分支减 1」这类不对称是卡满/卡低的高发源。根治：把「窗口/抑制标记」与「引用计数」彻底解耦，标记只置位不占计数。
+- **管理后台适配「没生效」要逐页实测、不能只写通用规则**：各页用不同私有类名（`.card-header`/`.toolbar`/`.top-bar`），`@media` 里只写通用类覆盖不到；且登录页这类「入口页」最容易被漏。用 Chrome headless + CDP 模拟真实视口逐页截图，是验证响应式适配最可靠的手段（无需装 puppeteer/playwright）。
+- **表格横向滚动的滚动容器是 `.el-card__body` 而非 table 自身**：给 table 加 `min-width` 会让它撑破卡片造成页面级溢出，正确做法是让卡片 body `overflow-x:auto`、table 保持 min-width 在容器内滚。
+- **transform:scale 不改变布局占位**：缩固定尺寸元素（如手机壳 390×844）需负 margin 补偿多余高度，且缩放后视觉溢出仍需外层容器 overflow 滚动兜底。
+- **WebView 拉起外部 App 必须在 `shouldOverrideUrlLoading` 拦截非 http scheme 并 `startActivity`**：WebView 无法处理 `androidamap://` 等 scheme 会静默失败，只有显式拦截 + ACTION_VIEW 才能真正调起地图 App。
+- **升级判断只看 versionName 不看 versionCode**：服务端 `_scan_latest` 从文件名/update.json 解析版本、`available = current < latest_version`（段比较），客户端也只比对 versionName；versionCode 是遗留字段不参与判断。
+
+---
+
 ## 2026-11-08 · 🏁 极空（JK BMS）功能阶段性完成里程碑（v0.2.110→v0.2.120）
 
 **节点意义**：极空保护板功能从「可用」收敛到「阶段性完成」——用户 2026-11-08 拍板「功能已阶段性胜利，后续只做细小优化」。四条脉络：①握手唤醒从「多轮 12s 超时重建近 1 分钟」收敛到「首连 + 1 次直连重建 ≈2~3s 稳定成功」（比官方「一次交互」仍差一步重建，但已稳定、判定完成）；②播报音量从「锁屏/后台拉不上去」根治到「三段兜底 + 引用计数，后台锁屏也能拉满」；③数据正确性加 CRC 校验，杜绝半死链苏醒首帧错位导致的电量误报；④体验增强（连接成功提示音 5 选 1 + 试听、首连短戳 0.1~1.0s 可配置）。
