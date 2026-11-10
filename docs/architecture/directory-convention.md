@@ -103,12 +103,16 @@ data/
 ├── sqlite/                     数据库文件 / SQL 迁移脚本（.sql / .db）
 ├── config/                     配置文件（非代码内配置，如服务器地址清单）
 ├── samples/                    样本/测试数据（JSON/CSV 等）
-└── schema/                     数据模型 Schema 定义（Proto/JSON Schema）
+├── schema/                     数据模型 Schema 定义（Proto/JSON Schema）
+└── jikong/                     极空（JK BMS）硬件侧固件/组件源码
+                                （jk_ble.ino：ESP32-C3 BLE+CAN 网关固件；
+                                 jk_bms.cpp：ESPHome 组件源码）
 ```
 
 **规则：**
 - 运行时数据库（Room）的 schema 由代码管理，导出文件可放 `data/schema/`。
 - 预置的 .db / .sql 文件放 `data/sqlite/`，需在 `assets` 中引用时通过脚本拷贝。
+- 极空（JK BMS）硬件侧参考源码统一收在 `data/jikong/`，与 Android 客户端解耦（独立固件，不参与 Gradle 构建）。
 
 ### 4. `references/` —— 参考源码（只读）
 
