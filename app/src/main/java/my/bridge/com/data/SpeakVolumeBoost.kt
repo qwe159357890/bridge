@@ -168,8 +168,35 @@ object SpeakVolumeBoost {
         // v0.2.116 诊断：记录「恢复前」的实际音量——这正是播报期间系统真正用的音量。
         // 若这里回读仍等于原音量（而非 max），说明 setStreamVolume 提升根本没生效（锁屏/时序问题）。
         val before = runCatching { am.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(-1)
-        runCatching { am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0) }
-        Timber.i("后台静默播报音量恢复：恢复前实际=%d → %d", before, target)
+        if (target < 0 || before == target) {
+            // 无有效目标（未记录过）或音量已在目标档（用户手动调过/提升未生效过）——无需恢复。
+            Timber.i("后台静默播报音量恢复：跳过（before=%d, target=%d）", before, target)
+            return
+        }
+        // v0.2.129：恢复方向补三段兜底（与 [forceMax] 完全对称）。一加 9Plus（ColorOS）
+        // 实证（用户 11-10 16:10）：提升方向裸调 setStreamVolume + FLAG_SHOW_UI 均被
+        // 静默忽略、只有 adjustStreamVolume 逐步调整生效；同一台设备恢复方向裸调同样
+        // 被忽略——v0.2.122~128 期间日志打出「恢复 30 → 5」但用户实测音量仍卡 30，
+        // 属「假恢复」（恢复日志只打印目标值、无回读校验，多轮排查被误导）。
+        // ① 直接设置；② 回读未生效带 FLAG_SHOW_UI 重试；③ 仍未生效逐步 adjust 逼近。
+        val stream = AudioManager.STREAM_MUSIC
+        runCatching { am.setStreamVolume(stream, target, 0) }
+        var after = runCatching { am.getStreamVolume(stream) }.getOrDefault(-1)
+        if (after != target) {
+            runCatching { am.setStreamVolume(stream, target, AudioManager.FLAG_SHOW_UI) }
+            after = runCatching { am.getStreamVolume(stream) }.getOrDefault(-1)
+        }
+        if (after != target) {
+            var guard = 0
+            while (runCatching { am.getStreamVolume(stream) }.getOrDefault(target) != target && guard++ < 40) {
+                val dir = if (runCatching { am.getStreamVolume(stream) }.getOrDefault(target) > target)
+                    AudioManager.ADJUST_LOWER else AudioManager.ADJUST_RAISE
+                runCatching { am.adjustStreamVolume(stream, dir, 0) }
+            }
+            after = runCatching { am.getStreamVolume(stream) }.getOrDefault(-1)
+        }
+        // v0.2.129：日志打出「回读」终值——恢复是否真正生效一目了然，杜绝假恢复误导排查。
+        Timber.i("后台静默播报音量恢复：恢复前实际=%d → 目标=%d，三段兜底后回读=%d", before, target, after)
     }
 
     /**
