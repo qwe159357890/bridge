@@ -40,6 +40,22 @@ CONNECTED、实例其实**活着**（已拿 VIP 86.74.128.88），只是 VNTS �
 
 **发版**：升 `versionName` 0.2.134→0.2.135、`versionCode` 4→5。
 
+**部署**：2026-11-13 已上传魔百盒（mbh，LAN 192.168.31.30）`/home/qwe159357/software/appClient/server/data/updates/`，
+旧 134 APK 备份至 `.bak/`，`update.json` 同步，supervisor 重启 `appclient:appclient-server` 后真机验证通过：
+通知断线时稳定显示「服务器连接中断 · 等待服务端恢复」（约 15s 确认后出现，服务端恢复前持续保持，不刷屏）；
+系统层「已激活 VPN」/顶部 VPN 图标始终存在（探活不 stop 实例、tun0 存活）。
+
+**关键经验沉淀**：
+- **「服务器断连」≠「实例死亡」，探活不能据此 stop 实例**：VNT 2.x 中 `getServerList().connected=false`
+  反映的是与 VNTS 服务器的实时连接断开，而实例仍活着（已拿 VIP、tun0 正常）；实例是否真正死亡只有
+  `nextEvent()` 的 `instance_stopped` 是权威信号。把「服务器断连」当「实例死」去 stop 重连，只会
+  重连后服务器仍连不上 → 又 stop 的死循环。**可复用做法**：探活只负责「更新状态展示（通知）」，把
+  「是否重连实例」的决策权交还给 native 的 instance_stopped 事件。
+- **探活线程的 sleep 必须与网络回调解耦**：VPN 接口（tun0）一建立就触发 `onAvailable` → 置
+  `networkJustRecovered=true`，若探活复用带该标志打断的 sleep，等待会被瞬间打断成 ~250ms 疯狂轮询，
+  把「连续 N 次确认」压到 1 秒内凑齐、防抖失效。**可复用做法**：探活用独立纯时间片 sleep，只响应
+  代次变更与线程中断。
+
 ---
 
 ## 2026-11-13 · ⚡ v0.2.134 探活误判抖动修复（连续确认 + 退避递增）
