@@ -1744,3 +1744,47 @@ VNT 已连接：86.74.128.88/24   ← 又连上 → 又探活失联 → 又 stop
 **验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收：连不到 VNTS 服务器时，通知应稳定
 显示「断线重连中 · 第 N 次」，N 逐步递增（2s→4s→8s…），不再高频闪烁；组网页也不再疯狂刷新。
 
+### 8.12 探活方向性错误：服务器断连被误判为「实例死亡」→ stop 重连死循环（v0.2.135，根治）
+
+**现象**（真机，v0.2.134 仍刷屏）：日志显示「探活：服务端全部失联（连续 1/3→2/3→3/3 次）」在**同一秒内**
+连续打出（而非每隔 5s），随即「探活确认真断线，主动 stop 触发重连」→「VNT 已连接」→ 又一轮，循环周期
+仅 1~2s，通知最终停在「已连接」。手机实测：蜂窝网络正常（`rmnet_data2` 10.81.159.2/30），VNT 的 tun0 接口
+CONNECTED（86.74.128.88/24，MTU 1380），但 VNTS 服务器（039039.xyz:31008）连不上。
+
+**根因（两个叠加，且 §8.11 的「连续确认」没解决根本问题）**：
+1. **探活方向性错误（根本）**：`getServerList().connected=false` 反映的是「与 VNTS 服务器的实时连接断了」，
+   **不是「VNT 实例死亡」**。在「连不到服务器」场景，实例其实**还活着**（已拿 VIP、TUN 正常），只是等服务器
+   恢复。§8.11 的探活仍「失联→stop→重连」，重连后服务器依然连不上 → `connected` 依然 false → 又 stop，
+   **死循环本质未变**。实例真正死亡应由 `nextEvent()` 发 `instance_stopped` 驱动重连（既有正确机制），
+   探活用 `getServerList()` 当重连依据是**方向错了**。
+2. **探活 sleep 被 `networkJustRecovered` 打断**：`registerNetworkCallback` 的 `onAvailable` 会在 **VPN 接口
+   （tun0）建立时**触发，把 `networkJustRecovered` 置 true；探活线程复用的 `sleepInterruptible` 里
+   `if (networkJustRecovered) return true` 立即返回 → 探活等待被瞬间打断，变成 ~250ms 一轮疯狂轮询，
+   「连续 3 次」在 1 秒内就凑齐（所以日志里 1/3→2/3→3/3 挤在同一秒）。
+
+**改法（v0.2.135，用户拍板「探活只更新通知不 stop」）**：
+- **探活只更新通知，不 stop 实例**：连续 `DOWN_CONFIRM_COUNT` 次（约 15s）服务端全失联 → 通知改
+  「服务器连接中断 · 等待服务端恢复」；任一次发现「仍连」→ 通知改回「已连接」。**不再调 `net.stop()`**，
+  实例死亡交给 `nextEvent` 的 `instance_stopped` 走既有监督重连。
+- **探活独立 sleep**：新增 `probeSleep(gen, seconds)`，**只**响应「代次变了」与「线程中断」，**不响应**
+  `networkJustRecovered`；探活用稳定固定周期，不再被 onAvailable 打断。
+- **通知标题三分支**：`buildNotification` 的 `when` 增「服务器连接中断」分支（title「VNT 服务器连接中断」）。
+
+**改前原文**（`VntVpnService.kt`，v0.2.134）：
+- `startProbe` 连续 3 次失联后 `net.stop()`（`if (downCount >= DOWN_CONFIRM_COUNT) { runCatching { net.stop() }; break }`）；
+- 探活等待复用 `sleepInterruptible`（受 `networkJustRecovered` 影响）；
+- `buildNotification` 无「服务器连接中断」标题分支。
+
+**新增/改动清单**：
+- `startProbe` 重写：删 `net.stop()`，改为 `promoteForeground("服务器连接中断…", false)` / 恢复
+  `promoteForeground("已连接 · …", true)`；
+- 新增 `probeSleep()`（探活专用，不响应 networkJustRecovered）+ `registeredIpOrUnknown()`；
+- `buildNotification` 增「服务器连接中断」标题分支；
+- 常量 `DOWN_CONFIRM_COUNT` 注释语义更新。
+
+**回滚配方**：`git checkout <v0.2.134 commit> -- app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`。
+
+**验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收：连不到 VNTS 服务器时，通知应**稳定**显示
+「服务器连接中断 · 等待服务端恢复」（约 15s 后），不再高频闪烁、不再「断线重连中/已连接」来回跳；
+服务器恢复后通知自动改回「已连接」；组网页不再疯狂刷新。
+

@@ -85,7 +85,7 @@ class VntVpnService : VpnService() {
         /** 探活间隔（毫秒，v0.2.133）：与界面刷新同频，断线后通知最多延迟一个周期更新。 */
         private const val PROBE_INTERVAL_MS = 5_000L
 
-        /** 连续失联确认次数（v0.2.134）：连续 N 次探活都失联才判真断线，过滤 native 过渡态抖动。 */
+        /** 连续失联确认次数（v0.2.134）：连续 N 次探活都失联才更新通知为「服务器连接中断」，过滤过渡态抖动。 */
         private const val DOWN_CONFIRM_COUNT = 3
 
         @Volatile
@@ -213,6 +213,7 @@ class VntVpnService : VpnService() {
                 when {
                     connected -> "VNT 虚拟网络已连接"
                     text.startsWith("断线重连中") -> "VNT 断线重连"
+                    text.startsWith("服务器连接中断") -> "VNT 服务器连接中断"
                     else -> "VNT 正在启动"
                 }
             )
@@ -542,32 +543,37 @@ class VntVpnService : VpnService() {
     }
 
     // ------------------------------------------------------------------
-    // 探活（v0.2.133）：弥补 nextEvent 断线感知延迟
+    // 探活（v0.2.135）：只更新通知，不 stop 实例——「服务器断连」≠「实例死亡」
     // ------------------------------------------------------------------
 
     /**
      * 启动探活线程。连接成功后调用，独立于 worker（监督循环）：
-     * 每 [PROBE_INTERVAL_MS] 查一次 [VntApi.getServerList]，若服务端**连续
-     * [DOWN_CONFIRM_COUNT] 次**全部失联才判定真断线，主动 [VntNetwork.stop]
-     * 让阻塞中的 nextEvent 立即返回 instance_stopped → 复用监督循环的
-     * 「断线重连」链路（更新通知 + 退避重连）。
+     * 每 [PROBE_INTERVAL_MS] 查一次 [VntApi.getServerList]，仅根据服务端连接
+     * 状态**更新通知**，**绝不 stop 实例**。
      *
-     * 设计要点（v0.2.134 修正抖动误判）：
-     * - **首查延迟一个周期**：连接刚建立/实例重建瞬间 getServerList 会返回
-     *   「全失联」的过渡态，先等满 [PROBE_INTERVAL_MS] 再首查，避开过渡窗口。
-     * - **连续确认**：单次失联可能是 native 过渡态抖动，须连续 [DOWN_CONFIRM_COUNT]
-     *   次（约 15s）持续失联才判定真断线；任一次发现「仍连」即清零计数。
-     * - 列表为空（查询异常/时序）视为「尚未确认」，不计入失联、也不清零（保守，
-     *   宁可交给 nextEvent 兜底，也不误触发重连）。
+     * 为什么（v0.2.135 根治，此前 v0.2.133/134 方向错了）：
+     * 「连不到 VNTS 服务器」时，VNT 实例其实**还活着**（已拿到 VIP、TUN 接口正常），
+     * 只是与服务器的实时连接断了；`getServerList().connected=false` 反映的是
+     * 「服务器断连」，**不是「实例死亡」**。若据此 stop 实例并重连，重连后服务器
+     * 依然连不上 → `connected` 依然 false → 又 stop，陷入死循环（高频刷屏）。
+     * 实例真正死亡应由 [runChangeLoop] 的 `nextEvent()` 发 `instance_stopped`
+     * 驱动重连（既有正确机制），探活不越俎代庖。
      *
-     * 用 [gen] 做代次校验，停止/新拉起/探活线程切换时旧线程自行退出，
-     * 绝不误停新代次的 native 实例。
+     * 设计要点：
+     * - **仅更新通知**：连续 [DOWN_CONFIRM_COUNT] 次（约 15s）服务端全失联 →
+     *   通知改「服务器连接中断」；任一次发现「仍连」→ 通知改回「已连接」。
+     * - **首查延迟一个周期**：避开连接建立瞬间的过渡态假失联。
+     * - **独立 sleep**（[probeSleep]）：不响应 [networkJustRecovered]，避免 VPN
+     *   接口建立触发的 onAvailable 打断等待、把「连续 N 次」压到 1 秒内凑齐。
+     * - 列表为空（查询异常/时序）视为「尚未确认」，不更新通知（保守）。
+     *
+     * 用 [gen] 做代次校验，停止/新拉起/探活线程切换时旧线程自行退出。
      */
     private fun startProbe(net: VntNetwork, api: VntApi, gen: Long) {
         stopProbe()
         val t = Thread({
             // 首查前先睡满一个周期，避开连接建立瞬间的过渡态假失联
-            if (!sleepInterruptible(gen, (PROBE_INTERVAL_MS / 1000).toInt())) return@Thread
+            if (!probeSleep(gen, (PROBE_INTERVAL_MS / 1000).toInt())) return@Thread
             var downCount = 0
             while (running && gen == generation) {
                 try {
@@ -575,26 +581,26 @@ class VntVpnService : VpnService() {
                     val allDown = servers.isNotEmpty() && servers.none { it.isConnected }
                     if (allDown) {
                         downCount++
-                        DiagLog.w(
-                            TAG,
-                            "探活：服务端全部失联（连续 $downCount/$DOWN_CONFIRM_COUNT 次）",
-                        )
                         if (downCount >= DOWN_CONFIRM_COUNT && running && gen == generation) {
-                            DiagLog.w(TAG, "探活确认真断线，主动 stop 触发重连")
-                            runCatching { net.stop() }
-                            break
+                            // 服务器持续断连：仅更新通知，不 stop 实例
+                            DiagLog.w(TAG, "探活：服务端持续失联，通知改「服务器连接中断」")
+                            promoteForeground("服务器连接中断 · 等待服务端恢复", connected = false)
                         }
-                    } else {
-                        // 发现「仍连」或列表为空 ⇒ 计数清零，重新累计
+                    } else if (servers.isNotEmpty()) {
+                        // 服务端「仍连」：若之前是「中断」状态，恢复通知为「已连接」
+                        if (downCount >= DOWN_CONFIRM_COUNT) {
+                            DiagLog.i(TAG, "探活：服务端恢复，通知改回「已连接」")
+                            promoteForeground("已连接 · ${registeredIpOrUnknown()}", connected = true)
+                        }
                         downCount = 0
                     }
+                    // 列表为空：不更新通知、也不清零（保守，交给 nextEvent 兜底）
                 } catch (e: Throwable) {
                     // getServerList 在实例停止/重建瞬间会抛 VntException，属正常，
                     // 不升级为断线；nextEvent 会以 instance_stopped 兜底。
                     DiagLog.e(TAG, "探活查询失败（忽略，交给 nextEvent 兜底）", e)
                 }
-                // 可中断等待：停止/新拉起立即结束，无需 sleep 满一个周期
-                if (!sleepInterruptible(gen, (PROBE_INTERVAL_MS / 1000).toInt())) break
+                if (!probeSleep(gen, (PROBE_INTERVAL_MS / 1000).toInt())) break
             }
         }, "vnt-probe").apply {
             isDaemon = true
@@ -602,6 +608,29 @@ class VntVpnService : VpnService() {
         }
         probeThread = t
     }
+
+    /**
+     * 探活专用可中断等待：**只**响应「代次变了」与「线程中断」，**不响应
+     * [networkJustRecovered]**。探活要的是稳定的固定周期，不能被网络回调打断
+     * （VPN 接口建立的 onAvailable 会把 `networkJustRecovered` 置 true，若复用
+     * [sleepInterruptible] 会导致探活等待被瞬间打断、疯狂轮询）。
+     */
+    private fun probeSleep(gen: Long, seconds: Int): Boolean {
+        val deadline = System.currentTimeMillis() + seconds * 1000L
+        while (running && gen == generation) {
+            if (System.currentTimeMillis() >= deadline) return true
+            try {
+                Thread.sleep(250)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        return false
+    }
+
+    /** 当前已分配的虚拟 IP（探活恢复通知时用），未取得则回退占位符。 */
+    private fun registeredIpOrUnknown(): String = establishedCidr?.substringBefore("/") ?: "已连接"
 
     /** 停止探活线程（幂等）：本轮尝试结束或新尝试接管时调用。 */
     private fun stopProbe() {
