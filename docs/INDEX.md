@@ -93,6 +93,11 @@
 | [environment-matrix.md](admin/environment-matrix.md) | **生产 / 测试环境配置对照（白话版 · SSOT）**（三处地址取值、Mermaid 链路图、端口地图、15080/301 实测结论、改前改后、生产/测试步骤、界面位置纯文字路径、只读验收命令） |
 | [bridge-admin.conf](admin/bridge-admin.conf) | **nginx 站点配置模板**（15443 静态 dist + `/api` `/ws` `/d` `/download` `/static` `/health` 反代、WebSocket Upgrade 头、`X-Forwarded-Host $http_host`、SPA fallback、缓存策略；末尾附验证清单，与 `wxhelper.conf` 同 server_name 时二选一） |
 
+### 跨项目通用引用（不在本仓库内）
+| 文档 | 说明 |
+|---|---|
+| **通用机器台账** | **跨项目通用基础设施台账**（机器命名/组网 IP 分配/凭据/SSH 免密/链路优先级），物理文件存于用户级公共目录 `C:\Users\Administrator\.workbuddy\通用机器台账.md`，不在本 git 仓库内。涉及 VNT 组网服务端（mbh/魔百盒）、写代码机（zaomai/早买）、SSH 免密、Tailscale/VNT 组网地址等**跨机器信息时，先查此台账** |
+
 ---
 
 ## 📁 目录速查
