@@ -108,6 +108,13 @@ class VntVpnService : VpnService() {
 
     private val nativeLock = Any()
 
+    /**
+     * 是否已挂前台。首次用 [android.app.Service.startForeground] 履行前台义务，
+     * 之后所有通知更新走 [NotificationManager.notify]——部分国产 ROM 上重复调用
+     * startForeground 不会刷新已有通知内容，导致「正在启动 → 已连接」切不动。
+     */
+    private var foregroundStarted = false
+
     /** 组网实例；由 [nativeLock] 保护。 */
     private var network: VntNetwork? = null
 
@@ -164,7 +171,15 @@ class VntVpnService : VpnService() {
 
     private fun promoteForeground(text: String, connected: Boolean) {
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(text, connected))
+            val notification = buildNotification(text, connected)
+            if (foregroundStarted) {
+                // 已挂前台：用 notify 更新通知（重复 startForeground 在部分 ROM 不刷新）
+                getSystemService(NotificationManager::class.java)
+                    .notify(NOTIFICATION_ID, notification)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+                foregroundStarted = true
+            }
         } catch (e: Exception) {
             DiagLog.e(TAG, "startForeground(specialUse) 失败，stopSelf 防崩", e)
             stopSelf()
@@ -529,6 +544,10 @@ class VntVpnService : VpnService() {
         unregisterNetworkCallback()
         VntMeshController.clearApi()
         worker = null
+        if (foregroundStarted) {
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            foregroundStarted = false
+        }
         if (instance === this) instance = null
         super.onDestroy()
     }

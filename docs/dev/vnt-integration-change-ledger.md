@@ -1598,3 +1598,58 @@ admin `vue-tsc -b` 类型检查 PASS。
   nginx 反代），服务端 API 上游 15160；`29873` 纯粹是服务端作者环境的端口号，由他定。
 - ⚠️ 上一轮总结把「服务端管理后台 29873」直接写进验收清单、未说明是「服务端作者的环境」，易被误读成
   本项目后台，此处正式澄清。
+
+### 8.9 通知更新 bug 修复（2026-11-13 用户真机反馈，切网重连后通知卡「正在启动」）
+
+**现象**：WiFi 组网成功 → 切移动蜂窝 → 短暂断线 → 自动重连成功（系统已提示「已激活为 PN、
+已连接到 Bridge VPN」），但 **VNT 前台通知仍停在「VNT 正在启动 / 正在准备虚拟网络」**，未及时更新为
+「已连接」。同一通知栏还有另一条「Bridge 后台服务运行中」——那是**另一个前台服务**（Bridge 主保活），
+与 VNT 通知无关，两条是独立的 NOTIFICATION_ID。
+
+**根因（三重叠加）**：
+1. **更新通知用错了 API**：`promoteForeground()` 全程用 `startForeground(NOTIFICATION_ID, …)` 刷通知。
+   VNT 服务切网重连时**不销毁、不重建**（`onCreate` 只走一次），「正在启动 → 断线重连中 → 已连接」
+   的状态切换全程都在用 `startForeground` 硬刷。**部分国产 ROM（华为/小米/OPPO 等）上，服务已在前台时
+   重复 `startForeground` 不会刷新已有通知内容**，导致通知卡在最早一次文案。
+2. `onStartCommand` 每次无条件 `promoteForeground("正在准备虚拟网络…")`，切网时若 keepalive/系统
+   重新 `startForegroundService`，通知先被刷回「正在启动」，再等连接成功更新（又被根因 1 卡住）。
+3. 连接成功更新（`tryConnectOnce` 里 373 行）包在 `if (gen == generation)` 守卫内，配合前两点，
+   即使走到也刷不动。
+
+**改前原文**（`app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`，v0.2.131 提交 `96b0b5c`）：
+```kotlin
+private fun promoteForeground(text: String, connected: Boolean) {
+    try {
+        startForeground(NOTIFICATION_ID, buildNotification(text, connected))
+    } catch (e: Exception) {
+        DiagLog.e(TAG, "startForeground(specialUse) 失败，stopSelf 防崩", e)
+        stopSelf()
+    }
+}
+```
+
+**改后**：拆两套 API——首次 `startForeground` 履行前台义务，之后全部 `NotificationManager.notify`；
+新增 `foregroundStarted` 标志；`onDestroy` 补 `stopForeground(STOP_FOREGROUND_REMOVE)` 并复位标志。
+```kotlin
+private var foregroundStarted = false
+
+private fun promoteForeground(text: String, connected: Boolean) {
+    try {
+        val notification = buildNotification(text, connected)
+        if (foregroundStarted) {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIFICATION_ID, notification)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+            foregroundStarted = true
+        }
+    } catch (e: Exception) {
+        DiagLog.e(TAG, "startForeground(specialUse) 失败，stopSelf 防崩", e)
+        stopSelf()
+    }
+}
+```
+
+**回滚配方**：`git checkout 96b0b5c -- app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`。
+
+**验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收待用户装新 APK 后切网复验。
