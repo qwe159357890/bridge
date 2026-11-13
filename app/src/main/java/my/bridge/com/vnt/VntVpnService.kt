@@ -85,6 +85,9 @@ class VntVpnService : VpnService() {
         /** 探活间隔（毫秒，v0.2.133）：与界面刷新同频，断线后通知最多延迟一个周期更新。 */
         private const val PROBE_INTERVAL_MS = 5_000L
 
+        /** 连续失联确认次数（v0.2.134）：连续 N 次探活都失联才判真断线，过滤 native 过渡态抖动。 */
+        private const val DOWN_CONFIRM_COUNT = 3
+
         @Volatile
         private var instance: VntVpnService? = null
 
@@ -279,6 +282,8 @@ class VntVpnService : VpnService() {
         val reason: String,
         /** 本次尝试是否曾连接成功（用于成功后重置退避计数）。 */
         val hadConnected: Boolean,
+        /** 连接是否稳定存活超过一个探活周期（只有稳定连接才重置退避，抖动不重置）。 */
+        val stable: Boolean = false,
     )
 
     /** 致命错误（重试无意义）：初始化/配置错、VPN 授权被抢。 */
@@ -293,7 +298,9 @@ class VntVpnService : VpnService() {
         var fatal: String? = null
         while (running && gen == generation) {
             val res = tryConnectOnce(gen) ?: break
-            if (res.hadConnected) attempt = 0          // 一次成功即重置退避
+            // 只有「稳定连接」才重置退避；「连上即断」的抖动不重置，让退避逐步拉大，
+            // 避免探活/过渡态导致的死循环永远停在「第 1 次」。
+            if (res.stable) attempt = 0
             if (!res.retryable) {
                 fatal = res.reason
                 break
@@ -359,6 +366,9 @@ class VntVpnService : VpnService() {
     private fun tryConnectOnce(gen: Long): AttemptResult? {
         var net: VntNetwork? = null
         val hadConnected = java.util.concurrent.atomic.AtomicBoolean(false)
+        // 连接成功时刻（毫秒）：用于判定「是否稳定连接」。存活不足一个探活周期
+        // 即断的，多为探活/过渡态抖动，不应重置退避计数。
+        var connectedAtMs = 0L
         try {
             networkJustRecovered = false     // 清掉上一轮残留标志
 
@@ -390,6 +400,7 @@ class VntVpnService : VpnService() {
             val api: VntApi = nativeNet.getApi()
             if (gen == generation) {
                 hadConnected.set(true)
+                connectedAtMs = System.currentTimeMillis()
                 VntMeshController.onConnected(api, registered, cfg, currentMtu)
                 promoteForeground("已连接 · ${registered.getIp()}", connected = true)
                 LogThrottle.summaryIfAny("vnt-retry", TAG, "组网重连")
@@ -407,7 +418,7 @@ class VntVpnService : VpnService() {
 
             // 到这里若还在跑且仍是当前代次 ⇒ native 自行退出（instance_stopped）——按可重试处理
             if (running && gen == generation) {
-                return AttemptResult(true, "组网实例已停止（视为断线）", hadConnected.get())
+                return AttemptResult(true, "组网实例已停止（视为断线）", hadConnected.get(), isStable(hadConnected.get(), connectedAtMs))
             }
             return null                                        // 用户停止 / 被接管
         } catch (e: Throwable) {
@@ -421,7 +432,7 @@ class VntVpnService : VpnService() {
             if (LogThrottle.shouldEmit("vnt-attempt-fail", e.javaClass.simpleName + "|" + e.message, TAG)) {
                 DiagLog.e(TAG, "组网尝试失败", e)
             }
-            return AttemptResult(retryable, e.message ?: "未知异常", hadConnected.get())
+            return AttemptResult(retryable, e.message ?: "未知异常", hadConnected.get(), isStable(hadConnected.get(), connectedAtMs))
         } finally {
             // 探活线程随本轮尝试结束（无论成败），避免旧代次探活线程残留误停新实例。
             stopProbe()
@@ -521,15 +532,33 @@ class VntVpnService : VpnService() {
         synchronized(nativeLock) { network = null }
     }
 
+    /**
+     * 是否「稳定连接」：本轮曾连上，且从连上到结束存活超过一个探活周期。
+     * 探活/过渡态抖动导致的「连上即断」存活极短，不应重置退避计数。
+     */
+    private fun isStable(hadConnected: Boolean, connectedAtMs: Long): Boolean {
+        if (!hadConnected || connectedAtMs <= 0L) return false
+        return System.currentTimeMillis() - connectedAtMs >= PROBE_INTERVAL_MS
+    }
+
     // ------------------------------------------------------------------
     // 探活（v0.2.133）：弥补 nextEvent 断线感知延迟
     // ------------------------------------------------------------------
 
     /**
      * 启动探活线程。连接成功后调用，独立于 worker（监督循环）：
-     * 每 [PROBE_INTERVAL_MS] 查一次 [VntApi.getServerList]，若服务端全部失联，
-     * 判定断线，主动 [VntNetwork.stop] 让阻塞中的 nextEvent 立即返回
-     * instance_stopped → 复用监督循环的「断线重连」链路（更新通知 + 退避重连）。
+     * 每 [PROBE_INTERVAL_MS] 查一次 [VntApi.getServerList]，若服务端**连续
+     * [DOWN_CONFIRM_COUNT] 次**全部失联才判定真断线，主动 [VntNetwork.stop]
+     * 让阻塞中的 nextEvent 立即返回 instance_stopped → 复用监督循环的
+     * 「断线重连」链路（更新通知 + 退避重连）。
+     *
+     * 设计要点（v0.2.134 修正抖动误判）：
+     * - **首查延迟一个周期**：连接刚建立/实例重建瞬间 getServerList 会返回
+     *   「全失联」的过渡态，先等满 [PROBE_INTERVAL_MS] 再首查，避开过渡窗口。
+     * - **连续确认**：单次失联可能是 native 过渡态抖动，须连续 [DOWN_CONFIRM_COUNT]
+     *   次（约 15s）持续失联才判定真断线；任一次发现「仍连」即清零计数。
+     * - 列表为空（查询异常/时序）视为「尚未确认」，不计入失联、也不清零（保守，
+     *   宁可交给 nextEvent 兜底，也不误触发重连）。
      *
      * 用 [gen] 做代次校验，停止/新拉起/探活线程切换时旧线程自行退出，
      * 绝不误停新代次的 native 实例。
@@ -537,16 +566,27 @@ class VntVpnService : VpnService() {
     private fun startProbe(net: VntNetwork, api: VntApi, gen: Long) {
         stopProbe()
         val t = Thread({
+            // 首查前先睡满一个周期，避开连接建立瞬间的过渡态假失联
+            if (!sleepInterruptible(gen, (PROBE_INTERVAL_MS / 1000).toInt())) return@Thread
+            var downCount = 0
             while (running && gen == generation) {
                 try {
                     val servers = api.getServerList()
-                    // 服务端失联判定：列表非空且全部 connected=false。
-                    // 列表为空（查询异常/时序）视为「尚未确认失联」，不误判。
                     val allDown = servers.isNotEmpty() && servers.none { it.isConnected }
-                    if (allDown && running && gen == generation) {
-                        DiagLog.w(TAG, "探活发现服务端全部失联，主动 stop 触发重连")
-                        runCatching { net.stop() }
-                        break
+                    if (allDown) {
+                        downCount++
+                        DiagLog.w(
+                            TAG,
+                            "探活：服务端全部失联（连续 $downCount/$DOWN_CONFIRM_COUNT 次）",
+                        )
+                        if (downCount >= DOWN_CONFIRM_COUNT && running && gen == generation) {
+                            DiagLog.w(TAG, "探活确认真断线，主动 stop 触发重连")
+                            runCatching { net.stop() }
+                            break
+                        }
+                    } else {
+                        // 发现「仍连」或列表为空 ⇒ 计数清零，重新累计
+                        downCount = 0
                     }
                 } catch (e: Throwable) {
                     // getServerList 在实例停止/重建瞬间会抛 VntException，属正常，

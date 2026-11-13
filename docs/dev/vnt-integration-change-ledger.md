@@ -1695,3 +1695,52 @@ private fun promoteForeground(text: String, connected: Boolean) {
 **验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收：组网成功 → 断网/切网 → 观察通知
 应在 ≤5s 内从「已连接」更新为「断线重连中 · 第 N 次」。
 
+### 8.11 探活误判抖动：「断线重连中/已连接」高频闪烁 + 永远「第 1 次」（v0.2.134）
+
+**现象**（真机，连不到 VNTS 服务器时）：通知在「断线重连中 · 第 N 次」和「已连接」之间**高频
+切换闪烁**（间隔约几百毫秒，而非预期的 5s 探活周期），且永远显示「第 1 次」；此时打开组网页也
+疯狂闪烁。日志实证（f2c38ebee251a196 组网 tag）：
+
+```
+VNT 已连接：86.74.128.88/24
+探活发现服务端全部失联，主动 stop 触发重连
+组网实例已停止，退出变更循环
+组网失败（可重试）：组网实例已停止（视为断线）；第 1 次重连将在 2s 后进行
+VNT 已连接：86.74.128.88/24   ← 又连上 → 又探活失联 → 又 stop，死循环
+```
+
+**根因（两个叠加）**：
+1. **探活误判（主因）**：`getServerList()` 在「连接刚建立 / 实例重建瞬间」会返回「全失联」的
+   **过渡态**（native 内部状态尚未同步）。§8.10 的探活「单次失联即 stop」把这种几百毫秒的瞬时
+   抖动当成真断线 → stop → 重连成功 → 又立即探活又误判 → 死循环（周期约 1s）。
+2. **退避计数被错误重置**：`runSupervisor` 里 `if (res.hadConnected) attempt = 0`——每次 stop 前
+   连接其实都成功过（`hadConnected=true`），把 `attempt` 归零，退避永远停在 2s 第一档，故永远
+   「第 1 次」。
+
+**改法（v0.2.134，用户拍板「连续 3 次失联」阈值）**：
+- **探活加「连续确认」**：新增常量 `DOWN_CONFIRM_COUNT = 3`，探活线程用 `downCount` 累计
+  「服务端全部 `connected=false`」的次数，**连续 3 次（约 15s）持续失联**才判定真断线并 stop；
+  任一次发现「仍连」即清零。列表为空/查询异常不计入失联也不清零（保守，交给 nextEvent 兜底）。
+- **首查延迟一个周期**：探活线程启动后先 `sleepInterruptible` 满 5s 再第一次 `getServerList()`，
+  避开连接建立瞬间的过渡态。
+- **退避计数修正**：`AttemptResult` 增 `stable` 字段，`isStable()` 判定「曾连上且存活 ≥ 一个探活
+  周期（`PROBE_INTERVAL_MS`）」；`runSupervisor` 改为 `if (res.stable) attempt = 0`。这样「连上即断」
+  的抖动不再重置退避，退避逐步 2→4→8s 拉大；真稳定连接后断线才从第 1 档重新数。
+
+**改前原文**（`VntVpnService.kt`，v0.2.133）：
+- `startProbe` 单次失联即 `net.stop()`，无 `downCount` 计数、无首查延迟；
+- `runSupervisor` 里 `if (res.hadConnected) attempt = 0`；
+- `AttemptResult` 无 `stable` 字段；`tryConnectOnce` 无 `connectedAtMs`。
+
+**新增/改动清单**：
+- 常量 `DOWN_CONFIRM_COUNT = 3`；
+- `startProbe`：首查前 sleep 一周期 + `downCount` 连续计数；
+- `AttemptResult` 增 `stable` 字段（默认 false）；`tryConnectOnce` 增 `connectedAtMs` 记录，
+  两处 return 传 `isStable(hadConnected, connectedAtMs)`；
+- 新增 `isStable()` 辅助方法；`runSupervisor` 改 `if (res.stable) attempt = 0`。
+
+**回滚配方**：`git checkout <v0.2.133 commit> -- app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`。
+
+**验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收：连不到 VNTS 服务器时，通知应稳定
+显示「断线重连中 · 第 N 次」，N 逐步递增（2s→4s→8s…），不再高频闪烁；组网页也不再疯狂刷新。
+
