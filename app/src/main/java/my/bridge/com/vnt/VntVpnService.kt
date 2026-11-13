@@ -82,6 +82,9 @@ class VntVpnService : VpnService() {
         /** 指数退避表（秒）：2/4/8/16/30/60 封顶，照 RelayClient 既有范式。 */
         private val BACKOFF_SEC = intArrayOf(2, 4, 8, 16, 30, 60)
 
+        /** 探活间隔（毫秒，v0.2.133）：与界面刷新同频，断线后通知最多延迟一个周期更新。 */
+        private const val PROBE_INTERVAL_MS = 5_000L
+
         @Volatile
         private var instance: VntVpnService? = null
 
@@ -120,6 +123,9 @@ class VntVpnService : VpnService() {
 
     /** worker 线程（监督循环跑在这里）。 */
     private var worker: Thread? = null
+
+    /** 探活线程（v0.2.133）：连接成功后周期性查服务端连接状态，失联即主动 stop 触发重连。 */
+    private var probeThread: Thread? = null
 
     @Volatile
     private var running = false
@@ -391,6 +397,11 @@ class VntVpnService : VpnService() {
                 DiagLog.i(TAG, "VNT 已连接：$cidr")
             }
 
+            // 4.5) 探活线程：nextEvent 断线感知有延迟（依赖 native 心跳超时），
+            //      这里每 5 秒查一次服务端连接状态，失联即主动 stop 触发重连，
+            //      让通知与界面「未连上服务端」保持同步。
+            startProbe(nativeNet, api, gen)
+
             // 5) 变更循环（阻塞 nextEvent，直到实例停止或异常）
             runChangeLoop(nativeNet, gen)
 
@@ -412,6 +423,8 @@ class VntVpnService : VpnService() {
             }
             return AttemptResult(retryable, e.message ?: "未知异常", hadConnected.get())
         } finally {
+            // 探活线程随本轮尝试结束（无论成败），避免旧代次探活线程残留误停新实例。
+            stopProbe()
             // 只释放本轮自己的实例；generation 已变（被接管）时不碰共享字段。
             val stillCurrent = gen == generation
             if (stillCurrent) synchronized(nativeLock) { network = null }
@@ -509,6 +522,55 @@ class VntVpnService : VpnService() {
     }
 
     // ------------------------------------------------------------------
+    // 探活（v0.2.133）：弥补 nextEvent 断线感知延迟
+    // ------------------------------------------------------------------
+
+    /**
+     * 启动探活线程。连接成功后调用，独立于 worker（监督循环）：
+     * 每 [PROBE_INTERVAL_MS] 查一次 [VntApi.getServerList]，若服务端全部失联，
+     * 判定断线，主动 [VntNetwork.stop] 让阻塞中的 nextEvent 立即返回
+     * instance_stopped → 复用监督循环的「断线重连」链路（更新通知 + 退避重连）。
+     *
+     * 用 [gen] 做代次校验，停止/新拉起/探活线程切换时旧线程自行退出，
+     * 绝不误停新代次的 native 实例。
+     */
+    private fun startProbe(net: VntNetwork, api: VntApi, gen: Long) {
+        stopProbe()
+        val t = Thread({
+            while (running && gen == generation) {
+                try {
+                    val servers = api.getServerList()
+                    // 服务端失联判定：列表非空且全部 connected=false。
+                    // 列表为空（查询异常/时序）视为「尚未确认失联」，不误判。
+                    val allDown = servers.isNotEmpty() && servers.none { it.isConnected }
+                    if (allDown && running && gen == generation) {
+                        DiagLog.w(TAG, "探活发现服务端全部失联，主动 stop 触发重连")
+                        runCatching { net.stop() }
+                        break
+                    }
+                } catch (e: Throwable) {
+                    // getServerList 在实例停止/重建瞬间会抛 VntException，属正常，
+                    // 不升级为断线；nextEvent 会以 instance_stopped 兜底。
+                    DiagLog.e(TAG, "探活查询失败（忽略，交给 nextEvent 兜底）", e)
+                }
+                // 可中断等待：停止/新拉起立即结束，无需 sleep 满一个周期
+                if (!sleepInterruptible(gen, (PROBE_INTERVAL_MS / 1000).toInt())) break
+            }
+        }, "vnt-probe").apply {
+            isDaemon = true
+            start()
+        }
+        probeThread = t
+    }
+
+    /** 停止探活线程（幂等）：本轮尝试结束或新尝试接管时调用。 */
+    private fun stopProbe() {
+        val t = probeThread ?: return
+        probeThread = null
+        t.interrupt()
+    }
+
+    // ------------------------------------------------------------------
     // 停止
     // ------------------------------------------------------------------
 
@@ -538,6 +600,7 @@ class VntVpnService : VpnService() {
     override fun onDestroy() {
         running = false
         ++generation
+        stopProbe()
         val n = synchronized(nativeLock) { network }
         runCatching { n?.stop() }
         synchronized(nativeLock) { network = null }

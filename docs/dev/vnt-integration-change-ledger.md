@@ -1653,3 +1653,45 @@ private fun promoteForeground(text: String, connected: Boolean) {
 **回滚配方**：`git checkout 96b0b5c -- app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`。
 
 **验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收待用户装新 APK 后切网复验。
+
+---
+
+### 8.10 通知「一直显示成功」不随断线更新（v0.2.133，探活缺失）
+
+**现象**（真机，切网/断网后）：界面组网页已显示「未连上服务端」，但通知栏 VNT 通知仍停在
+「已连接 · 86.74.128.88」，一直不更新为断线状态。
+
+**根因**：通知与界面用了**两套不对称的断线感知机制**——
+- 界面：`VntMeshController.refreshOnce` 每 5 秒主动 RPC `getClientList()`，断网立即感知「未连上服务端」；
+- 通知：只靠 `VntVpnService.runChangeLoop` 里阻塞的 `net.nextEvent()` 被动等 native 发
+  `instance_stopped` 事件。**`nextEvent()` 纯阻塞、无超时参数**（`VntNetwork.nextEvent()`），
+  断线后 native 要等自己的 TCP 心跳超时才判定 → 才发 `instance_stopped`，期间 worker 一直卡在
+  `nextEvent`，走不到监督循环的断线分支，通知保持「已连接」。
+
+**改法（方案 A：探活线程发现失联 → 主动 stop 触发既有重连链）**：`VntVpnService` 新增探活线程
+`startProbe`/`stopProbe`——连接成功后启动，每 `PROBE_INTERVAL_MS`（5s，与界面刷新同频）查一次
+`api.getServerList()`，若服务端**全部 `connected=false`**（`servers.none { it.isConnected }`，
+列表为空不误判），判定断线，主动 `net.stop()` 让阻塞中的 `nextEvent()` 立即返回
+`instance_stopped`（或抛异常）→ 复用既有监督循环的「断线重连」链路（更新通知「断线重连中」+
+退避重连）。代次校验用 `gen`，`stopProbe` 在 `tryConnectOnce` 的 finally 与 `onDestroy` 调用，
+绝不误停新代次实例。
+
+**关键事实核验**：官方参考实现的停止机制（调研 §6.3）本就是「`cancellationRequested=true`（让阻塞
+的 nextEvent 退出）→ `VntNetwork.stop()`」，即**另一线程调 stop 让 nextEvent 退出是官方支持的用法**；
+且 stop 后 `nextEvent` 无论返回 `instance_stopped` 还是抛异常，`tryConnectOnce` 都能正确判可重试
+（非 FatalVntException），两条路径都走重连，逻辑稳健。
+
+**改前原文**（`VntVpnService.kt`，v0.2.132 提交 `aa0ce59`）：
+- `tryConnectOnce` 连接成功后直接 `runChangeLoop(nativeNet, gen)`（无探活）；
+- 无 `probeThread`/`startProbe`/`stopProbe`。
+
+**新增/改动清单**：
+- 字段 `probeThread: Thread?`；常量 `PROBE_INTERVAL_MS = 5_000L`（并入既有 companion object）。
+- `tryConnectOnce` 连接成功块后加 `startProbe(nativeNet, api, gen)`；finally 首行加 `stopProbe()`。
+- 新增 `startProbe`/`stopProbe` 两个方法；`onDestroy` 补 `stopProbe()`。
+
+**回滚配方**：`git checkout aa0ce59 -- app/src/main/java/my/bridge/com/vnt/VntVpnService.kt`。
+
+**验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收：组网成功 → 断网/切网 → 观察通知
+应在 ≤5s 内从「已连接」更新为「断线重连中 · 第 N 次」。
+
