@@ -433,31 +433,32 @@ COMMANDS: list[dict[str, Any]] = [
           _param("force_download", "强制重新下载", PARAM_TYPE_SWITCH, default=False,
                  description="忽略本地缓存强制重下（md5 校验删除污染缓存的自救手段，仅自动安装/协助安装模式有效）")]),
 
-    # ---- VNT 组网（v0.2.30 引入，v0.2.32 改为 1.x / VntApp v1.2.9 语义）----
+    # ---- VNT 组网（v0.2.30 引入，v0.2.131 改为 2.x / v2.0.12 语义）----
     _cmd("vnt_start", "开始组网", "system", "🕸️",
-         "启动 VNT 虚拟局域网（1.x 核心，与自建 1.x VNTS 及存量客户端互通；前台服务常驻，切 Tab / 退后台不断连）；"
+         "启动 VNT 虚拟局域网（2.x 核心 v2.0.12，接入自建 vnts2 服务端；前台服务常驻，切 Tab / 退后台不断连）；"
          "★ 需 App 在前台或已授予系统 VPN 授权：后台下发大概率失败，回执会如实说明而不假装成功；"
          "★ v0.2.33：管理后台按 vnt_status 快照禁用重复下发（已组网时按钮不可用），"
          "确需绕过请用「强制下发」（需二次确认）；设备端也会忽略已在运行时的重复 start（不写配置、不改自动组网记忆）",
          [_param("server", "服务端地址", PARAM_TYPE_TEXT,
-                 placeholder="039039.xyz:31007",
-                 description="可选覆盖 APP 内已保存的配置；1.x 只接受裸 host:port，不要带 udp:// / tcp:// 前缀"),
-          _param("token", "组网编号 Token", PARAM_TYPE_TEXT,
+                 placeholder="quic://039039.xyz:31008,tcp://039039.xyz:31008",
+                 description="可选覆盖 APP 内已保存的配置；v2 支持 quic:// / tcp:// / wss:// / dynamic:// "
+                             "前缀或裸 host:port（默认 tcp://），可逗号分隔多地址容灾；不支持 udp://（1.2.x 旧协议）"),
+          _param("network_code", "组网编号", PARAM_TYPE_TEXT,
                  placeholder="留空用 APP 内保存的配置",
-                 description="可选覆盖；同编号设备互通。兼容旧参数名 network_code"),
-          _param("password", "客户端加密密码", PARAM_TYPE_TEXT,
+                 description="可选覆盖；同编号设备互通。兼容旧参数名 token"),
+          _param("password", "组网密码", PARAM_TYPE_TEXT,
                  placeholder="留空用 APP 内保存的配置",
-                 description="可选覆盖；须与存量 1.x 客户端一致，不同加密状态不能通信"),
-          _param("tcp", "连接协议", PARAM_TYPE_TEXT,
-                 placeholder="留空用 APP 内保存的配置",
-                 description="可选覆盖；填 tcp/true/1 走 TCP，填 udp/false/0 走 UDP（默认 UDP，与 1.2.13 原生 APK 一致）")]),
+                 description="可选覆盖；节点间端到端加密（ChaCha20-Poly1305），全网设备必须一致"),
+          _param("protocol", "协议（已废弃）", PARAM_TYPE_TEXT,
+                 placeholder="忽略即可",
+                 description="v2 传输协议由 server 地址前缀决定，此参数已废弃，收到即忽略")]),
     _cmd("vnt_stop", "停止组网", "system", "🛑",
          "停止 VNT 虚拟局域网并释放系统 VPN 通道；无平台限制，最可靠；"
          "★ v0.2.33：管理后台按 vnt_status 快照禁用重复下发（未组网时按钮不可用），"
          "确需绕过请用「强制下发」（需二次确认）；设备端在未组网时直接忽略，不再拉起空前台服务、不清除开机自动组网记忆"),
     _cmd("vnt_status", "组网状态", "system", "📶",
-         "查询 VNT 组网状态（状态 / 虚拟 IP / Token / 协议 / 在线设备数 / 服务端版本）；"
-         "只读本地缓存快照，**不触发 Vnt.list()**（详细设备列表仅在组网页可见时刷新）"),
+         "查询 VNT 组网状态（状态 / 虚拟 IP / NAT 类型 / 服务端 RTT / 在线设备数）；"
+         "只读本地缓存快照，**不触发 getClientList()**（详细设备列表仅在组网页可见时刷新）"),
     _cmd("ssh_start", "启动 SSH 服务", "system", "🖥️",
          "启动客户端内嵌 SSH 服务器（SFTP 文件管理 + 远程终端），端口 8022、用户名 bridge，"
          "访问密码与 hostkey 指纹见 APP「设置 → 连接 → SSH 服务」状态页；同一服务同时服务 WiFi 局域网与 VNT 虚拟网；"

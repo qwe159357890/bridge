@@ -597,31 +597,29 @@ object CommandModule {
     }
 
     // ------------------------------------------------------------------
-    // VNT 组网命令（v0.2.30 引入，v0.2.32 改为 1.x 语义）
+    // VNT 组网命令（v0.2.30 引入，v0.2.131 改为 2.x 语义 / v2.0.12）
     //
     // 平台限制（已在回执里如实说明）：
     // - VpnService.prepare() 授权框必须有 Activity 才能弹；
     // - Android 12+ 后台 startForegroundService 会抛 ForegroundServiceStartNotAllowedException；
     // ⇒ vnt_start 实际只在「App 在前台」或「用户此前已授权过 VPN」时可靠生效。
-    // - vnt_status 刻意只读本地快照，不调 Vnt.list()（1.x 是本地内存读，但仍属 JNI，
+    // - vnt_status 刻意只读本地快照，不调 getClientList()（2.x 是主动 RPC 且最多阻塞 3 秒，
     //   且详细设备列表只在页面可见时刷新，命令通道不该触发）。
-    // - 1.x：组网编号叫 token（兼容旧 network_code 别名）；服务端是裸 host:port；
-    //   UDP/TCP 由布尔 tcp 决定，不接受 udp:// / tcp:// 前缀。
+    // - 2.x：组网编号叫 network_code（兼容旧 token 参数名）；服务端支持 quic:// / tcp:// /
+    //   wss:// / dynamic:// 前缀或裸 host:port（默认 tcp://），可逗号分隔多地址；
+    //   传输协议由地址前缀决定，不再有 protocol/tcp 布尔参数（收到即忽略）。
     // ------------------------------------------------------------------
 
-    /** vnt_start：可选覆盖服务端 / 组网编号 / 密码 / 协议后启动组网。 */
+    /** vnt_start：可选覆盖服务端 / 组网编号 / 密码后启动组网（protocol 已废弃）。 */
     private fun executeVntStart(context: Context, command: Command): CommandResult {
         return try {
             val server = command.strParam("server", "")
-            // 1.x 叫 token；兼容 v0.2.30/31 管理后台沿用的 network_code 参数名
-            val token = command.strParam("token", "").ifEmpty { command.strParam("network_code", "") }
+            // 2.x 叫 network_code；兼容 v0.2.32 时代 1.x 沿用的 token 参数名
+            val networkCode = command.strParam("network_code", "")
+                .ifEmpty { command.strParam("token", "") }
             val password = command.strParam("password", "")
-            val tcpText = command.strParam("tcp", "").lowercase()
-            val tcp = when (tcpText) {
-                "true", "1", "tcp" -> true
-                "false", "0", "udp" -> false
-                else -> null
-            }
+            // protocol（tcp/udp）在 2.x 已废弃：传输协议由 server 地址前缀决定，收到即忽略
+            val ignoredProtocol = command.strParam("protocol", "")
             // v0.2.33：状态守卫提到最前面。重复下发（含管理后台「强制下发」）绝不能
             // 改配置、也不能重写自动组网记忆——否则运行中的实例仍用启动时的旧配置，
             // 后台却以为新参数已生效；迟到的 start 还会把用户刚点「停止」清掉的记忆写回。
@@ -641,23 +639,22 @@ object CommandModule {
                 )
             }
             // 确认要真正启动，才把覆盖参数写回单套配置 Prefs（与页面「组网配置」共用）
-            if (server.isNotEmpty() || token.isNotEmpty() || password.isNotEmpty() || tcp != null) {
+            if (server.isNotEmpty() || networkCode.isNotEmpty() || password.isNotEmpty()) {
                 val old = VntMeshPrefs.load(context)
                 VntMeshPrefs.save(
                     context,
                     old.copy(
                         server = server.ifEmpty { old.server },
-                        token = token.ifEmpty { old.token },
+                        networkCode = networkCode.ifEmpty { old.networkCode },
                         password = password.ifEmpty { old.password },
-                        tcp = tcp ?: old.tcp,
                     ),
                 )
             }
             val cfg = VntMeshPrefs.load(context)
-            if (cfg.token.isBlank()) {
+            if (cfg.networkCode.isBlank()) {
                 return CommandResult(
                     command.commandId, command.command, false,
-                    "组网编号（Token）为空：请先在 APP「组网配置」里填写，或用本命令 token 参数指定",
+                    "组网编号（network_code）为空：请先在 APP「组网配置」里填写，或用本命令 network_code 参数指定",
                 )
             }
             VntServerAddress.error(cfg.server)?.let {
@@ -671,11 +668,12 @@ object CommandModule {
             }
             val launched = VntMeshController.start(context)
             if (launched) VntMeshPrefs.setAutoStart(context, true)
+            val protocolNote = if (ignoredProtocol.isNotEmpty())
+                "（protocol 参数已忽略，v2 由地址前缀决定协议）" else ""
             CommandResult(
                 command.commandId, command.command, launched,
                 if (launched) {
-                    "已下发开始组网：${cfg.server} / Token ${cfg.token}（" +
-                        "${if (cfg.tcp) "TCP" else "UDP"}）" +
+                    "已下发开始组网：${cfg.server} / 网络编号 ${cfg.networkCode}$protocolNote" +
                         "（首次需等待服务器注册，用 vnt_status 查状态；切 Tab/退后台不断连）"
                 } else {
                     "启动失败：多为 Android 12+ 后台启动前台服务受限，详见设备日志；请让 App 回到前台再试"

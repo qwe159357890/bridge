@@ -156,14 +156,9 @@ function parseStatusFields(msg: string): Field[] {
     if (m) out.push({ label, value: m[1].trim() })
   }
   push('虚拟 IP', /虚拟IP\s+([^\s·]+)/)
-  push('组网编号 Token', /Token\s+([^\s·]+)/)
-  const srv = msg.match(/服务端\s+([^（\s]+)（(TCP|UDP)）/)
-  if (srv) {
-    out.push({ label: '服务端地址', value: srv[1] })
-    out.push({ label: '连接协议', value: srv[2] })
-  }
+  push('NAT 类型', /NAT\s+([^\s·]+)/)
+  push('服务端 RTT', /服务端RTT\s+([^\s·]+)ms/)
   push('在线设备数', /在线设备\s+(\d+)/)
-  push('服务端版本', /服务端版本\s+([^\s（]+)/)
   return out
 }
 
@@ -187,16 +182,11 @@ const statusFields = computed(() => parseStatusFields(msg.value))
 // ---- ② vnt_start ----
 const startParams = computed<Field[]>(() => {
   const p = record.value?.params ?? {}
-  const tcpText = String(p.tcp ?? '').toLowerCase()
-  let proto = '沿用 App 内保存配置（默认 UDP）'
-  if (['true', '1', 'tcp'].includes(tcpText)) proto = 'TCP'
-  else if (['false', '0', 'udp'].includes(tcpText)) proto = 'UDP'
-  const token = p.token || p.network_code
+  const networkCode = p.network_code || p.token
   return [
     { label: '服务端地址', value: p.server ? String(p.server) : '沿用 App 内保存配置' },
-    { label: '组网编号 Token', value: token ? String(token) : '沿用 App 内保存配置' },
-    { label: '客户端加密密码', value: p.password ? '已设置（••••，不回显明文）' : '未设置 / 沿用 App 内保存配置' },
-    { label: '连接协议', value: proto },
+    { label: '组网编号', value: networkCode ? String(networkCode) : '沿用 App 内保存配置' },
+    { label: '组网密码', value: p.password ? '已设置（••••，不回显明文）' : '未设置 / 沿用 App 内保存配置' },
   ]
 })
 
@@ -230,11 +220,11 @@ const startVerdict = computed<Verdict>(() => {
       next: '让 App 回到前台再试，或由用户在手机上点一次「开始组网」。',
     }
   }
-  if (m.startsWith('组网编号（Token）为空')) {
-    return { label: '缺少 Token', type: 'danger', explain: m, next: '在 App「组网配置」填写，或用本命令 token 参数指定。' }
+  if (m.startsWith('组网编号（network_code）为空')) {
+    return { label: '缺少组网编号', type: 'danger', explain: m, next: '在 App「组网配置」填写，或用本命令 network_code 参数指定。' }
   }
   if (m.startsWith('服务端地址非法')) {
-    return { label: '地址非法', type: 'danger', explain: m, next: '1.x 只接受裸 host:port，不要带 udp:// / tcp:// 前缀。' }
+    return { label: '地址非法', type: 'danger', explain: m, next: 'v2 只接受 tcp:// / wss:// / quic:// / dynamic:// 或裸 host:port，不支持 udp://。' }
   }
   if (m.startsWith('尚未授予系统 VPN 权限')) {
     return { label: '未授权 VPN', type: 'danger', explain: '系统 VPN 授权尚未完成，后台无法静默拉起。', next: '需 App 在前台由用户点一次「开始组网」完成授权。' }

@@ -4,64 +4,59 @@ import android.content.Context
 import android.provider.Settings
 import java.util.UUID
 
-/**
- * 单套 VNT 组网配置（v0.2.32，1.x / VntApp v1.2.9）。
- *
- * ★ 与 2.x 的配置模型完全不同（见 `docs/dev/vnt-integration-change-ledger.md` §六）：
- * - 组网编号在 1.x 里叫 **token**（2.x 叫 networkCode）；
- * - 服务端是**裸 `host:port`，无任何协议前缀**；UDP/TCP 由布尔 [tcp] 决定
- *   （`false` = UDP，正对应用户 1.2.13 原生 APK 里选的「协议 UDP」）；
- * - 加密是 `cipherModel`（aes_gcm / aes_cbc / aes_ecb）+ `serverEncrypt` + `finger`，
- *   不是 2.x 的 ChaCha20-Poly1305 / certMode；
- * - 没有网络编号之外的「网络码」、没有 certMode、没有 compress/fec/rtx/noPunch。
- *
- * 这些字段必须与存量 1.x 客户端**逐项一致**（尤其 token / password / cipherModel /
- * serverEncrypt / finger），否则会「能注册但互相不通」。
- */
+/** 单套 VNT 组网配置（已拍板：不做多配置切换）。 */
 data class VntMeshConfig(
-    /** 组网编号（1.x 的 token，必填；同编号设备互通）。 */
-    val token: String = "",
-    /** 服务端裸地址 `host:port`（如 039039.xyz:31007），**不要带协议前缀**。 */
+    /**
+     * 服务端地址（**v2.0.12 规则**，见 `docs/research/vnt-mesh-integration.md` §12）：
+     * - 裸 `host:port` 默认 **tcp://（TLS TCP）**；
+     * - 可显式写 `tcp://` / `wss://` / `quic://` / `dynamic://`；
+     * - 支持**多地址逗号分隔容灾**（如 `quic://039039.xyz:31008,tcp://039039.xyz:31008`）；
+     * - **不支持 `udp://`**——那是 1.2.x 旧版协议（v2.0.x 核心已移除）。
+     */
     val server: String = DEFAULT_SERVER,
-    /** false = UDP（默认，与存量 1.2.13 一致），true = TCP。 */
-    val tcp: Boolean = false,
-    /** 客户端间加密密码；空 = 不加密。不同加密状态的客户端不能通信。 */
-    val password: String = "",
-    /** 加密模式：aes_gcm / aes_cbc / aes_ecb（官方 v1.2.9 的 spinner 选项）。 */
-    val cipherModel: String = DEFAULT_CIPHER,
-    /** 服务端加密，官方 AddActivity 固定 true。 */
-    val serverEncrypt: Boolean = true,
-    /** 开启加密指纹校验。 */
-    val finger: Boolean = false,
-    /** 延迟优先（false = p2p 优先）。 */
-    val firstLatency: Boolean = false,
+    /** 网络编号（三要素之一，必填）。 */
+    val networkCode: String = DEFAULT_NETWORK_CODE,
+    /** 组网密码；非空时启用 ChaCha20-Poly1305 端到端加密。 */
+    val password: String = DEFAULT_PASSWORD,
     val deviceName: String = "Bridge",
     /** 设备 ID，默认取 ANDROID_ID 并持久化（同一设备保持不变）。 */
     val deviceId: String = "",
     /** 固定虚拟 IP；留空由服务端动态分配。 */
     val ip: String = "",
     val mtu: Int = DEFAULT_MTU,
-    /** STUN 服务地址，官方 AddActivity 固定这三个。 */
-    val stunServers: List<String> = DEFAULT_STUN,
-    /** 打洞模式 ipv4/ipv6/all；留空用底层默认。 */
-    val punchModel: String = "",
-    /** 通道 relay/p2p/all；留空用底层默认。 */
-    val useChannel: String = "",
+    val compress: Boolean = true,
+    val fec: Boolean = false,
+    val rtx: Boolean = false,
+    val noPunch: Boolean = false,
+    /** 证书模式，如 `finger:<64hex>`；联调默认 `skip`（不校验）。 */
+    val certMode: String = "",
+
+    // ---- 预留位：子网转发 / 端口映射（本期不做，见 §九 决策 8）----
+    // 接口已核准：VntConfig.Builder.addOutputRoute("真实CIDR")
+    //   / addInputRoute("源网段CIDR,目标虚拟IP")
+    //   / addSubnetMapping("映射CIDR,真实CIDR")
+    //   / setAutoSyncSubnet(Boolean)
+    //   / setAllowMapping(Boolean) + addPortMapping("tcp://0.0.0.0:81-10.26.0.2-192.168.1.10:80")
+    // 启用这些接口会令运行期快照 needsVpnRebuild=true → 必须重建 VPN 接口（fd 切换），
+    // 是本项目最容易出事故的动作之一。将来真要做，只做 output 单向。
+    // 当前这些字段恒为空 / false，load() 与 save() 不持久化它们。
+    val outputRoutes: List<String> = emptyList(),
+    val inputRoutes: List<String> = emptyList(),
+    val subnetMappings: List<String> = emptyList(),
+    val autoSyncSubnet: Boolean = false,
+    val portMappings: List<String> = emptyList(),
+    val allowMapping: Boolean = false,
 ) {
     companion object {
-        /** 用户自建 1.x VNTS（其 1.2.13 原生 APK 里填的就是这个）。可在配置里改。 */
-        const val DEFAULT_SERVER = "039039.xyz:31007"
-        /** 官方 MyVpnService 在 mtu 为 null 时的兜底值。 */
-        const val DEFAULT_MTU = 1410
-        const val MIN_MTU = 576
+        /** 本项目自建 vnts2 服务端（31008，quic+tcp 双地址）。可在配置里改。 */
+        const val DEFAULT_SERVER = "quic://039039.xyz:31008,tcp://039039.xyz:31008"
+        /** 本项目组网编号（服务端白名单）。 */
+        const val DEFAULT_NETWORK_CODE = "wzsvnttoken"
+        /** 本项目组网密码（端到端加密，全网一致）。 */
+        const val DEFAULT_PASSWORD = "qwe951753"
+        const val DEFAULT_MTU = 1380
+        const val MIN_MTU = 1280
         const val MAX_MTU = 9000
-        const val DEFAULT_CIPHER = "aes_gcm"
-        val CIPHER_OPTIONS = listOf("aes_gcm", "aes_cbc", "aes_ecb")
-        val DEFAULT_STUN = listOf(
-            "stun1.l.google.com:19302",
-            "stun2.l.google.com:19302",
-            "stun.miwifi.com:3478",
-        )
     }
 }
 
@@ -73,27 +68,26 @@ data class VntMeshConfig(
 object VntMeshPrefs {
 
     private const val FILE = "vnt_mesh_prefs"
-    private const val K_TOKEN = "token"
     private const val K_SERVER = "server"
-    private const val K_TCP = "tcp"
+    private const val K_NETWORK_CODE = "network_code"
     private const val K_PASSWORD = "password"
-    private const val K_CIPHER = "cipher_model"
-    private const val K_SERVER_ENCRYPT = "server_encrypt"
-    private const val K_FINGER = "finger"
-    private const val K_FIRST_LATENCY = "first_latency"
     private const val K_DEVICE_NAME = "device_name"
     private const val K_DEVICE_ID = "device_id"
     private const val K_IP = "ip"
     private const val K_MTU = "mtu"
-    private const val K_STUN = "stun_servers"
-    private const val K_PUNCH = "punch_model"
-    private const val K_CHANNEL = "use_channel"
+    private const val K_COMPRESS = "compress"
+    private const val K_FEC = "fec"
+    private const val K_RTX = "rtx"
+    private const val K_NO_PUNCH = "no_punch"
+    private const val K_CERT_MODE = "cert_mode"
     /** v0.2.31：自动组网记忆（点「开始组网」置 true，点「停止组网」清 false）。 */
     private const val K_AUTO_START = "auto_start"
-    /** v0.2.30/31 旧 key（只读，用于升级迁移；不再写入）。 */
-    private const val K_LEGACY_NETWORK_CODE = "network_code"
-    /** v0.2.30/31 的 2.x 公共服默认值：升级时若仍是它，自动换成 1.x 自建地址。 */
-    private const val LEGACY_V2_DEFAULT_SERVER = "vnt2.rustvnt.com:29872"
+
+    // ---- 1.x 遗留 key（只读，用于 v0.2.131 反向迁移；不再写入）----
+    /** 1.x 的组网编号 key（2.x 改叫 network_code）。 */
+    private const val K_LEGACY_TOKEN = "token"
+    /** 1.x 的裸自建服务端地址（31007，已下线）。 */
+    private const val LEGACY_V1_DEFAULT_SERVER = "039039.xyz:31007"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -112,70 +106,69 @@ object VntMeshPrefs {
 
     fun load(context: Context): VntMeshConfig {
         val p = sp(context)
-        // 升级迁移：v0.2.30/31 把组网编号存在 network_code，1.x 里它叫 token
-        val token = p.getString(K_TOKEN, null)?.takeIf { it.isNotBlank() }
-            ?: p.getString(K_LEGACY_NETWORK_CODE, null)
-            ?: ""
-        // 升级迁移：旧的 2.x 公共服默认值对 1.x 无意义，换成用户自建 1.x 服务端
-        val legacyServer = p.getString(K_SERVER, null)
+
+        // v0.2.131 反向迁移：1.x 的组网编号存在 token，2.x 叫 network_code。
+        // 优先级：新 network_code > 旧 token > 默认值。
+        val networkCode = p.getString(K_NETWORK_CODE, null)?.takeIf { it.isNotBlank() }
+            ?: p.getString(K_LEGACY_TOKEN, null)?.takeIf { it.isNotBlank() }
+            ?: VntMeshConfig.DEFAULT_NETWORK_CODE
+
+        // v0.2.131 反向迁移：1.x 的裸 31007 已下线，自动换成 v2 双地址；
+        // 其它非法前缀（尤其 udp://）也一并兜底到默认 v2 地址，避免 native 抛晦涩错误。
+        val rawServer = p.getString(K_SERVER, null)
         val server = when {
-            legacyServer.isNullOrBlank() -> VntMeshConfig.DEFAULT_SERVER
-            legacyServer == LEGACY_V2_DEFAULT_SERVER -> VntMeshConfig.DEFAULT_SERVER
-            else -> legacyServer
+            rawServer.isNullOrBlank() -> VntMeshConfig.DEFAULT_SERVER
+            rawServer == LEGACY_V1_DEFAULT_SERVER -> VntMeshConfig.DEFAULT_SERVER
+            rawServer.contains("://") -> {
+                // 2.x 合法前缀校验：不合法（如 udp://）则回退默认
+                if (VntServerAddress.error(rawServer) == null) rawServer
+                else VntMeshConfig.DEFAULT_SERVER
+            }
+            // 裸 host:port（2.x 合法，默认 tcp://）；但若是旧 31007 已在上面兜底
+            else -> rawServer
         }
-        val stun = p.getString(K_STUN, null)
-            ?.split("\n")
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?.takeIf { it.isNotEmpty() }
-            ?: VntMeshConfig.DEFAULT_STUN
+
         return VntMeshConfig(
-            token = token,
             server = server,
-            tcp = p.getBoolean(K_TCP, false),
-            password = p.getString(K_PASSWORD, null) ?: "",
-            cipherModel = p.getString(K_CIPHER, null)?.takeIf { it.isNotBlank() }
-                ?: VntMeshConfig.DEFAULT_CIPHER,
-            serverEncrypt = p.getBoolean(K_SERVER_ENCRYPT, true),
-            finger = p.getBoolean(K_FINGER, false),
-            firstLatency = p.getBoolean(K_FIRST_LATENCY, false),
+            networkCode = networkCode,
+            password = p.getString(K_PASSWORD, null) ?: VntMeshConfig.DEFAULT_PASSWORD,
             deviceName = p.getString(K_DEVICE_NAME, null)?.takeIf { it.isNotBlank() } ?: "Bridge",
             deviceId = stableDeviceId(context),
             ip = p.getString(K_IP, null) ?: "",
             mtu = p.getInt(K_MTU, VntMeshConfig.DEFAULT_MTU)
                 .coerceIn(VntMeshConfig.MIN_MTU, VntMeshConfig.MAX_MTU),
-            stunServers = stun,
-            punchModel = p.getString(K_PUNCH, null) ?: "",
-            useChannel = p.getString(K_CHANNEL, null) ?: "",
+            compress = p.getBoolean(K_COMPRESS, true),
+            fec = p.getBoolean(K_FEC, false),
+            rtx = p.getBoolean(K_RTX, false),
+            noPunch = p.getBoolean(K_NO_PUNCH, false),
+            certMode = p.getString(K_CERT_MODE, null) ?: "",
         )
     }
 
     fun save(context: Context, config: VntMeshConfig) {
         sp(context).edit()
-            .putString(K_TOKEN, config.token.trim())
             .putString(K_SERVER, config.server.trim())
-            .putBoolean(K_TCP, config.tcp)
+            .putString(K_NETWORK_CODE, config.networkCode.trim())
             .putString(K_PASSWORD, config.password)
-            .putString(K_CIPHER, config.cipherModel.trim().ifBlank { VntMeshConfig.DEFAULT_CIPHER })
-            .putBoolean(K_SERVER_ENCRYPT, config.serverEncrypt)
-            .putBoolean(K_FINGER, config.finger)
-            .putBoolean(K_FIRST_LATENCY, config.firstLatency)
             .putString(K_DEVICE_NAME, config.deviceName.trim().ifBlank { "Bridge" })
             .putString(K_DEVICE_ID, config.deviceId.ifBlank { stableDeviceId(context) })
             .putString(K_IP, config.ip.trim())
             .putInt(K_MTU, config.mtu.coerceIn(VntMeshConfig.MIN_MTU, VntMeshConfig.MAX_MTU))
-            .putString(K_STUN, config.stunServers.joinToString("\n"))
-            .putString(K_PUNCH, config.punchModel.trim())
-            .putString(K_CHANNEL, config.useChannel.trim())
+            .putBoolean(K_COMPRESS, config.compress)
+            .putBoolean(K_FEC, config.fec)
+            .putBoolean(K_RTX, config.rtx)
+            .putBoolean(K_NO_PUNCH, config.noPunch)
+            .putString(K_CERT_MODE, config.certMode.trim())
             .apply()
     }
 
     // ------------------------------------------------------------------
-    // v0.2.31 起：自动组网记忆（语义不变，1.x 沿用）
+    // v0.2.31 起：自动组网记忆（语义不变）
     //
     // - 点开始 → true → 下次冷启动 App 自动开始组网；
     // - 点停止 → false → 下次冷启动需用户手动点开启。
     // 退出应用 / 切后台结束进程**不动记忆**；远程 vnt_start / vnt_stop 同步写记忆。
+    // restart()（配置保存重连）刻意不写记忆，避免「未连接时保存配置」误清标记。
     // ------------------------------------------------------------------
 
     fun autoStart(context: Context): Boolean = sp(context).getBoolean(K_AUTO_START, false)
@@ -186,29 +179,39 @@ object VntMeshPrefs {
 }
 
 /**
- * 1.x 服务端地址校验（见官方 `VntApp v1.2.9` 的 `AddActivity` / `MyVpnService`）。
+ * v2.0.12 服务端地址规则校验（见 `vnt-core/.../transport/config.rs::parse_server`）。
  *
- * 合法：**裸 `host:port`**（如 `039039.xyz:31007`）。
- * 非法：任何 `://` 协议前缀（`udp://` / `tcp://` 等都不接受；1.x 用布尔 `tcp` 区分
- * UDP/TCP，而不是前缀）、空串、缺少端口或端口非数字。
+ * 合法：裸 `host:port`（默认 TlsTcp）、`tcp://`、`wss://`、`quic://`、`dynamic://`；
+ * 支持逗号分隔多地址（容灾）。
+ * 非法：任何其它 `://` 前缀——尤其 `udp://`（1.2.x 旧协议），会让 native
+ * `createNetwork()` 抛 `Unknown protocol in server address`，错误晦涩且会被反复重试刷屏。
  *
  * 返回可直接展示给用户的错误说明；`null` 表示合法。
  */
 object VntServerAddress {
+    private val ALLOWED_PREFIXES = listOf("tcp://", "wss://", "quic://", "dynamic://")
+
     fun error(raw: String): String? {
         val s = raw.trim()
-        if (s.isBlank()) return "服务端地址不能为空"
-        if (s.contains("://")) {
-            return "1.x 只接受裸 host:port（如 039039.xyz:31007），不要带协议前缀；" +
-                "UDP / TCP 请在下方用「连接协议」开关选择"
+        if (s.isBlank()) return null                 // 空串由 VntConfigBuilder 兜底成默认服务端
+        // 多地址容灾：逐个校验，任一非法即报错
+        for (addr in s.split(",")) {
+            val a = addr.trim()
+            if (a.isBlank()) continue
+            val err = errorSingle(a) ?: continue
+            return err
         }
-        val idx = s.lastIndexOf(':')
-        if (idx <= 0 || idx == s.length - 1) {
-            return "格式应为 host:port（如 039039.xyz:31007）"
-        }
-        val port = s.substring(idx + 1).toIntOrNull()
-            ?: return "端口必须是数字（如 039039.xyz:31007）"
-        if (port !in 1..65535) return "端口超出范围（1~65535）"
         return null
+    }
+
+    private fun errorSingle(raw: String): String? {
+        val s = raw.trim()
+        if (!s.contains("://")) return null          // 裸 host:port 合法
+        val lower = s.lowercase()
+        if (ALLOWED_PREFIXES.any { lower.startsWith(it) }) return null
+        val proto = s.substringBefore("://") + "://"
+        return "不支持的协议前缀「$proto」。VNT v2.0.12 只支持 " +
+            "tcp:// / wss:// / quic:// / dynamic://，或裸 host:port（默认 tcp:// TLS）。" +
+            "udp:// 是 1.2.x 旧版协议，请升级自建 VNTS 到 2.x 并开启 TLS TCP/WSS/QUIC。"
     }
 }

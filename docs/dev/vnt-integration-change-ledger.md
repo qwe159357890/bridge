@@ -1442,3 +1442,159 @@ git checkout 6f12c26 -- \
 4. 重连中保存新配置：下一轮自动用新配置。
 5. token 配错：应直接 ERROR（不无限重试）。
 6. 退出应用：整体结束、无复活（START_NOT_STICKY 不变）。
+
+---
+
+## 八、v0.2.131：VNT 1.x → 2.x 升级（v2.0.12，2026-11-13）
+
+### 8.0 触发本次变更的用户诉求与诊断结论
+
+**背景**：1.x 服务端（31007）已永久下线。用户请服务端开发者把 VNTS 升级到 VNT 2.0
+（`quic://039039.xyz:31008` + `tcp://039039.xyz:31008`），并提供了一份《bridge 安卓 APP 组网
+VNT1 升 VNT2 改造指南》（该指南按用户口述估写，服务端/其它客户端信息正确，但**不了解本项目
+真实代码**，仅作借鉴）。用户拍板：**先拉官方 v2.0.12 再动手、现在开工**。
+
+**核心结论（本次是「反向恢复」而非「从零新写」）**：本项目 v0.2.30/31 时代**曾经就是 2.x 实现**
+（`com.vnt.*` 11 类 + 2.x 业务层），v0.2.32 才因「存量客户端全 1.x 必须互通」回退到 1.x。
+2.x 的全部代码完好保存在 git 历史 commit `0f7f5098`（tag v0.2.31）；2.x so 也已留存。
+本次升级 = 反向走一遍 §六 的「2.x→1.x」配方，再叠加 v0.2.38 之后新增的「断线自动重连」逻辑。
+
+**so 版本核实（v2.0.12 vs v2.0.11）**：官方 `vnt-dev/vnt` 最新 release 为 **v2.0.12**
+（`/releases/latest` 指针滞后返回 v2.0.11，但 `/releases/tags/v2.0.12` 确有其物）。三套 so
+（arm64-v8a / armeabi-v7a / x86_64）已下载并三重校验 PASS：
+- sha256 与官方 `.sha256` 文件逐字节一致（arm64 `09049316…` / v7a `4cc3b22e…` / x86_64 `48504af5…`）；
+- ELF machine 正确（183 / 40 / 62）；
+- PT_LOAD 全 `0x4000`（16KB 对齐，Android 15+ 要求）；
+- arm64 导出 23 个 `Java_com_vnt_*` 符号，与 v2.0.11 **完全一致** ⇒ `com.vnt.*` 封装层无需改动。
+
+### 8.1 改前基线（git 100% 兜底）
+
+- 基线 commit：**`c7ff577`**（"docs: 里程碑补脉络8…"）。改前所有文件均 git 已跟踪，回滚 = `git checkout c7ff577 -- <path>`。
+- 改前 so：`app/src/main/jniLibs/{arm64-v8a,x86_64}/libvnt_jni.so`（1.x v1.2.9，2 套 ABI）。
+- 改前绑定：`app/src/main/java/top/wherewego/vnt/jni/*`（1.x 14 类）。
+- 2.x 参照：git 历史 `0f7f5098`（tag v0.2.31）里的 `com/vnt/*` 11 类 + 2.x 业务层 6 文件 + 2.x VntPages.kt。
+
+### 8.2 改前关键文件指纹（sha256 前 16 位 / 行数，供回滚逐字比对）
+
+| 文件 | 行数 | sha256 前 16 位 |
+|---|---|---|
+| `app/src/main/java/my/bridge/com/vnt/VntVpnService.kt` | 603 | `93d3d925e0d208a6` |
+| `.../VntMeshController.kt` | 344 | `a24f158c84f5fd41` |
+| `.../VntMeshState.kt` | 80 | `dd9f0b8aa303fdaf` |
+| `.../VntMeshPrefs.kt` | 214 | `654d83700d7240d5` |
+| `.../VntConfigBuilder.kt` | 63 | `07a24f2367753876` |
+| `.../ui/VntPages.kt` | 588 | `79c5f7135de8414c` |
+| `.../di/CommandModule.kt` | 3363 | `6b4829981a8c3337` |
+| `app/proguard-rules.pro` | 17 | `522d7e001a6acc15` |
+
+### 8.3 改动清单（12 个文件，含恢复/删除/新增）
+
+**① 核心库层（JNI 绑定 + so）**
+1. 删 `app/src/main/java/top/wherewego/vnt/jni/*`（1.x 14 类）。
+2. 恢复 `app/src/main/java/com/vnt/*`（2.x 11 类）← `git checkout 0f7f5098 -- app/src/main/java/com/vnt/`。
+   ★ 该版已含 Android 适配（`VntConfig.put()` 包装 JSONException）与 `network_code` 字段，无需再改。
+3. 删 1.x so，拷入 v2.0.12 三套 so 到 `jniLibs/{arm64-v8a,armeabi-v7a,x86_64}/libvnt_jni.so`
+   （源 `tools/vnt/artifacts/v2.0.12/`，sha256 已核对一致）。
+4. `app/proguard-rules.pro`：`-keep class top.wherewego.vnt.jni.**` → `-keep class com.vnt.** { *; }`。
+5. `app/build.gradle.kts`：abiFilters 2 套 → 3 套（加回 `armeabi-v7a`）。
+
+**② 业务层（6 个 `my/bridge/com/vnt/*`）**
+6. `VntMeshState.kt`：2.x 字段（virtualIpv6/natType/serverRttMs/servers/networkCode）+
+   补回 v0.2.38 的 `RECONNECTING`/`retryAttempt`/`retryDelaySec`/`isActive`。
+7. `VntMeshPrefs.kt`：2.x 字段（networkCode/password/compress/fec/rtx/noPunch/certMode）+
+   DEFAULT_SERVER=`quic://039039.xyz:31008,tcp://039039.xyz:31008` + DEFAULT_NETWORK_CODE=`wzsvnttoken`
+   + DEFAULT_PASSWORD=`qwe951753` + **反向迁移**（旧 `token`→`networkCode`、旧 `039039.xyz:31007`→新地址）。
+8. `VntConfigBuilder.kt`：2.x 版，server 字段按逗号 split 逐个 `addServer()`（多地址容灾）。
+9. `VntMeshController.kt`：2.x `VntApi` 查询（getClientList/getServerList/getNatInfo/getRouteTable/
+   getTrafficInfo/isDirect）+ 补回 `onReconnecting`/`clearApi`。
+10. `VntVpnService.kt`：**主战场**——v0.2.38 监督循环框架 + 2.x 单次尝试时序
+    （createNetwork→getNetwork→establishVpn→startTun→getApi→runChangeLoop）。
+11. `VntAutoStart.kt`：保留当前版（已含 RECONNECTING 守卫，比 2.x 版新）。
+
+**③ UI / 命令 / admin**
+12. `ui/VntPages.kt`：2.x UI + 补 RECONNECTING 状态卡 + 主按钮走 `state.isActive` +
+    默认占位/文案改 v2.0.12 与本项目服务端。
+13. `di/CommandModule.kt`：executeVntStart 参数改 `network_code`（兼容 token）/ `password`/
+    `protocol`（废弃忽略），`VntMeshConfig.token/tcp` → `networkCode`（无 tcp）。
+14. `server/app/core/command_catalog.py`：vnt_start 参数 server（双地址占位）/
+    network_code（兼容 token）/ password / protocol（废弃）。
+15. `admin/src/components/VntResultDetailDialog.vue`：parseStatusFields 改 NAT/RTT；
+    startParams 改 network_code；错误文案同步。
+
+### 8.4 断线重连错误分类重映射（唯一「新写」的技术点）
+
+| 阶段 | 2.x 现象 | 分类 |
+|---|---|---|
+| `VntManager.init()` false | 核心初始化失败 | **致命**（FatalVntException） |
+| `createNetwork()` null | 配置/网络不可达 | **致命**（VntException） |
+| `getNetwork()` 抛 VntException | 注册失败（token 错/地址错） | **致命** |
+| `establishVpn()` null | VPN 授权被抢 | **致命**（FatalVntException） |
+| `runChangeLoop` nextEvent 抛异常 | 断线 | **可重试** |
+| nextEvent 返回 `instance_stopped` | 实例自行退出=断线 | **可重试** |
+
+（对照 1.x：`CallBack.error(ErrorInfo)` 错误通道 → 2.x `nextEvent()` 事件循环；
+1.x 的 `TokenError/InvalidIp` 枚举 → 2.x 的 `createNetwork null`/`getNetwork 抛异常`。）
+
+### 8.5 回滚配方（100% 恢复到 v0.2.131 改前 = c7ff577）
+
+```bash
+cd /f/pythonWork/appClient
+# ① 恢复所有 git 跟踪文件（含被删的 top/wherewego/vnt 与 1.x so）
+git checkout c7ff577 -- app/src/main/java/top/wherewego/vnt/ \
+  app/src/main/jniLibs/ app/proguard-rules.pro app/build.gradle.kts \
+  app/src/main/java/my/bridge/com/vnt/ app/src/main/java/my/bridge/com/ui/VntPages.kt \
+  app/src/main/java/my/bridge/com/di/CommandModule.kt \
+  server/app/core/command_catalog.py admin/src/components/VntResultDetailDialog.vue
+# ② 删除 2.x 新增（git 未跟踪，必须显式删）
+git rm -r --quiet app/src/main/java/com/vnt/   # 2.x 绑定（若已 git add）
+rm -rf tools/vnt/artifacts/v2.0.12/            # v2.0.12 so 存档
+# ③ 校验
+git status
+```
+
+### 8.6 触发回滚的信号（出现任一即停手并回滚）
+
+1. 真机 `VntManager.createNetwork()` 持续返回 null / 抛 `Unknown protocol`（说明 so 或地址规则不匹配）。
+2. `UnsatisfiedLinkError`（so 缺失 / proguard 未 keep / ABI 不匹配）。
+3. 断线重连死循环（instance_stopped 反复触发且永不恢复）。
+4. 服务端管理后台（`http://039039.xyz:29873`）看不到设备注册（network_code/password 不匹配）。
+5. 打包体积异常（三套 so 全打进 APK 后超阈值）。
+
+### 8.7 改后回填（2026-11-13 完成，本节待真机验收）
+
+**本地验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL（两轮，首轮 `Os.close(Int)` 类型错——
+`detachFd()` 后 fd 归 native、Java 侧不该 close，已删）；`command_catalog.py` `py_compile` PASS；
+admin `vue-tsc -b` 类型检查 PASS。
+
+**未做**：assembleDebug / 真机回归（交用户手动验收）。
+
+**真机验收清单（用户手动，对应改造指南步骤 7/8）**：
+1. 装 v0.2.131 APK → 点「开始组网」→ VPN 授权 → 拿到 `86.74.128.x` 虚拟 IP；
+   **VNTS 2.0 管理后台（服务端开发者环境）`http://039039.xyz:29873`** 设备列表可见该设备。
+2. 双向 ping（本机 ↔ 其它 2.x 客户端）通；SSH（8022）可达。
+3. `vnt_status` 回执字段齐全（运行中 · 虚拟IP · NAT · 服务端RTT · 在线设备 N）。
+4. **飞行模式 10 秒 → 恢复**：界面转「断线重连中」，服务不停止，自动恢复「已连接」（v2 核心收益）。
+5. 杀进程重开 → 自动组网（若 autoStart 记忆开启）。
+6. 重复 vnt_start → 幂等忽略（回执「重复下发被忽略」）。
+7. token/network_code 配错 → 直接 ERROR（不无限重试）。
+
+### 8.8 两个易混事实澄清（2026-11-13 用户追问，固化为记忆）
+
+**① 虚拟 IP `86.74.128.x` 是谁指定的？**
+- **不是客户端写死**，而是「可选覆盖 + 默认留空自动分配」。
+- `VntConfigBuilder.kt:47`：`if (config.ip.isNotBlank()) builder.setIp(config.ip)` —— 只有用户在配置里
+  **显式填了 IP** 才会传给服务端；`VntMeshConfig.ip` 默认是**空串**（自动分配）。
+- `86.74.128.0/24` 这个网段是**服务端（VNTS 2.0）下发**的，客户端只是「拿到」服务端分配到的地址，
+  网段归属权在服务端，不在客户端。
+- 指南说明：`86.74.128.0/24` 已占用 `.226/.30/.68/.99/.24/.67`，**建议留空 ip 让服务端自动分配**
+  （避免手动指定撞到已占用地址）。
+- 验收含义：看到 `86.74.128.x` 就证明连上了**新 VNTS（v2.0 的服务端网段）**。
+
+**② 管理后台端口为什么是 `29873`？**
+- **`29873` 不是本项目（appClient）的端口，是服务端开发者自己的 VNTS 2.0 管理后台端口**，写在他的
+  改造指南第 23 行：`服务端管理后台 http://039039.xyz:29873（账号 qwe159357 / qwe951753）`。
+- 用途：登录查看「哪些设备注册进了这个 VNT 网络」，联调时核对设备是否上线。
+- 与本项目的关系：**无关**。本项目自己的 admin 走 `https://appclient.039039.xyz:15443`（生产单入口，
+  nginx 反代），服务端 API 上游 15160；`29873` 纯粹是服务端作者环境的端口号，由他定。
+- ⚠️ 上一轮总结把「服务端管理后台 29873」直接写进验收清单、未说明是「服务端作者的环境」，易被误读成
+  本项目后台，此处正式澄清。

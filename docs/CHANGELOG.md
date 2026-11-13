@@ -22,7 +22,36 @@
 
 ---
 
-## 2026-11-09~10 · 📱🖥️ v0.2.121→v0.2.130 音量引用计数根治 + 管理后台嵌入式集成 + 移动端/横屏适配 + 导航拉起 + 全项目日志治理 + 生产环境切换
+## 2026-11-13 · 🕸️ v0.2.131 VNT 组网 1.x → 2.x 升级（vnt-dev v2.0.12）
+
+**节点意义**：1.x 组网服务端（31007）永久下线，服务端开发者把 VNTS 升级到 VNT 2.0
+（`quic://039039.xyz:31008` + `tcp://039039.xyz:31008`），Bridge 客户端同步从 1.x（VntApp v1.2.9）
+反向升级到 2.x（vnt-dev v2.0.12）。本次是**「反向恢复」而非「从零新写」**——v0.2.30/31 时代本就是
+2.x 实现（v0.2.32 才因「存量客户端全 1.x 必须互通」回退 1.x），2.x 代码完好保存在 git 历史 `0f7f5098`
+（tag v0.2.31），本次把它反向切回并叠加 v0.2.38 断线自动重连。
+
+**核心改动**：
+- **核心库层**：删 `top/wherewego/vnt/jni/*`（1.x 14 类）、恢复 `com/vnt/*`（2.x 11 类）、换
+  v2.0.12 三套 so（arm64/armeabi-v7a/x86_64，sha256+ELF+符号三重校验 PASS，23 个 `Java_com_vnt_*`
+  符号与 v2.0.11 完全一致）、proguard keep 改 `com.vnt.**`、abiFilters 2→3 套。
+- **业务层**：`VntMeshState`/`VntMeshPrefs`/`VntConfigBuilder`/`VntMeshController`/`VntVpnService`
+  重写为 2.x 模型（`networkCode`/`password`/`compress`/`fec`/`rtx`/`noPunch`），保留 v0.2.38 的
+  `RECONNECTING` + 断线监督重连循环；默认配置指向新服务端（31008 双地址 + `wzsvnttoken`/`qwe951753`），
+  Prefs 做反向迁移（旧 `token`→`networkCode`、旧 31007→新地址）。
+- **命令/UI/admin**：`vnt_start` 参数改 `network_code`（兼容 token）+ `password` + `protocol`（废弃），
+  `command_catalog.py`、`VntResultDetailDialog.vue` 同步；组网页补 RECONNECTING 状态卡。
+- **断线重连错误分类重映射**（唯一新写点）：1.x `CallBack.error` 通道 → 2.x `nextEvent()` 事件循环；
+  致命 = init 失败 / createNetwork null / getNetwork 抛异常 / establish null（VPN 被抢），
+  可重试 = nextEvent 异常 / instance_stopped（断线）。
+
+**文档同步**：`system.md`（命令语义 1.x→2.x）、`vnt-mesh-integration.md`（新增 §十四 2.x 权威记录）、
+`INDEX.md`（台账/调研索引更新）、本文档；台账 `vnt-integration-change-ledger.md` §八（改前基线
+`c7ff577`/指纹/回滚配方/验收清单）与 §八.8（虚拟 IP 归属 + 29873 端口澄清）。
+
+**本地验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL、`command_catalog.py` py_compile PASS、
+admin `vue-tsc -b` PASS。**真机回归待做**（v2 核心收益 = 断线自动重连 + 服务端 29873 可见设备）。
+
+**⭐ 待发版**：版本号仍 v0.2.130，下一轮发版时升 v0.2.131（`release.py` 自动递增）。
 
 **节点意义**：极空「阶段性完成」之后进入收尾打磨期，三条脉络并行——①语音播报音量提升从「引用计数」暴露三处深层 bug（stop 不触发 onCompletion 泄漏、connectHold 与计数语义不对称、半死链重建提前释放窗口），逐一根治到「纯抑制标记 + 补偿 + 守卫」的最终形态；②管理后台从「独立 Web 服务」进化为「客户端底部导航第 4 Tab 嵌入式集成」（WebView 加载可配置 URL），并补齐移动端/横屏适配与「播报音量提升」镜像同步缺口；③体验增强——定位结果一键拉起高德/百度/腾讯地图导航、管理页横屏开关。另有日志治理暗线：删掉「不播」刷屏日志、调大日志窗口 2000→20000。后续两条脉络把本里程碑延长到 v0.2.130：④全项目日志治理（脉络6，砍过程性重复、保状态骨架）；⑤**从测试环境切换到生产环境并完成全链路验收**（脉络8）——项目首次以公网 `https://appclient.039039.xyz:15443` 为默认运行环境，测试值从此只留在注释与界面提示里，切环境必须手动改三处。
 

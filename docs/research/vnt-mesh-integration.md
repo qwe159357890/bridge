@@ -701,11 +701,13 @@ SHA256 与官方 `.sha256` 一致、PT_LOAD 页对齐（64 位 16KB / 32 位 4KB
 
 ---
 
-## 十三、v0.2.32：整体替换为 VNT 1.x（当前实现的权威记录）
+## 十三、v0.2.32：整体替换为 VNT 1.x（历史记录，**已被 §十四 的 2.x 升级取代**）
 
-> **本节是 v0.2.32 及之后当前代码的唯一权威说明。** 前十二节（尤其 §2.4、§5.1、§九、
-> §十二）描述的 2.0.11 集成方案已被整体替换，保留原文仅为「改前留档」与决策溯源。
-> 改前原文、文件指纹、删除清单与回滚配方见 `docs/dev/vnt-integration-change-ledger.md` §六。
+> **★ 本节已是历史记录。** 当前实现（v0.2.131 起）已升级回 **2.x（vnt-dev v2.0.12）**，
+> 权威说明见 **§十四**。本节描述 v0.2.32~v0.2.130 的 1.x 实现，保留原文仅为「改前留档」与决策溯源。
+> 前十二节（尤其 §2.4、§5.1、§九、§十二）描述的 2.0.x 集成方案在 v0.2.32 被替换为 1.x、
+> 又在 v0.2.131 恢复为 2.x。改前原文、文件指纹、删除清单与回滚配方见
+> `docs/dev/vnt-integration-change-ledger.md` §六（1.x）与 §八（2.x）。
 
 ### 13.1 决策链（不可省略的背景）
 
@@ -820,3 +822,79 @@ SHA256 与官方 `.sha256` 一致、PT_LOAD 页对齐（64 位 16KB / 32 位 4KB
   不碰新 attempt 的共享字段、不 stopSelf、不发布 STOPPED（详见台账 §7.4）。
 
 **回滚**：`docs/dev/vnt-integration-change-ledger.md` §7.3（`git checkout 6f12c26 -- <8 files>`）。
+
+---
+
+## 十四、v0.2.131：升级为 VNT 2.x（vnt-dev v2.0.12，2026-11-13 · 当前实现的权威记录）
+
+> **本节是 v0.2.131 及之后当前代码的唯一权威说明。** 1.x 服务端（31007）已永久下线，
+> 服务端开发者已将 VNTS 升级到 VNT 2.0（`quic://039039.xyz:31008` + `tcp://039039.xyz:31008`）。
+> Bridge 客户端同步升级为 2.x。改前基线/指纹/改动清单/回滚配方见
+> `docs/dev/vnt-integration-change-ledger.md` §八。
+
+### 14.1 决策链
+
+1. 1.x 服务端（`039039.xyz:31007`）永久下线，客户端 v0.2.130 及以前已无法组网。
+2. 服务端开发者把 VNTS 升到 VNT 2.0，并给了一份《VNT1 升 VNT2 改造指南》（按用户口述估写，
+   服务端/其它客户端信息正确，但**不了解本项目真实代码**，仅作借鉴）。
+3. 用户拍板：**先拉官方 v2.0.12 再动手、现在开工**。
+4. 关键洞察：本项目 v0.2.30/31 时代**本来就是 2.x 实现**（§十三 之前），v0.2.32 才因
+   「存量客户端全 1.x 必须互通」回退到 1.x。2.x 代码完整保存在 git 历史 `0f7f5098`（tag v0.2.31），
+   ⇒ 本次是「反向恢复 + 叠加 v0.2.38 断线重连」，非从零新写。
+
+### 14.2 so 版本核实（v2.0.12）
+
+- 官方 `vnt-dev/vnt` 最新 release = **v2.0.12**（`/releases/latest` 指针滞后返回 v2.0.11，
+  但 `/releases/tags/v2.0.12` 确有其物）。
+- 三套 so（arm64-v8a / armeabi-v7a / x86_64）下载 + 三重校验 PASS：
+  - sha256 与官方 `.sha256` 逐字节一致（arm64 `09049316…` / v7a `4cc3b22e…` / x86_64 `48504af5…`）；
+  - ELF machine 183/40/62 正确；PT_LOAD 全 `0x4000`（16KB 对齐，Android 15+ 要求）；
+  - arm64 导出 23 个 `Java_com_vnt_*` 符号，与 v2.0.11 完全一致 ⇒ `com.vnt.*` 封装层无需改。
+
+### 14.3 2.x 调用时序（与 1.x 相反）
+
+`VntManager.init()` → `createNetwork(config)` → `getNetwork()`（拿 `NetworkResult` 网段）→
+**Java 先建 `VpnService.Builder`**（含 IPv6 派生地址 `fd76:6e74::xxxx/96` + 路由 `fd76:6e74::/96`、
+`ff00::/8`、虚拟网段，**绝不加 0.0.0.0/0**）**并 `detachFd()` 拿 int fd** → `startTun(fd)` →
+`getApi()`（`VntApi`）→ `nextEvent()` 变更循环（`instance_stopped` / `changed`）。
+
+对比 1.x：`new Vnt(Config, CallBack)` → native 回调 `generateTun` 让 Java 建 TUN 并 return fd，
+时序相反，不可混用。
+
+### 14.4 配置字段对照（1.x → 2.x）
+
+| 概念 | 1.x（已删） | 2.x（v0.2.131） |
+|---|---|---|
+| 组网编号 | `token` | `networkCode`（命令参数 `network_code`，兼容旧 `token`） |
+| 服务端 | 裸 `host:port`（31007） | `server` 数组（`quic://`+`tcp://` 双地址，31008） |
+| 协议 | `tcp: Boolean` 开关 | 删除，地址前缀决定（`quic://`/`tcp://`/`wss://`） |
+| 加密 | `cipherModel`/`serverEncrypt`/`finger` | `password`（ChaCha20）+ `certMode`（联调 `skip`） |
+| 新增 | — | `compress`/`fec`/`rtx`/`noPunch` |
+
+`VntServerAddress.error()` 校验反转：1.x 拒绝任何 `://` 前缀 → 2.x 只接受 `tcp:// / wss:// /
+quic:// / dynamic://` 或裸地址（默认 TLS TCP），拒绝 `udp://`（1.2.x 旧协议）。
+
+### 14.5 断线重连错误分类重映射（唯一「新写」点）
+
+1.x 错误通道 `CallBack.error(ErrorInfo)` → 2.x `nextEvent()` 事件循环：
+
+| 阶段 | 2.x 现象 | 分类 |
+|---|---|---|
+| `VntManager.init()` false | 初始化失败 | 致命 |
+| `createNetwork()` null | 配置/网络不可达 | 致命 |
+| `getNetwork()` 抛 VntException | 注册失败（network_code/地址错） | 致命 |
+| `establishVpn()` null | VPN 授权被抢 | 致命 |
+| `nextEvent()` 抛异常 / `instance_stopped` | 断线 | 可重试 |
+
+（对照 1.x：`TokenError`/`InvalidIp` 枚举 → 2.x `createNetwork null`/`getNetwork 抛异常`。）
+
+### 14.6 已知限制与风险
+
+- **so v2.0.11 vs v2.0.12**：仓库里成套历史为 v2.0.11，本次用 v2.0.12（符号 23↔23 一致已核）。
+- **IPv6**：指南说「只做 IPv4 也能通」，但已按官方做全 IPv6 注入，无额外成本。
+- **老 APK（≤v0.2.130）**：1.x 服已下线，本就不可用，无需向后兼容。
+- **真机互通验证待做**：本节为代码落地记录，验收清单见台账 §8.7。
+
+### 14.7 回滚
+
+`docs/dev/vnt-integration-change-ledger.md` §八.5（`git checkout c7ff577 -- <paths>`）。

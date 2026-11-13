@@ -20,16 +20,14 @@ android {
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
         versionCode = 1
-        versionName = "0.2.130"
+        versionName = "0.2.131"
 
-        // VNT 组网（v0.2.32）：用户自建 VNTS 与存量客户端全为 1.x、必须互通 ⇒ 集成
-        // 官方最后一个 Java JNI 版 VntApp v1.2.9。该版本仓库内只带 2 套 ABI 的
-        // libvnt_jni.so（arm64-v8a / x86_64），**没有 armeabi-v7a**（1.2.10.1 起转 Flutter
-        // 的 v7a so 是 Dart FFI、无 Java JNI 符号，不能用于本项目）。若不限定，
-        // 其它依赖的 armeabi-v7a / x86 so 仍会被打进 APK，但那些 ABI 上 VNT 加载不到
-        // native 库，造成「装上了但组网不可用」的假成功，故显式排除。
+        // VNT 组网（v0.2.131，2.x）：服务端已升级到 VNT 2.0，客户端随升官方 v2.0.12。
+        // 官方 v2.0.12 提供 3 套 ABI 的 libvnt_jni.so（arm64-v8a / armeabi-v7a / x86_64），
+        // 全量纳入，避免「装上了但组网加载不到 native 库」的假成功。
         ndk {
             abiFilters += "arm64-v8a"
+            abiFilters += "armeabi-v7a"
             abiFilters += "x86_64"
         }
 
