@@ -19,8 +19,8 @@ android {
         minSdk = 24
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
-        versionCode = 1
-        versionName = "0.2.131"
+        versionCode = 2
+        versionName = "0.2.132"
 
         // VNT 组网（v0.2.131，2.x）：服务端已升级到 VNT 2.0，客户端随升官方 v2.0.12。
         // 官方 v2.0.12 提供 3 套 ABI 的 libvnt_jni.so（arm64-v8a / armeabi-v7a / x86_64），
