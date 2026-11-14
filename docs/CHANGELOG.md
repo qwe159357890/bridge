@@ -22,6 +22,167 @@
 
 ---
 
+## 2026-11-13~14 · 🎥 监控功能里程碑（NVR 集成，v0.2.140→v0.2.155）
+
+**节点意义**：Bridge APP 在「主页」后新增「监控」Tab，原生（Kotlin+Compose）重做 NVR 8200 统一控制台的
+四大功能——实时预览 / 事件 / 云端 / 延时摄影。这是一条「从零落地 → 真机逐批收敛 → 手势/交互打磨 → 导航
+收口」的完整脉络：v0.2.140 一次性落地 P0~P6，随后 15 个版本全部是真机反馈驱动的修复与体验打磨，最终在
+v0.2.154 收敛手势交互、v0.2.155 完成导航收口（管理页移入主页顶部 Tab + 底部换工具页）。
+核心决策与背景见专题文档 `docs/research/nvr-monitor-integration.md`（v1.2，已拍板），本文档只收
+「以后还会用到的」根因结论与经验沉淀。
+
+**关键架构结论（贯穿全程）**：监控是**纯客户端**实现——APP 通过既有 VNT 组网直连 hub（`86.74.128.68:8200`）
+的 REST API，**服务端（NVR）零改动**。唯一一处跨服务端改动是延时摄影频率（改 NVR `.env`，见脉络四）。
+
+### 脉络一 · 落地与骨架（v0.2.140→v0.2.141）
+
+- **v0.2.140 一次性落地 P0~P6**：新增 `monitor/` 包 9 文件（MonitorPrefs/NvrApiClient/MonitorViewModel/
+  MonitorPages/LiveView/EventListView/CloudBrowserView/TimelapseView/MonitorPlayer），底部导航 5→6 Tab
+  （监控插主页后第 2 位），引入 Media3 ExoPlayer 播 fMP4 音视频流（H.264+AAC 有声音），设置页加「监控」
+  分区（服务地址/令牌/自动轮询开关）。
+- **v0.2.141 补日志**：首版真机排查发现监控包**零日志**（无任何 DiagLog），无法定位问题 → 统一 tag「监控」、
+  9 文件全量补 DiagLog.i/w/e 上传链路。**经验**：新功能落地首版就该带日志，否则真机问题无从排查。
+
+### 脉络二 · 真机逐批 bug 收敛（v0.2.142→v0.2.148）
+
+- **v0.2.142 首批 8 bug 根治**：全部是「hub 代理 vs 单节点直连」的**路径/前缀语义错乱**——
+  ①全部节点下 `/api/live/cameras` 被 hub 误当 node=api → 404（effectiveNode 回退首个在线节点）；
+  ②单节点事件快照 URL 缺节点前缀 → 404；③心跳写死缺节点前缀 → 404；④⑤云端/事件录像点播 Source error
+  （remote 缺 `/NVR备份/` 前缀，需先 locate 再 stream）；⑥切 Tab 协程未取消 → CancellationException 风暴
+  （静默 rethrow）；⑦云端 path 同源；⑧首连 hub 超时无重试（连接类 IOException 重试一次）。
+- **v0.2.143 复测 4 项**：①实时预览「全部节点」真正聚合（`fetchAllCameras` 并发逐在线节点合并，快照键
+  `node|cameraId` 隔离）；②事件合并（同节点+同摄像头、时间差 ≤2s 去重，优先留快照）；③云端昵称映射
+  （node_nick/cam_nicks）；④实时预览布局可选（1/2/3 列）。
+- **v0.2.144 复测 4 项**：①事件去重时间戳带微秒解析失败 → 改 6 位微秒格式、阈值 ≤1s；②刷新防抖
+  （withTimeoutOrNull 15s + 按钮禁用）；③云端类别汉字（human/motion → 人形事件/普通运动）；④云端路径记忆
+  （SharedPreferences 按节点视图记前缀，因切 Tab 会销毁重建）。
+- **v0.2.145 复测 3 项**：①首次进入「全部节点」误判无在线摄像头（根因 LaunchedEffect key 只绑 selectedNode，
+  节点清单异步就绪后不重触发 → key 加 onlineNodeKeys）；②单路刷新按钮视觉+位置（移到底部名称后）；③云端
+  切走再回来报 `coroutine scope left the composition`（CancellationException 被当业务错误，需单独 rethrow）。
+- **v0.2.146→v0.2.147 方向纠正**：v0.2.146 误解用户意图（把「组网」移到底部），v0.2.147 纠正为
+  **监控+组网都回主页顶部 Tab**——监控放组网之后（主页 7 页：短信/中继/控制/扫码/组网/监控/极空），
+  底部工具栏回 5 项。**经验**：涉及「哪个 Tab 放哪」的布局调整，先复述确认再动手，避免方向性返工。
+- **v0.2.148 收尾 6 项**：①播放器 back 先隐藏控制器（PlayerView.isControllerFullyVisible）；②事件时间短格式
+  （设备自定义 `2026-11-14T0:9:16:30.034390` 四段冒号无法标准解析 → 字符串截取）；③back 判断实时预览 tab；
+  ④首次启动无摄像头回归（nodesLoading 透传 + 800ms 重试）；⑤延时摄影昵称；⑥延时摄影频率改 5 分钟（见脉络四）。
+
+### 脉络三 · 图片/视频查看与子页切换（v0.2.149→v0.2.154）
+
+- **v0.2.149 图片查看器缩放 + 子 Tab 常驻**：①新增 `ZoomableImageView`（事件快照大图双指缩放 1~5 倍 +
+  平移 + 双击复位）；②监控四个子 View 由 `when(currentTab)` 条件渲染改为**常驻叠加 + zIndex 切换**，避免
+  切子 Tab 时销毁重建导致重新拉取。**核心洞察**：四个子 View 的 LaunchedEffect 都是「数据 key 驱动」而非
+  「进入组合驱动」，所以不销毁组合即不重跑。
+- **v0.2.150 紧急修复子 Tab 画面重叠**：v0.2.149 常驻叠加引入**严重 bug**——四个子 View 根节点透明，
+  活动 Tab 虽 zIndex 最高但透明区域透出下层（延时摄影组合顺序最后、非活动 Tab 里绘制层级最高，故其画面
+  「盖住」其它页）。修法：给每个子 View 包裹 Box 加不透明背景。**经验**：常驻叠加切换可见性时，子 View 根
+  节点必须不透明，这是「when 条件渲染」换「常驻叠加」最易踩的坑。
+- **v0.2.151 视频缩放 + 实时预览流式显示**：①MonitorPlayer 加双指缩放（原生 ScaleGestureDetector 1~4 倍）；
+  ②实时预览改流式——摄像头清单到手立即出网格，快照并发逐路点亮（不再等全部返回才显示）。数据层本就是
+  并发逐路累加（流式存储），此版把显示层也改流式。
+- **v0.2.152 播放器手势+控制器重构**：用户三点需求——①点屏呼出「暂停/播放」键（进度条上方，3 秒自动隐藏）
+  替代 Media3 自带控制器；②双指缩放 + 单指平移；③返回键三级优先级（设置面板→复位缩放→关闭播放器）。
+  关闭 useController，自绘底部控制条 + 底部设置抽屉（速度/音频/画质），缩放上限定 6 倍。
+- **v0.2.153 修复触摸全失效 + 画质移到顶栏**：v0.2.152 的 `setOnTouchListener` 返回 `isInProgress`，
+  缩放未进行时返回 false → Android 判定「该 View 不处理手势」→ 后续 MOVE/UP 不再分发 → 点按/缩放/平移全失效。
+  修法：始终返回 true 完整接管。画质从设置抽屉移到顶栏「设置」按钮左侧。
+- **v0.2.154 根治「缩放一次后第二次失效」**：原生 `ScaleGestureDetector` + `GestureDetector` 在
+  setOnTouchListener 里共享事件，状态机在连续多次手势时互相干扰、状态残留 → 第二次缩放无法重新开始、平移失效。
+  **彻底方案**：放弃原生 detector，改用**纯 Compose 手势**（`detectTransformGestures` + `detectTapGestures`），
+  通过透明覆盖层接收手势，与图片查看器 ZoomableImageView 同套。最终收敛。
+
+### 脉络四 · 延时摄影频率（跨服务端，v0.2.148）
+
+- 延时摄影抓帧频率由**服务端** NVR（盒子2 `86.74.128.68`）`.env` 的 `TIMELAPSE_SNAPSHOT_SECONDS` 决定，
+  v0.2.148 由 1800（30 分钟）改为 300（5 分钟）。**时长是派生值**：`时长 = 当天帧数 ÷ TIMELAPSE_FPS（10fps）`，
+  原来 30 分钟/帧 → 48 帧/天 → 4.8 秒；改 5 分钟/帧 → 288 帧/天 → 28.8 秒。客户端说明文案同步改「约 29 秒」。
+  **经验**：客户端显示的「时长」可能是服务端参数的派生结果，改参数前先算清派生链再同步文案。
+
+### 脉络五 · 导航收口（v0.2.155）
+
+- **v0.2.155 导航结构调整**：①底部「管理」移到主页顶部 Tab 最后一位（id=7）；②底部原「管理」位置换成
+  「工具」页（4×4=16 占位图标，点击 Toast「功能开发中」）；③主页 TabOrderPrefs 迁移简化为「旧 7 页末尾
+  追加 id=7」（无需整体重排）。**经验**：把「管理」这类低频但重要的页面从底部工具栏挪到主页顶部 Tab，
+  用「末尾追加 id + 简单迁移」即可，不必整体重排既有 id；设置页排序编辑器靠 `PAGE_TITLES` 动态取值自动带出。
+
+**关键经验沉淀**：
+- **hub 代理 vs 单节点直连的路径前缀是监控 bug 的主源头**：`/api/...`（单节点直连）与 `/<节点ID>/api/...`
+  （hub 代理）两种形态，列表条目是否含 `node` 字段、心跳/点播 URL 是否要补节点前缀，都要按「当前视图是
+  全部节点还是单节点」区分。**可复用做法**：凡涉及「聚合 vs 直连」双形态的 API 客户端，集中封装一个
+  `effectiveNode` / `nodeBase` 路由函数，所有 URL 组装走它，避免散落各处的裸拼前缀。
+- **`CancellationException` 必须单独 rethrow，不能当业务错误吞掉**：协程取消（切 Tab/退页）会抛
+  CancellationException，若被 `catch(Exception)` 捕获并写 state，会引发「coroutine scope left the composition」
+  风暴或状态错乱。**可复用做法**：所有 `catch` 前先 `catch(CancellationException) { throw it }`。
+- **AndroidView 里做多点手势，用 Compose `detectTransformGestures` 而非原生 detector**：原生
+  `ScaleGestureDetector`/`GestureDetector` 组合在 setOnTouchListener 共享事件时状态机易在连续手势时卡死；
+  且 setOnTouchListener 返回 false 会让系统中断后续事件分发。**可复用做法**：PlayerView 等 AndroidView 上做
+  自定义手势，用透明 Compose 覆盖层 + `detectTransformGestures`/`detectTapGestures`，与纯 Compose 组件（如
+  图片查看器）保持同一套手势逻辑，稳定且可复用。
+- **「子 Tab 切换不刷新」用常驻叠加 + zIndex，但子 View 根节点必须不透明**：`when(currentTab)` 切 Tab 会
+  销毁重建导致重新拉取；改常驻叠加 + zIndex 切换可见性可保留状态，但透明根节点会透出下层画面。
+  **可复用做法**：常驻叠加方案下，每个子 View 包裹 Box 显式 `background(MaterialTheme.colorScheme.background)`。
+- **非标准时间戳/字段优先字符串处理而非标准解析**：设备事件时间是自定义格式
+  `2026-11-14T0:9:16:30.034390`（四段冒号 + 微秒），`LocalDateTime.parse` 必失败。**可复用做法**：来源不可控的
+  时间/字段，先确认实际格式，能用字符串截取就用字符串截取，别硬套标准解析器。
+
+---
+
+## 2026-11-13 · 🔊 v0.2.137 极空播报音量提升：排除音频中继误判
+
+**节点意义**：极空播报「提升音量」的智能检测本意是「无**其他程序**播放才提升」，但音频中继的
+AudioTrack 用 `USAGE_MEDIA` 且只要开始收流就常驻播放（对端静音也输出低频底噪），被
+`isOtherAppPlaying` 遍历 `activePlaybackConfigurations` 时命中 `USAGE_MEDIA`，误判为「其他程序在播放」，
+导致中继开着时极空播报**永不提升音量**。v0.2.124 的排除机制只排除了极空自己的播报 MediaPlayer，
+未覆盖中继。
+
+**修复（用户拍板简化方案「只判中继」）**：在 `shouldBoostProvider` 的 `otherPlaying` 判断里追加
+`&& !AudioRelayService.isRunning()`——中继开着就把它当「咱们自己」、不算「其他程序」，照常提升；
+即使中继与第三方同时播放也提升（用户确认可接受此边缘场景）。理由：「其他程序」的「其他」指
+Bridge App 之外的程序，中继是 Bridge 自身功能，不该算「其他」。
+
+**发版**：升 `versionName` 0.2.136→0.2.137、`versionCode` 6→7。
+
+**关键经验沉淀**：
+- **`activePlaybackConfigurations` 拿不到 uid/包名，无法直接区分「自己 vs 第三方」**：遍历结果只有
+  usage/contentType，`getClientUid` 是 @hide 隐藏 API。要排除「自己的播放」，只能靠「自己知道自己在不在播」
+  的内部状态（如 `AudioRelayService.isRunning()`）做减法。可复用做法：凡要「排除自己播放」的场景，优先
+  复用现有服务的对外状态量，而不是去反射隐藏 API。
+- **「其他程序」的语义要用户拍板**：智能检测的「其他」到底指「本 App 之外」还是「本功能之外」，是产品
+  语义而非纯技术问题；本次用户明确「其他 = Bridge 之外」，且接受「中继+第三方同时播也提升」的边缘场景。
+  可复用做法：涉及「是否打断用户当前音频」的判断，先和用户对齐「其他程序」的边界，再决定排除范围。
+
+---
+
+## 2026-11-13 · 🔌 v0.2.136 极空靠近自动连接：蓝牙关闭→重开失效修复
+
+**节点意义**：用户确认「关闭蓝牙系统通知不消失、但关闭蓝牙重开必须不影响靠近自动连接」的期望后，
+代码推演发现 `JikongProximityService` 的蓝牙开关广播 `btReceiver` **只处理 `STATE_ON`、漏了 `STATE_OFF`**：
+蓝牙关闭时系统只把底层 GATT 断开（`setConnected(false)`），`autoConnectAttached` 标记**残留为 true**，
+重开后 `evaluateInPlace` 命中「已挂起」判断直接 return，**永不重挂**，靠近自动连接静默失效。
+
+**修复**：`btReceiver` 补 `STATE_OFF` 分支——`detachAutoConnect()` 清残留标记 + `updateNotificationText()`
+刷新通知文案（通知保留、仅文案切到「等待条件满足（蓝牙未开）」）；`STATE_ON` 分支补刷新通知
+（重挂成功后文案从「等待条件满足」切回「监听默认保护板中」）。
+
+**发版**：升 `versionName` 0.2.135→0.2.136、`versionCode` 5→6。
+
+**部署**：2026-11-13 已按 v0.2.135 流程部署到魔百盒（mbh，LAN 192.168.31.30）
+`/home/qwe159357/software/appClient/server/data/updates/`：旧 135 APK 备份至 `.bak/`、`update.json` 同步
+（sha256 `fcabba0e…c76a`、size 58805084），`supervisorctl restart appclient:appclient-server` 后服务 RUNNING，
+远程 sha256 与本地逐字节一致。真机「关闭蓝牙→重开靠近自动连接」场景待用户验证。
+并据此把「部署到远程服务器 = v0.2.135 流程 = 部署到魔百盒」固化为打包话术约定
+（`docs/dev/release-pipeline.md` §一）。
+
+**关键经验沉淀**：
+- **「走远断开」与「蓝牙被关闭」两种断开必须区分对待**：前者是 autoConnect 的核心场景（标记必须保持 true
+  让系统后台持续重试），后者才是标记残留需要清理；清理只能放 `btReceiver` 的 `STATE_OFF`，**不能**放
+  `STATE_DISCONNECTED` 回调。**可复用做法**：凡「标记残留导致重开失效」类 bug，先定位「该标记的清理入口
+  是否覆盖了所有让它失效的触发源」，再对号入座补分支。
+- **广播只处理开、不处理关，是「重开后失效」类 bug 的典型根因**：`STATE_ON` 重评估但 `STATE_OFF` 不清理，
+  造成「开时以为自己还挂着」的错觉。可复用做法：成对的系统状态广播（蓝牙/网络/定位等），开关两侧要么都处理、
+  要么明确注释「另一侧为何不需要」。
+
+---
+
 ## 2026-11-13 · 🎯 v0.2.135 探活方向纠偏（服务器断连 ≠ 实例死亡，根治死循环）
 
 **节点意义**：v0.2.133/134 的探活虽然加了「连续确认」，但**方向错了**——它把「与 VNTS 服务器

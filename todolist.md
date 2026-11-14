@@ -6,6 +6,20 @@
 
 ---
 
+# 监控功能（NVR 集成，2026-11-13）
+
+## ✅ 监控功能完整实现（P0~P6 全做，代码完成待真机验收）
+
+- 需求：主页后插「监控」Tab（6 Tab），原生重做 NVR 8200 控制台四大功能：实时预览/事件/云端/延时摄影。
+- 决策（已拍板）：D1 插第2位、D2 引入 Media3 ExoPlayer（fMP4 音视频有声音）、D3 多节点+聚合一起做、D4 默认落地实时预览、D5 新建 MonitorPlayer、D6 设置页配置、D7 快照刷新（单路/全部/自动轮询）。
+- 实现：monitor/ 包 9 文件（Prefs/ApiClient/ViewModel/Pages/Live/Event/Cloud/Timelapse/Player）+ MainScreen 6 Tab + 设置页监控分区 + media3 依赖。
+- 状态：✅ 代码完成，`:app:compileDebugKotlin` BUILD SUCCESSFUL。
+- **未了结**：①版本号升 v0.2.140 打 APK；②真机验收（avstream 有声音/快照刷新/心跳回收/点播）。
+
+## 已了结（历史，全部发版）
+
+---
+
 # 第三轮（v0.2.92）：任务十六~十九
 
 ## ✅任务十六：阶段统计加「自定义」时间段

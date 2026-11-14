@@ -120,14 +120,29 @@ class JikongProximityService : Service() {
     private var stopRequested = false
     private var promoted = false
 
-    /** 蓝牙开关重启守护：STATE_ON 后重评估（部分 ROM 蓝牙重启后挂起丢失）。 */
+    /**
+     * 蓝牙开关重启守护：
+     * - STATE_OFF：摘除 autoConnect 挂起标记（蓝牙关闭时系统断开底层 GATT 但不清
+     *   `autoConnectAttached`，残留会导致重开后 `evaluateInPlace` 的「已挂起」判断
+     *   误命中而永不重挂——v0.2.136 修复）；并刷新通知文案（通知保留，仅文案切到
+     *   「等待条件满足（蓝牙未开）」）。
+     * - STATE_ON：重评估挂起（部分 ROM 蓝牙重启后挂起丢失），并刷新通知文案。
+     */
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
                 val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
-                if (state == BluetoothAdapter.STATE_ON) {
-                    Timber.tag(TAG).i("蓝牙已重新开启，重评估挂起")
-                    evaluateInPlace(applicationContext)
+                when (state) {
+                    BluetoothAdapter.STATE_OFF -> {
+                        Timber.tag(TAG).i("蓝牙已关闭，摘除 autoConnect 挂起标记（防重开失效）")
+                        JikongBleClient.detachAutoConnect()
+                        updateNotificationText()
+                    }
+                    BluetoothAdapter.STATE_ON -> {
+                        Timber.tag(TAG).i("蓝牙已重新开启，重评估挂起")
+                        evaluateInPlace(applicationContext)
+                        updateNotificationText()
+                    }
                 }
             }
         }

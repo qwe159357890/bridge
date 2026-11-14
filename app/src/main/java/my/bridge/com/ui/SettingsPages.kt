@@ -1341,6 +1341,12 @@ fun ConnectionSettings() {
             RelaySwitchSettings()
         }
 
+        // ===== 监控分区（v0.2.140：NVR 集成配置）=====
+        item { SectionTitle("监控") }
+        item {
+            MonitorSettingsSection()
+        }
+
         // ===== SSH 服务分区（v0.2.34：内嵌 sshd，入口卡片 + 详情页见 SshPages.kt）=====
         item { SectionTitle("SSH 服务") }
         item {
@@ -1927,4 +1933,212 @@ fun UiLockSettingsSection() {
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
         )
     }
+}
+
+// ============ 监控配置分区（v0.2.140：NVR 集成）============
+
+/**
+ * 监控服务配置：hub 地址 + 访问令牌 + 快照自动轮询开关 + 轮询间隔。
+ * 配置写入 MonitorPrefs，实时预览页即时读取生效。
+ */
+@Composable
+fun MonitorSettingsSection() {
+    val context = LocalContext.current
+
+    var showUrlDialog by remember { mutableStateOf(false) }
+    var showTokenDialog by remember { mutableStateOf(false) }
+    var showRefreshDialog by remember { mutableStateOf(false) }
+    var autoRefresh by remember { mutableStateOf(my.bridge.com.monitor.MonitorPrefs.autoRefresh(context)) }
+    var refreshSeconds by remember { mutableStateOf(my.bridge.com.monitor.MonitorPrefs.refreshSeconds(context).toString()) }
+
+    SettingCard {
+        SettingValueRow(
+            icon = "🌐",
+            title = "监控服务地址",
+            value = my.bridge.com.monitor.MonitorPrefs.hubUrl(context),
+        ) {
+            showUrlDialog = true
+        }
+        SettingValueRow(
+            icon = "🔑",
+            title = "访问令牌",
+            value = if (my.bridge.com.monitor.MonitorPrefs.token(context).isBlank()) "未设置" else "已设置",
+        ) {
+            showTokenDialog = true
+        }
+        SettingSwitchRow(
+            icon = "🔄",
+            title = "快照自动轮询",
+            checked = autoRefresh,
+            onCheckedChange = { on ->
+                autoRefresh = on
+                my.bridge.com.monitor.MonitorPrefs.saveAutoRefresh(context, on)
+            },
+        )
+        if (autoRefresh) {
+            SettingValueRow(
+                icon = "⏱️",
+                title = "轮询间隔（秒）",
+                value = refreshSeconds,
+            ) {
+                showRefreshDialog = true
+            }
+        }
+        Text(
+            text = "监控服务地址默认走 VNT 组网内的 NVR 统一控制台（http://86.74.128.68:8200）。访问令牌对应 hub 的 HUB_API_TOKEN，为空表示不校验。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+        )
+    }
+
+    // 地址编辑弹窗
+    if (showUrlDialog) {
+        MonitorUrlEditDialog(
+            initial = my.bridge.com.monitor.MonitorPrefs.hubUrl(context),
+            onCancel = { showUrlDialog = false },
+            onConfirm = { url ->
+                my.bridge.com.monitor.MonitorPrefs.saveHubUrl(context, url)
+                showUrlDialog = false
+            },
+        )
+    }
+
+    // 令牌编辑弹窗
+    if (showTokenDialog) {
+        MonitorTokenEditDialog(
+            initial = my.bridge.com.monitor.MonitorPrefs.token(context),
+            onCancel = { showTokenDialog = false },
+            onConfirm = { token ->
+                my.bridge.com.monitor.MonitorPrefs.saveToken(context, token)
+                showTokenDialog = false
+            },
+        )
+    }
+
+    // 轮询间隔编辑弹窗
+    if (showRefreshDialog) {
+        var seconds by remember { mutableStateOf(my.bridge.com.monitor.MonitorPrefs.refreshSeconds(context).toString()) }
+        var err by remember { mutableStateOf<String?>(null) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showRefreshDialog = false },
+            title = { Text("轮询间隔") },
+            text = {
+                Column {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = seconds,
+                        onValueChange = { seconds = it; err = null },
+                        label = { Text("间隔秒数（5~300）") },
+                        singleLine = true,
+                        isError = err != null,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                        ),
+                    )
+                    if (err != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(err!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        val n = seconds.toIntOrNull()
+                        if (n == null || n < 5 || n > 300) {
+                            err = "请输入 5~300 之间的整数"
+                        } else {
+                            my.bridge.com.monitor.MonitorPrefs.saveRefreshSeconds(context, n)
+                            refreshSeconds = n.toString()
+                            showRefreshDialog = false
+                        }
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showRefreshDialog = false }) { Text("取消") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun MonitorUrlEditDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var url by remember { mutableStateOf(initial) }
+    var error by remember { mutableStateOf<String?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("监控服务地址") },
+        text = {
+            Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it; error = null },
+                    label = { Text("完整 URL（带协议）") },
+                    singleLine = true,
+                    isError = error != null,
+                    placeholder = { Text("http://86.74.128.68:8200") },
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "默认走 VNT 组网内网地址。也可填公网地址或单节点 8100 端口。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    val u = url.trim().trimEnd('/')
+                    if (u.isEmpty()) {
+                        error = "地址不能为空"
+                    } else if (!u.startsWith("http://", true) && !u.startsWith("https://", true)) {
+                        error = "必须以 http:// 或 https:// 开头"
+                    } else {
+                        onConfirm(u)
+                    }
+                },
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+@Composable
+private fun MonitorTokenEditDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var token by remember { mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("访问令牌") },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = token,
+                onValueChange = { token = it },
+                label = { Text("HUB_API_TOKEN") },
+                singleLine = true,
+                placeholder = { Text("留空表示不校验") },
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onConfirm(token) }) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
 }

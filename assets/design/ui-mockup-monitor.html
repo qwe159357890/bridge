@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>监控功能原型（实时预览/事件/云端/延时摄影）</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #1a1d23;
+    --card2: #22262e;
+    --text: #e8eaed;
+    --sub: #8a919f;
+    --divider: #2a2e36;
+    --tabbar: #14161b;
+    --green: #00e050;
+    --red: #e5484d;
+    --blue: #4d8bf5;
+    --amber: #f5a623;
+    --cyan: #00b8d4;
+    --outer: #08090c;
+  }
+  body.light {
+    --bg: #eef1f5;
+    --card: #ffffff;
+    --card2: #f2f4f7;
+    --text: #17191d;
+    --sub: #5d6672;
+    --divider: #e0e4e9;
+    --tabbar: #ffffff;
+    --green: #00a344;
+    --red: #d93036;
+    --blue: #2f6fd8;
+    --amber: #d98600;
+    --cyan: #0097b8;
+    --outer: #c9ced6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--outer); height: 100%; }
+  body {
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    padding: 12px 0;
+  }
+  .theme-btn {
+    position: fixed; top: 12px; right: 14px; z-index: 9;
+    background: var(--card); color: var(--text);
+    border: 1px solid var(--divider); border-radius: 20px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .phone {
+    width: 390px; height: 844px;
+    background: var(--bg);
+    border: 8px solid #1c1e22;
+    border-radius: 44px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
+    position: relative;
+  }
+  body.light .phone { border-color: #d5d8dd; }
+
+  /* 状态栏 */
+  .statusbar {
+    height: 40px; flex: none;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 22px; font-size: 13px; font-weight: 600;
+    color: var(--text);
+  }
+
+  /* 顶栏：标题 + 节点切换 */
+  .topbar {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 6px 16px 10px;
+  }
+  .topbar .title { font-size: 20px; font-weight: 700; color: var(--text); flex: 1; }
+  .node-picker {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--card2); border: 1px solid var(--divider);
+    border-radius: 16px; padding: 6px 12px; font-size: 13px;
+    color: var(--text); cursor: pointer;
+  }
+  .node-picker .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+
+  /* 二级 Tab */
+  .tabs {
+    flex: none; display: flex; gap: 6px; padding: 0 16px 10px;
+    border-bottom: 1px solid var(--divider);
+  }
+  .tab {
+    flex: 1; text-align: center; padding: 8px 0; font-size: 14px;
+    color: var(--sub); cursor: pointer; border-radius: 8px;
+    position: relative;
+  }
+  .tab.on { color: var(--text); font-weight: 600; }
+  .tab.on::after {
+    content: ''; position: absolute; left: 20%; right: 20%; bottom: -10px;
+    height: 3px; background: var(--blue); border-radius: 2px;
+  }
+
+  .content { flex: 1; overflow-y: auto; padding: 12px 16px 16px; }
+
+  /* ===== 实时预览 ===== */
+  .mode-switch { display: flex; gap: 8px; margin-bottom: 12px; }
+  .mode-btn {
+    flex: 1; padding: 8px; text-align: center; font-size: 13px;
+    background: var(--card2); color: var(--sub); border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--divider);
+  }
+  .mode-btn.on { background: var(--blue); color: #fff; border-color: var(--blue); font-weight: 600; }
+  .refresh-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .refresh-all {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--blue); cursor: pointer;
+    background: var(--card2); border: 1px solid var(--divider);
+    border-radius: 14px; padding: 5px 12px;
+  }
+  .refresh-hint { font-size: 11px; color: var(--sub); }
+  .cam-refresh {
+    position: absolute; top: 6px; right: 6px; z-index: 3;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 12px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .cam-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cam-card {
+    background: var(--card); border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--divider); cursor: pointer;
+  }
+  .cam-view {
+    position: relative; aspect-ratio: 16/10; background: #000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .cam-view .scene {
+    font-size: 40px; opacity: .9;
+    filter: grayscale(.15);
+  }
+  .cam-view.offline .scene { filter: grayscale(1) brightness(.5); }
+  .cam-mask {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 8px;
+    background: rgba(0,0,0,.6); color: #fff; font-size: 12px;
+  }
+  .cam-mask .retry {
+    background: var(--blue); color: #fff; border: none; border-radius: 14px;
+    padding: 4px 14px; font-size: 12px; cursor: pointer;
+  }
+  .cam-badge {
+    position: absolute; top: 6px; left: 6px;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 10px;
+    padding: 2px 8px; border-radius: 10px;
+  }
+  .cam-badge.live { background: rgba(229,72,77,.85); }
+  .cam-info {
+    display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  }
+  .cam-info .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.ok { background: var(--green); } .dot.bad { background: var(--sub); }
+  .cam-info .name { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+  .cam-info .state { font-size: 11px; color: var(--sub); }
+
+  /* ===== 事件 ===== */
+  .filter-chips { display: flex; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    padding: 6px 14px; border-radius: 16px; font-size: 13px; cursor: pointer;
+    background: var(--card2); color: var(--sub); border: 1px solid var(--divider);
+  }
+  .chip.on { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .ev-item {
+    display: flex; gap: 12px; padding: 10px; background: var(--card);
+    border-radius: 12px; margin-bottom: 10px; border: 1px solid var(--divider);
+    cursor: pointer;
+  }
+  .ev-thumb {
+    width: 84px; height: 62px; border-radius: 8px; overflow: hidden; flex: none;
+    background: #000; display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+  }
+  .ev-body { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .ev-head { display: flex; align-items: center; gap: 6px; }
+  .ev-tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+  }
+  .ev-tag.human { background: rgba(229,72,77,.15); color: var(--red); }
+  .ev-tag.motion { background: rgba(245,166,35,.15); color: var(--amber); }
+  .ev-cam { font-size: 13px; font-weight: 600; color: var(--text); }
+  .ev-time { font-size: 11px; color: var(--sub); }
+  .ev-actions { display: flex; gap: 6px; margin-top: 2px; }
+  .ev-btn {
+    font-size: 11px; padding: 3px 10px; border-radius: 12px; cursor: pointer;
+    background: var(--card2); color: var(--blue); border: 1px solid var(--divider);
+  }
+
+  /* ===== 云端 / 延时 ===== */
+  .crumb {
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    font-size: 12px; color: var(--sub); margin-bottom: 12px;
+    padding: 8px 10px; background: var(--card2); border-radius: 8px;
+  }
+  .crumb .seg { cursor: pointer; color: var(--blue); }
+  .crumb .sep { color: var(--sub); }
+  .cloud-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px;
+    background: var(--card); border-radius: 12px; margin-bottom: 8px;
+    border: 1px solid var(--divider); cursor: pointer;
+  }
+  .cloud-item .ico { font-size: 22px; width: 30px; text-align: center; flex: none; }
+  .cloud-item .name { font-size: 14px; color: var(--text); flex: 1; font-weight: 500; }
+  .cloud-item .meta { font-size: 11px; color: var(--sub); }
+  .cloud-item .arrow { color: var(--sub); font-size: 14px; }
+  .tl-card {
+    display: flex; align-items: center; gap: 12px; padding: 12px;
+    background: var(--card); border-radius: 12px; margin-bottom: 10px;
+    border: 1px solid var(--divider); cursor: pointer;
+  }
+  .tl-thumb {
+    width: 96px; height: 56px; border-radius: 8px; background: linear-gradient(135deg,#1d3a5f,#123);
+    display: flex; align-items: center; justify-content: center; font-size: 24px; flex: none;
+  }
+  .tl-info { flex: 1; }
+  .tl-date { font-size: 14px; font-weight: 600; color: var(--text); }
+  .tl-meta { font-size: 11px; color: var(--sub); margin-top: 3px; }
+  .tl-play {
+    width: 34px; height: 34px; border-radius: 50%; background: var(--blue);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex: none;
+  }
+
+  /* 提示条 */
+  .tip {
+    font-size: 12px; color: var(--sub); line-height: 1.6;
+    background: var(--card2); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+  }
+
+  /* ===== 底部导航 ===== */
+  .bottombar {
+    flex: none; display: flex; background: var(--tabbar);
+    border-top: 1px solid var(--divider); padding: 6px 0 14px;
+  }
+  .bn-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    color: var(--sub); font-size: 10px; cursor: pointer;
+  }
+  .bn-item .bn-ico { font-size: 20px; }
+  .bn-item.on { color: var(--blue); }
+  .bn-item.on.mon { color: var(--blue); }
+
+  /* ===== 全屏播放器 ===== */
+  .player-overlay {
+    position: absolute; inset: 0; z-index: 20; background: #000;
+    display: none; flex-direction: column;
+  }
+  .player-overlay.show { display: flex; }
+  .player-head {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; color: #fff;
+  }
+  .player-head .p-title { font-size: 15px; font-weight: 600; flex: 1; }
+  .player-head .p-quality {
+    font-size: 11px; background: rgba(255,255,255,.18); padding: 3px 10px; border-radius: 10px;
+    cursor: pointer;
+  }
+  .player-head .p-close {
+    width: 28px; height: 28px; border-radius: 50%; background: rgba(255,255,255,.15);
+    display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px;
+  }
+  .player-body {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 64px;
+  }
+  .player-foot {
+    flex: none; padding: 12px 16px 16px; color: #999; font-size: 12px; text-align: center;
+  }
+  .player-timeline {
+    flex: none; padding: 0 16px 12px;
+  }
+  .tl-bar {
+    position: relative; height: 24px; border-radius: 12px;
+    background: rgba(255,255,255,.12); overflow: hidden;
+  }
+  .tl-seg { position: absolute; top: 0; bottom: 0; background: var(--blue); opacity: .7; }
+  .tl-knob {
+    position: absolute; top: 0; bottom: 0; width: 3px; background: #fff;
+    border-radius: 2px;
+  }
+  .tl-scale { display: flex; justify-content: space-between; font-size: 10px; color: #999; margin-top: 4px; }
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="toggleTheme()">浅色/深色</button>
+
+<div class="phone" id="phone">
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <span>20:14</span>
+    <span style="display:flex;gap:5px;align-items:center;">📶 🔋</span>
+  </div>
+
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div class="title" id="topTitle">监控</div>
+    <div class="node-picker" onclick="toggleNodeMenu()">
+      <span class="dot"></span><span id="nodeLabel">全部节点</span><span>▾</span>
+    </div>
+  </div>
+
+  <!-- 二级 Tab -->
+  <div class="tabs" id="tabs">
+    <div class="tab on" data-pg="live" onclick="switchPg('live', this)">实时预览</div>
+    <div class="tab" data-pg="events" onclick="switchPg('events', this)">事件</div>
+    <div class="tab" data-pg="cloud" onclick="switchPg('cloud', this)">云端</div>
+    <div class="tab" data-pg="timelapse" onclick="switchPg('timelapse', this)">延时摄影</div>
+  </div>
+
+  <!-- 内容区 -->
+  <div class="content" id="content"></div>
+
+  <!-- 底部导航（6 Tab：主页/监控/微信/销售/管理/设置，监控插主页后第 2 位） -->
+  <div class="bottombar">
+    <div class="bn-item"><div class="bn-ico">🏠</div>主页</div>
+    <div class="bn-item on mon"><div class="bn-ico">📹</div>监控</div>
+    <div class="bn-item"><div class="bn-ico">💬</div>微信</div>
+    <div class="bn-item"><div class="bn-ico">🛒</div>销售</div>
+    <div class="bn-item"><div class="bn-ico">🗂️</div>管理</div>
+    <div class="bn-item"><div class="bn-ico">⚙️</div>设置</div>
+  </div>
+
+  <!-- 全屏播放器 -->
+  <div class="player-overlay" id="player">
+    <div class="player-head">
+      <span class="p-title" id="pTitle">南大门 · 实时</span>
+      <span class="p-quality" onclick="this.textContent = this.textContent==='流畅 · 子码流' ? '高清 · 主码流' : '流畅 · 子码流'">流畅 · 子码流</span>
+      <span class="p-close" onclick="closePlayer()">✕</span>
+    </div>
+    <div class="player-body" id="pBody">🎥</div>
+    <div class="player-timeline" id="pTimeline" style="display:none;">
+      <div class="tl-bar">
+        <div class="tl-seg" style="left:10%;width:14%"></div>
+        <div class="tl-seg" style="left:35%;width:22%"></div>
+        <div class="tl-seg" style="left:68%;width:10%"></div>
+        <div class="tl-knob" style="left:42%"></div>
+      </div>
+      <div class="tl-scale"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+    </div>
+    <div class="player-foot" id="pFoot">实时音视频 · 延迟约 2~3 秒 · 关闭自动断开连接</div>
+  </div>
+</div>
+
+<script>
+let curPg = 'live';
+// 节点列表（多节点 + 全部节点聚合）
+const nodes = [
+  {id:'', nick:'全部节点', online:true},
+  {id:'taoyuan', nick:'桃园', online:true},
+  {id:'huayuan', nick:'花园', online:true},
+  {id:'cangku', nick:'仓库', online:false},
+];
+let curNode = 0; // 默认「全部节点」
+const cams = [
+  {id:'cam_1', name:'南大门', scene:'🏠', state:'ok', node:'桃园'},
+  {id:'cam_2', name:'北门', scene:'🚪', state:'ok', node:'桃园'},
+  {id:'cam_3', name:'仓库', scene:'📦', state:'offline', node:'仓库'},
+  {id:'cam_4', name:'后院', scene:'🌳', state:'ok', node:'花园'},
+];
+const events = [
+  {level:'human', cam:'南大门', time:'今天 14:32', thumb:'🚶', hasVideo:true},
+  {level:'motion', cam:'北门', time:'今天 13:05', thumb:'🐕', hasVideo:true},
+  {level:'human', cam:'南大门', time:'昨天 22:18', thumb:'🚶', hasVideo:true},
+  {level:'motion', cam:'仓库', time:'昨天 18:47', thumb:'🐈', hasVideo:false},
+  {level:'human', cam:'北门', time:'昨天 09:12', thumb:'🚶', hasVideo:true},
+  {level:'motion', cam:'后院', time:'前天 16:30', thumb:'🍃', hasVideo:true},
+];
+const cloudTree = {
+  '': ['南大门','北门'],
+  '南大门': ['人形事件','普通运动'],
+  '北门': ['人形事件','普通运动'],
+  '南大门/人形事件': ['2026-11-13','2026-11-12','2026-11-11'],
+  '南大门/普通运动': ['2026-11-13','2026-11-12'],
+  '北门/人形事件': ['2026-11-12','2026-11-10'],
+  '北门/普通运动': ['2026-11-13','2026-11-11'],
+};
+let cloudPath = [];
+
+function renderLive() {
+  const nodeName = nodes[curNode].nick;
+  const shownCams = curNode === 0 ? cams : cams.filter(c => c.node === nodeName);
+  return `
+    <div class="mode-switch">
+      <div class="mode-btn on" onclick="this.parentNode.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('on'));this.classList.add('on')">快照模式</div>
+      <div class="mode-btn" onclick="this.parentNode.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('on'));this.classList.add('on')">实时模式</div>
+    </div>
+    <div class="refresh-row">
+      <span class="refresh-hint">${shownCams.length} 路 · ${nodeName} · 快照为静态帧</span>
+      <span class="refresh-all" onclick="refreshAll(this)">⟳ 刷新全部</span>
+    </div>
+    <div class="cam-grid">
+      ${shownCams.map(c=>`
+        <div class="cam-card" onclick="openLive('${c.name}')">
+          <div class="cam-view ${c.state==='offline'?'offline':''}">
+            <span class="scene">${c.scene}</span>
+            <span class="cam-refresh" title="刷新该路快照" onclick="event.stopPropagation();refreshCam(this)">⟳</span>
+            ${c.state==='offline' ? `<div class="cam-mask"><div>摄像头离线</div><button class="retry" onclick="event.stopPropagation();refreshCam(this)">重试</button></div>` : `<span class="cam-badge live">LIVE</span>`}
+          </div>
+          <div class="cam-info">
+            <span class="dot ${c.state==='ok'?'ok':'bad'}"></span>
+            <span class="name">${c.name}</span>
+            <span class="state">${c.state==='ok'?'快照':c.state==='offline'?'离线':'连接中'}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="tip" style="margin-top:12px">快照模式：每路仅一帧静态画面，省流量；点「⟳」刷新单路，点「刷新全部」重抓所有在线路。点卡片进入全屏实时音视频（有声音）。</div>
+  `;
+}
+
+function refreshCam(el) {
+  // 单路刷新：模拟重抓一帧（loading 态）
+  const old = el.innerHTML;
+  el.innerHTML = '⏳';
+  el.style.opacity = '.6';
+  setTimeout(()=>{ el.innerHTML = old; el.style.opacity = '1'; }, 600);
+}
+function refreshAll(el) {
+  // 全部刷新：模拟并发重抓所有在线路
+  const old = el.innerHTML;
+  el.innerHTML = '⏳ 刷新中…';
+  setTimeout(()=>{ el.innerHTML = old; }, 800);
+}
+function toggleNodeMenu() {
+  const menu = document.createElement('div');
+  menu.style.cssText = 'position:absolute;top:52px;right:12px;z-index:30;background:var(--card);border:1px solid var(--divider);border-radius:12px;padding:6px;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.3)';
+  menu.innerHTML = nodes.map((n,i)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:8px;font-size:13px;color:${i===curNode?'var(--blue)':'var(--text)'};cursor:pointer;${i===curNode?'background:var(--card2)':''}"
+      onclick="selectNode(${i});this.parentNode.remove()">
+      <span style="width:8px;height:8px;border-radius:50%;background:${n.online?'var(--green)':'var(--sub)'}"></span>
+      <span>${n.nick}</span>
+      ${n.online?'':'<span style="font-size:11px;color:var(--sub)">离线</span>'}
+    </div>`).join('');
+  document.getElementById('phone').appendChild(menu);
+  setTimeout(()=>{ document.addEventListener('click', function h(){ menu.remove(); document.removeEventListener('click',h); }, {once:true}); }, 0);
+}
+function selectNode(i) {
+  curNode = i;
+  document.getElementById('nodeLabel').textContent = nodes[i].nick;
+  render();
+}
+
+function renderEvents() {
+  return `
+    <div class="filter-chips">
+      <span class="chip on" onclick="selChip(this)">全部</span>
+      <span class="chip" onclick="selChip(this)">人形</span>
+      <span class="chip" onclick="selChip(this)">普通运动</span>
+    </div>
+    ${events.map(e=>`
+      <div class="ev-item" onclick="openEvent('${e.cam}','${e.level}')">
+        <div class="ev-thumb">${e.thumb}</div>
+        <div class="ev-body">
+          <div class="ev-head">
+            <span class="ev-tag ${e.level}">${e.level==='human'?'人形':'运动'}</span>
+            <span class="ev-cam">${e.cam}</span>
+          </div>
+          <div class="ev-time">${e.time}</div>
+          <div class="ev-actions">
+            <span class="ev-btn" onclick="event.stopPropagation()">看快照</span>
+            ${e.hasVideo ? `<span class="ev-btn" onclick="event.stopPropagation();openPlayer('${e.cam} · 事件录像','回放录像')">看录像</span>` : ''}
+          </div>
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderCloud() {
+  const path = cloudPath.join('/');
+  const items = cloudTree[path] || [];
+  const isDate = path.split('/').length >= 3;
+  const list = items.map(it=>{
+    if (isDate) {
+      // 日期目录下显示 mp4 文件
+      return `<div class="cloud-item" onclick="openPlayer('${path.replaceAll('/',' · ')}','回放录像')">
+        <span class="ico">🎞️</span><span class="name">${it}.mp4</span><span class="meta">12.4 MB</span><span class="arrow">▶</span>
+      </div>`;
+    }
+    const next = path ? path+'/'+it : it;
+    const isFolder = cloudTree[next] !== undefined;
+    const label = it.replace('人形事件','人形事件 👤').replace('普通运动','普通运动 🚶');
+    return `<div class="cloud-item" onclick="cloudPath.push('${it}');render()">
+      <span class="ico">${isFolder?'📁':'🎞️'}</span>
+      <span class="name">${label}</span>
+      <span class="meta">${isFolder?'目录':'视频'}</span>
+      <span class="arrow">›</span>
+    </div>`;
+  }).join('');
+  return `
+    <div class="crumb">
+      <span class="seg" onclick="cloudPath=[];render()">NVR备份</span>
+      ${cloudPath.map((p,i)=>`<span class="sep">›</span><span class="seg" onclick="cloudPath=cloudPath.slice(0,${i+1});render()">${p}</span>`).join('')}
+    </div>
+    ${list || '<div class="tip">目录为空</div>'}
+  `;
+}
+
+function renderTimelapse() {
+  const tls = [
+    {date:'2026-11-13', cam:'南大门', size:'4.8 MB'},
+    {date:'2026-11-12', cam:'南大门', size:'4.6 MB'},
+    {date:'2026-11-12', cam:'北门', size:'4.5 MB'},
+    {date:'2026-11-11', cam:'南大门', size:'4.7 MB'},
+    {date:'2026-11-10', cam:'北门', size:'4.4 MB'},
+  ];
+  return `
+    <div class="tip">每 30 分钟从摄像头抓取一帧快照，每天自动合成一个约 5 秒的浓缩视频，云端永久保留，用于回看历史样貌变迁。</div>
+    ${tls.map(t=>`
+      <div class="tl-card" onclick="openPlayer('${t.cam} · 延时摄影','延时摄影 ${t.date}')">
+        <div class="tl-thumb">🎬</div>
+        <div class="tl-info">
+          <div class="tl-date">${t.date}</div>
+          <div class="tl-meta">${t.cam} · ${t.size}</div>
+        </div>
+        <div class="tl-play">▶</div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function switchPg(pg, el) {
+  curPg = pg;
+  document.querySelectorAll('#tabs .tab').forEach(t=>t.classList.remove('on'));
+  if (el) el.classList.add('on');
+  const titles = {live:'实时预览', events:'事件', cloud:'云端录像', timelapse:'延时摄影'};
+  document.getElementById('topTitle').textContent = titles[pg];
+  render();
+}
+function selChip(el) {
+  el.parentNode.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  el.classList.add('on');
+}
+function render() {
+  const c = document.getElementById('content');
+  if (curPg==='live') c.innerHTML = renderLive();
+  else if (curPg==='events') c.innerHTML = renderEvents();
+  else if (curPg==='cloud') c.innerHTML = renderCloud();
+  else if (curPg==='timelapse') c.innerHTML = renderTimelapse();
+}
+function openLive(name) {
+  openPlayer(name+' · 实时','实时音视频');
+}
+function openEvent(cam, level) {
+  document.getElementById('pTimeline').style.display='none';
+  document.getElementById('pFoot').textContent='事件快照 · '+cam;
+  document.getElementById('pTitle').textContent = cam+' · '+(level==='human'?'人形事件':'运动事件');
+  document.getElementById('pBody').textContent = level==='human'?'🚶':'🐕';
+  document.getElementById('player').classList.add('show');
+}
+function openPlayer(title, foot) {
+  document.getElementById('pTimeline').style.display = foot.includes('回放')?'':'none';
+  document.getElementById('pFoot').textContent = foot + ' · 关闭自动断开';
+  document.getElementById('pTitle').textContent = title;
+  document.getElementById('pBody').textContent = foot.includes('回放')||foot.includes('延时')?'🎞️':'🎥';
+  document.getElementById('player').classList.add('show');
+}
+function closePlayer() {
+  document.getElementById('player').classList.remove('show');
+}
+function toggleTheme() {
+  document.body.classList.toggle('light');
+}
+render();
+</script>
+</body>
+</html>

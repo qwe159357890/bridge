@@ -40,6 +40,9 @@ mlkitBarcode = "17.3.0"
 # ---- 日志 ----
 timber = "5.0.1"
 
+# ---- 监控（NVR 集成 v0.2.140：Media3 ExoPlayer 播放 fMP4 音视频流 / MP4 点播）----
+media3 = "1.4.1"
+
 # ---- SSH 服务器（v0.2.34：Apache MINA SSHD 纯 Java 内嵌，见 docs/research/sshd-integration.md）----
 # 3.0.0-M* 与 2.x API 不兼容，锁定 2.20.x；sshd-mina 替换默认 NIO2 传输层（AsynchronousSocketChannel
 # 是 API 26+，我们 minSdk 24）；java.nio.file 依赖 core library desugaring（desugar_jdk_libs 2.x 含 NIO）。
@@ -103,6 +106,11 @@ mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning"
 
 # 日志
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
+
+# 监控（NVR 集成）：Media3 ExoPlayer
+media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
+media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 
 # SSH 服务器（sshd-core 含 sshd-common；sshd-mina = I/O 传输层替换；sshd-sftp/sshd-scp = 子系统）
 sshd-core = { group = "org.apache.sshd", name = "sshd-core", version.ref = "sshd" }

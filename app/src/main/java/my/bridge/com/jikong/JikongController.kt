@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.bridge.com.data.SpeakVolumeBoost
+import my.bridge.com.relay.AudioRelayService
 import my.bridge.com.core.network.ws.BridgeWebSocketClient
 import timber.log.Timber
 
@@ -392,7 +393,13 @@ class JikongController private constructor() {
             if (JikongPrefs.volumeBoostForce(ctx)) return@setShouldBoostProvider true
             // v0.2.124：排除「自己 app 上一段未播完的播报 mp3」，避免重叠播报时被误判成
             // 「其他程序」→ 第二段不提升音量且 stop 上一段时提前恢复，导致第二段偏小。
-            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx) && !JikongSpeaker.isSelfPlaying()
+            // v0.2.137：再排除「音频中继」——中继 AudioTrack 用 USAGE_MEDIA 且常驻播放
+            // （对端静音也输出低频底噪），会被 isOtherAppPlaying 误判为「其他程序在播放」，
+            // 导致中继开着时极空播报永不提升。用户拍板简化方案「只判中继」：中继开着就不算
+            // 「其他程序」，照常提升（即使中继与第三方同时播放也提升）。
+            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx) &&
+                !JikongSpeaker.isSelfPlaying() &&
+                !AudioRelayService.isRunning()
             if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
             !otherPlaying
         }

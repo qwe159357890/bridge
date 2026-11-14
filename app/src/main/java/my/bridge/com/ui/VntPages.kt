@@ -3,6 +3,7 @@ package my.bridge.com.ui
 import android.app.Activity
 import android.net.VpnService
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -35,6 +36,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -74,13 +76,27 @@ private val VntCard = Color(0xFFFFFFFF)
  * 离开页面 / ON_PAUSE 取消定时任务（细节见 [VntMeshController.startRefresh]）。
  */
 @Composable
-fun VntPage() {
+fun VntPage(onExitToHome: () -> Unit = {}) {
     val context = LocalContext.current
     val state by VntMeshController.state.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // 配置弹窗（单套配置）
     var showConfig by remember { mutableStateOf(false) }
+
+    // 返回键（v0.2.145 组网移到底部工具栏后成为独立 Tab）：对齐销售/管理页范式，
+    // 第 1 次 Toast「再按一次返回主页」，窗口内第 2 次 → onExitToHome()。
+    // 窗口时长取自 BackPressPrefs（设置→通用→返回键，默认 2 秒）。
+    var lastBackAt by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
+            onExitToHome()
+        } else {
+            lastBackAt = now
+            Toast.makeText(context, "再按一次返回主页", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // 系统 VPN 授权：prepare() 返回非 null 时必须经 Activity 弹框
     val consentLauncher = rememberLauncherForActivityResult(

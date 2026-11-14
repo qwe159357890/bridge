@@ -17,6 +17,176 @@
 
 ---
 
+### v0.2.137 音量提升「智能检测」排除音频中继（2026-11-13 实施）
+
+**背景（用户 11-13 反馈 + 代码推演）**：极空播报「提升音量」的智能检测，本意是「无**其他程序**在播放才提升」。但音频中继（AudioRelayService）的 AudioTrack 用 `USAGE_MEDIA` 且只要开始收流就一直处于 `PLAYSTATE_PLAYING`（对端静音也持续输出低频底噪），被 `isOtherAppPlaying` 遍历 `activePlaybackConfigurations` 时命中 `USAGE_MEDIA` 误判为「其他程序在播放」→ 极空播报永不提升音量。而 v0.2.124 的排除机制只排除了极空自己的播报 MediaPlayer（`JikongSpeaker.isSelfPlaying()`），未覆盖中继。
+
+**用户拍板（简化方案）**：**只判中继**——只要中继开着，就把它当作「咱们自己」，不算「其他程序」，照常提升；**即使中继与第三方同时播放，也提升**（用户确认可接受此边缘场景）。理由：「其他程序」的「其他」指 Bridge App 之外的程序，中继是 Bridge 自己功能，不该算「其他」。
+
+**改前原文（逐字）**：`JikongController.kt` `shouldBoostProvider`（约 387-398 行）：
+
+```kotlin
+        SpeakVolumeBoost.setShouldBoostProvider { ctx ->
+            if (!JikongPrefs.volumeBoostEnabled(ctx)) {
+                Timber.i("音量提升决策：主开关关闭，跳过")
+                return@setShouldBoostProvider false
+            }
+            if (JikongPrefs.volumeBoostForce(ctx)) return@setShouldBoostProvider true
+            // v0.2.124：排除「自己 app 上一段未播完的播报 mp3」，避免重叠播报时被误判成
+            // 「其他程序」→ 第二段不提升音量且 stop 上一段时提前恢复，导致第二段偏小。
+            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx) && !JikongSpeaker.isSelfPlaying()
+            if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
+            !otherPlaying
+        }
+```
+
+以及 import 区（第 1-16 行）**无** `import my.bridge.com.relay.AudioRelayService`。
+
+**改后**（`JikongController.kt`，两处）：
+
+1. import 区新增一行（第 15 行前）：
+   ```kotlin
+   import my.bridge.com.relay.AudioRelayService
+   ```
+
+2. `shouldBoostProvider` 判断（`otherPlaying` 追加 `&& !AudioRelayService.isRunning()`）：
+   ```kotlin
+            // v0.2.124：排除「自己 app 上一段未播完的播报 mp3」……（原注释保留）
+            // v0.2.137：再排除「音频中继」——中继 AudioTrack 用 USAGE_MEDIA 且常驻播放
+            // （对端静音也输出低频底噪），会被 isOtherAppPlaying 误判为「其他程序在播放」，
+            // 导致中继开着时极空播报永不提升。用户拍板简化方案「只判中继」：中继开着就不算
+            // 「其他程序」，照常提升（即使中继与第三方同时播放也提升）。
+            val otherPlaying = SpeakVolumeBoost.isOtherAppPlaying(ctx) &&
+                !JikongSpeaker.isSelfPlaying() &&
+                !AudioRelayService.isRunning()
+            if (!otherPlaying) Timber.d("音量提升决策：无其他程序播放，允许提升")
+            !otherPlaying
+   ```
+
+**设计说明（为什么用 `AudioRelayService.isRunning()`）**：`isRunning()`（companion object 第 133 行）
+返回 `instance?.isServerRunning == true`，是「中继服务是否在运行」的现成对外状态，无需给 AudioRelayService
+加新代码。中继运行期间（含底噪 RECEIVING、就绪 READY、连接中 CONNECTING）一律视为「咱们自己」，符合
+用户「只判中继」的简化意图。`isOtherAppPlaying` 与 `JikongSpeaker.isSelfPlaying()` 均未改动。
+
+**回滚配方**：还原上述两处为「改前原文」（删 import 行 + 恢复单行 `otherPlaying` 判断）。
+`SpeakVolumeBoost.kt` / `AudioRelayService.kt` / `JikongSpeaker.kt` 全程未动。
+
+**触发信号**：
+① 中继开着时极空播报仍不提升音量 → 查「音量提升决策」日志是否命中「无其他程序播放」分支、
+  `AudioRelayService.isRunning()` 是否返回 false（服务实例未正确登记）；
+② 中继关闭后、第三方（网易云/抖音）播放时播报错误提升 → 说明排除范围过宽，回滚本改动；
+③ 编译期找不到 `AudioRelayService` → 检查 import 是否遗漏（本改动已加）。
+
+**验证**：`./gradlew :app:compileDebugKotlin` BUILD SUCCESSFUL（2026-11-13）；真机场景待验证。
+
+---
+
+### v0.2.136 蓝牙关闭→重开「靠近自动连接」失效修复（2026-11-13 实施）
+
+**背景（用户 11-13 反馈 + 代码推演）**：用户明确期望「**关闭蓝牙后系统通知也不消失**，但最主要的是**关闭蓝牙并重新启动后，靠近自动连接功能不能受影响**」。代码推演发现致命缺陷：蓝牙关闭时，系统会先触发底层 GATT 的 `STATE_DISCONNECTED`（只 `setConnected(false)`），随后 `btReceiver` 收到 `ACTION_STATE_CHANGED` 的 `STATE_OFF`——但 **`btReceiver` 只处理 `STATE_ON`，对 `STATE_OFF` 无任何处理**，导致 `autoConnectAttached` 标记**残留为 `true`。蓝牙重开后，`STATE_ON` 分支调 `evaluateInPlace`，但 `evaluateInPlace` 第 105 行 `if (connected || autoConnectAttached || connectInFlight) return` 命中「`autoConnectAttached == true`」直接 return，**永不重挂** → 靠近自动连接静默失效。
+
+> 为什么 `STATE_DISCONNECTED` 回调里**不能**清 `autoConnectAttached`：设备「走远断开」（status=8）是 autoConnect 的核心场景，此时挂起标记必须**保持 true** 让系统后台持续重试；只有「蓝牙被关闭」才是标记残留、需要清理。二者必须区分，清理动作只能放 `btReceiver` 的 `STATE_OFF`。
+
+**改前原文（逐字）**：
+
+1. `JikongProximityService.kt` `btReceiver`（约 123-134 行，**无 STATE_OFF 分支**）：
+   ```kotlin
+   /** 蓝牙开关重启守护：STATE_ON 后重评估（部分 ROM 蓝牙重启后挂起丢失）。 */
+   private val btReceiver = object : BroadcastReceiver() {
+       override fun onReceive(context: Context?, intent: Intent?) {
+           if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+               val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
+               if (state == BluetoothAdapter.STATE_ON) {
+                   Timber.tag(TAG).i("蓝牙已重新开启，重评估挂起")
+                   evaluateInPlace(applicationContext)
+               }
+           }
+       }
+   }
+   ```
+
+2. `JikongBleClient.kt` `onConnectionStateChange` 的 `STATE_DISCONNECTED` 分支（约 379-384 行，**只 setConnected(false)，不清 autoConnectAttached**）：
+   ```kotlin
+   } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+       Timber.tag(TAG).i("GATT 已断开 status=$status")
+       lastDisconnectStatus = status
+       setConnected(false)
+       connectWaiter?.let { w -> connectWaiter = null; w.resume(false) }
+   }
+   ```
+
+3. `JikongProximityService.kt` `updateNotificationText`（约 226-232 行，else 兜底文案）：
+   ```kotlin
+   private fun updateNotificationText() {
+       val text = when {
+           JikongBleClient.connected -> "已连接默认设备"
+           JikongController.instance.manualSuppressed -> "已暂停（极空页断开后不再自动连接）"
+           JikongBleClient.autoConnectAttached -> "监听默认保护板中 · 靠近自动连接"
+           else -> "等待条件满足（演示中/蓝牙未开等）"
+       }
+       ...
+   ```
+   ⚠️ 注：该 else 分支文案本就含「蓝牙未开」，但**蓝牙关闭时无人调用 `updateNotificationText`**，
+   通知仍停留在旧文案「监听默认保护板中 · 靠近自动连接」，与真实状态不符。
+
+**改后**（`JikongProximityService.kt` `btReceiver`，唯一改动点；`JikongBleClient.kt` 未动）：
+
+```kotlin
+    /**
+     * 蓝牙开关重启守护：
+     * - STATE_OFF：摘除 autoConnect 挂起标记（蓝牙关闭时系统断开底层 GATT 但不清
+     *   `autoConnectAttached`，残留会导致重开后 `evaluateInPlace` 的「已挂起」判断
+     *   误命中而永不重挂——v0.2.136 修复）；并刷新通知文案（通知保留，仅文案切到
+     *   「等待条件满足（蓝牙未开）」）。
+     * - STATE_ON：重评估挂起（部分 ROM 蓝牙重启后挂起丢失），并刷新通知文案。
+     */
+    private val btReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
+                when (state) {
+                    BluetoothAdapter.STATE_OFF -> {
+                        Timber.tag(TAG).i("蓝牙已关闭，摘除 autoConnect 挂起标记（防重开失效）")
+                        JikongBleClient.detachAutoConnect()
+                        updateNotificationText()
+                    }
+                    BluetoothAdapter.STATE_ON -> {
+                        Timber.tag(TAG).i("蓝牙已重新开启，重评估挂起")
+                        evaluateInPlace(applicationContext)
+                        updateNotificationText()
+                    }
+                }
+            }
+        }
+    }
+```
+
+**设计说明（为什么这样改）**：
+- `STATE_OFF` 分支调 `JikongBleClient.detachAutoConnect()`：该函数幂等（`if (!autoConnectAttached) return`），
+  内部 `autoConnectAttached=false` + `if (!connected)` 时 disconnect/close/置 null GATT，正是清理残留标记的正确入口。
+  蓝牙关闭时 `connected` 早已被 `STATE_DISCONNECTED` 置 false，走清理分支；极端情况下若仍 `connected=true`，
+  detach 走「只清标记不动链路」分支，同样安全。
+- `STATE_OFF` 调 `updateNotificationText()`：通知**不消失**（前台服务不停止），仅文案落到
+  else 分支「等待条件满足（演示中/蓝牙未开等）」，与用户「通知不消失但文案要准确」的期望一致。
+- `STATE_ON` 补 `updateNotificationText()`：重挂成功后 `autoConnectAttached=true`，通知从
+  「等待条件满足」切回「监听默认保护板中 · 靠近自动连接」，否则重开后通知文案会停留在旧状态。
+- **不改 `STATE_DISCONNECTED` 回调**：设备「走远断开」（status=8）是 autoConnect 的核心场景，
+  必须保持 `autoConnectAttached=true` 让系统后台持续重试；清理只属于「蓝牙被关闭」场景。
+
+**回滚配方**：仅还原 `JikongProximityService.kt` 的 `btReceiver` 为改前原文（上方「改前原文」第 1 条，
+`if (state == BluetoothAdapter.STATE_ON)` 单分支版本）。`JikongBleClient.kt` 全程未动，
+`git checkout <改前提交> -- app/src/main/java/my/bridge/com/jikong/JikongProximityService.kt` 即可一键还原。
+
+**触发信号**：
+① 蓝牙关闭→重开后靠近默认设备**仍不自动连接** → 查日志「蓝牙已关闭，摘除 autoConnect 挂起标记」
+ 与「蓝牙已重新开启，重评估挂起」两条是否都出现，以及 `autoConnectAttached` 是否被正确清 false；
+② 蓝牙关闭后通知**消失**了 → 查 `STATE_OFF` 分支是否误触发了 stopForeground/stopSelf（本改动不应触发）；
+③ 设备走远断开（status=8）后不再自动回连 → 说明有人误在 `STATE_DISCONNECTED` 回调里清了标记，回滚该误改。
+
+**验证**：`./gradlew :app:compileDebugKotlin` BUILD SUCCESSFUL（2026-11-13）；真机场景待验证。
+
+---
+
 ### v0.2.125b 修复 connectHold 与引用计数不配对导致的音量卡满不回（2026-11-10 09:30 实施）
 
 **背景（用户 11-10 09:15 反馈 + 日志实证）**：靠近自动连接连响**两次**蜂鸣（半死链 autoConnect 首连 + 直连重建各 beep 一次）→ 电量播报完成后，媒体音量**没有从最大恢复**（用户手动按音量减键查看，仍接近满）。日志实证：09:12 那次测试「音量提升决策/重申」日志齐全，但**缺「音量恢复」日志**（`后台静默播报音量恢复` 未出现），说明 `end`/`releaseConnectHold` 始终没能把 `boostCount` 减到 0。

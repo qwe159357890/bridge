@@ -19,8 +19,8 @@ android {
         minSdk = 24
         targetSdk = 36
         // 版本号单一来源：release.py 会自动递增并写回此处，CI 打包直接读取。
-        versionCode = 5
-        versionName = "0.2.135"
+        versionCode = 355
+        versionName = "0.2.155"
 
         // VNT 组网（v0.2.131，2.x）：服务端已升级到 VNT 2.0，客户端随升官方 v2.0.12。
         // 官方 v2.0.12 提供 3 套 ABI 的 libvnt_jni.so（arm64-v8a / armeabi-v7a / x86_64），
@@ -116,6 +116,11 @@ dependencies {
 
     // ---- 日志 ----
     implementation(libs.timber)
+
+    // ---- 监控（NVR 集成 v0.2.140）：Media3 ExoPlayer 播放 fMP4 音视频流 / MP4 点播 ----
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.ui)
 
     // ---- 后台周期任务（位置兜底上报 WorkManager）----
     implementation(libs.androidx.work.runtime)

@@ -15,6 +15,31 @@
 | **「本地打包」** | 只做本地打包 | 仅 `assembleDebug`，出本地 APK，**不**推 GitHub、**不**跑 Actions → 落地 `server/data/updates/` + 更新 `update.json` + 唯一留存 |
 | **「远程打包」/「仓库打包」/「GitHub 打包」** | 远程/仓库/GitHub 打包后下载到本地 | 走 GitHub Actions 打包（Actions 内自动 `assembleDebug` 并**自动创建 Release + 上传 APK**）→ 下载 APK 到本地 |
 
+### ★ 「部署到远程服务器」话术约定（2026-11-13 定版）
+
+> 用户说「**部署到远程服务器**」（或「部署」「上线」「发到服务器」等同类说法）时，**统一指下面的 v0.2.135 流程**，目标机器就是**魔百盒（mbh）**，不再泛指其它机器或其它流程。
+
+**默认流程（v0.2.135 流程，已固化）**：
+
+```
+① 本地打包（assembleDebug）→ 落地 server/data/updates/bridge-vX.Y.Z.apk
+② 回填 update.json 的 sha256 / size / released_at（打包后现算）
+③ 唯一留存：删本地 updates/ 旧版本 APK + app/build/.../app-debug.apk
+④ SSH 部署到魔百盒（LAN 192.168.31.30，别名 mbh，免密可用）：
+   a. 备份远程旧版：mv bridge-v旧.apk .bak/  +  cp update.json .bak/update.json.v旧
+   b. scp 新 APK + update.json → /home/qwe159357/software/appClient/server/data/updates/
+   c. 校验远程 sha256 与本地一致
+   d. 重启 supervisor：sudo supervisorctl restart appclient:appclient-server
+⑤ 验证：服务 RUNNING；目录第一层只剩最新 APK（旧版已进 .bak/）
+```
+
+**关键事实（避免再踩坑）**：
+- 目标机器 = 魔百盒（mbh，aarch64 / Armbian，LAN `192.168.31.30`，SSH 账号 `qwe159357 / qwe951753`，免密可用）。**不是**写代码机、不是华合/淘买等其它机器。
+- 远程部署路径：`/home/qwe159357/software/appClient/server/data/updates/`（与本地 `server/data/updates/` 同构）。
+- 服务端 check_update 接口是 `GET /api/updates/latest`，**扫描目录取文件名版本最高的 `.apk`**（`.bak` 子目录不会被扫）；`update.json` 的 `version`/`notes` 用于对外展示与 meta 版本。旧 APK 必须移到 `.bak/` 子目录（不能原地改名留着，否则会被扫描逻辑误判）。
+- 服务由 supervisor 托管：`appclient:appclient-server`（改 update.json / 换 APK 后需 `supervisorctl restart` 重新加载）。
+- 本约定由 2026-11-13 的 v0.2.136 发版固化，此前的 v0.2.135 已按同一流程部署过一次（见 `docs/CHANGELOG.md` v0.2.135 里程碑「部署」段）。
+
 ### ★ 贯穿所有打包方式的铁律
 
 > **只要是「打包」操作，就必须确保本地和远程（GitHub）代码完全一样。**

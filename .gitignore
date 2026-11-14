@@ -51,6 +51,8 @@ gh_token.txt
 
 # 服务端更新目录中的 APK 本体不入库（12MB 级二进制，服务器运行时手动放置）
 server/data/updates/*.apk
+# 历史 APK 备份（.bak，每次发版移入的旧版 APK，纯运行时产物，不入库）
+server/data/updates/.bak/
 # 服务端运行数据（媒体文件等，运行时生成）
 server/data/media/
 # TTS 语音缓存（edge-tts 合成 mp3，运行时按需生成，v0.2.106 起不入库）

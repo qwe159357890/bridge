@@ -104,7 +104,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
      * 避免用恢复出来的旧态误开会话。
      */
     var openWechatToken by remember { mutableIntStateOf(0) }
-    // 底部导航当前选中项：0=主页 1=微信 2=销售 3=设置
+    // 底部导航当前选中项：0=主页 1=微信 2=销售 3=管理 4=设置
+    // （v0.2.147 监控/组网回归主页顶部 Tab，底部工具栏回 5 Tab）
     var selectedBottom by rememberSaveable { mutableIntStateOf(0) }
     // 各页二级 Tab 当前选中项
     var homeTab by rememberSaveable { mutableIntStateOf(0) }
@@ -172,7 +173,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         if (JkUiState.immersive) {
             JkUiState.immersive = false
         } else {
-            homeTab = homeTabOrder.indexOfFirst { it != 5 }.coerceAtLeast(0)
+            homeTab = homeTabOrder.indexOfFirst { it != 6 }.coerceAtLeast(0)
         }
     }
 
@@ -192,7 +193,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
             salesNavVisible = true
             return@BackHandler
         }
-        // v0.2.125：管理后台页返回键已由页内 BackHandler 全权接管（「再按一次返回主页」），
+        // v0.2.15x：工具页（原管理后台位置）返回键由页内 BackHandler 接管（「再按一次返回主页」），
         // 正常组合时不会落到这里；此分支仅作页面未组合时的极兜底。
         if (selectedBottom == 3) {
             selectedBottom = 0
@@ -263,8 +264,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         salesNavVisible = true
                     },
                 )
-                3 -> AdminWebPage(
-                    // v0.2.125：管理页返回键 = 第 1 次提示、窗口内第 2 次回主页（与销售页一致）
+                3 -> ToolsPage(
+                    // 工具页（v0.2.15x 替换原「管理」位置）：占位宫格，返回键默认回主页。
                     onExitToHome = { selectedBottom = 0 },
                 )
                 4 -> SettingsPage(
@@ -336,11 +337,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
-        // 底部导航：销售页沉浸时隐藏（selectedBottom==1 且未点「返回导航」）。
+        // 底部导航：销售页沉浸时隐藏（selectedBottom==3 且未点「返回导航」）。
         // 点击任意 Tab 时重置 salesNavVisible，保证再次进入销售页回到沉浸态。
         // v0.2.67：极空页沉浸（主页顶部 Tab 选中「极空」且 JkUiState.immersive）时同样隐藏。
         val jkImmersive = selectedBottom == 0 &&
-            homeTabOrder.getOrElse(homeTab) { 0 } == 5 &&
+            homeTabOrder.getOrElse(homeTab) { 0 } == 6 &&
             JkUiState.immersive
         if (!((selectedBottom == 1 && !wechatNavVisible) || (selectedBottom == 2 && !salesNavVisible) || jkImmersive)) {
             BridgeBottomBar(
@@ -368,7 +369,7 @@ private val bottomTabs = listOf(
     BottomTab("主页", Icons.Filled.Home),
     BottomTab("微信", Icons.AutoMirrored.Filled.Chat),
     BottomTab("销售", Icons.Filled.Store),
-    BottomTab("管理", Icons.Filled.Dashboard),
+    BottomTab("工具", Icons.Filled.Dashboard),
     BottomTab("设置", Icons.Filled.Settings),
 )
 
@@ -390,7 +391,7 @@ private fun BridgeBottomBar(
             val isSelected = selected == index
             // 微信 Tab 选中用微信绿（用户拍板），其余沿用品牌蓝
             val color = when {
-                isSelected && index == 1 -> WechatTabGreen
+                isSelected && index == 2 -> WechatTabGreen
                 isSelected -> BrandBlue
                 else -> InactiveColor
             }
@@ -403,7 +404,7 @@ private fun BridgeBottomBar(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                if (index == 1 && unreadWechat > 0) {
+                if (index == 2 && unreadWechat > 0) {
                     BadgedBox(badge = { Badge { Text(if (unreadWechat > 99) "99+" else unreadWechat.toString()) } }) {
                         Icon(
                             imageVector = tab.icon,
@@ -440,7 +441,7 @@ fun HomePage(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // v0.2.67：极空页沉浸时隐藏顶部页面 Tab 栏（回主页 = 极空页内双击返回键）
-        if (!(tabOrder.getOrElse(currentTab) { 0 } == 5 && JkUiState.immersive)) {
+        if (!(tabOrder.getOrElse(currentTab) { 0 } == 6 && JkUiState.immersive)) {
             BridgeTabRow(
                 // titles 已按显示顺序解析好（自定义名/默认名）
                 titles = titles,
@@ -449,14 +450,16 @@ fun HomePage(
             )
         }
         // currentTab 语义=「位置」，经顺序表翻译成页面 id 再分发。
-        // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..5，此处防御性钳制。
+        // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..6，此处防御性钳制。
         when (tabOrder.getOrElse(currentTab) { 0 }) {
             0 -> SmsConversationsPage() // 真实短信页（v0.1.34，原假数据骨架）
             1 -> AudioRelayPage() // 音频中继页（手机放音，原通讯录占位已移除）
             2 -> RelaySwitchPage() // 智能控制页（ESP32 继电器，原「发现」假数据占位已替换）
             3 -> ScanPage() // 快递扫码页（v0.1.94 新增，CameraX + ML Kit 纯本地闭环）
-            4 -> VntPage() // 组网页（v0.2.30 新增，VNT 虚拟局域网；服务常驻，页面只订阅）
-            5 -> JikongPage() // 极空保护板页（v0.2.55 新增，BLE 连接 + 状态上报 + 远程控制）
+            4 -> VntPage(onExitToHome = { onTabChange(0) }) // 组网页（v0.2.30 新增，VNT 虚拟局域网）
+            5 -> my.bridge.com.monitor.MonitorPage(onExitToHome = { onTabChange(0) }) // 监控页（v0.2.140 新增）
+            6 -> JikongPage() // 极空保护板页（v0.2.55 新增，BLE 连接 + 状态上报 + 远程控制）
+            7 -> AdminWebPage(onExitToHome = { onTabChange(0) }) // 管理后台页（v0.2.15x 从底部工具栏移入，末尾）
         }
     }
 }
