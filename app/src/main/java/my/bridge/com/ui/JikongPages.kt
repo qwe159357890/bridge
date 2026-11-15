@@ -1779,6 +1779,8 @@ private fun SettingsView(
     var beepManualId by remember { mutableIntStateOf(JikongPrefs.beepManualId(context)) }
     var beepScreenOnId by remember { mutableIntStateOf(JikongPrefs.beepScreenOnId(context)) }
     var beepBroadcastId by remember { mutableIntStateOf(JikongPrefs.beepBroadcastId(context)) }
+    // v0.2.16x 快速熄屏播报间隔（秒，0~3600，默认 5；0=关闭）
+    var quickScreenoffSpeakSec by remember { mutableIntStateOf(JikongPrefs.quickScreenoffSpeakSec(context)) }
     // v0.2.130 BLE 原始报文诊断日志开关（默认关，纯本地设置无远程同步需求）
     var bleHexDumpEnabled by remember { mutableStateOf(JikongPrefs.bleHexDumpEnabled(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
@@ -1980,6 +1982,45 @@ private fun SettingsView(
                 Spacer(Modifier.height(2.dp))
                 Text(
                     "三种连接方式（手动 / 亮屏 / 广播）各配一种提示音，靠耳朵就能分辨这次是哪种方式连上的，无需看日志。连接成功播提示音后，紧接着首帧「播报电量」。点选音色即时试听。",
+                    fontSize = 11.sp, color = c.gray,
+                )
+                // v0.2.16x 快速熄屏播报间隔：熄屏时若「亮屏→熄屏」≤ 阈值且已连接则播报电量/时速
+                Spacer(Modifier.height(10.dp))
+                Text("快速熄屏播报", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = if (quickScreenoffSpeakSec == 0) "" else quickScreenoffSpeakSec.toString(),
+                        onValueChange = { raw ->
+                            val digits = raw.filter { it.isDigit() }
+                            val v = if (digits.isEmpty()) 0 else digits.toIntOrNull()?.coerceIn(0, 3600) ?: 0
+                            quickScreenoffSpeakSec = v
+                            JikongPrefs.setQuickScreenoffSpeakSec(context, v)
+                            controller.forceReport()
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("间隔（秒）", fontSize = 11.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = c.green,
+                            unfocusedBorderColor = c.divider,
+                            focusedTextColor = c.text,
+                            unfocusedTextColor = c.text,
+                            cursorColor = c.green,
+                            focusedContainerColor = c.bg,
+                            unfocusedContainerColor = c.bg,
+                        ),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        if (quickScreenoffSpeakSec == 0) "已关闭" else "秒内熄屏即播",
+                        fontSize = 12.sp, color = c.gray,
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "已连接极空时，快速「点亮→熄灭」屏幕（如连按两次电源键，间隔越短越快）就会播报电量/时速；正常解锁使用手机时亮屏到熄屏间隔远超阈值，不会误播。设为 0 即关闭本功能。",
                     fontSize = 11.sp, color = c.gray,
                 )
             }

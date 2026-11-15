@@ -378,4 +378,21 @@ object JikongPrefs {
     fun beepSoundId(context: Context): Int = beepManualId(context)
 
     fun setBeepSoundId(context: Context, id: Int) = setBeepManualId(context, id)
+
+    // ==================== 快速熄屏播报间隔（v0.2.16x） ====================
+
+    /**
+     * 快速熄屏播报间隔（秒，0~3600，默认 5；0=关闭）。熄屏时若「亮屏→熄屏」间隔
+     * ≤ 本值，且已连接极空，则播报电量/时速（speakDashboardNow）。用户按两次电源键
+     * （先亮屏后熄屏，间隔越短越快）即可主动触发，正常使用手机的亮屏→熄屏间隔远超
+     * 本值，不会误播。0 语义上等价于关闭（间隔不可能为 0），故不再单设开关。
+     */
+    private const val KEY_QUICK_SCREENOFF_SPEAK_SEC = "jikong_quick_screenoff_speak_sec"
+
+    fun quickScreenoffSpeakSec(context: Context): Int =
+        sp(context).getInt(KEY_QUICK_SCREENOFF_SPEAK_SEC, 5).coerceIn(0, 3600)
+
+    fun setQuickScreenoffSpeakSec(context: Context, sec: Int) {
+        sp(context).edit().putInt(KEY_QUICK_SCREENOFF_SPEAK_SEC, sec.coerceIn(0, 3600)).apply()
+    }
 }

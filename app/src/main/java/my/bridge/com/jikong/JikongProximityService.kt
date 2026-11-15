@@ -158,9 +158,36 @@ class JikongProximityService : Service() {
             controller.triggerScreenOnConnect(appCtx)
         }
 
+        /**
+         * 熄屏触发播报（v0.2.16x）：用户快速「点亮→熄灭」屏幕（如连按两次电源键）时，
+         * 若已连接极空且间隔 ≤ [JikongPrefs.quickScreenoffSpeakSec]（默认 5 秒，0=关），
+         * 则播报电量/时速。播报时机在熄屏（用户已主动收屏），不打断操作；正常用手机时
+         * 亮屏→熄屏间隔远超阈值，天然不误播。未连接时直接跳过（不触发连接，保持静默）。
+         */
+        fun onScreenOff(context: Context) {
+            val appCtx = context.applicationContext
+            val thresholdSec = JikongPrefs.quickScreenoffSpeakSec(appCtx)
+            if (thresholdSec <= 0) return   // 0=关闭
+            val now = System.currentTimeMillis()
+            val lastOn = lastScreenOnAt
+            if (lastOn <= 0L) return
+            val elapsedMs = now - lastOn
+            if (elapsedMs < 0 || elapsedMs > thresholdSec * 1000L) return
+            val controller = JikongController.instance
+            controller.attachContext(appCtx)
+            if (controller.manualSuppressed || controller.demoMode) return
+            if (!JikongBleClient.connected) return   // 未连接：不触发连接，静默跳过
+            Timber.tag(TAG).i("快速熄屏触发播报（亮屏→熄屏 %dms ≤ %ds）", elapsedMs, thresholdSec)
+            controller.speakDashboardNow(appCtx)
+        }
+
         @Volatile
         private var lastScreenTriggerAt = 0L
         private const val SCREEN_COOLDOWN_MS = 10_000L
+
+        /** 最近一次亮屏时刻（毫秒），供熄屏播报计算「亮屏→熄屏」间隔。 */
+        @Volatile
+        private var lastScreenOnAt = 0L
     }
 
     private var stopRequested = false
@@ -176,12 +203,17 @@ class JikongProximityService : Service() {
      */
     /**
      * 亮屏监听（v0.2.16x）：ACTION_SCREEN_ON 在屏幕点亮的瞬间广播（电源键/指纹/抬手/
-     * 双击唤醒均触发），无论是否解锁。收到后转交 [onScreenOn] 评估是否主动直连。
+     * 双击唤醒均触发），无论是否解锁。收到后转交 [onScreenOn] 评估是否主动直连，
+     * 并记录亮屏时刻供 [onScreenOff] 计算「亮屏→熄屏」间隔。
      */
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_ON) {
-                onScreenOn(applicationContext)
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_ON -> {
+                    lastScreenOnAt = System.currentTimeMillis()
+                    onScreenOn(applicationContext)
+                }
+                Intent.ACTION_SCREEN_OFF -> onScreenOff(applicationContext)
             }
         }
     }
@@ -210,7 +242,10 @@ class JikongProximityService : Service() {
         super.onCreate()
         createNotificationChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
-        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
+        registerReceiver(screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        })
         promote()
     }
 
