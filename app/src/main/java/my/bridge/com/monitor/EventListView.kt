@@ -280,8 +280,9 @@ fun EventListView(
             }
     }
 
-    // 加载快照缩略图（v0.2.159）：进入 Loading → 成功后 Success → 失败 Failed（可重试）。
-    // force=true 用于失败后点击重试（绕过「已有状态即跳过」的守卫）。
+    // 加载快照缩略图（v0.2.159；v0.2.161 起加磁盘缓存）：先查本地磁盘缓存，命中直接
+    // decode 不触网；未命中网络下载 → 写磁盘缓存 + 落内存。force=true 用于失败后点击
+    // 重试（绕过「已有状态即跳过」的守卫）。
     fun loadThumb(ev: NvrEvent, force: Boolean = false) {
         if (!ev.snapshotExists || ev.snapshotPath.isBlank()) return
         val node = eventNode(ev)
@@ -292,8 +293,12 @@ fun EventListView(
         scope.launch {
             try {
                 val api = NvrApiClient(context)
-                val url = api.snapshotImageUrl(node, ev.snapshotPath)
-                val bytes = withContext(Dispatchers.IO) { api.downloadBytes(url) }
+                var bytes = withContext(Dispatchers.IO) { NvrSnapshotCache.read(context, node, ev.snapshotPath) }
+                if (bytes == null) {
+                    val url = api.snapshotImageUrl(node, ev.snapshotPath)
+                    bytes = withContext(Dispatchers.IO) { api.downloadBytes(url) }
+                    withContext(Dispatchers.IO) { NvrSnapshotCache.write(context, node, ev.snapshotPath, bytes) }
+                }
                 val bmp = withContext(Dispatchers.IO) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
                 if (bmp != null) thumbs = thumbs + (key to ThumbState.Success(bmp))
                 else thumbs = thumbs + (key to ThumbState.Failed)
@@ -329,8 +334,12 @@ fun EventListView(
                     if (path.isNotBlank()) {
                         val snapKey = "${node}|${path}"
                         thumbs = thumbs + (snapKey to ThumbState.Loading)
-                        val url = api.snapshotImageUrl(node, path)
-                        val bytes = withContext(Dispatchers.IO) { api.downloadBytes(url) }
+                        var bytes = withContext(Dispatchers.IO) { NvrSnapshotCache.read(context, node, path) }
+                        if (bytes == null) {
+                            val url = api.snapshotImageUrl(node, path)
+                            bytes = withContext(Dispatchers.IO) { api.downloadBytes(url) }
+                            withContext(Dispatchers.IO) { NvrSnapshotCache.write(context, node, path, bytes) }
+                        }
                         val bmp = withContext(Dispatchers.IO) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
                         if (bmp != null) {
                             thumbs = thumbs + (snapKey to ThumbState.Success(bmp))
