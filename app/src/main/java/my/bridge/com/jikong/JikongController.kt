@@ -57,6 +57,14 @@ class JikongController private constructor() {
         /** GATT status=8：连接监督超时（设备走远/遮挡，信号恢复即可能回连成功）。 */
         const val GATT_STATUS_CONN_TIMEOUT = 8
 
+        // ---- 连接来源标记（v0.2.16x）----
+        /** 连接来源：手动（默认）。 */
+        const val SOURCE_MANUAL = "manual"
+        /** 连接来源：亮屏触发直连。 */
+        const val SOURCE_SCREEN_ON = "screen_on"
+        /** 连接来源：autoConnect 广播建链（不经过 connect() 入口）。 */
+        const val SOURCE_AUTO_CONNECT = "auto_connect"
+
         @Volatile
         private var INSTANCE: JikongController? = null
 
@@ -233,6 +241,19 @@ class JikongController private constructor() {
             JikongPrefs.proximityAutoConnect(it) && JikongPrefs.defaultMac(it).isNotBlank()
         } == true
 
+    // ---- 连接来源标记（v0.2.16x）----
+
+    /**
+     * 最近一次成功连接的来源（SOURCE_MANUAL/SCREEN_ON/AUTO_CONNECT）。供建链成功日志
+     * 与分音蜂鸣读取。autoConnect 广播建链不经过 connect()，其来源在
+     * onConnectionChanged 触点①单独标记。
+     */
+    @Volatile
+    private var lastConnectSource: String = SOURCE_MANUAL
+
+    /** 当前连接的来源（供外部/日志/beep 读取）。 */
+    val connectSource: String get() = lastConnectSource
+
     /**
      * 注入应用上下文（靠近连接服务启动时调用）。autoConnect 建链可能早于任何手动
      * 连接（appContext 原只在 connect() 缓存），缺上下文会导致 proximityModeActive
@@ -240,6 +261,27 @@ class JikongController private constructor() {
      */
     fun attachContext(context: Context) {
         if (appContext == null) appContext = context.applicationContext
+    }
+
+    /**
+     * v0.2.16x：亮屏触发主动直连（供 JikongProximityService 的 SCREEN_ON 接收器调用）。
+     * 在 controller 自有 scope 上异步执行 connect（服务层保持无协程，符合其设计哲学）。
+     * connect 内部已有 connectInFlight 防重入 + 抢占式取消 + 失败回退挂起，无需额外治理。
+     */
+    fun triggerScreenOnConnect(context: Context) {
+        attachContext(context)
+        val ctx = appContext ?: return
+        val mac = JikongPrefs.defaultMac(ctx)
+        if (mac.isBlank()) return
+        scope.launch {
+            try {
+                connect(ctx, mac, source = SOURCE_SCREEN_ON)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "亮屏主动直连异常")
+            }
+        }
     }
 
     /**
@@ -350,7 +392,9 @@ class JikongController private constructor() {
                     clearScanCache()
                     startPolling()
                     proximityAnnouncePending = true   // §2.8 拍板：后台也播（下一帧强制播一次）
-                    Timber.tag(TAG).i("靠近自动连接成功（autoConnect 建链），开始拉数据")
+                    // v0.2.16x：标记来源为 autoConnect 广播建链（供日志与分音蜂鸣）
+                    lastConnectSource = SOURCE_AUTO_CONNECT
+                    Timber.tag(TAG).i("连接成功（来源=autoConnect 广播），开始拉数据")
                 }
                 // v0.2.120：连接成功提示音——覆盖手动 connect 与靠近自动连接两条成功路径。
                 // 演示模式直接改 status、不触发本回调，故此处 connected=true 必为真实 BLE 连接。
@@ -365,7 +409,7 @@ class JikongController private constructor() {
                         if (SpeakVolumeBoost.beginConnectHold(ctx)) {
                             scheduleConnectHoldRelease(ctx, HOLD_FALLBACK_MS)
                         }
-                        JikongSpeaker.beepConnected(ctx)
+                        JikongSpeaker.beepConnected(ctx, lastConnectSource)
                     }
                 }
                 reportStatus()
@@ -407,11 +451,13 @@ class JikongController private constructor() {
 
     // ==================== 连接控制 ====================
 
-    suspend fun connect(context: Context, address: String): Boolean {
+    suspend fun connect(context: Context, address: String, source: String = SOURCE_MANUAL): Boolean {
         // v0.2.93：抢占式终结在飞的连接尝试（自动连接/排队中的旧请求）——resume 其 waiter
         // 并关闭其 GATT，让 mutex 立即可用。否则新请求要等旧尝试满 10s 超时
         // （2026-11-07 用户实证：设默认设备后点扫描延时 10~50s 才变「扫描中」）
         JikongBleClient.cancelPendingConnect()
+        // v0.2.16x：记录本次连接来源，供建链成功日志与分音蜂鸣读取
+        lastConnectSource = source
         return mutex.withLock {
             connectInFlight = true
             try {
@@ -434,6 +480,8 @@ class JikongController private constructor() {
                     // v0.2.91：连接成功即清空扫描暂存（防僵尸）
                     clearScanCache()
                     startPolling()
+                    // v0.2.16x：连接成功日志标明来源（亮屏/手动），便于排查
+                    Timber.tag(TAG).i("连接成功（来源=%s）", source)
                 }
                 ok
             } finally {

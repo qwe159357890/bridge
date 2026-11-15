@@ -102,6 +102,19 @@ class JikongProximityService : Service() {
             }
             val mac = JikongPrefs.defaultMac(appCtx)
             if (mac.isBlank()) return
+
+            // v0.2.16x：按触发方式分流。亮屏模式不挂 autoConnect（纯靠亮屏直连），
+            // 广播/自动模式才挂控制器后台监听。
+            val mode = JikongPrefs.proximityTriggerMode(appCtx)
+            if (mode == JikongPrefs.MODE_SCREEN_ON) {
+                // 亮屏模式：确保不残留 autoConnect 挂起（切换模式即时生效时摘除）
+                if (JikongBleClient.autoConnectAttached) {
+                    Timber.tag(TAG).i("亮屏模式：摘除 autoConnect 挂起（纯亮屏触发）")
+                    JikongBleClient.detachAutoConnect()
+                }
+                return
+            }
+
             if (JikongBleClient.connected || JikongBleClient.autoConnectAttached ||
                 controller.connectInFlight
             ) {
@@ -115,6 +128,39 @@ class JikongProximityService : Service() {
                 Timber.tag(TAG).w("挂起 autoConnect 未成功（蓝牙关/地址无效），待下次评估")
             }
         }
+
+        /**
+         * 亮屏触发主动直连（v0.2.16x）：用户点亮屏幕（SCREEN_ON）时，若触发方式为
+         * 亮屏或自动，则发起一次主动 direct connect，把「靠近后被动等广播命中（~30s）」
+         * 压缩成「亮屏即秒级直连」。10s 冷却防亮灭屏风暴；直连失败由 connect() 的
+         * finally 回退挂起（仅自动模式会重挂，亮屏模式不挂）。
+         */
+        fun onScreenOn(context: Context) {
+            val appCtx = context.applicationContext
+            if (!JikongPrefs.proximityAutoConnect(appCtx)) return
+            val mode = JikongPrefs.proximityTriggerMode(appCtx)
+            if (mode == JikongPrefs.MODE_BROADCAST) return   // 广播模式不响应亮屏
+            val now = System.currentTimeMillis()
+            if (now - lastScreenTriggerAt < SCREEN_COOLDOWN_MS) {
+                Timber.tag(TAG).d("亮屏触发冷却中，跳过（距上次 %dms）", now - lastScreenTriggerAt)
+                return
+            }
+            val controller = JikongController.instance
+            controller.attachContext(appCtx)
+            if (controller.manualSuppressed || controller.demoMode) return
+            if (JikongBleClient.connected || controller.connectInFlight) return
+            val mac = JikongPrefs.defaultMac(appCtx)
+            if (mac.isBlank()) return
+            lastScreenTriggerAt = now
+            Timber.tag(TAG).i("亮屏触发主动直连（mode=%d）", mode)
+            // 复用 controller 抢占式连接（内部 scope 异步执行）；直连失败由 connect() 的
+            // finally 回退挂起（仅自动模式重挂，亮屏模式不挂）。
+            controller.triggerScreenOnConnect(appCtx)
+        }
+
+        @Volatile
+        private var lastScreenTriggerAt = 0L
+        private const val SCREEN_COOLDOWN_MS = 10_000L
     }
 
     private var stopRequested = false
@@ -128,6 +174,18 @@ class JikongProximityService : Service() {
      *   「等待条件满足（蓝牙未开）」）。
      * - STATE_ON：重评估挂起（部分 ROM 蓝牙重启后挂起丢失），并刷新通知文案。
      */
+    /**
+     * 亮屏监听（v0.2.16x）：ACTION_SCREEN_ON 在屏幕点亮的瞬间广播（电源键/指纹/抬手/
+     * 双击唤醒均触发），无论是否解锁。收到后转交 [onScreenOn] 评估是否主动直连。
+     */
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_ON) {
+                onScreenOn(applicationContext)
+            }
+        }
+    }
+
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
@@ -152,6 +210,7 @@ class JikongProximityService : Service() {
         super.onCreate()
         createNotificationChannel()
         registerReceiver(btReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
         promote()
     }
 
@@ -172,6 +231,7 @@ class JikongProximityService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         runCatching { unregisterReceiver(btReceiver) }
+        runCatching { unregisterReceiver(screenReceiver) }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

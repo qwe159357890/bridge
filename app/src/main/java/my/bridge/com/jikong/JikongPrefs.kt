@@ -281,6 +281,28 @@ object JikongPrefs {
         sp(context).edit().putBoolean(KEY_PROXIMITY_AUTO_CONNECT, enabled).apply()
     }
 
+    // ==================== 靠近连接触发方式（v0.2.16x） ====================
+
+    /** 触发方式：自动（默认，广播监听 + 亮屏直连两者都开）。 */
+    const val MODE_AUTO = 0
+    /** 触发方式：广播（纯原模式，只靠 autoConnect 低占空比监听广播，亮屏不触发）。 */
+    const val MODE_BROADCAST = 1
+    /** 触发方式：亮屏（只靠亮屏主动直连，完全不挂 autoConnect，纯亮屏语义，可验证性最好）。 */
+    const val MODE_SCREEN_ON = 2
+
+    private const val KEY_PROXIMITY_TRIGGER_MODE = "jikong_proximity_trigger_mode"
+
+    /**
+     * 靠近连接的触发方式（MODE_AUTO/BROADCAST/SCREEN_ON）。默认 AUTO。
+     * 仅在「靠近自动连接」总开关打开时生效；总开关关时三态无意义（UI 置灰）。
+     */
+    fun proximityTriggerMode(context: Context): Int =
+        sp(context).getInt(KEY_PROXIMITY_TRIGGER_MODE, MODE_AUTO).coerceIn(MODE_AUTO, MODE_SCREEN_ON)
+
+    fun setProximityTriggerMode(context: Context, mode: Int) {
+        sp(context).edit().putInt(KEY_PROXIMITY_TRIGGER_MODE, mode.coerceIn(MODE_AUTO, MODE_SCREEN_ON)).apply()
+    }
+
     // ==================== 半死链握手超时（v0.2.117 / v0.2.119） ====================
 
     /**

@@ -1769,6 +1769,8 @@ private fun SettingsView(
     var odoDiscount by remember { mutableFloatStateOf(JikongPrefs.odoDiscount(context)) }
     // v0.2.107 靠近自动连接开关状态（★ 先于下方 Effect 声明；纯本地开关无远程同步需求）
     var proximityAuto by remember { mutableStateOf(JikongPrefs.proximityAutoConnect(context)) }
+    // v0.2.16x 靠近连接触发方式（自动/广播/亮屏，默认自动；总开关关时置灰）
+    var proximityTriggerMode by remember { mutableIntStateOf(JikongPrefs.proximityTriggerMode(context)) }
     // v0.2.117 半死链握手长等待时长（秒，1~60，默认 12）
     var handshakeLongTimeoutSec by remember { mutableIntStateOf(JikongPrefs.handshakeLongTimeoutSec(context)) }
     // v0.2.119 半死链首连短戳时长（0.1~1.0 秒，默认 1.0）
@@ -1864,6 +1866,50 @@ private fun SettingsView(
                         },
                     )
                 }
+                // v0.2.16x 触发方式三态：自动/广播/亮屏（循环点击，与主题切换同款紧凑样式）
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "触发方式",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (proximityAuto) c.text else c.gray,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    val modeLabel = when (proximityTriggerMode) {
+                        JikongPrefs.MODE_BROADCAST -> "广播"
+                        JikongPrefs.MODE_SCREEN_ON -> "亮屏"
+                        else -> "自动"
+                    }
+                    Text(
+                        modeLabel,
+                        color = if (proximityAuto) JkBlue else c.gray,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clickable(enabled = proximityAuto) {
+                                val next = when (proximityTriggerMode) {
+                                    JikongPrefs.MODE_AUTO -> JikongPrefs.MODE_BROADCAST
+                                    JikongPrefs.MODE_BROADCAST -> JikongPrefs.MODE_SCREEN_ON
+                                    else -> JikongPrefs.MODE_AUTO
+                                }
+                                proximityTriggerMode = next
+                                JikongPrefs.setProximityTriggerMode(context, next)
+                                // 即时生效：切模式立即重评估挂起（切到亮屏摘除、切到广播/自动挂起）
+                                JikongProximityService.evaluateInPlace(context)
+                                controller.forceReport()
+                            }
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    )
+                }
+                Text(
+                    "自动＝广播监听＋亮屏直连两者都开；广播＝纯控制器监听（原模式）；亮屏＝只靠点亮屏幕主动连接（不监听广播，便于单独验证亮屏机制）。",
+                    fontSize = 11.sp,
+                    color = c.gray,
+                )
                 // v0.2.117 半死链握手超时：首连短戳 + 长等待兜底
                 Spacer(Modifier.height(6.dp))
                 JkStepperRow(

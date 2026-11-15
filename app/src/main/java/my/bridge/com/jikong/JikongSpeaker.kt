@@ -134,6 +134,23 @@ object JikongSpeaker {
     }
 
     /**
+     * v0.2.16x：按连接来源分音蜂鸣（固定映射）。
+     * - 亮屏（SOURCE_SCREEN_ON）→ 清脆叮（id 4，高音，与广播/手动明显区分）；
+     * - 广播（SOURCE_AUTO_CONNECT）→ 叮咚（id 5）；
+     * - 手动（默认）→ 沿用用户配置的 beepSoundId（不改变现有体验）。
+     * 目的：用户靠耳朵就能分辨「这次是亮屏连上的还是广播连上的」，无需看日志。
+     */
+    fun beepConnected(context: Context, source: String) {
+        val app = context.applicationContext
+        val id = when (source) {
+            my.bridge.com.jikong.JikongController.SOURCE_SCREEN_ON -> 4
+            my.bridge.com.jikong.JikongController.SOURCE_AUTO_CONNECT -> 5
+            else -> JikongPrefs.beepSoundId(app)
+        }
+        playBeep(app, id)
+    }
+
+    /**
      * 是否正在播放播报 mp3（v0.2.124）：供 [my.bridge.com.jikong.JikongController] 的
      * 音量提升决策排除「自己 app 上一段未播完的播报」——否则重叠播报时上一段会被
      * `isOtherAppPlaying` 误判成「其他程序」，导致第二段不提升音量（且 stop 上一段时
