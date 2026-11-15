@@ -84,6 +84,8 @@
 | [jikong-proximity-autoconnect.md](research/jikong-proximity-autoconnect.md) | **极空「靠近自动连接」需求与调研**（需求最终版 V2、autoConnect 挂起方案选型、省电量化 <0.5%/天、实现设计 §三、握手剖析 §四；**已实现 v0.2.107→109**：`JikongProximityService` + 半死链直连重建自愈） |
 | [jikong-handshake-fix.md](research/jikong-handshake-fix.md) | **极空「半死链唤醒」握手修复专档**（问题冻结、基线锚点、单变量实验纪律、实验①~④矩阵与卡片、兜底方向；结论见 `jikong-summary.md` §四） |
 | [jikong-summary.md](research/jikong-summary.md) | **极空功能阶段性总结**（交付物总览、能力全景、真机验证结论、遗留 TODO、下一步；**功能阶段性完成**，功能怎么用见 `guides/jikong.md`） |
+| [nvr-monitor-integration.md](research/nvr-monitor-integration.md) | **监控功能集成调研（NVR 8200 统一控制台）**（四大功能实时预览/事件/云端/延时摄影 + hub 代理 vs 单节点直连的路径前缀语义 + 客户端直连 `86.74.128.68:8200` REST API；**已实现 v0.2.140→v0.2.160**，里程碑见 `CHANGELOG.md` 顶部「监控功能里程碑」） |
+| [tailscale-integration.md](research/tailscale-integration.md) | **Tailscale 组网集成调研**（tsnet + gomobile 路线、userspace/SOCKS5 vs TUN 模式硬约束、与 VNT 互斥性分析；**v0.2.156 曾接入后因「与 VNT 互斥 + 单向互通」完全回退（v0.2.157 出包），本档仅作「未采用方案」存档**，回退脉络见 `CHANGELOG.md` 监控里程碑「脉络六」） |
 
 ### 管理后台（admin/）
 | 文档 | 说明 |

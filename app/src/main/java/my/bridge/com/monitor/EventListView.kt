@@ -51,6 +51,24 @@ private val EvRed = Color(0xFFE5484D)
 private val EvAmber = Color(0xFFF5A623)
 private val EvBlue = Color(0xFF1A6EE8)
 
+/**
+ * 事件快照缩略图的加载状态（v0.2.159，v0.2.16x 起扩展补图两态）。
+ * 区分互斥状态，供列表缩略图框渲染对应视觉：
+ * - [Loading] 下载中（转圈 + 文字）
+ * - [Success] 已下载（真实快照 Bitmap）
+ * - [Failed]  下载失败（醒目 ⚠️ + 可点击重试）
+ * - [RegenLoading] 补图中（复用 Loading 样式，文字「补图中」）
+ * - [RegenFailed]  补图失败（复用 Failed 样式，文字「无法补图·点按重试」）
+ * 无快照（snapshotExists=false）不进入本状态机，由调用方按 canRegen 分流显示「补图」按钮或「无快照」占位。
+ */
+private sealed class ThumbState {
+    object Loading : ThumbState()
+    class Success(val bitmap: android.graphics.Bitmap) : ThumbState()
+    object Failed : ThumbState()
+    object RegenLoading : ThumbState()
+    object RegenFailed : ThumbState()
+}
+
 /** 事件时间字符串常见格式（服务端 event_time 为 ISO/空格分隔，可能带 3/6 位小数秒），按顺序尝试解析。 */
 private val EVENT_TIME_FORMATS = listOf(
     "yyyy-MM-dd HH:mm:ss.SSSSSS",   // 微秒
@@ -127,8 +145,8 @@ fun EventListView(
     var error by remember { mutableStateOf<String?>(null) }
     var hasMore by remember { mutableStateOf(true) }
 
-    // 快照缩略图缓存：cameraId|snapshotPath -> Bitmap
-    var thumbs by remember { mutableStateOf<Map<String, android.graphics.Bitmap>>(emptyMap()) }
+    // 快照缩略图状态缓存：cameraId|snapshotPath -> ThumbState
+    var thumbs by remember { mutableStateOf<Map<String, ThumbState>>(emptyMap()) }
 
     // 详情弹窗状态
     var detailEvent by remember { mutableStateOf<NvrEvent?>(null) }
@@ -142,13 +160,21 @@ fun EventListView(
     // 事件快照/点播需回退到 selectedNode，否则 URL 缺节点前缀 → 404。
     fun eventNode(ev: NvrEvent): String = ev.node.ifBlank { selectedNode }
 
+    // 摄像头昵称：优先用节点状态里的 cam_nicks 映射（{camera_id: 昵称}），回退 cameraId。
+    // 与 TimelapseView / CloudBrowserView 一致，避免事件列表显示原始 cam_2 之类的 ID。
+    fun camNick(ev: NvrEvent): String {
+        val nodeId = eventNode(ev)
+        return nodes.find { it.id == nodeId }?.camNicks?.get(ev.cameraId) ?: ev.cameraId
+    }
+
+    /** 同摄像头事件合并窗口（毫秒）：窗口内的连续触发合并为一条。 */
+    val EVENT_MERGE_WINDOW_MS = 3000L
+
     /**
-     * 事件去重：同节点 + 同摄像头、事件时间差 ≤ 1 秒（「几乎同一秒」）的相邻事件视为
-     * 同一次触发（服务端抖动/重复触发），跨 level（人形/普通运动）也合并，保留优先级更高的一条：
-     * 有缩略图 > 人形(human) > 普通运动(motion)。优先级相同则保留先出现（时间更新）的那条。
+     * 事件优先级：有缩略图 > 人形(human) > 普通运动(motion)。
+     * 有缩略图 +100，保证「有缩略图」永远压过无图的 level 差异。
      */
     fun eventPriority(ev: NvrEvent): Int {
-        // 有缩略图 +100，保证「有缩略图」永远压过无图的 level 差异
         var p = if (ev.snapshotExists) 100 else 0
         p += when (ev.level) {
             "human" -> 2
@@ -158,22 +184,37 @@ fun EventListView(
         return p
     }
 
+    /**
+     * 事件窗口去重（v0.2.158）：同一「节点 + 摄像头」，与**该摄像头最近一条已保留事件**
+     * 的时间差 ≤ 3 秒即视为同一次触发（同一人经过时的连续抖动/重复上报），合并为一条，
+     * 保留优先级更高的一条（有缩略图 > 人形 > 普通运动；优先级相同保留时间更新者）。
+     *
+     * 与旧版「仅相邻比较」不同：本版按摄像头各自维护最近一条的索引，**不依赖 hub 返回
+     * 的排序**——即使中间夹了其它摄像头的事件，也能正确合并。跨 level 同样合并。
+     */
     fun mergeEvents(list: List<NvrEvent>): List<NvrEvent> {
         if (list.isEmpty()) return list
         val out = mutableListOf<NvrEvent>()
+        // 每个「节点|cameraId」最近一条已保留事件在 out 中的下标
+        val lastIndexByCam = mutableMapOf<String, Int>()
         for (ev in list) {
-            val last = out.lastOrNull()
-            val sameCam = last != null && last.cameraId == ev.cameraId && eventNode(last) == eventNode(ev)
-            val near = sameCam && timeDiffMillis(last.eventTime, ev.eventTime) <= 1000L
-            if (near) {
-                // 保留优先级更高的一条；新条目优先级更高则替换
-                if (eventPriority(ev) > eventPriority(last)) {
-                    out[out.lastIndex] = ev
+            val camKey = "${eventNode(ev)}|${ev.cameraId}"
+            val lastIdx = lastIndexByCam[camKey]
+            if (lastIdx != null) {
+                val last = out[lastIdx]
+                val near = timeDiffMillis(last.eventTime, ev.eventTime) <= EVENT_MERGE_WINDOW_MS
+                if (near) {
+                    // 3 秒窗口内：合并，保留优先级更高的一条
+                    if (eventPriority(ev) > eventPriority(last)) {
+                        out[lastIdx] = ev
+                        // 时间更新者作为新基准（index 不变，事件已替换）
+                    }
+                    continue
                 }
-                // 否则丢弃新条目（相邻重复）
-            } else {
-                out.add(ev)
             }
+            // 超窗 / 该摄像头首条：追加为新事件，记录其下标
+            lastIndexByCam[camKey] = out.size
+            out.add(ev)
         }
         if (out.size != list.size) {
             DiagLog.i(NTAG, "事件去重：${list.size} 条 → ${out.size} 条")
@@ -207,7 +248,7 @@ fun EventListView(
 
     // 事件录像点播：先 locate 拿 remote（本地/缓存/云端），再构造 stream URL。
     // 直接跳 stream 会因 remote 缺失/格式错导致 Source error。
-    fun playEventVideo(node: String, cameraId: String, name: String) {
+    fun playEventVideo(node: String, cameraId: String, name: String, displayName: String = cameraId) {
         scope.launch {
             try {
                 val api = NvrApiClient(context)
@@ -221,7 +262,7 @@ fun EventListView(
                     // cache / cloud：用 locate 返回的 remote
                     api.cloudStreamUrl(node, loc.remote, loc.source)
                 }
-                playing = Pair("${cameraId} · 事件录像", url)
+                playing = Pair("${displayName} · 事件录像", url)
             } catch (e: Exception) {
                 DiagLog.e(NTAG, "事件录像定位失败 ${cameraId}：${e.message}", e)
             }
@@ -239,24 +280,76 @@ fun EventListView(
             }
     }
 
-    // 加载快照缩略图
-    fun loadThumb(ev: NvrEvent) {
+    // 加载快照缩略图（v0.2.159）：进入 Loading → 成功后 Success → 失败 Failed（可重试）。
+    // force=true 用于失败后点击重试（绕过「已有状态即跳过」的守卫）。
+    fun loadThumb(ev: NvrEvent, force: Boolean = false) {
         if (!ev.snapshotExists || ev.snapshotPath.isBlank()) return
         val node = eventNode(ev)
         val key = "${node}|${ev.snapshotPath}"
-        if (thumbs.containsKey(key)) return
+        val cur = thumbs[key]
+        if (!force && cur != null) return  // 已有状态（含 Failed）不重复加载；重试走 force
+        thumbs = thumbs + (key to ThumbState.Loading)
         scope.launch {
             try {
                 val api = NvrApiClient(context)
                 val url = api.snapshotImageUrl(node, ev.snapshotPath)
                 val bytes = withContext(Dispatchers.IO) { api.downloadBytes(url) }
                 val bmp = withContext(Dispatchers.IO) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
-                if (bmp != null) thumbs = thumbs + (key to bmp)
+                if (bmp != null) thumbs = thumbs + (key to ThumbState.Success(bmp))
+                else thumbs = thumbs + (key to ThumbState.Failed)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 切 Tab 导致协程取消：正常现象，静默（避免海量「离开 composition」噪声日志）
                 throw e
             } catch (e: Exception) {
                 DiagLog.w(NTAG, "事件缩略图加载失败 ${ev.cameraId}：${e.message}")
+                thumbs = thumbs + (key to ThumbState.Failed)
+            }
+        }
+    }
+
+    // 补图（v0.2.16x）：无图事件按需补救快照。进入 RegenLoading → POST → ok/already 则
+    // 用服务端返回的 snapshot_path 直接下载缩略图（无需刷新列表），failed 则 RegenFailed。
+    // 守卫与 loadThumb 一致：已有补图状态（含 RegenFailed）不重复触发，重试走 force。
+    // 补图过程态用 regenKey（node|eventId），成功后的图统一落到缩略图键（node|snapshotPath），
+    // 渲染时无图可补走 regenKey、有图走 snapKey，互不干扰。
+    fun regenThumb(ev: NvrEvent, force: Boolean = false) {
+        if (ev.eventId.isBlank()) return
+        val node = eventNode(ev)
+        val regenKey = "${node}|${ev.eventId}"
+        val cur = thumbs[regenKey]
+        if (!force && cur != null) return
+        thumbs = thumbs + (regenKey to ThumbState.RegenLoading)
+        scope.launch {
+            try {
+                val api = NvrApiClient(context)
+                val res = withContext(Dispatchers.IO) { api.regenSnapshot(node, ev.eventId) }
+                if (res.status == "ok" || res.status == "already") {
+                    // 补图成功/已有图：服务端已回填 snapshot_path，直接用返回路径下载缩略图
+                    val path = res.snapshotPath.ifBlank { ev.snapshotPath }
+                    if (path.isNotBlank()) {
+                        val snapKey = "${node}|${path}"
+                        thumbs = thumbs + (snapKey to ThumbState.Loading)
+                        val url = api.snapshotImageUrl(node, path)
+                        val bytes = withContext(Dispatchers.IO) { api.downloadBytes(url) }
+                        val bmp = withContext(Dispatchers.IO) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                        if (bmp != null) {
+                            thumbs = thumbs + (snapKey to ThumbState.Success(bmp))
+                            // 同步更新事件对象：snapshotExists=true + 新 snapshotPath，渲染切到有图分支
+                            events = events.map { if (it.eventId == ev.eventId && eventNode(it) == node) it.copy(snapshotExists = true, snapshotPath = path) else it }
+                        } else {
+                            thumbs = thumbs + (regenKey to ThumbState.RegenFailed)
+                        }
+                    } else {
+                        thumbs = thumbs + (regenKey to ThumbState.RegenFailed)
+                    }
+                } else {
+                    thumbs = thumbs + (regenKey to ThumbState.RegenFailed)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DiagLog.w(NTAG, "事件补图失败 ${ev.cameraId}：${e.message}")
+                thumbs = thumbs + (regenKey to ThumbState.RegenFailed)
             }
         }
     }
@@ -306,23 +399,39 @@ fun EventListView(
             ) {
                 items(events, key = { it.cameraId + it.eventTime + eventNode(it) }) { ev ->
                     val node = eventNode(ev)
-                    val key = "${node}|${ev.snapshotPath}"
-                    loadThumb(ev)
+                    val snapKey = "${node}|${ev.snapshotPath}"
+                    val regenKey = "${node}|${ev.eventId}"
+                    if (ev.snapshotExists && ev.snapshotPath.isNotBlank()) {
+                        loadThumb(ev)
+                    }
+                    // 有图走缩略图状态机；无图可补走补图状态机；无图不可补为 null（显示无快照占位）
+                    val thumbState = when {
+                        ev.snapshotExists -> thumbs[snapKey]
+                        ev.canRegen -> thumbs[regenKey]
+                        else -> null
+                    }
                     EventItem(
                         event = ev,
-                        thumb = thumbs[key],
+                        thumbState = thumbState,
+                        camNick = camNick(ev),
                         nodeNick = nodes.find { it.id == node }?.nick ?: ev.nodeNick,
                         onClick = {
                             detailEvent = ev
-                            detailBitmap = thumbs[key]
+                            detailBitmap = (thumbState as? ThumbState.Success)?.bitmap
                         },
+                        onRetryThumb = if (thumbState is ThumbState.Failed) {
+                            { loadThumb(ev, force = true) }
+                        } else null,
+                        onRegen = if (ev.canRegen && !ev.snapshotExists && thumbState != ThumbState.RegenLoading) {
+                            { regenThumb(ev, force = thumbState is ThumbState.RegenFailed) }
+                        } else null,
                         onPlayVideo = {
                             // 关联录像点播：先 locate 拿 remote，再 stream（否则 Source error）
                             val camId = ev.cameraId
                             val name = ev.segmentName
                             if (name.isNotBlank()) {
                                 DiagLog.i(NTAG, "事件录像点播 ${ev.cameraId} segment=${name}")
-                                playEventVideo(node, camId, name)
+                                playEventVideo(node, camId, name, camNick(ev))
                             } else {
                                 DiagLog.w(NTAG, "事件 ${ev.cameraId} 无关联录像（segment_name 为空）")
                             }
@@ -343,7 +452,7 @@ fun EventListView(
         val name = ev.segmentName
         if (detailBitmap != null) {
             ZoomableImageView(
-                title = "${ev.cameraId} · ${if (ev.level == "human") "人形事件" else "运动事件"}",
+                title = "${camNick(ev)} · ${if (ev.level == "human") "人形事件" else "运动事件"}",
                 subtitle = formatEventTime(ev.eventTime),
                 bitmap = detailBitmap!!,
                 onClose = { detailEvent = null },
@@ -351,7 +460,7 @@ fun EventListView(
                 onAction = if (name.isNotBlank()) {
                     {
                         detailEvent = null
-                        playEventVideo(node, camId, name)
+                        playEventVideo(node, camId, name, camNick(ev))
                     }
                 } else null,
             )
@@ -360,7 +469,7 @@ fun EventListView(
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { detailEvent = null },
                 title = {
-                    Text("${ev.cameraId} · ${if (ev.level == "human") "人形事件" else "运动事件"}")
+                    Text("${camNick(ev)} · ${if (ev.level == "human") "人形事件" else "运动事件"}")
                 },
                 text = {
                     Column {
@@ -374,7 +483,7 @@ fun EventListView(
                         onClick = {
                             detailEvent = null
                             if (name.isNotBlank()) {
-                                playEventVideo(node, camId, name)
+                                playEventVideo(node, camId, name, camNick(ev))
                             }
                         },
                         enabled = name.isNotBlank(),
@@ -402,9 +511,12 @@ fun EventListView(
 @Composable
 private fun EventItem(
     event: NvrEvent,
-    thumb: android.graphics.Bitmap?,
+    thumbState: ThumbState?,
+    camNick: String,
     nodeNick: String,
     onClick: () -> Unit,
+    onRetryThumb: (() -> Unit)?,
+    onRegen: (() -> Unit)?,
     onPlayVideo: () -> Unit,
 ) {
     Row(
@@ -415,17 +527,93 @@ private fun EventItem(
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 缩略图
+        // 缩略图：区分「无快照 / 下载中 / 失败(可重试) / 成功」
         Box(
             modifier = Modifier
                 .size(width = 84.dp, height = 62.dp)
                 .background(Color.Black, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            if (thumb != null) {
-                Image(bitmap = thumb.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            } else {
-                Text(if (event.level == "human") "🚶" else "🐕", fontSize = 24.sp)
+            when {
+                !event.snapshotExists && !event.canRegen -> {
+                    // 无快照且不可补：灰色占位 + 文案（与加载中/失败明确区分）
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("🈳", fontSize = 20.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text("无快照", fontSize = 9.sp, color = Color(0xFF9AA0A6))
+                    }
+                }
+                !event.snapshotExists && event.canRegen -> {
+                    // 无图但可补：按补图状态分流（初始/失败=「⟳ 补图」按钮，进行中=转圈「补图中」）
+                    when (thumbState) {
+                        is ThumbState.RegenLoading -> {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = EvBlue)
+                                Spacer(Modifier.height(3.dp))
+                                Text("补图中", fontSize = 9.sp, color = EvBlue)
+                            }
+                        }
+                        is ThumbState.RegenFailed -> {
+                            // 补图失败：⚠️ + 点按重试（重新 POST）
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .then(if (onRegen != null) Modifier.clickable { onRegen() } else Modifier),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("⚠️", fontSize = 20.sp)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("无法补图·点按重试", fontSize = 8.sp, color = EvAmber, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                }
+                            }
+                        }
+                        else -> {
+                            // 初始可补：⟳ 补图 按钮
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .then(if (onRegen != null) Modifier.clickable { onRegen() } else Modifier),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("⟳", fontSize = 20.sp, color = EvBlue)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("补图", fontSize = 9.sp, color = EvBlue)
+                                }
+                            }
+                        }
+                    }
+                }
+                thumbState == null -> {
+                    // 尚未开始加载（即将进入 Loading）
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFF9AA0A6))
+                }
+                thumbState is ThumbState.Loading -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = EvBlue)
+                        Spacer(Modifier.height(3.dp))
+                        Text("下载中", fontSize = 9.sp, color = EvBlue)
+                    }
+                }
+                thumbState is ThumbState.Failed -> {
+                    // 失败：醒目 ⚠️ + 可点击重试
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(if (onRetryThumb != null) Modifier.clickable { onRetryThumb() } else Modifier),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("⚠️", fontSize = 20.sp)
+                            Spacer(Modifier.height(2.dp))
+                            Text(if (onRetryThumb != null) "加载失败·点按重试" else "加载失败", fontSize = 8.sp, color = EvAmber, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                    }
+                }
+                thumbState is ThumbState.Success -> {
+                    Image(bitmap = thumbState.bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
             }
         }
         Spacer(Modifier.width(12.dp))
@@ -444,7 +632,7 @@ private fun EventItem(
                     )
                 }
                 Spacer(Modifier.width(6.dp))
-                Text(event.cameraId, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Text(camNick, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
             }
             Spacer(Modifier.height(4.dp))
             Text(formatEventTime(event.eventTime), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

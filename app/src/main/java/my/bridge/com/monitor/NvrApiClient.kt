@@ -8,6 +8,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,6 +67,17 @@ class NvrApiClient(
             ?.build()
             ?: throw IllegalStateException("监控服务地址非法：${base()}")
         val b = Request.Builder().url(url).get()
+        if (token().isNotEmpty()) b.header("X-API-Token", token())
+        return b.build()
+    }
+
+    /** 构造带令牌头的 POST 请求（无请求体；补图等触发类端点）。 */
+    private fun reqPost(path: String): Request {
+        val url = base().toHttpUrlOrNull()?.newBuilder()
+            ?.addPathSegments(path.trimStart('/'))
+            ?.build()
+            ?: throw IllegalStateException("监控服务地址非法：${base()}")
+        val b = Request.Builder().url(url).post(ByteArray(0).toRequestBody(null))
         if (token().isNotEmpty()) b.header("X-API-Token", token())
         return b.build()
     }
@@ -224,11 +236,13 @@ class NvrApiClient(
             val o = arr.optJSONObject(i) ?: continue
             items.add(
                 NvrEvent(
+                    eventId = o.optString("event_id"),
                     cameraId = o.optString("camera_id"),
                     level = o.optString("level"),
                     eventTime = o.optString("event_time"),
                     snapshotPath = o.optString("snapshot_path"),
                     snapshotExists = o.optBoolean("snapshot_exists"),
+                    canRegen = o.optBoolean("can_regen", false),
                     segmentName = o.optString("segment_name"),
                     node = o.optString("node"),
                     nodeNick = o.optString("node_nick"),
@@ -242,6 +256,21 @@ class NvrApiClient(
             items = items,
         ).also {
             DiagLog.i(NTAG, "事件列表 node=${node.ifBlank { "全部" }} level=${level.ifBlank { "全部" }} p$page 返回 ${items.size}/${it.total}")
+        }
+    }
+
+    /** 事件补图（v0.2.16x）：无图事件按需补救一张快照（服务端三级降级：本地段→点播缓存→云端封面）。
+     *  node 空=直连单节点 /api/events/{id}/regen_snapshot，否则经 hub 代理 /<node>/...。
+     *  服务端护栏：全局并发=1 + 同摄像头 60s 冷却；APP 端只需禁用重复点击。 */
+    fun regenSnapshot(node: String, eventId: String): RegenResult {
+        val path = if (node.isBlank()) "/api/events/$eventId/regen_snapshot" else "/$node/api/events/$eventId/regen_snapshot"
+        val json = executeJson(reqPost(path))
+        return RegenResult(
+            status = json.optString("status"),
+            message = json.optString("message"),
+            snapshotPath = json.optString("snapshot_path"),
+        ).also {
+            DiagLog.i(NTAG, "事件补图 node=${node.ifBlank { "全部" }} id=$eventId → ${it.status}（${it.message}）")
         }
     }
 
@@ -397,11 +426,13 @@ data class NvrCamera(
 )
 
 data class NvrEvent(
+    val eventId: String,
     val cameraId: String,
     val level: String,
     val eventTime: String,
     val snapshotPath: String,
     val snapshotExists: Boolean,
+    val canRegen: Boolean = false,
     val segmentName: String,
     val node: String,
     val nodeNick: String,
@@ -412,6 +443,13 @@ data class NvrEventPage(
     val page: Int,
     val pageSize: Int,
     val items: List<NvrEvent>,
+)
+
+/** 事件补图结果（POST /api/events/{id}/regen_snapshot 返回）。 */
+data class RegenResult(
+    val status: String,      // ok / already / failed
+    val message: String,
+    val snapshotPath: String,
 )
 
 data class NvrCloudItem(
