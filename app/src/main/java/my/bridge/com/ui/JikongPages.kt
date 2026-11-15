@@ -1775,8 +1775,10 @@ private fun SettingsView(
     var handshakeLongTimeoutSec by remember { mutableIntStateOf(JikongPrefs.handshakeLongTimeoutSec(context)) }
     // v0.2.119 半死链首连短戳时长（0.1~1.0 秒，默认 1.0）
     var handshakeShortTimeoutSec by remember { mutableFloatStateOf(JikongPrefs.handshakeShortTimeoutSec(context)) }
-    // v0.2.120 连接成功提示音（1~5，默认 2=双嘀）
-    var beepSoundId by remember { mutableIntStateOf(JikongPrefs.beepSoundId(context)) }
+    // v0.2.120 连接成功提示音（1~5）；v0.2.16x 拆成三来源分别配置
+    var beepManualId by remember { mutableIntStateOf(JikongPrefs.beepManualId(context)) }
+    var beepScreenOnId by remember { mutableIntStateOf(JikongPrefs.beepScreenOnId(context)) }
+    var beepBroadcastId by remember { mutableIntStateOf(JikongPrefs.beepBroadcastId(context)) }
     // v0.2.130 BLE 原始报文诊断日志开关（默认关，纯本地设置无远程同步需求）
     var bleHexDumpEnabled by remember { mutableStateOf(JikongPrefs.bleHexDumpEnabled(context)) }
     // v0.2.102：管理后台改播报设置 → 命令下发 → Prefs 已被改 → tick 自增 → 这里重读刷新
@@ -1945,38 +1947,39 @@ private fun SettingsView(
                     "靠近自动连接后，前两次用「首连短戳时长」快速唤醒保护板，第三次起用「长等待时长」耐心等它苏醒出数据。短戳越小唤醒越快（实测 0.1~1 秒内都可用），长等待兜底防反复空转。可多试几个值，日志会记录每次实际连接时长，便于找到最优值。",
                     fontSize = 11.sp, color = c.gray,
                 )
-                // v0.2.120 连接成功提示音：5 选 1，点选即试听
+                // v0.2.120 连接成功提示音；v0.2.16x 拆成三来源分别配置：5 选 1，点选即试听
                 Spacer(Modifier.height(10.dp))
                 Text("连接成功提示音", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.text)
                 Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                ) {
-                    (1..5).forEach { id ->
-                        val selected = beepSoundId == id
-                        Text(
-                            JikongSpeaker.beepName(id),
-                            fontSize = 12.sp,
-                            color = if (selected) Color.White else c.gray,
-                            modifier = Modifier
-                                .background(
-                                    if (selected) JkBlue else c.bg,
-                                    RoundedCornerShape(6.dp),
-                                )
-                                .clickable {
-                                    beepSoundId = id
-                                    JikongPrefs.setBeepSoundId(context, id)
-                                    JikongSpeaker.playBeep(context, id)   // 选中即试听
-                                    controller.forceReport()
-                                }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                    }
-                }
+                // 手动连接提示音
+                BeepSoundRow("手动连接", beepManualId,
+                    onSelect = { id ->
+                        beepManualId = id
+                        JikongPrefs.setBeepManualId(context, id)
+                        JikongSpeaker.playBeep(context, id)
+                        controller.forceReport()
+                    })
+                Spacer(Modifier.height(8.dp))
+                // 亮屏连接提示音
+                BeepSoundRow("亮屏连接", beepScreenOnId,
+                    onSelect = { id ->
+                        beepScreenOnId = id
+                        JikongPrefs.setBeepScreenOnId(context, id)
+                        JikongSpeaker.playBeep(context, id)
+                        controller.forceReport()
+                    })
+                Spacer(Modifier.height(8.dp))
+                // 广播连接提示音
+                BeepSoundRow("广播连接", beepBroadcastId,
+                    onSelect = { id ->
+                        beepBroadcastId = id
+                        JikongPrefs.setBeepBroadcastId(context, id)
+                        JikongSpeaker.playBeep(context, id)
+                        controller.forceReport()
+                    })
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "连接成功时播一声提示音，紧接着首帧会「播报电量」；两个声音的间隔就是「连接成功 → 首帧数据」的耗时，无需看日志也能估算。点选音色即时试听。",
+                    "三种连接方式（手动 / 亮屏 / 广播）各配一种提示音，靠耳朵就能分辨这次是哪种方式连上的，无需看日志。连接成功播提示音后，紧接着首帧「播报电量」。点选音色即时试听。",
                     fontSize = 11.sp, color = c.gray,
                 )
             }
@@ -2350,6 +2353,42 @@ private fun JkStepperRow(
             "＋", fontSize = 16.sp, color = JkBlue, fontWeight = FontWeight.Bold,
             modifier = Modifier.clickable(onClick = onPlus).padding(horizontal = 10.dp, vertical = 2.dp),
         )
+    }
+}
+
+/**
+ * v0.2.16x：连接成功提示音按来源的一组 5 选 1（点选即试听）。
+ * [label] 为小节标题（如「手动连接」「亮屏连接」「广播连接」），[selectedId] 当前选中音色，
+ * [onSelect] 选中回调（调用方负责持久化 + 试听 + forceReport）。
+ */
+@Composable
+private fun BeepSoundRow(
+    label: String,
+    selectedId: Int,
+    onSelect: (Int) -> Unit,
+) {
+    val c = LocalJkColors.current
+    Text(label, fontSize = 12.sp, color = c.gray)
+    Spacer(Modifier.height(4.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    ) {
+        (1..5).forEach { id ->
+            val selected = selectedId == id
+            Text(
+                JikongSpeaker.beepName(id),
+                fontSize = 12.sp,
+                color = if (selected) Color.White else c.gray,
+                modifier = Modifier
+                    .background(
+                        if (selected) JkBlue else c.bg,
+                        RoundedCornerShape(6.dp),
+                    )
+                    .clickable { onSelect(id) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+        }
     }
 }
 

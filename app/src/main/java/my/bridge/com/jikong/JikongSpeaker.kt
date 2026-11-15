@@ -134,18 +134,19 @@ object JikongSpeaker {
     }
 
     /**
-     * v0.2.16x：按连接来源分音蜂鸣（固定映射）。
-     * - 亮屏（SOURCE_SCREEN_ON）→ 清脆叮（id 4，高音，与广播/手动明显区分）；
-     * - 广播（SOURCE_AUTO_CONNECT）→ 叮咚（id 5）；
-     * - 手动（默认）→ 沿用用户配置的 beepSoundId（不改变现有体验）。
-     * 目的：用户靠耳朵就能分辨「这次是亮屏连上的还是广播连上的」，无需看日志。
+     * v0.2.16x：按连接来源分音蜂鸣（用户分别配置，默认值保留原固定映射的分音语义）。
+     * - 亮屏（SOURCE_SCREEN_ON）→ [JikongPrefs.beepScreenOnId]（默认 4 清脆叮）；
+     * - 广播（SOURCE_AUTO_CONNECT）→ [JikongPrefs.beepBroadcastId]（默认 5 叮咚）；
+     * - 手动（默认）→ [JikongPrefs.beepManualId]（默认 2 双嘀）。
+     * 目的：用户靠耳朵就能分辨「这次是亮屏连上的还是广播连上的」，且音色可在设置页
+     * 分别自选（三组 5 选 1），无需看日志。
      */
     fun beepConnected(context: Context, source: String) {
         val app = context.applicationContext
         val id = when (source) {
-            my.bridge.com.jikong.JikongController.SOURCE_SCREEN_ON -> 4
-            my.bridge.com.jikong.JikongController.SOURCE_AUTO_CONNECT -> 5
-            else -> JikongPrefs.beepSoundId(app)
+            my.bridge.com.jikong.JikongController.SOURCE_SCREEN_ON -> JikongPrefs.beepScreenOnId(app)
+            my.bridge.com.jikong.JikongController.SOURCE_AUTO_CONNECT -> JikongPrefs.beepBroadcastId(app)
+            else -> JikongPrefs.beepManualId(app)
         }
         playBeep(app, id)
     }

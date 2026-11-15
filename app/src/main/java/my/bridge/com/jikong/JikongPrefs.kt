@@ -336,19 +336,46 @@ object JikongPrefs {
         sp(context).edit().putInt(KEY_HANDSHAKE_LONG_TIMEOUT_SEC, sec.coerceIn(1, 60)).apply()
     }
 
-    // ==================== 连接成功提示音（v0.2.120） ====================
+    // ==================== 连接成功提示音（v0.2.120 / v0.2.16x 拆分三来源） ====================
 
     /**
-     * 连接成功提示音 ID（1~5，默认 2=双嘀）。
-     * 连接成功（GATT 建链、开始拉数据）时 beep 一声，配合首帧「播报电量」让用户无需看日志
-     * 也能听出「连接成功 → 首帧数据」的耗时。设置页可选 5 种音色并即时试听。
+     * 连接成功提示音按「连接来源」分别配置（1~5）。v0.2.16x 起从单一 [beepSoundId]
+     * 拆成三个独立键，让用户靠耳朵分辨「这次是手动、亮屏还是广播连上的」：
+     * - 手动（SOURCE_MANUAL）→ [beepManualId]，默认 2=双嘀（沿用旧默认）；
+     * - 亮屏（SOURCE_SCREEN_ON）→ [beepScreenOnId]，默认 4=清脆叮（高音，与广播/手动区分）；
+     * - 广播（SOURCE_AUTO_CONNECT）→ [beepBroadcastId]，默认 5=叮咚。
+     * 保留 [beepSoundId]/[setBeepSoundId] 作手动来源的别名，兼容既有调用与远程同步。
      */
-    private const val KEY_BEEP_SOUND_ID = "jikong_beep_sound_id"
+    private const val KEY_BEEP_MANUAL_ID = "jikong_beep_manual_id"
+    private const val KEY_BEEP_SCREEN_ON_ID = "jikong_beep_screen_on_id"
+    private const val KEY_BEEP_BROADCAST_ID = "jikong_beep_broadcast_id"
 
-    fun beepSoundId(context: Context): Int =
-        sp(context).getInt(KEY_BEEP_SOUND_ID, 2).coerceIn(1, 5)
+    /** 手动连接提示音 ID（1~5，默认 2=双嘀）。 */
+    fun beepManualId(context: Context): Int =
+        sp(context).getInt(KEY_BEEP_MANUAL_ID, 2).coerceIn(1, 5)
 
-    fun setBeepSoundId(context: Context, id: Int) {
-        sp(context).edit().putInt(KEY_BEEP_SOUND_ID, id.coerceIn(1, 5)).apply()
+    fun setBeepManualId(context: Context, id: Int) {
+        sp(context).edit().putInt(KEY_BEEP_MANUAL_ID, id.coerceIn(1, 5)).apply()
     }
+
+    /** 亮屏直连提示音 ID（1~5，默认 4=清脆叮）。 */
+    fun beepScreenOnId(context: Context): Int =
+        sp(context).getInt(KEY_BEEP_SCREEN_ON_ID, 4).coerceIn(1, 5)
+
+    fun setBeepScreenOnId(context: Context, id: Int) {
+        sp(context).edit().putInt(KEY_BEEP_SCREEN_ON_ID, id.coerceIn(1, 5)).apply()
+    }
+
+    /** 广播建链提示音 ID（1~5，默认 5=叮咚）。 */
+    fun beepBroadcastId(context: Context): Int =
+        sp(context).getInt(KEY_BEEP_BROADCAST_ID, 5).coerceIn(1, 5)
+
+    fun setBeepBroadcastId(context: Context, id: Int) {
+        sp(context).edit().putInt(KEY_BEEP_BROADCAST_ID, id.coerceIn(1, 5)).apply()
+    }
+
+    /** 手动连接提示音别名（= [beepManualId]，兼容旧调用与远程同步语义）。 */
+    fun beepSoundId(context: Context): Int = beepManualId(context)
+
+    fun setBeepSoundId(context: Context, id: Int) = setBeepManualId(context, id)
 }
