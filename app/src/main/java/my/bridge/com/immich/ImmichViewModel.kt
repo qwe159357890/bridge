@@ -14,26 +14,35 @@ import my.bridge.com.core.common.DiagLog
 private const val NTAG = "相册"
 
 /**
- * Immich 相册功能视图模型（接 API 阶段，2026-11-16）。
+ * Immich 相册功能视图模型（接 API 阶段，2026-11-16；2026-11-16 二轮反馈修复）。
  *
- * 承载跨 Tab 共享状态：时间线（分页加载 + 三级分组）、相册列表、人物列表、资产统计、
- * 分类结果网格（收藏/最近/视频/回收站/归档/人物/文件名搜索共用）。
+ * 承载跨 Tab 共享状态：时间线（分页加载 + 三级分组 + 本地未上传资产合并）、
+ * 相册列表、人物列表、资产统计、分类结果网格（收藏/最近/视频/回收站/归档/人物/文件名共用）。
  * 网络调用统一切 IO 线程，UI 经 StateFlow 订阅（同 MonitorViewModel 范式）。
  *
- * 未配置账号时进入「待配置」态（UI 显示配置引导，真实数据为空）。
+ * 本地资产合并（用户反馈第 5 条，借鉴 Immich 原版）：MediaStore 本地照片/视频与
+ * 云端资产按文件名匹配，未匹配到的（最近 40 天内）作为「未上传」资产并入时间线，
+ * 网格块带角标区分（☁ 已备份 / ⬆ 未上传）。
  */
 class ImmichViewModel : ViewModel() {
 
     /** 分页大小（search/metadata 单页；1000 太重 500 折中）。 */
     private val pageSize = 500
 
+    /** 本地候选资产仅取最近 N 天（云端分页只加载了最近部分，窗口外匹配会误报未上传）。 */
+    private val localWindowDays = 40
+
     // ============ 时间线（照片 Tab） ============
 
-    /** 时间线全部资产（降序累计；分组由 UI 用 ImmichTimeline.group 现算）。 */
+    /** 时间线云端资产（降序累计；分组由 UI 用 ImmichTimeline.group 现算）。 */
     private val _timelineAssets = MutableStateFlow<List<ImmichAsset>>(emptyList())
     val timelineAssets: StateFlow<List<ImmichAsset>> = _timelineAssets
 
-    /** 时间线三级分组结果（缓存避免每次重组重算）。 */
+    /** 本地未上传资产（与云端按文件名匹配后剩余，最近 40 天窗口内）。 */
+    private val _localOnlyAssets = MutableStateFlow<List<ImmichAsset>>(emptyList())
+    val localOnlyAssets: StateFlow<List<ImmichAsset>> = _localOnlyAssets
+
+    /** 时间线三级分组结果（云端 + 本地合并后；缓存避免每次重组重算）。 */
     private val _timelineGroups = MutableStateFlow<List<ImmichTimeline.ImmichGroup>>(emptyList())
     val timelineGroups: StateFlow<List<ImmichTimeline.ImmichGroup>> = _timelineGroups
 
@@ -106,6 +115,7 @@ class ImmichViewModel : ViewModel() {
      *
      * :param type: IMAGE / VIDEO
      * :param personId: 人物 ID
+     * :param albumId: 相册 ID（截图分类）
      * :param favorite: 收藏过滤
      * :param archived: 归档过滤
      * :param trashed: 回收站过滤
@@ -124,8 +134,8 @@ class ImmichViewModel : ViewModel() {
     )
 
     /**
-     * 首次进入拉全量基础数据（时间线首页 + 相册 + 人物 + 统计）。
-     * 时间线分组按 today 现算（跨天进入自动重算）。
+     * 进入相册页拉全量基础数据（时间线首页刷新 + 元数据 + 本地资产扫描）。
+     * 时间线每次进入都刷新（拍照备份后回相册页能看到新照片——用户反馈第 4 条）。
      *
      * :param context: 任意 Context（ApiClient 用 applicationContext）
      */
@@ -135,8 +145,9 @@ class ImmichViewModel : ViewModel() {
             DiagLog.i(NTAG, "未配置服务端账号，跳过加载（引导用户去设置页）")
             return
         }
-        if (timelinePage == 0) loadTimelinePage(context)
-        if (_albums.value.isEmpty()) loadMeta(context)
+        loadTimelinePage(context)
+        loadMeta(context)
+        loadLocalMedia(context)
     }
 
     /**
@@ -151,15 +162,16 @@ class ImmichViewModel : ViewModel() {
             _error.value = null
             try {
                 val api = ImmichApiClient(context.applicationContext)
-                val page = withContext(Dispatchers.IO) { api.searchAssets(timelinePage + 1, pageSize) }
+                val target = timelinePage + 1
+                val page = withContext(Dispatchers.IO) { api.searchAssets(target, pageSize) }
                 timelinePage += 1
                 _timelineAssets.value = _timelineAssets.value + page.items
-                _timelineGroups.value = ImmichTimeline.group(_timelineAssets.value)
+                recomputeTimeline()
                 _timelineExhausted.value = !page.hasNext
-                DiagLog.i(NTAG, "时间线累计 ${_timelineAssets.value.size} 条（p$timelinePage exhausted=${page.hasNext.not()}）")
+                DiagLog.i(NTAG, "时间线累计 ${_timelineAssets.value.size} 条（p$target exhausted=${page.hasNext.not()}）")
             } catch (e: Exception) {
-                _error.value = e.message ?: "加载时间线失败"
-                DiagLog.e(NTAG, "时间线加载失败：${_error.value}", e)
+                _error.value = "时间线加载失败：${e.message}"
+                DiagLog.e(NTAG, "时间线加载失败（p${timelinePage + 1}）：${_error.value}", e)
             } finally {
                 _timelineLoading.value = false
                 _timelineLoadingMore.value = false
@@ -168,7 +180,7 @@ class ImmichViewModel : ViewModel() {
     }
 
     /**
-     * 加载时间线首页（重置分页游标）。
+     * 加载时间线首页（重置分页游标，本地合并组重算）。
      *
      * :param context: 任意 Context
      */
@@ -180,17 +192,81 @@ class ImmichViewModel : ViewModel() {
     }
 
     /**
-     * 无限滚动加载时间线下一页（网格接近底部时调用）。
+     * 无限滚动加载时间线下一页（网格接近底部时调用；带跳过原因日志便于真机诊断）。
      *
      * :param context: 任意 Context
      */
     fun loadMoreTimeline(context: Context) {
-        if (_timelineLoading.value || _timelineLoadingMore.value || _timelineExhausted.value) return
+        if (_timelineLoading.value) {
+            DiagLog.i(NTAG, "无限滚动跳过：首页加载中")
+            return
+        }
+        if (_timelineLoadingMore.value) {
+            DiagLog.i(NTAG, "无限滚动跳过：正在加载下一页")
+            return
+        }
+        if (_timelineExhausted.value) {
+            DiagLog.i(NTAG, "无限滚动跳过：已到最后一页")
+            return
+        }
+        DiagLog.i(NTAG, "无限滚动触发：拉取 p${timelinePage + 1}")
         fetchTimelinePage(context)
     }
 
     /**
-     * 拉取相册列表 + 人物列表 + 资产统计（进相册/搜索/资料 Tab 时调用，空才拉）。
+     * 重算时间线三级分组：云端资产 + 本地未上传资产按拍摄时间降序合并后分组
+     * （本地合并见 ImmichLocalMedia.merge；用户反馈第 5 条）。
+     */
+    private fun recomputeTimeline() {
+        val merged = ImmichLocalMedia.merge(_timelineAssets.value, _localOnlyAssets.value)
+        _timelineGroups.value = ImmichTimeline.group(merged)
+    }
+
+    /**
+     * 扫描本机 MediaStore 照片/视频，与云端资产按文件名匹配，剩余未上传资产入时间线。
+     *
+     * :param context: 任意 Context
+     */
+    fun loadLocalMedia(context: Context) {
+        viewModelScope.launch {
+            try {
+                val cloud = _timelineAssets.value
+                val localOnly = withContext(Dispatchers.IO) {
+                    ImmichLocalMedia.scanLocalOnly(context, cloud.map { it.fileName }, localWindowDays)
+                }
+                _localOnlyAssets.value = localOnly
+                recomputeTimeline()
+                DiagLog.i(NTAG, "本地资产合并：未上传 ${localOnly.size} 个（云端已知 ${cloud.size} 个文件名）")
+            } catch (e: Exception) {
+                DiagLog.w(NTAG, "本地资产扫描失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 手动上传单个本机资产到 Immich 服务端（查看器「上传」动作）。
+     * 上传成功后从本地未上传集合移除并刷新时间线。
+     *
+     * :param context: 任意 Context
+     * :param asset: 本地资产（isLocal = true）
+     */
+    fun uploadLocalAsset(context: Context, asset: ImmichAsset) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { ImmichLocalMedia.uploadLocal(context, asset) }
+                _localOnlyAssets.value = _localOnlyAssets.value.filterNot { it.id == asset.id }
+                recomputeTimeline()
+                loadTimelinePage(context)
+            } catch (e: Exception) {
+                DiagLog.e(NTAG, "手动上传失败（${asset.fileName}）：${e.message}", e)
+                _error.value = "上传失败：${e.message}"
+            }
+        }
+    }
+
+    /**
+     * 拉取相册列表 + 人物列表 + 资产统计（三路独立容错：一路失败不拖垮其余，
+     * 修复 2026-11-16 反馈「资料页相册一直加载中、统计 0」——原实现顺序执行一损俱损）。
      *
      * :param context: 任意 Context
      */
@@ -200,15 +276,24 @@ class ImmichViewModel : ViewModel() {
             _albumsLoading.value = true
             try {
                 val api = ImmichApiClient(context.applicationContext)
-                val albums = withContext(Dispatchers.IO) { api.fetchAlbums() }
-                _albums.value = albums
-                val people = withContext(Dispatchers.IO) { api.fetchPeople() }
-                _people.value = people
-                val stats = withContext(Dispatchers.IO) { api.fetchStatistics() }
-                _statistics.value = stats
-            } catch (e: Exception) {
-                _error.value = e.message ?: "加载相册数据失败"
-                DiagLog.e(NTAG, "相册元数据加载失败：${_error.value}", e)
+                try {
+                    val albums = withContext(Dispatchers.IO) { api.fetchAlbums() }
+                    _albums.value = albums
+                } catch (e: Exception) {
+                    DiagLog.e(NTAG, "相册列表加载失败：${e.message}", e)
+                }
+                try {
+                    val people = withContext(Dispatchers.IO) { api.fetchPeople() }
+                    _people.value = people
+                } catch (e: Exception) {
+                    DiagLog.e(NTAG, "人物列表加载失败：${e.message}", e)
+                }
+                try {
+                    val stats = withContext(Dispatchers.IO) { api.fetchStatistics() }
+                    _statistics.value = stats
+                } catch (e: Exception) {
+                    DiagLog.e(NTAG, "资产统计加载失败：${e.message}", e)
+                }
             } finally {
                 _albumsLoading.value = false
             }
@@ -258,7 +343,7 @@ class ImmichViewModel : ViewModel() {
                 _resultsAssets.value = _resultsAssets.value + page.items
                 _resultsExhausted.value = !page.hasNext
             } catch (e: Exception) {
-                _error.value = e.message ?: "加载结果失败"
+                _error.value = "结果加载失败：${e.message}"
                 DiagLog.e(NTAG, "结果网格加载失败：${_error.value}", e)
             } finally {
                 _resultsLoading.value = false
@@ -313,7 +398,7 @@ class ImmichViewModel : ViewModel() {
             try {
                 withContext(Dispatchers.IO) { ImmichApiClient(context.applicationContext).trashAssets(listOf(assetId)) }
                 _timelineAssets.value = _timelineAssets.value.filterNot { it.id == assetId }
-                _timelineGroups.value = ImmichTimeline.group(_timelineAssets.value)
+                recomputeTimeline()
                 _resultsAssets.value = _resultsAssets.value.filterNot { it.id == assetId }
             } catch (e: Exception) {
                 DiagLog.e(NTAG, "删除失败 $assetId：${e.message}", e)
@@ -335,7 +420,7 @@ class ImmichViewModel : ViewModel() {
                 val (info, assets) = withContext(Dispatchers.IO) { api.fetchAlbumDetail(albumId) }
                 onLoaded(info, ImmichTimeline.group(assets))
             } catch (e: Exception) {
-                _error.value = e.message ?: "加载相册详情失败"
+                _error.value = "相册详情加载失败：${e.message}"
                 DiagLog.e(NTAG, "相册详情加载失败：${_error.value}", e)
             }
         }

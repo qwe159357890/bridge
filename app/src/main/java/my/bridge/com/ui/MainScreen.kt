@@ -441,7 +441,10 @@ fun HomePage(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // v0.2.67：极空页沉浸时隐藏顶部页面 Tab 栏（回主页 = 极空页内双击返回键）
-        if (!(tabOrder.getOrElse(currentTab) { 0 } == 6 && JkUiState.immersive)) {
+        // v0.2.167：相册页同款沉浸式（双击时间线切换，ImmichUiState.immersive）
+        val isImmersive = (tabOrder.getOrElse(currentTab) { 0 } == 6 && JkUiState.immersive) ||
+            (tabOrder.getOrElse(currentTab) { 0 } == 8 && my.bridge.com.immich.ImmichUiState.immersive)
+        if (!isImmersive) {
             BridgeTabRow(
                 // titles 已按显示顺序解析好（自定义名/默认名）
                 titles = titles,
@@ -450,7 +453,7 @@ fun HomePage(
             )
         }
         // currentTab 语义=「位置」，经顺序表翻译成页面 id 再分发。
-        // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..6，此处防御性钳制。
+        // coerceIn 兜底：rememberSaveable 恢复的旧索引恒在 0..8，此处防御性钳制。
         when (tabOrder.getOrElse(currentTab) { 0 }) {
             0 -> SmsConversationsPage() // 真实短信页（v0.1.34，原假数据骨架）
             1 -> AudioRelayPage() // 音频中继页（手机放音，原通讯录占位已移除）
@@ -460,6 +463,7 @@ fun HomePage(
             5 -> my.bridge.com.monitor.MonitorPage(onExitToHome = { onTabChange(0) }) // 监控页（v0.2.140 新增）
             6 -> JikongPage() // 极空保护板页（v0.2.55 新增，BLE 连接 + 状态上报 + 远程控制）
             7 -> AdminWebPage(onExitToHome = { onTabChange(0) }) // 管理后台页（v0.2.15x 从底部工具栏移入，末尾）
+            8 -> my.bridge.com.immich.ImmichPage(onExitToHome = { onTabChange(0) }) // 相册页（v0.2.164 新增，Immich 复刻 UI）
         }
     }
 }

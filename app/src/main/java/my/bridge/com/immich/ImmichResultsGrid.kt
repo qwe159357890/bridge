@@ -13,9 +13,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
+
+import my.bridge.com.core.common.DiagLog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -59,17 +60,21 @@ fun ImmichResultsGrid(
     val loading by vm.resultsLoading.collectAsState()
     val loadingMore by vm.resultsLoadingMore.collectAsState()
     val groups = remember(assets) { ImmichTimeline.group(assets) }
-    val headerIndices = remember(groups) { ImmichTimeline.headerIndices(groups) }
     val gridState = rememberLazyGridState()
     // 分组折叠状态（与照片 Tab 同款）
     var collapsed by remember { mutableStateOf(setOf<String>()) }
-    val totalItems = groups.sumOf { 1 + it.assets.size }
-    // 无限滚动：snapshotFlow 监听最后可见索引（修复照片 Tab 同源的 stale 捕获问题）
-    LaunchedEffect(groups) {
-        snapshotFlow {
-            gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-        }.collect { idx ->
-            if (totalItems > 0 && idx >= totalItems - 30) vm.loadMoreResults(context)
+    // 无限滚动：derivedStateOf 读网格自带 totalItemsCount（权威计数，无 stale 捕获）
+    val nearBottom by remember {
+        derivedStateOf {
+            val li = gridState.layoutInfo
+            val last = li.visibleItemsInfo.lastOrNull()?.index ?: -1
+            li.totalItemsCount > 0 && last >= li.totalItemsCount - 30
+        }
+    }
+    LaunchedEffect(nearBottom) {
+        if (nearBottom) {
+            DiagLog.i(NTAG, "结果网格无限滚动：接近底部（total=${gridState.layoutInfo.totalItemsCount}）")
+            vm.loadMoreResults(context)
         }
     }
     Column(

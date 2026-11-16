@@ -60,12 +60,14 @@ class ImmichApiClient(private val appContext: Context) {
 
     private fun token(): String = ImmichPrefs.token(appContext)
 
-    /** 构造带令牌头的请求。 */
+    /** 构造带令牌头的请求（path 可含 ?query；修复：addPathSegments 会把 query 编码进路径导致 404）。 */
     private fun req(method: String, path: String, body: String? = null): Request {
-        val url = base().toHttpUrlOrNull()?.newBuilder()
-            ?.addPathSegments(path.trimStart('/'))
-            ?.build()
+        val parts = path.trimStart('/').split("?", limit = 2)
+        val builder = base().toHttpUrlOrNull()?.newBuilder()
             ?: throw ImmichException("服务地址非法：${base()}", null)
+        builder.addPathSegments(parts[0])
+        if (parts.size == 2) builder.query(parts[1])
+        val url = builder.build()
         val b = Request.Builder().url(url).method(method, body?.toRequestBody("application/json".toMediaType()) ?: ByteArray(0).toRequestBody(null))
         if (token().isNotEmpty()) b.header("x-immich-user-token", token())
         return b.build()
@@ -526,6 +528,9 @@ data class ImmichAsset(
 ) {
     /** 是否视频资产。 */
     val isVideo: Boolean get() = type == "VIDEO"
+
+    /** 是否本机未上传资产（id 前缀 local:，由本地 MediaStore 合并进时间线）。 */
+    val isLocal: Boolean get() = id.startsWith("local:")
 
     /** 时长角标文案（"0:00:12.00000" → "0:12"；图片空串）。 */
     val durationLabel: String

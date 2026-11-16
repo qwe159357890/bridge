@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.graphics.Color
@@ -59,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntSize
 import coil.compose.AsyncImage
+import coil.imageLoader
 import coil.request.ImageRequest
 import androidx.compose.foundation.layout.fillMaxSize as fillMaxSize1
 
@@ -123,12 +125,14 @@ fun ImmichViewer(
     // EXIF 详情面板显隐 + 当前资产详情缓存
     var detailOpen by remember { mutableStateOf(false) }
     var assetDetail by remember { mutableStateOf<ImmichAsset?>(null) }
-    // 翻页时重置面板与详情缓存
+    // 翻页时重置面板与详情缓存（本地资产无服务端详情，跳过拉取）
     LaunchedEffect(pagerState.currentPage) {
         detailOpen = false
         assetDetail = null
         currentAsset?.let { asset ->
-            vm.loadAssetDetail(context, asset.id) { loaded -> assetDetail = loaded }
+            if (!asset.isLocal) {
+                vm.loadAssetDetail(context, asset.id) { loaded -> assetDetail = loaded }
+            }
         }
     }
     // 返回键：优先收起详情面板，再关闭查看器
@@ -151,10 +155,11 @@ fun ImmichViewer(
             key = { assets[it].id },
         ) { page ->
             val asset = assets[page]
-            if (asset.isVideo) {
-                ImmichVideoPlayer(asset = asset)
+            // 本地未上传资产：图片直读 contentUri；视频 ExoPlayer 播本地 Uri（无令牌/无网络）
+            if (asset.isLocal) {
+                if (asset.isVideo) ImmichLocalVideoPlayer(asset = asset) else ImmichPreviewImage(asset = asset)
             } else {
-                ImmichPreviewImage(asset = asset)
+                if (asset.isVideo) ImmichVideoPlayer(asset = asset) else ImmichPreviewImage(asset = asset)
             }
         }
         // 顶栏：返回 + 时间 + 收藏 + 信息 + 更多（原型 .v-top）
@@ -184,21 +189,33 @@ fun ImmichViewer(
                     .weight(1f)
                     .padding(start = 6.dp),
             )
-            val favOn = (favoriteOverrides[currentAsset?.id] ?: currentAsset?.isFavorite) ?: false
-            Icon(
-                if (favOn) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                contentDescription = "收藏",
-                tint = if (favOn) p.heart else Color.White,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clickable {
-                        currentAsset?.let { asset ->
-                            vm.toggleFavorite(context, asset.id, !favOn)
-                            DiagLog.i(NTAG, "查看器收藏切换：${asset.fileName} → ${!favOn}")
+            // 本地资产无收藏/更多（服务端专属动作），时间行前带「未上传」标记
+            if (currentAsset?.isLocal == true) {
+                Text(
+                    "未上传",
+                    color = Color(0xFFFFC107),
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .background(Color(0x33FFC107), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            } else {
+                val favOn = (favoriteOverrides[currentAsset?.id] ?: currentAsset?.isFavorite) ?: false
+                Icon(
+                    if (favOn) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = "收藏",
+                    tint = if (favOn) p.heart else Color.White,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clickable {
+                            currentAsset?.let { asset ->
+                                vm.toggleFavorite(context, asset.id, !favOn)
+                                DiagLog.i(NTAG, "查看器收藏切换：${asset.fileName} → ${!favOn}")
+                            }
                         }
-                    }
-                    .padding(8.dp),
-            )
+                        .padding(8.dp),
+                )
+            }
             Icon(
                 Icons.Filled.Info,
                 contentDescription = "详细信息",
@@ -248,37 +265,55 @@ fun ImmichViewer(
                     .navigationBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 18.dp),
             ) {
-                // 动作行：分享 / 下载 / 收藏 / 删除（spaceAround 均分）
+                // 动作行：本地资产 = 分享 + 上传；云端资产 = 分享 / 下载 / 收藏 / 删除（spaceAround 均分）
                 val favOn2 = (favoriteOverrides[currentAsset?.id] ?: currentAsset?.isFavorite) ?: false
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    ImmichViewerAction(ViewerAction("分享", Icons.Filled.Share), Modifier.weight(1f)) {
-                        currentAsset?.let { asset ->
-                            scope.launch {
-                                shareAsset(context, vm, asset)
+                if (currentAsset?.isLocal == true) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        ImmichViewerAction(ViewerAction("分享", Icons.Filled.Share), Modifier.weight(1f)) {
+                            currentAsset?.let { asset ->
+                                scope.launch { shareAsset(context, vm, asset) }
+                            }
+                        }
+                        ImmichViewerAction(ViewerAction("上传", Icons.Filled.Upload), Modifier.weight(1f)) {
+                            currentAsset?.let { asset ->
+                                DiagLog.i(NTAG, "手动上传本地资产：${asset.fileName}")
+                                Toast.makeText(context, "开始上传 ${asset.fileName}", Toast.LENGTH_SHORT).show()
+                                vm.uploadLocalAsset(context, asset)
+                                onClose()
                             }
                         }
                     }
-                    ImmichViewerAction(ViewerAction("下载", Icons.Filled.Download), Modifier.weight(1f)) {
-                        currentAsset?.let { asset ->
-                            scope.launch {
-                                saveAsset(context, vm, asset)
+                } else {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        ImmichViewerAction(ViewerAction("分享", Icons.Filled.Share), Modifier.weight(1f)) {
+                            currentAsset?.let { asset ->
+                                scope.launch {
+                                    shareAsset(context, vm, asset)
+                                }
                             }
                         }
-                    }
-                    ImmichViewerAction(
-                        ViewerAction("收藏", if (favOn2) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder),
-                        Modifier.weight(1f),
-                        tint = if (favOn2) p.heart else Color.White,
-                    ) {
-                        currentAsset?.let { asset ->
-                            vm.toggleFavorite(context, asset.id, !favOn2)
+                        ImmichViewerAction(ViewerAction("下载", Icons.Filled.Download), Modifier.weight(1f)) {
+                            currentAsset?.let { asset ->
+                                scope.launch {
+                                    saveAsset(context, vm, asset)
+                                }
+                            }
                         }
-                    }
-                    ImmichViewerAction(ViewerAction("删除", Icons.Filled.Delete), Modifier.weight(1f)) {
-                        currentAsset?.let { asset ->
-                            vm.trashAsset(context, asset.id)
-                            Toast.makeText(context, "已移入回收站", Toast.LENGTH_SHORT).show()
-                            onClose()
+                        ImmichViewerAction(
+                            ViewerAction("收藏", if (favOn2) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder),
+                            Modifier.weight(1f),
+                            tint = if (favOn2) p.heart else Color.White,
+                        ) {
+                            currentAsset?.let { asset ->
+                                vm.toggleFavorite(context, asset.id, !favOn2)
+                            }
+                        }
+                        ImmichViewerAction(ViewerAction("删除", Icons.Filled.Delete), Modifier.weight(1f)) {
+                            currentAsset?.let { asset ->
+                                vm.trashAsset(context, asset.id)
+                                Toast.makeText(context, "已移入回收站", Toast.LENGTH_SHORT).show()
+                                onClose()
+                            }
                         }
                     }
                 }
@@ -310,16 +345,22 @@ private fun ImmichPreviewImage(asset: ImmichAsset) {
     val context = LocalContext.current
     var scale by remember { mutableStateOf(1f) }
     var offset by androidx.compose.runtime.mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)
+    // 本地资产直读 contentUri（默认 Coil 实例）；云端资产走 Immich 预览端点
+    val isLocal = asset.isLocal
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
         AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(immichThumbnailUrl(context, asset.id, preview = true))
-                .crossfade(true)
-                .build(),
-            imageLoader = ImmichImageLoader.get(context),
+            model = if (isLocal) {
+                ImmichLocalMedia.localUri(asset)
+            } else {
+                ImageRequest.Builder(context)
+                    .data(immichThumbnailUrl(context, asset.id, preview = true))
+                    .crossfade(true)
+                    .build()
+            },
+            imageLoader = if (isLocal) context.imageLoader else ImmichImageLoader.get(context),
             contentDescription = asset.fileName,
             contentScale = ContentScale.Fit,
             modifier = Modifier
@@ -414,6 +455,68 @@ private fun ImmichVideoPlayer(asset: ImmichAsset) {
             modifier = Modifier.fillMaxSize(),
         )
         // 中央状态图标（缓冲圈 / 播放暂停键）
+        if (isBuffering) {
+            androidx.compose.material3.CircularProgressIndicator(
+                color = Color.White,
+                modifier = Modifier.size(44.dp),
+            )
+        } else if (!isPlaying) {
+            Text("▶", fontSize = 52.sp, color = Color(0xB3FFFFFF))
+        }
+    }
+}
+
+/**
+ * 查看器视频页（本地资产）：ExoPlayer 播放 MediaStore Uri（默认数据源，无令牌）。
+ *
+ * :param asset: 本地视频资产
+ */
+@Composable
+private fun ImmichLocalVideoPlayer(asset: ImmichAsset) {
+    val context = LocalContext.current
+    var isPlaying by remember { mutableStateOf(true) }
+    var isBuffering by remember { mutableStateOf(true) }
+    val player = remember(asset.id) {
+        ExoPlayer.Builder(context).build().apply {
+            playWhenReady = true
+            addListener(object : Player.Listener {
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    isPlaying = playing
+                }
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    isBuffering = playbackState == Player.STATE_BUFFERING
+                }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    DiagLog.e(NTAG, "本地视频播放失败（${asset.fileName}）：${error.message}", error)
+                }
+            })
+        }
+    }
+    // 本地 Uri 用默认数据源；销毁时释放播放器
+    LaunchedEffect(asset.id) {
+        ImmichLocalMedia.localUri(asset)?.let { uri ->
+            player.setMediaItem(MediaItem.fromUri(uri))
+            player.prepare()
+        }
+    }
+    DisposableEffect(asset.id) {
+        onDispose { player.release() }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable { player.playWhenReady = !player.playWhenReady },
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = false
+                    this.player = player
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
         if (isBuffering) {
             androidx.compose.material3.CircularProgressIndicator(
                 color = Color.White,
@@ -640,7 +743,12 @@ private suspend fun downloadToCache(context: android.content.Context, vm: Immich
  */
 private suspend fun shareAsset(context: android.content.Context, vm: ImmichViewModel, asset: ImmichAsset) {
     try {
-        val file = downloadToCache(context, vm, asset)
+        // 本地资产直接拷贝缓存分享（无网络）；云端资产下载原图后分享
+        val file = if (asset.isLocal) {
+            copyLocalToCache(context, asset)
+        } else {
+            downloadToCache(context, vm, asset)
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = if (asset.isVideo) "video/*" else "image/*"
@@ -653,6 +761,24 @@ private suspend fun shareAsset(context: android.content.Context, vm: ImmichViewM
         Toast.makeText(context, "分享失败：${e.message}", Toast.LENGTH_SHORT).show()
     }
 }
+
+/**
+ * 本地资产拷贝到缓存 exports 目录（分享用，流式拷贝）。
+ *
+ * :param context: 任意 Context
+ * :param asset: 本地资产
+ * :return: 缓存文件
+ */
+private suspend fun copyLocalToCache(context: android.content.Context, asset: ImmichAsset): java.io.File =
+    withContext(Dispatchers.IO) {
+        val dir = java.io.File(context.cacheDir, "exports").apply { mkdirs() }
+        val dest = java.io.File(dir, asset.fileName)
+        val uri = ImmichLocalMedia.localUri(asset) ?: throw ImmichException("找不到本机文件：${asset.fileName}", null)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            dest.outputStream().use { output -> input.copyTo(output) }
+        } ?: throw ImmichException("读取本机文件失败：${asset.fileName}", null)
+        dest
+    }
 
 /**
  * 保存资产到系统图库（API 29+ 存 MediaStore Pictures/Immich；旧版本存应用外部目录并提示路径）。

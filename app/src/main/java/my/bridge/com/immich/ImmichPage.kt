@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Column
@@ -64,6 +65,15 @@ data class ImmichViewerContext(
     val index: Int,
 )
 
+/**
+ * Immich 全局 UI 状态（沉浸式开关，借鉴极空页 JkUiState.immersive 范式）。
+ * 双击时间线切换：true 时隐藏主页顶部 Tab（MainScreen 读取）与相册内部底部导航。
+ */
+object ImmichUiState {
+    /** 是否沉浸式（隐藏两侧导航，照片浏览全屏）。 */
+    var immersive by mutableStateOf(false)
+}
+
 /** 相册详情上下文：信息 + 本地三级分组结果。 */
 data class ImmichAlbumDetailContext(
     val album: ImmichAlbumInfo,
@@ -95,8 +105,18 @@ fun ImmichPage(onExitToHome: () -> Unit) {
     val vm = remember { ImmichViewModel() }
     // 深浅色跟随系统（原型顶部「浅色/深色」按钮为演示工具，非应用内交互）
     val palette = if (isSystemInDarkTheme()) ImmichDarkPalette else ImmichLightPalette
-    // 首次进入拉全量基础数据
-    LaunchedEffect(Unit) { vm.loadAll(context) }
+    // 首次进入拉全量基础数据（时间线每次进入都刷新：拍照备份后回相册页能看到新照片）
+    LaunchedEffect(Unit) {
+        vm.loadAll(context)
+        // 自动备份兜底：进相册页触发一次对账（调研 §5.4；开关关闭时内部为 no-op）
+        ImmichBackup.ensureRegistered(context)
+        ImmichBackup.triggerSyncNow(context)
+    }
+    // 沉浸式状态（ImmichUiState.immersive 为 snapshot 状态，双击切换自动触发重组；
+    // 退出本页时复位，避免下次进入残留）
+    DisposableEffect(Unit) {
+        onDispose { ImmichUiState.immersive = false }
+    }
 
     // 内部底部导航当前 Tab：0=照片 1=搜索 2=相册 3=资料
     var currentTab by rememberSaveable { mutableStateOf(0) }
@@ -119,6 +139,11 @@ fun ImmichPage(onExitToHome: () -> Unit) {
 
     // 返回键梯子（覆盖层由各自 BackHandler 优先接管——后组合先出）
     BackHandler {
+        if (ImmichUiState.immersive) {
+            // 沉浸式中按返回：先退出沉浸式
+            ImmichUiState.immersive = false
+            return@BackHandler
+        }
         if (viewerCtx != null) {
             viewerCtx = null
             return@BackHandler
@@ -207,14 +232,16 @@ fun ImmichPage(onExitToHome: () -> Unit) {
                         )
                     }
                 }
-                // 内部底部导航（原型 .bottomnav：药丸图标 + 文字标签）
-                ImmichBottomNav(
-                    selected = currentTab,
-                    onSelect = {
-                        DiagLog.i(NTAG, "内部底部导航切换：${immichBottomTabs[it].label}")
-                        currentTab = it
-                    },
-                )
+                // 内部底部导航（原型 .bottomnav：药丸图标 + 文字标签；沉浸式隐藏腾出屏幕）
+                if (!ImmichUiState.immersive) {
+                    ImmichBottomNav(
+                        selected = currentTab,
+                        onSelect = {
+                            DiagLog.i(NTAG, "内部底部导航切换：${immichBottomTabs[it].label}")
+                            currentTab = it
+                        },
+                    )
+                }
             }
             // 分类结果网格覆盖层（搜索/资料入口 + 人物照片页；盖住主内容与底部导航）
             if (resultsOpen) {
