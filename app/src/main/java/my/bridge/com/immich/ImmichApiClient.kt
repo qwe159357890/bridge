@@ -71,8 +71,20 @@ class ImmichApiClient(private val appContext: Context) {
         return b.build()
     }
 
-    /** 执行请求并解析 JSON（401 自动重登一次再重试；连接类失败重试一次）。 */
+    /** 执行请求并解析 JSON 对象（401 自动重登一次再重试；连接类失败重试一次）。 */
     private fun executeJson(request: Request, allowRelogin: Boolean = true): JSONObject {
+        val text = executeRaw(request, allowRelogin)
+        return JSONObject(text.ifBlank { "{}" })
+    }
+
+    /** 执行请求并解析 JSON 数组（顶层为数组的端点用，如 GET /api/albums）。 */
+    private fun executeJsonArray(request: Request, allowRelogin: Boolean = true): JSONArray {
+        val text = executeRaw(request, allowRelogin)
+        return JSONArray(text.ifBlank { "[]" })
+    }
+
+    /** 执行请求返回原始响应体（401 重登 / 连接重试的公共逻辑）。 */
+    private fun executeRaw(request: Request, allowRelogin: Boolean): String {
         var current = request
         var lastError: Exception? = null
         for (attempt in 0..2) {
@@ -94,7 +106,7 @@ class ImmichApiClient(private val appContext: Context) {
                         throw ImmichException("HTTP ${resp.code}", bodyText)
                     }
                     DiagLog.i(NTAG, "API 成功 耗时${cost}ms ${request.url.encodedPath}")
-                    return JSONObject(bodyText.ifBlank { "{}" })
+                    return bodyText
                 }
             } catch (e: ImmichException) {
                 throw e
@@ -155,8 +167,8 @@ class ImmichApiClient(private val appContext: Context) {
      * :return: 相册列表（按资产数降序）
      */
     fun fetchAlbums(): List<ImmichAlbumInfo> {
-        val resp = executeJson(req("GET", "/api/albums?withoutAssets=true"))
-        val arr = resp.optJSONArray("albums") ?: JSONArray()
+        // 注意：GET /api/albums 返回顶层 JSON 数组（实测），不能用 executeJson 解析对象
+        val arr = executeJsonArray(req("GET", "/api/albums?withoutAssets=true"))
         val out = mutableListOf<ImmichAlbumInfo>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue

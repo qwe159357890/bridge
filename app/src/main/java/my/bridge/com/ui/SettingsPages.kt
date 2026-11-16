@@ -2478,7 +2478,12 @@ private fun ImmichBucketSelectDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Column {
+                // 相册较多时弹窗内容可滚动（修复 2026-11-16 反馈：勾选列表只显示一页滑不动）
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     buckets.forEach { bucket ->
                         Row(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,

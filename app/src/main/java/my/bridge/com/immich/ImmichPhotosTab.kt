@@ -1,6 +1,7 @@
 package my.bridge.com.immich
 
 import coil.compose.AsyncImage
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -10,7 +11,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
@@ -29,6 +33,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -87,16 +93,18 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
             val scope = rememberCoroutineScope()
             // 分组头全局索引表（三级分组：今天/最近一周逐天/按月）
             val headerIndices = remember(groups) { ImmichTimeline.headerIndices(groups) }
+            // 分组折叠状态（label → 收起；折叠按钮修复：2026-11-16 反馈问题 1）
+            var collapsed by remember { mutableStateOf(setOf<String>()) }
             // 全网格条目总数（头 + 块），无限滚动触发用
             val totalItems = groups.sumOf { 1 + it.assets.size }
-            // 滚动到接近底部（剩 30 条以内）时加载下一页
-            val nearBottom by remember {
-                derivedStateOf {
-                    totalItems > 0 && gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 >= totalItems - 30
+            // 无限滚动：snapshotFlow 监听最后一个可见索引，接近底部（剩 30 条内）触发下一页。
+            // 修复（2026-11-16 反馈问题 2）：原 derivedStateOf 捕获了首帧 totalItems 导致翻页永不触发。
+            LaunchedEffect(groups) {
+                snapshotFlow {
+                    gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                }.collect { idx ->
+                    if (totalItems > 0 && idx >= totalItems - 30) vm.loadMoreTimeline(context)
                 }
-            }
-            androidx.compose.runtime.LaunchedEffect(nearBottom) {
-                if (nearBottom) vm.loadMoreTimeline(context)
             }
             // 当前滚动位置对应的月份（拖动条高亮用）
             val monthLabels = remember(groups) { groups.map { it.monthLabel }.distinct() }
@@ -117,19 +125,32 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 groups.forEachIndexed { gi, group ->
-                    // 分组头：跨满整行
+                    // 分组头：跨满整行（折叠按钮可收起/展开该组）
                     item(key = "header_${group.label}", span = { GridItemSpan(maxLineSpan) }) {
-                        ImmichGroupHeader(group = group)
-                    }
-                    items(group.assets.size, key = { group.assets[it].id }) { ti ->
-                        val asset = group.assets[ti]
-                        ImmichAssetTile(
-                            asset = asset,
-                            onClick = {
-                                DiagLog.i(NTAG, "点击缩略图 → 查看器（${asset.fileName}）")
-                                onOpenViewer(group.assets, ti)
+                        ImmichGroupHeader(
+                            group = group,
+                            collapsed = group.label in collapsed,
+                            onToggle = {
+                                collapsed = if (group.label in collapsed) {
+                                    collapsed - group.label
+                                } else {
+                                    collapsed + group.label
+                                }
                             },
                         )
+                    }
+                    // 折叠的组只渲染头，不渲染资产块
+                    if (group.label !in collapsed) {
+                        items(group.assets.size, key = { group.assets[it].id }) { ti ->
+                            val asset = group.assets[ti]
+                            ImmichAssetTile(
+                                asset = asset,
+                                onClick = {
+                                    DiagLog.i(NTAG, "点击缩略图 → 查看器（${asset.fileName}）")
+                                    onOpenViewer(group.assets, ti)
+                                },
+                            )
+                        }
                     }
                 }
                 // 加载状态条（首页 loading / 无限滚动 loadingMore）
@@ -284,12 +305,18 @@ fun ImmichConfigGuide() {
 }
 
 /**
- * 分组头：标签（今天 / 周几+日期 / 月份）+ 资产计数胶囊 + 折叠箭头（原型 .month-head 同款样式）。
+ * 分组头：标签（今天 / 周几+日期 / 月份）+ 资产计数胶囊 + 折叠/展开按钮（原型 .month-head 同款）。
  *
  * :param group: 分组段数据（三级精细分组）
+ * :param collapsed: 该组是否已折叠
+ * :param onToggle: 点击折叠按钮回调（展开 ⇄ 收起）
  */
 @Composable
-internal fun ImmichGroupHeader(group: ImmichTimeline.ImmichGroup) {
+internal fun ImmichGroupHeader(
+    group: ImmichTimeline.ImmichGroup,
+    collapsed: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+) {
     val p = LocalImmichPalette.current
     Row(
         modifier = Modifier
@@ -309,14 +336,22 @@ internal fun ImmichGroupHeader(group: ImmichTimeline.ImmichGroup) {
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         )
         Spacer(Modifier.weight(1f))
-        // 折叠箭头（原版点箭头收起分组段；本阶段仅占位）
-        Box(
-            modifier = Modifier
-                .size(26.dp)
-                .background(p.surface2, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("⌃", fontSize = 14.sp, color = p.accent)
+        // 折叠/展开按钮：二级表面色圆底 + Material 箭头图标（展开态朝上收起 / 折叠态朝下展开）
+        if (onToggle != null) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(p.surface2, CircleShape)
+                    .clickable { onToggle() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (collapsed) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
+                    contentDescription = if (collapsed) "展开 ${group.label}" else "收起 ${group.label}",
+                    tint = p.accent,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }

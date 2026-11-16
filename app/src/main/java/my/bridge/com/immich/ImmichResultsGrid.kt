@@ -8,8 +8,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.background
@@ -57,15 +61,16 @@ fun ImmichResultsGrid(
     val groups = remember(assets) { ImmichTimeline.group(assets) }
     val headerIndices = remember(groups) { ImmichTimeline.headerIndices(groups) }
     val gridState = rememberLazyGridState()
+    // 分组折叠状态（与照片 Tab 同款）
+    var collapsed by remember { mutableStateOf(setOf<String>()) }
     val totalItems = groups.sumOf { 1 + it.assets.size }
-    // 滚动到接近底部时加载下一页
-    val nearBottom by remember {
-        derivedStateOf {
-            totalItems > 0 && (gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= totalItems - 30
+    // 无限滚动：snapshotFlow 监听最后可见索引（修复照片 Tab 同源的 stale 捕获问题）
+    LaunchedEffect(groups) {
+        snapshotFlow {
+            gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        }.collect { idx ->
+            if (totalItems > 0 && idx >= totalItems - 30) vm.loadMoreResults(context)
         }
-    }
-    LaunchedEffect(nearBottom) {
-        if (nearBottom) vm.loadMoreResults(context)
     }
     Column(
         modifier = Modifier
@@ -114,14 +119,26 @@ fun ImmichResultsGrid(
             ) {
                 groups.forEachIndexed { gi, group ->
                     item(key = "rg_${group.label}", span = { GridItemSpan(maxLineSpan) }) {
-                        ImmichGroupHeader(group = group)
-                    }
-                    items(group.assets.size, key = { group.assets[it].id }) { ti ->
-                        val asset = group.assets[ti]
-                        ImmichAssetTile(
-                            asset = asset,
-                            onClick = { onOpenViewer(group.assets, ti) },
+                        ImmichGroupHeader(
+                            group = group,
+                            collapsed = group.label in collapsed,
+                            onToggle = {
+                                collapsed = if (group.label in collapsed) {
+                                    collapsed - group.label
+                                } else {
+                                    collapsed + group.label
+                                }
+                            },
                         )
+                    }
+                    if (group.label !in collapsed) {
+                        items(group.assets.size, key = { group.assets[it].id }) { ti ->
+                            val asset = group.assets[ti]
+                            ImmichAssetTile(
+                                asset = asset,
+                                onClick = { onOpenViewer(group.assets, ti) },
+                            )
+                        }
                     }
                 }
                 if (loadingMore) {

@@ -6,6 +6,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.activity.compose.BackHandler
@@ -120,7 +124,7 @@ fun ImmichAlbumDetail(
                 )
             }
         }
-        // 资产网格（三级精细分组，与主时间线同规格 3 列 2px）
+        // 资产网格（三级精细分组，与主时间线同规格 3 列 2px；weight 约束保证滚动正常）
         if (groups.isEmpty()) {
             Text(
                 "相册为空或加载中…",
@@ -132,25 +136,41 @@ fun ImmichAlbumDetail(
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                groups.forEachIndexed { gi, group ->
-                    item(key = "adh_${group.label}", span = { GridItemSpan(maxLineSpan) }) {
-                        ImmichGroupHeader(group = group)
-                    }
-                    items(group.assets.size, key = { group.assets[it].id }) { ti ->
-                        val asset = group.assets[ti]
-                        ImmichAssetTile(
-                            asset = asset,
-                            onClick = {
-                                DiagLog.i(NTAG, "相册详情点击缩略图 → 查看器（${asset.fileName}）")
-                                onOpenViewer(group.assets, ti)
-                            },
-                        )
+            // 分组折叠状态（与照片 Tab 同款）
+            var collapsed by remember { mutableStateOf(setOf<String>()) }
+            androidx.compose.foundation.layout.Box(modifier = Modifier.weight(1f)) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    groups.forEachIndexed { gi, group ->
+                        item(key = "adh_${group.label}", span = { GridItemSpan(maxLineSpan) }) {
+                            ImmichGroupHeader(
+                                group = group,
+                                collapsed = group.label in collapsed,
+                                onToggle = {
+                                    collapsed = if (group.label in collapsed) {
+                                        collapsed - group.label
+                                    } else {
+                                        collapsed + group.label
+                                    }
+                                },
+                            )
+                        }
+                        if (group.label !in collapsed) {
+                            items(group.assets.size, key = { group.assets[it].id }) { ti ->
+                                val asset = group.assets[ti]
+                                ImmichAssetTile(
+                                    asset = asset,
+                                    onClick = {
+                                        DiagLog.i(NTAG, "相册详情点击缩略图 → 查看器（${asset.fileName}）")
+                                        onOpenViewer(group.assets, ti)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }

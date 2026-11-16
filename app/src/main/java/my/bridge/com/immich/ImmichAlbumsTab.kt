@@ -110,38 +110,40 @@ fun ImmichAlbumsTab(vm: ImmichViewModel, onOpenAlbum: (ImmichAlbumInfo) -> Unit)
                 Text("新建相册", fontSize = 13.sp, color = p.accent)
             }
         }
-        // 相册网格：2 列（原型 .album-grid gap 4）
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 12.dp, end = 12.dp, top = 10.dp, bottom = 16.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            albums.forEachIndexed { i, album ->
-                item(key = album.id) {
-                    ImmichAlbumCard(
-                        album = album,
-                        onClick = {
-                            DiagLog.i(NTAG, "进入相册详情：${album.name}（${album.assetCount} 个资产）")
-                            onOpenAlbum(album)
-                        },
-                    )
+        // 相册网格：2 列（原型 .album-grid gap 4；weight 约束保证滚动正常，2026-11-16 修复）
+        Box(modifier = Modifier.weight(1f)) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 12.dp, end = 12.dp, top = 10.dp, bottom = 16.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                albums.forEachIndexed { i, album ->
+                    item(key = album.id) {
+                        ImmichAlbumCard(
+                            album = album,
+                            onClick = {
+                                DiagLog.i(NTAG, "进入相册详情：${album.name}（${album.assetCount} 个资产）")
+                                onOpenAlbum(album)
+                            },
+                        )
+                    }
                 }
-            }
-            if (loading && albums.isEmpty()) {
-                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
-                    Text(
-                        "加载相册中…",
-                        fontSize = 13.sp,
-                        color = p.sub,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 24.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
+                if (loading && albums.isEmpty()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                        Text(
+                            "加载相册中…",
+                            fontSize = 13.sp,
+                            color = p.sub,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                    }
                 }
             }
         }
