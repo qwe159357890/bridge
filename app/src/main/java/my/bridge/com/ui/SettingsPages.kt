@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import my.bridge.com.BuildConfig
 import my.bridge.com.automation.a11y.BridgeAccessibilityService
 import my.bridge.com.keepalive.KeepAlivePrefs
@@ -1347,6 +1348,12 @@ fun ConnectionSettings() {
             MonitorSettingsSection()
         }
 
+        // ===== 相册分区（Immich 集成：服务端配置 + 自动备份）=====
+        item { SectionTitle("相册") }
+        item {
+            ImmichSettingsSection()
+        }
+
         // ===== SSH 服务分区（v0.2.34：内嵌 sshd，入口卡片 + 详情页见 SshPages.kt）=====
         item { SectionTitle("SSH 服务") }
         item {
@@ -2136,6 +2143,370 @@ private fun MonitorTokenEditDialog(
         },
         confirmButton = {
             androidx.compose.material3.TextButton(onClick = { onConfirm(token) }) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+// ============ 相册配置分区（Immich 集成）============
+
+/**
+ * Immich 相册服务配置：服务地址 + 账号密码 + 测试连接 + 自动备份开关（仅 Wi-Fi +
+ * 勾选本地相册）。配置写入 ImmichPrefs，ImmichApiClient / 备份 Worker 即时读取。
+ */
+@Composable
+fun ImmichSettingsSection() {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    var showUrlDialog by remember { mutableStateOf(false) }
+    var showUserDialog by remember { mutableStateOf(false) }
+    var showPwdDialog by remember { mutableStateOf(false) }
+    var showBucketDialog by remember { mutableStateOf(false) }
+    var autoBackup by remember { mutableStateOf(my.bridge.com.immich.ImmichPrefs.autoBackup(context)) }
+    var wifiOnly by remember { mutableStateOf(my.bridge.com.immich.ImmichPrefs.wifiOnly(context)) }
+    var selectedBuckets by remember {
+        mutableStateOf(my.bridge.com.immich.ImmichPrefs.selectedBuckets(context))
+    }
+    // 测试连接结果文案（null = 未测）
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
+
+    SettingCard {
+        SettingValueRow(
+            icon = "🌐",
+            title = "相册服务地址",
+            value = my.bridge.com.immich.ImmichPrefs.baseUrl(context),
+        ) {
+            showUrlDialog = true
+        }
+        SettingValueRow(
+            icon = "👤",
+            title = "登录账号",
+            value = my.bridge.com.immich.ImmichPrefs.username(context).ifBlank { "未设置" },
+        ) {
+            showUserDialog = true
+        }
+        SettingValueRow(
+            icon = "🔑",
+            title = "登录密码",
+            value = if (my.bridge.com.immich.ImmichPrefs.password(context).isBlank()) "未设置" else "已设置",
+        ) {
+            showPwdDialog = true
+        }
+        // 测试连接：登录 + 令牌校验
+        SettingValueRow(
+            icon = "🔌",
+            title = "测试连接",
+            value = when {
+                testing -> "测试中…"
+                testResult != null -> testResult!!
+                else -> "点击测试"
+            },
+        ) {
+            if (testing) return@SettingValueRow
+            testing = true
+            testResult = null
+            scope.launch {
+                testResult = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val api = my.bridge.com.immich.ImmichApiClient(context)
+                        val user = my.bridge.com.immich.ImmichPrefs.username(context)
+                        val pwd = my.bridge.com.immich.ImmichPrefs.password(context)
+                        if (user.isBlank() || pwd.isBlank()) {
+                            "请先填写账号密码"
+                        } else {
+                            api.login(user, pwd)
+                            if (api.validateToken()) {
+                                my.bridge.com.core.common.DiagLog.i("设置", "相册服务测试连接成功")
+                                "连接成功 ✓"
+                            } else {
+                                "登录成功但令牌校验失败"
+                            }
+                        }
+                    } catch (e: Exception) {
+                        "连接失败：${e.message}"
+                    }
+                }
+                testing = false
+            }
+        }
+        SettingSwitchRow(
+            icon = "🔄",
+            title = "自动备份",
+            checked = autoBackup,
+            onCheckedChange = { on ->
+                autoBackup = on
+                my.bridge.com.immich.ImmichPrefs.saveAutoBackup(context, on)
+                if (on) {
+                    my.bridge.com.immich.ImmichBackup.ensureRegistered(context)
+                } else {
+                    my.bridge.com.immich.ImmichBackup.unregister(context)
+                }
+            },
+        )
+        if (autoBackup) {
+            SettingSwitchRow(
+                icon = "📶",
+                title = "仅 Wi-Fi 上传",
+                checked = wifiOnly,
+                onCheckedChange = { on ->
+                    wifiOnly = on
+                    my.bridge.com.immich.ImmichPrefs.saveWifiOnly(context, on)
+                },
+            )
+            SettingValueRow(
+                icon = "📁",
+                title = "备份相册",
+                value = if (selectedBuckets.isEmpty()) "全部相册" else "已勾选 ${selectedBuckets.size} 个",
+            ) {
+                showBucketDialog = true
+            }
+        }
+        Text(
+            text = "直连 Immich 服务端（默认本机 http://039039.xyz:15148，VNT 组网内可达）。" +
+                "自动备份监听 MediaStore 新照片/视频，仅 Wi-Fi（可关）、勾选相册制，" +
+                "大文件（>256MB）上传时短暂显示前台通知。需授予照片/视频读取权限。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+        )
+    }
+
+    // 服务地址编辑弹窗
+    if (showUrlDialog) {
+        ImmichUrlEditDialog(
+            initial = my.bridge.com.immich.ImmichPrefs.baseUrl(context),
+            onCancel = { showUrlDialog = false },
+            onConfirm = { url ->
+                my.bridge.com.immich.ImmichPrefs.saveBaseUrl(context, url)
+                showUrlDialog = false
+            },
+        )
+    }
+
+    // 账号编辑弹窗
+    if (showUserDialog) {
+        ImmichUserEditDialog(
+            initial = my.bridge.com.immich.ImmichPrefs.username(context),
+            onCancel = { showUserDialog = false },
+            onConfirm = { user ->
+                my.bridge.com.immich.ImmichPrefs.saveUsername(context, user)
+                showUserDialog = false
+            },
+        )
+    }
+
+    // 密码编辑弹窗
+    if (showPwdDialog) {
+        ImmichPwdEditDialog(
+            initial = my.bridge.com.immich.ImmichPrefs.password(context),
+            onCancel = { showPwdDialog = false },
+            onConfirm = { pwd ->
+                my.bridge.com.immich.ImmichPrefs.savePassword(context, pwd)
+                showPwdDialog = false
+            },
+        )
+    }
+
+    // 备份相册勾选弹窗
+    if (showBucketDialog) {
+        ImmichBucketSelectDialog(
+            initialSelected = selectedBuckets,
+            onCancel = { showBucketDialog = false },
+            onConfirm = { buckets ->
+                selectedBuckets = buckets
+                my.bridge.com.immich.ImmichPrefs.saveSelectedBuckets(context, buckets)
+                showBucketDialog = false
+            },
+        )
+    }
+}
+
+/**
+ * 相册服务地址编辑弹窗。
+ */
+@Composable
+private fun ImmichUrlEditDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var url by remember { mutableStateOf(initial) }
+    var error by remember { mutableStateOf<String?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("相册服务地址") },
+        text = {
+            Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it; error = null },
+                    label = { Text("完整 URL（带协议，不含 /api）") },
+                    singleLine = true,
+                    isError = error != null,
+                    placeholder = { Text("http://039039.xyz:15148") },
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Immich 服务端根地址（如 http://192.168.31.x:2283），API 路径自动拼接 /api。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    val u = url.trim().trimEnd('/')
+                    if (u.isEmpty()) {
+                        error = "地址不能为空"
+                    } else if (!u.startsWith("http://", true) && !u.startsWith("https://", true)) {
+                        error = "必须以 http:// 或 https:// 开头"
+                    } else {
+                        onConfirm(u)
+                    }
+                },
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+/**
+ * 相册登录账号编辑弹窗。
+ */
+@Composable
+private fun ImmichUserEditDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var user by remember { mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("登录账号") },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = user,
+                onValueChange = { user = it },
+                label = { Text("Immich 登录邮箱") },
+                singleLine = true,
+                placeholder = { Text("user@example.com") },
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onConfirm(user) }) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+/**
+ * 相册登录密码编辑弹窗。
+ */
+@Composable
+private fun ImmichPwdEditDialog(
+    initial: String,
+    onCancel: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var pwd by remember { mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("登录密码") },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = pwd,
+                onValueChange = { pwd = it },
+                label = { Text("Immich 登录密码") },
+                singleLine = true,
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onConfirm(pwd) }) { Text("保存") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+/**
+ * 备份相册勾选弹窗：加载本机 MediaStore 相册（bucket_display_name），多选；
+ * 全不勾 = 备份全部相册。
+ */
+@Composable
+private fun ImmichBucketSelectDialog(
+    initialSelected: Set<String>,
+    onCancel: () -> Unit,
+    onConfirm: (Set<String>) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var buckets by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    val selected = remember { mutableStateOf(initialSelected.toMutableSet()) }
+    // 首次打开加载本机相册列表
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        loading = true
+        buckets = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            my.bridge.com.immich.ImmichBackup.fetchLocalBuckets(context)
+        }
+        loading = false
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("备份相册（全不勾 = 全部）") },
+        text = {
+            if (loading) {
+                Text("加载本机相册中…", style = MaterialTheme.typography.bodySmall)
+            } else if (buckets.isEmpty()) {
+                Text(
+                    "未读到本机相册（可能缺少照片/视频读取权限）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Column {
+                    buckets.forEach { bucket ->
+                        Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val cur = selected.value.toMutableSet()
+                                    if (bucket in cur) cur.remove(bucket) else cur.add(bucket)
+                                    selected.value = cur
+                                }
+                                .padding(vertical = 6.dp),
+                        ) {
+                            androidx.compose.material3.Checkbox(
+                                checked = bucket in selected.value,
+                                onCheckedChange = {
+                                    val cur = selected.value.toMutableSet()
+                                    if (it) cur.add(bucket) else cur.remove(bucket)
+                                    selected.value = cur
+                                },
+                            )
+                            Text(bucket, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onConfirm(selected.value) }) { Text("保存") }
         },
         dismissButton = {
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("取消") }

@@ -5,6 +5,8 @@
     <!-- ===================== 保活核心权限 ===================== -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 相册自动备份（Immich 集成）：大文件上传走 WorkManager setForeground（dataSync 类型） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- 媒体采集（screenshot/record_screen 投屏 + take_photo/record_video 后台相机
          + record_audio 后台麦克风） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -145,6 +147,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- 相册自动备份：WorkManager 前台上传服务声明 dataSync 类型（API 34+ setForeground 必需） -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <activity
             android:name=".MainActivity"

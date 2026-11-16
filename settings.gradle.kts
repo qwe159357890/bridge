@@ -12,6 +12,11 @@
 // 依赖方向：app → feature(未来) → core-*；core-* 之间仅允许向更基础的模块依赖。
 pluginManagement {
     repositories {
+        // 阿里云镜像优先（Maven Central 直连国内不通，实测 coil 2.7.0 拉取超时）；
+        // 镜像未命中时回落官方源，保证冷门包仍可拉取
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
+        maven("https://maven.aliyun.com/repository/gradle-plugin")
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -21,6 +26,9 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // 阿里云镜像优先（同上，官方源兜底）
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
         google()
         mavenCentral()
     }

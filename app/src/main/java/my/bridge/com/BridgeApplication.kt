@@ -109,6 +109,10 @@ class BridgeApplication : Application() {
         // evaluate 内部查开关，关时不启动（幂等，无脑调用安全）。
         my.bridge.com.jikong.JikongProximityService.evaluate(this)
 
+        // 相册自动备份（Immich 集成）：开关开则注册 MediaStore 内容触发 Observer
+        // （幂等 KEEP 重排；关闭时内部直接跳过，不注册零消耗）
+        my.bridge.com.immich.ImmichBackup.ensureRegistered(this)
+
         Timber.i("BridgeApplication 初始化完成")
     }
 }

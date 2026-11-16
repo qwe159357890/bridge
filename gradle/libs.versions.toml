@@ -25,6 +25,9 @@ okhttp = "4.12.0"
 retrofit = "2.11.0"
 gson = "2.11.0"
 
+# ---- 图片加载（相册 Immich 集成：缩略图/人物头像/大图预览，见 docs/research/immich-integration.md）----
+coil = "2.7.0"
+
 # ---- 存储 ----
 datastore = "1.1.1"
 room = "2.6.1"
@@ -86,6 +89,9 @@ okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor",
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+
+# 图片加载（相册 Immich 集成）：coil-compose 内含 coil-base（OkHttp 拦截器加 token 头）
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 # 存储
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }

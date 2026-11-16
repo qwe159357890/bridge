@@ -1,0 +1,324 @@
+package my.bridge.com.immich
+
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.animation.fadeIn
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.fadeOut
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.Composable
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material.icons.filled.FolderCopy
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+
+import my.bridge.com.ui.BackPressPrefs
+import my.bridge.com.core.common.DiagLog
+
+private const val NTAG = "相册"
+
+/** 底部导航 4 Tab 数据（tab_shell.page.dart：photos / search / albums / library）。 */
+private data class ImmichBottomTab(
+    val label: String,
+    val icon: ImageVector,
+)
+
+private val immichBottomTabs = listOf(
+    ImmichBottomTab("照片", Icons.Filled.Photo),
+    ImmichBottomTab("搜索", Icons.Filled.Search),
+    ImmichBottomTab("相册", Icons.AutoMirrored.Filled.MenuBook),
+    ImmichBottomTab("资料", Icons.Filled.FolderCopy),
+)
+
+/** 查看器上下文：资产列表 + 起始索引（左右翻页在列表内循环）。 */
+data class ImmichViewerContext(
+    val assets: List<ImmichAsset>,
+    val index: Int,
+)
+
+/** 相册详情上下文：信息 + 本地三级分组结果。 */
+data class ImmichAlbumDetailContext(
+    val album: ImmichAlbumInfo,
+    val groups: List<ImmichTimeline.ImmichGroup>,
+)
+
+/**
+ * Immich 相册功能根页面（Bridge 主页顶部 Tab 第 9 页，复刻 Immich 安卓版 v3.4）。
+ *
+ * 结构（tab_shell.page.dart 同构）：
+ * - 内部底部导航 4 Tab：照片 / 搜索 / 相册 / 资料（选中态药丸高亮）；
+ * - 覆盖层梯子：分类结果网格（搜索/资料入口 + 人物页）→ 相册详情 → 大图查看器；
+ * - 未配置服务端账号时显示引导卡片（去设置 → 相册 分区填写）。
+ *
+ * 返回键梯子（与监控页同款「再按一次返回」范式）：
+ * 1) 查看器打开 → 关闭查看器；
+ * 2) 相册详情打开 → 关闭详情；
+ * 3) 结果网格打开 → 关闭网格；
+ * 4) 非「照片」Tab → 切回照片 Tab；
+ * 5) 已在照片 Tab：第 1 次提示、窗口内第 2 次回主页（窗口取设置→通用→返回键）。
+ *
+ * 主题（决策 D6 默认）：跟随系统深浅色，亮 #4150AF / 暗 #ACCBFA。
+ *
+ * :param onExitToHome: 返回主页首 Tab 回调（由 MainScreen 提供）
+ */
+@Composable
+fun ImmichPage(onExitToHome: () -> Unit) {
+    val context = LocalContext.current
+    val vm = remember { ImmichViewModel() }
+    // 深浅色跟随系统（原型顶部「浅色/深色」按钮为演示工具，非应用内交互）
+    val palette = if (isSystemInDarkTheme()) ImmichDarkPalette else ImmichLightPalette
+    // 首次进入拉全量基础数据
+    LaunchedEffect(Unit) { vm.loadAll(context) }
+
+    // 内部底部导航当前 Tab：0=照片 1=搜索 2=相册 3=资料
+    var currentTab by rememberSaveable { mutableStateOf(0) }
+    // 分类结果网格覆盖层（null=关闭；搜索/资料入口与人物照片页共用）
+    var resultsOpen by remember { mutableStateOf(false) }
+    // 相册详情覆盖层（null=关闭）
+    var albumDetail by remember { mutableStateOf<ImmichAlbumDetailContext?>(null) }
+    // 大图查看器覆盖层（null=关闭）
+    var viewerCtx by remember { mutableStateOf<ImmichViewerContext?>(null) }
+    // 返回键梯子的「再按一次」状态
+    var exitHint by remember { mutableStateOf(false) }
+    var lastBackAt by remember { mutableStateOf(0L) }
+    // 冒泡提示 2 秒后自动消失（与监控页同款）
+    LaunchedEffect(exitHint) {
+        if (exitHint) {
+            kotlinx.coroutines.delay(BackPressPrefs.exitWindowMs(context))
+            exitHint = false
+        }
+    }
+
+    // 返回键梯子（覆盖层由各自 BackHandler 优先接管——后组合先出）
+    BackHandler {
+        if (viewerCtx != null) {
+            viewerCtx = null
+            return@BackHandler
+        }
+        if (albumDetail != null) {
+            albumDetail = null
+            return@BackHandler
+        }
+        if (resultsOpen) {
+            resultsOpen = false
+            return@BackHandler
+        }
+        if (currentTab != 0) {
+            currentTab = 0
+            return@BackHandler
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
+            onExitToHome()
+        } else {
+            lastBackAt = now
+            exitHint = true
+        }
+    }
+
+    // 调色板组合局部：所有 Immich 子组件经 LocalImmichPalette 读取
+    CompositionLocalProvider(LocalImmichPalette provides palette) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.bg),
+        ) {
+            // 主内容：4 Tab 页面
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f)) {
+                    when (currentTab) {
+                        0 -> ImmichPhotosTab(
+                            vm = vm,
+                            onOpenViewer = { assets, index ->
+                                viewerCtx = ImmichViewerContext(assets, index)
+                            },
+                        )
+                        1 -> ImmichSearchTab(
+                            vm = vm,
+                            onOpenResults = { resultsOpen = true },
+                            onOpenViewer = { assets, index ->
+                                viewerCtx = ImmichViewerContext(assets, index)
+                            },
+                        )
+                        2 -> ImmichAlbumsTab(
+                            vm = vm,
+                            onOpenAlbum = { album ->
+                                DiagLog.i(NTAG, "进入相册详情：${album.name}（${album.assetCount} 个资产）")
+                                vm.loadAlbumDetail(context, album.id) { info, groups ->
+                                    albumDetail = ImmichAlbumDetailContext(info, groups)
+                                }
+                            },
+                        )
+                        3 -> ImmichLibraryTab(
+                            vm = vm,
+                            onOpenResults = { resultsOpen = true },
+                            onOpenAlbum = { album ->
+                                vm.loadAlbumDetail(context, album.id) { info, groups ->
+                                    albumDetail = ImmichAlbumDetailContext(info, groups)
+                                }
+                            },
+                        )
+                    }
+                    // 返回提醒冒泡（与监控页同款：底部居中胶囊）
+                    // 全限定名调用：避免匹配到外层 ColumnScope 的 AnimatedVisibility 扩展
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = exitHint,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 90.dp),
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                    ) {
+                        Text(
+                            "再按一次返回主页",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .background(Color(0xE6333338), RoundedCornerShape(20.dp))
+                                .padding(horizontal = 18.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+                // 内部底部导航（原型 .bottomnav：药丸图标 + 文字标签）
+                ImmichBottomNav(
+                    selected = currentTab,
+                    onSelect = {
+                        DiagLog.i(NTAG, "内部底部导航切换：${immichBottomTabs[it].label}")
+                        currentTab = it
+                    },
+                )
+            }
+            // 分类结果网格覆盖层（搜索/资料入口 + 人物照片页；盖住主内容与底部导航）
+            if (resultsOpen) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(palette.bg),
+                ) {
+                    ImmichResultsGrid(
+                        vm = vm,
+                        onOpenViewer = { assets, index ->
+                            viewerCtx = ImmichViewerContext(assets, index)
+                        },
+                        onClose = { resultsOpen = false },
+                    )
+                }
+            }
+            // 相册详情覆盖层（盖住主内容与底部导航）
+            albumDetail?.let { detail ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(palette.bg),
+                ) {
+                    ImmichAlbumDetail(
+                        detail = detail,
+                        onOpenViewer = { assets, index ->
+                            viewerCtx = ImmichViewerContext(assets, index)
+                        },
+                        onClose = { albumDetail = null },
+                    )
+                }
+            }
+            // 大图查看器覆盖层（最高层，黑底全屏）
+            viewerCtx?.let { vctx ->
+                ImmichViewer(
+                    vm = vm,
+                    assets = vctx.assets,
+                    startIndex = vctx.index,
+                    onClose = { viewerCtx = null },
+                    onOpenPerson = { person ->
+                        // 点击人物：关查看器 → 开人物照片页（D8 只读复刻）
+                        viewerCtx = null
+                        vm.openResults(context, ImmichViewModel.ImmichQuery(personId = person.id, title = person.name))
+                        resultsOpen = true
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Immich 内部底部导航：4 Tab 均分，选中态药丸高亮（原型 .bottomnav / .bn.on）。
+ *
+ * :param selected: 当前选中 Tab 序号
+ * :param onSelect: 点选 Tab 回调
+ */
+@Composable
+private fun ImmichBottomNav(selected: Int, onSelect: (Int) -> Unit) {
+    val p = LocalImmichPalette.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(p.navBg)
+            .navigationBarsPadding()
+            .padding(vertical = 8.dp),
+    ) {
+        immichBottomTabs.forEachIndexed { index, tab ->
+            val isSelected = index == selected
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onSelect(index) },
+            ) {
+                // 选中药丸：二级表面色圆角底 + 品牌色图标（未选中 = 次要文字色）
+                Box(
+                    modifier = Modifier
+                        .height(28.dp)
+                        .then(
+                            if (isSelected) {
+                                Modifier
+                                    .background(p.surface2, RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 14.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        tab.icon,
+                        contentDescription = tab.label,
+                        tint = if (isSelected) p.accent else p.sub,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Text(
+                    tab.label,
+                    fontSize = 11.sp,
+                    color = if (isSelected) p.text else p.sub,
+                )
+            }
+        }
+    }
+}
