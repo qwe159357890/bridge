@@ -25,6 +25,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -127,17 +130,48 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     vm.loadMoreTimeline(context)
                 }
             }
-            // 当前滚动位置对应的月份（拖动条高亮用）
-            val monthLabels = remember(groups) { groups.map { it.monthLabel }.distinct() }
-            val currentMonth by remember {
+            // 右侧月份拖动条：固定全量列表（今天 / 一周逐天 MM-dd / 已加载月 + 未加载月）
+            // 点已加载项跳转；点未加载月触发按月加载（拉全该月插入）
+            val buckets by vm.monthBuckets.collectAsState()
+            val monthLoadingKey by vm.monthLoadingKey.collectAsState()
+            val monthJumpKey by vm.monthJumpKey.collectAsState()
+            val scrubItems = remember(groups, buckets) { ImmichTimeline.scrubItems(groups, buckets) }
+            // 当前滚动位置对应的分组（浮窗高亮用）
+            val currentLabel by remember {
                 derivedStateOf {
-                    var mi = 0
+                    var gi = 0
                     headerIndices.forEachIndexed { i, idx ->
-                        if (gridState.firstVisibleItemIndex >= idx) mi = i
+                        if (gridState.firstVisibleItemIndex >= idx) gi = i
                     }
-                    groups.getOrNull(mi)?.monthLabel ?: ""
+                    groups.getOrNull(gi)?.label ?: ""
                 }
             }
+            // 按月加载完成 → 跳转到该月分组头（等分组重算出现后执行）
+            LaunchedEffect(monthJumpKey, groups) {
+                val key = monthJumpKey ?: return@LaunchedEffect
+                val gi = groups.indexOfFirst { it.monthKey == key && Regex("""\d+年\d+月""").matches(it.label) }
+                if (gi >= 0) {
+                    DiagLog.i(NTAG, "按月加载完成 → 跳转 ${groups[gi].label}")
+                    scope.launch { gridState.scrollToItem(headerIndices[gi]) }
+                    vm.clearMonthJump()
+                }
+            }
+            ImmichScrubber(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                items = scrubItems,
+                currentLabel = currentLabel,
+                loadingKey = monthLoadingKey,
+                onSelect = { item ->
+                    val gi = item.groupIndex
+                    if (gi != null) {
+                        DiagLog.i(NTAG, "浮窗跳转：${item.label}")
+                        scope.launch { gridState.scrollToItem(headerIndices[gi]) }
+                    } else {
+                        DiagLog.i(NTAG, "浮窗按月加载：${item.monthKey}（${item.count} 个）")
+                        vm.loadMonth(context, item.monthKey)
+                    }
+                },
+            )
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 state = gridState,
@@ -189,19 +223,6 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     }
                 }
             }
-            // 右侧月份拖动条：点月份名跳转到该月第一个分组头（align 由调用方 BoxScope 提供）
-            ImmichScrubber(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                months = monthLabels,
-                currentMonth = currentMonth,
-                onSelect = { label ->
-                    DiagLog.i(NTAG, "拖动条跳转月份：$label")
-                    val gi = groups.indices.firstOrNull { groups[it].monthLabel == label } ?: return@ImmichScrubber
-                    scope.launch { gridState.scrollToItem(headerIndices[gi]) }
-                    // 跳到已加载的最后一个月：立即续页（该月通常只加载了一部分）
-                    if (label == monthLabels.lastOrNull()) vm.loadMoreTimeline(context)
-                },
-            )
             // 左下角存储指示药丸（原型 .storage）
             ImmichStoragePill(
                 modifier = Modifier.align(Alignment.BottomStart),
@@ -406,20 +427,24 @@ internal fun ImmichAssetTile(asset: ImmichAsset, onClick: () -> Unit, modifier: 
 }
 
 /**
- * 右侧月份拖动条：悬浮浮层列出各月简称，点击跳转、当月高亮（原型 .scrubber）。
- * 三级分组下「今天」与一周内各天仍属当月，拖动条按月聚合不变。
+ * 右侧浮窗：固定全量列表（用户拍板 2026-11-16）——今天 / 一周内逐天（MM-dd）/
+ * 已加载月份 + 未加载月份（附资产数），不再随加载动态增减。
+ * 点击已加载项 → 跳转该分组头；点击未加载月 → 触发按月加载（拉全该月插入时间线）。
+ * 内部可滚动（服务端月份多时列表长，高度限制约屏高 40%）。
  *
  * :param modifier: 布局参数（调用方传 align 定位）
- * :param months: 月份标签列表（分组出现顺序）
- * :param currentMonth: 当前滚动位置所属月份标签（高亮）
- * :param onSelect: 点选月份回调（传月份标签）
+ * :param items: 浮窗条目（ImmichTimeline.scrubItems 构造）
+ * :param currentLabel: 当前滚动位置分组标签（高亮匹配）
+ * :param loadingKey: 正在按月加载的月份键（null = 空闲）
+ * :param onSelect: 点选条目回调
  */
 @Composable
 private fun ImmichScrubber(
     modifier: Modifier = Modifier,
-    months: List<String>,
-    currentMonth: String,
-    onSelect: (String) -> Unit,
+    items: List<ImmichTimeline.ImmichScrubItem>,
+    currentLabel: String,
+    loadingKey: String?,
+    onSelect: (ImmichTimeline.ImmichScrubItem) -> Unit,
 ) {
     val p = LocalImmichPalette.current
     Column(
@@ -427,17 +452,34 @@ private fun ImmichScrubber(
         modifier = modifier
             .padding(end = 3.dp)
             .background(p.surface3, RoundedCornerShape(16.dp))
+            .heightIn(max = 340.dp)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 7.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        months.forEach { name ->
-            val active = name == currentMonth
+        items.forEach { item ->
+            val isCurrent = item.label == currentLabel
+            val isLoading = item.monthKey == loadingKey
+            val loaded = item.groupIndex != null
             Text(
-                name,
-                fontSize = if (active) 12.sp else 10.sp,
-                fontWeight = if (active) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
-                color = if (active) p.accent else p.sub,
-                modifier = Modifier.clickable { onSelect(name) },
+                text = when {
+                    isLoading -> "${item.label}…"
+                    loaded -> item.label
+                    else -> "${item.label} ${item.count}"
+                },
+                fontSize = if (isCurrent) 12.sp else 10.sp,
+                fontWeight = if (isCurrent) {
+                    androidx.compose.ui.text.font.FontWeight.Bold
+                } else {
+                    androidx.compose.ui.text.font.FontWeight.Normal
+                },
+                color = when {
+                    isCurrent -> p.accent
+                    isLoading -> p.accent
+                    loaded -> p.sub
+                    else -> p.sub.copy(alpha = 0.55f)
+                },
+                modifier = Modifier.clickable { onSelect(item) },
             )
         }
     }

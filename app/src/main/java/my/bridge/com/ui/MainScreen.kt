@@ -465,6 +465,50 @@ fun HomePage(
             7 -> AdminWebPage(onExitToHome = { onTabChange(0) }) // 管理后台页（v0.2.15x 从底部工具栏移入，末尾）
             8 -> my.bridge.com.immich.ImmichPage(onExitToHome = { onTabChange(0) }) // 相册页（v0.2.164 新增，Immich 复刻 UI）
         }
+        // v0.2.169：自动备份成功横幅（顶层浮层，3 秒自动消失）
+        ImmichSuccessBanner()
+    }
+}
+
+/**
+ * 自动备份成功横幅：顶部悬浮胶囊，3 秒后自动消失（用户需求 2026-11-16）。
+ * 文案由 ImmichUiState.banner 提供（备份 Worker / 手动上传成功时设置）。
+ */
+@Composable
+private fun ImmichSuccessBanner() {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(my.bridge.com.immich.ImmichUiState.banner) {
+        val text = my.bridge.com.immich.ImmichUiState.banner ?: return@LaunchedEffect
+        visible = true
+        kotlinx.coroutines.delay(3000)
+        visible = false
+        kotlinx.coroutines.delay(300)
+        my.bridge.com.immich.ImmichUiState.banner = null
+    }
+    val bannerText = my.bridge.com.immich.ImmichUiState.banner
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible && bannerText != null,
+        enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+        exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = androidx.compose.ui.Alignment.TopCenter,
+        ) {
+            androidx.compose.material3.Surface(
+                color = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                shadowElevation = 6.dp,
+            ) {
+                Text(
+                    bannerText.orEmpty(),
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                )
+            }
+        }
     }
 }
 

@@ -239,6 +239,8 @@ class ImmichApiClient(private val appContext: Context) {
         isArchived: Boolean? = null,
         isTrashed: Boolean? = null,
         filename: String = "",
+        takenAfter: String = "",
+        takenBefore: String = "",
     ): ImmichAssetPage {
         val payload = JSONObject().put("page", page).put("size", size).put("order", "desc")
         if (type.isNotBlank()) payload.put("type", type)
@@ -248,6 +250,8 @@ class ImmichApiClient(private val appContext: Context) {
         isArchived?.let { payload.put("isArchived", it) }
         isTrashed?.let { payload.put("isTrashed", it) }
         if (filename.isNotBlank()) payload.put("filename", filename)
+        if (takenAfter.isNotBlank()) payload.put("takenAfter", takenAfter)
+        if (takenBefore.isNotBlank()) payload.put("takenBefore", takenBefore)
         val resp = executeJson(req("POST", "/api/search/metadata", payload.toString()))
         val assets = resp.optJSONObject("assets") ?: JSONObject()
         val items = parseAssets(assets.optJSONArray("items") ?: JSONArray())
@@ -274,6 +278,23 @@ class ImmichApiClient(private val appContext: Context) {
         if (filename.isNotBlank()) append("文件名=$filename ")
         if (isEmpty()) append("全部")
     }.trim()
+
+    /**
+     * 全量月份分布（浮窗固定列表用；timeline/buckets 为 Internal 端点，已在部署版本实测可用）。
+     *
+     * :return: 月份桶列表（timeBucket = yyyy-MM-01，count = 该月资产数，降序）
+     */
+    fun fetchTimelineBuckets(): List<ImmichMonthBucket> {
+        val arr = executeJsonArray(req("GET", "/api/timeline/buckets?size=MONTH&isArchived=false"))
+        val out = mutableListOf<ImmichMonthBucket>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val tb = o.optString("timeBucket").take(7) // yyyy-MM
+            if (tb.isNotBlank()) out.add(ImmichMonthBucket(monthKey = tb, count = o.optInt("count")))
+        }
+        DiagLog.i(NTAG, "月份分布拉取：${out.size} 个月（最早 ${out.lastOrNull()?.monthKey}）")
+        return out
+    }
 
     /**
      * 资产详情（查看器打开时拉取，含完整 EXIF 与人物）。
@@ -561,6 +582,14 @@ data class ImmichAlbumInfo(
 data class ImmichAssetPage(
     val items: List<ImmichAsset>,
     val hasNext: Boolean,
+)
+
+/** 月份分布桶（GET /api/timeline/buckets，浮窗固定全量月份列表用）。 */
+data class ImmichMonthBucket(
+    /** 月份键 yyyy-MM（timeBucket 前 7 位） */
+    val monthKey: String,
+    /** 该月资产数 */
+    val count: Int,
 )
 
 /** 服务端资产统计（GET /api/assets/statistics）。 */

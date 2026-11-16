@@ -327,6 +327,11 @@ class ImmichUploadWorker(
             }
             ImmichPrefs.saveLastSyncDateAdded(context, maxDateAdded)
             DiagLog.i(NTAG, "备份对账完成：上传 $uploaded / 跳过 $skipped / 失败 $failed")
+            if (uploaded > 0) {
+                // 成功反馈：顶部横幅（3 秒消失）+ 相册页前台时自动刷新时间线
+                ImmichUiState.banner = "✓ 已备份 $uploaded 张照片到 Immich"
+                ImmichUiState.refreshTick += 1
+            }
             return Result.success()
         } catch (e: Exception) {
             DiagLog.e(NTAG, "备份对账异常：${e.message}", e)

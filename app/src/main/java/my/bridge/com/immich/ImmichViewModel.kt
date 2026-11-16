@@ -60,9 +60,24 @@ class ImmichViewModel : ViewModel() {
     private val _timelineExhausted = MutableStateFlow(false)
     val timelineExhausted: StateFlow<Boolean> = _timelineExhausted
 
-    /** 时间线刷新序号（每次 loadTimelinePage 自增；UI 监听复位滚动到顶部）。 */
+    /** 时间线刷新序号（首页数据到达后自增；UI 监听复位滚动到顶部「今天」）。 */
     private val _refreshSeq = MutableStateFlow(0)
     val refreshSeq: StateFlow<Int> = _refreshSeq
+
+    /** 服务端全量月份分布（浮窗固定列表；loadBuckets 拉取）。 */
+    private val _monthBuckets = MutableStateFlow<List<ImmichMonthBucket>>(emptyList())
+    val monthBuckets: StateFlow<List<ImmichMonthBucket>> = _monthBuckets
+
+    /** 按月加载补丁（monthKey → 该月资产；点击浮窗未加载月份产生）。 */
+    private val _monthPatches = MutableStateFlow<Map<String, List<ImmichAsset>>>(emptyMap())
+
+    /** 正在按月加载的月份键（null = 空闲；浮窗该项转圈）。 */
+    private val _monthLoadingKey = MutableStateFlow<String?>(null)
+    val monthLoadingKey: StateFlow<String?> = _monthLoadingKey
+
+    /** 按月加载完成待跳转的月份键（UI 消费后 clearMonthJump 复位）。 */
+    private val _monthJumpKey = MutableStateFlow<String?>(null)
+    val monthJumpKey: StateFlow<String?> = _monthJumpKey
 
     private var timelinePage = 0
 
@@ -155,6 +170,7 @@ class ImmichViewModel : ViewModel() {
         loadTimelinePage(context)
         loadMeta(context)
         loadLocalMedia(context)
+        loadBuckets(context)
     }
 
     /**
@@ -175,6 +191,8 @@ class ImmichViewModel : ViewModel() {
                 _timelineAssets.value = _timelineAssets.value + page.items
                 recomputeTimeline()
                 _timelineExhausted.value = !page.hasNext
+                // 首页数据到达后通知 UI 复位到顶部（此前复位会因数据未就绪落回旧位置）
+                if (isFirst) _refreshSeq.value += 1
                 DiagLog.i(NTAG, "时间线累计 ${_timelineAssets.value.size} 条（p$target exhausted=${page.hasNext.not()}）")
             } catch (e: Exception) {
                 _error.value = "时间线加载失败：${e.message}"
@@ -195,7 +213,6 @@ class ImmichViewModel : ViewModel() {
         timelinePage = 0
         _timelineAssets.value = emptyList()
         _timelineExhausted.value = false
-        _refreshSeq.value += 1
         fetchTimelinePage(context)
     }
 
@@ -222,16 +239,89 @@ class ImmichViewModel : ViewModel() {
     }
 
     /**
-     * 重算时间线三级分组：本地候选按「当前已加载云端文件名」现算匹配后与云端资产
-     * 合并降序分组（修复：扫描早于分页返回时云端名单为空 → 全部误标未上传导致重复显示）。
+     * 重算时间线三级分组：云端首页分页 + 按月加载补丁 + 本地未上传（按当前已加载
+     * 云端文件名现算匹配）合并去重后降序分组。
      */
     private fun recomputeTimeline() {
-        val cloudNames = _timelineAssets.value.mapTo(HashSet()) { it.fileName }
+        val patchAssets = _monthPatches.value.values.flatten()
+        val cloudNames = (_timelineAssets.value + patchAssets).mapTo(HashSet()) { it.fileName }
         val localOnly = _rawLocalAssets.value.filter { it.fileName !in cloudNames }
         _localOnlyAssets.value = localOnly
-        val merged = ImmichLocalMedia.merge(_timelineAssets.value, localOnly)
+        // 去重：时间线已含的资产（补丁/本地产物可能与服务端分页重叠）
+        val seen = _timelineAssets.value.mapTo(HashSet()) { it.id }
+        val extra = (patchAssets + localOnly).filter { it.id !in seen }
+        val merged = ImmichLocalMedia.merge(_timelineAssets.value, extra)
         _timelineGroups.value = ImmichTimeline.group(merged)
-        DiagLog.i(NTAG, "时间线重组：云端 ${_timelineAssets.value.size} / 本地候选 ${_rawLocalAssets.value.size} → 未上传 ${localOnly.size}")
+        DiagLog.i(NTAG, "时间线重组：云端 ${_timelineAssets.value.size} / 补丁 ${patchAssets.size} / 本地候选 ${_rawLocalAssets.value.size} → 未上传 ${localOnly.size} → 合并 ${merged.size}")
+    }
+
+    /**
+     * 拉取服务端全量月份分布（浮窗固定列表；一次请求）。
+     *
+     * :param context: 任意 Context
+     */
+    fun loadBuckets(context: Context) {
+        viewModelScope.launch {
+            try {
+                val buckets = withContext(Dispatchers.IO) {
+                    ImmichApiClient(context.applicationContext).fetchTimelineBuckets()
+                }
+                _monthBuckets.value = buckets
+            } catch (e: Exception) {
+                DiagLog.w(NTAG, "月份分布拉取失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 按月加载（点击浮窗未加载月份）：takenAfter/takenBefore 圈定该月，分页拉全后
+     * 作为补丁并入时间线，并通知 UI 跳转到该月分组头。
+     *
+     * :param context: 任意 Context
+     * :param monthKey: 月份键（yyyy-MM）
+     */
+    fun loadMonth(context: Context, monthKey: String) {
+        if (_monthLoadingKey.value != null) {
+            DiagLog.i(NTAG, "按月加载跳过：已有月份在加载（${_monthLoadingKey.value}）")
+            return
+        }
+        _monthLoadingKey.value = monthKey
+        viewModelScope.launch {
+            try {
+                val year = monthKey.take(4).toInt()
+                val month = monthKey.drop(3).toInt()
+                val after = "%04d-%02d-01T00:00:00.000Z".format(year, month)
+                val before = if (month == 12) {
+                    "%04d-01-01T00:00:00.000Z".format(year + 1)
+                } else {
+                    "%04d-%02d-01T00:00:00.000Z".format(year, month + 1)
+                }
+                val api = ImmichApiClient(context.applicationContext)
+                val items = mutableListOf<ImmichAsset>()
+                var page = 1
+                while (true) {
+                    val p = withContext(Dispatchers.IO) { api.searchAssets(page, 1000, takenAfter = after, takenBefore = before) }
+                    items += p.items
+                    if (!p.hasNext) break
+                    page += 1
+                }
+                _monthPatches.value = _monthPatches.value + (monthKey to items)
+                recomputeTimeline()
+                _monthJumpKey.value = monthKey
+            } catch (e: Exception) {
+                DiagLog.e(NTAG, "按月加载失败 $monthKey：${e.message}", e)
+                _error.value = "月份加载失败：${e.message}"
+            } finally {
+                _monthLoadingKey.value = null
+            }
+        }
+    }
+
+    /**
+     * 清除按月加载跳转标记（UI 消费后调用）。
+     */
+    fun clearMonthJump() {
+        _monthJumpKey.value = null
     }
 
     /**
@@ -266,6 +356,7 @@ class ImmichViewModel : ViewModel() {
                 withContext(Dispatchers.IO) { ImmichLocalMedia.uploadLocal(context, asset) }
                 _rawLocalAssets.value = _rawLocalAssets.value.filterNot { it.id == asset.id }
                 recomputeTimeline()
+                ImmichUiState.banner = "✓ 已上传 ${asset.fileName}"
                 loadTimelinePage(context)
             } catch (e: Exception) {
                 DiagLog.e(NTAG, "手动上传失败（${asset.fileName}）：${e.message}", e)

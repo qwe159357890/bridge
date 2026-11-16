@@ -66,12 +66,20 @@ data class ImmichViewerContext(
 )
 
 /**
- * Immich 全局 UI 状态（沉浸式开关，借鉴极空页 JkUiState.immersive 范式）。
- * 双击时间线切换：true 时隐藏主页顶部 Tab（MainScreen 读取）与相册内部底部导航。
+ * Immich 全局 UI 状态（借鉴极空页 JkUiState.immersive 范式）。
+ * - immersive：双击时间线切换（隐藏主页顶部 Tab 与相册内部底部导航）；
+ * - banner：自动备份成功横幅文案（MainScreen 顶层展示，3 秒自动清除）；
+ * - refreshTick：备份成功递增——相册页若在前台则监听后自动刷新时间线。
  */
 object ImmichUiState {
     /** 是否沉浸式（隐藏两侧导航，照片浏览全屏）。 */
     var immersive by mutableStateOf(false)
+
+    /** 备份成功横幅文案（null = 不显示）。 */
+    var banner by mutableStateOf<String?>(null)
+
+    /** 备份成功刷新信号（递增计数）。 */
+    var refreshTick by mutableStateOf(0)
 }
 
 /** 相册详情上下文：信息 + 本地三级分组结果。 */
@@ -111,6 +119,13 @@ fun ImmichPage(onExitToHome: () -> Unit) {
         // 自动备份兜底：进相册页触发一次对账（调研 §5.4；开关关闭时内部为 no-op）
         ImmichBackup.ensureRegistered(context)
         ImmichBackup.triggerSyncNow(context)
+    }
+    // 备份成功信号：相册页在前台时自动刷新时间线（新照片出现在「今天」组）
+    LaunchedEffect(ImmichUiState.refreshTick) {
+        if (ImmichUiState.refreshTick > 0) {
+            DiagLog.i(NTAG, "备份成功信号 → 刷新时间线（tick=${ImmichUiState.refreshTick}）")
+            vm.loadTimelinePage(context)
+        }
     }
     // 沉浸式状态（ImmichUiState.immersive 为 snapshot 状态，双击切换自动触发重组；
     // 退出本页时复位，避免下次进入残留）
