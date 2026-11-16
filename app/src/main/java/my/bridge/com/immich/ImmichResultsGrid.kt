@@ -68,7 +68,7 @@ fun ImmichResultsGrid(
         derivedStateOf {
             val li = gridState.layoutInfo
             val last = li.visibleItemsInfo.lastOrNull()?.index ?: -1
-            li.totalItemsCount > 0 && last >= li.totalItemsCount - 30
+            li.totalItemsCount > 0 && last >= li.totalItemsCount - 60
         }
     }
     LaunchedEffect(nearBottom) {

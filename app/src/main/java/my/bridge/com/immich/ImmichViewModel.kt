@@ -38,7 +38,10 @@ class ImmichViewModel : ViewModel() {
     private val _timelineAssets = MutableStateFlow<List<ImmichAsset>>(emptyList())
     val timelineAssets: StateFlow<List<ImmichAsset>> = _timelineAssets
 
-    /** 本地未上传资产（与云端按文件名匹配后剩余，最近 40 天窗口内）。 */
+    /** 本机媒体原始候选（最近 40 天窗口；未与云端匹配的原始集）。 */
+    private val _rawLocalAssets = MutableStateFlow<List<ImmichAsset>>(emptyList())
+
+    /** 本地未上传资产（重组时按当前已加载云端文件名现算）。 */
     private val _localOnlyAssets = MutableStateFlow<List<ImmichAsset>>(emptyList())
     val localOnlyAssets: StateFlow<List<ImmichAsset>> = _localOnlyAssets
 
@@ -56,6 +59,10 @@ class ImmichViewModel : ViewModel() {
     /** 服务端检索是否已无下一页。 */
     private val _timelineExhausted = MutableStateFlow(false)
     val timelineExhausted: StateFlow<Boolean> = _timelineExhausted
+
+    /** 时间线刷新序号（每次 loadTimelinePage 自增；UI 监听复位滚动到顶部）。 */
+    private val _refreshSeq = MutableStateFlow(0)
+    val refreshSeq: StateFlow<Int> = _refreshSeq
 
     private var timelinePage = 0
 
@@ -188,6 +195,7 @@ class ImmichViewModel : ViewModel() {
         timelinePage = 0
         _timelineAssets.value = emptyList()
         _timelineExhausted.value = false
+        _refreshSeq.value += 1
         fetchTimelinePage(context)
     }
 
@@ -214,29 +222,31 @@ class ImmichViewModel : ViewModel() {
     }
 
     /**
-     * 重算时间线三级分组：云端资产 + 本地未上传资产按拍摄时间降序合并后分组
-     * （本地合并见 ImmichLocalMedia.merge；用户反馈第 5 条）。
+     * 重算时间线三级分组：本地候选按「当前已加载云端文件名」现算匹配后与云端资产
+     * 合并降序分组（修复：扫描早于分页返回时云端名单为空 → 全部误标未上传导致重复显示）。
      */
     private fun recomputeTimeline() {
-        val merged = ImmichLocalMedia.merge(_timelineAssets.value, _localOnlyAssets.value)
+        val cloudNames = _timelineAssets.value.mapTo(HashSet()) { it.fileName }
+        val localOnly = _rawLocalAssets.value.filter { it.fileName !in cloudNames }
+        _localOnlyAssets.value = localOnly
+        val merged = ImmichLocalMedia.merge(_timelineAssets.value, localOnly)
         _timelineGroups.value = ImmichTimeline.group(merged)
+        DiagLog.i(NTAG, "时间线重组：云端 ${_timelineAssets.value.size} / 本地候选 ${_rawLocalAssets.value.size} → 未上传 ${localOnly.size}")
     }
 
     /**
-     * 扫描本机 MediaStore 照片/视频，与云端资产按文件名匹配，剩余未上传资产入时间线。
+     * 扫描本机 MediaStore 全部候选（最近窗口），存原始集后重组（匹配在重组时现算）。
      *
      * :param context: 任意 Context
      */
     fun loadLocalMedia(context: Context) {
         viewModelScope.launch {
             try {
-                val cloud = _timelineAssets.value
-                val localOnly = withContext(Dispatchers.IO) {
-                    ImmichLocalMedia.scanLocalOnly(context, cloud.map { it.fileName }, localWindowDays)
+                val raw = withContext(Dispatchers.IO) {
+                    ImmichLocalMedia.scanLocal(context, localWindowDays)
                 }
-                _localOnlyAssets.value = localOnly
+                _rawLocalAssets.value = raw
                 recomputeTimeline()
-                DiagLog.i(NTAG, "本地资产合并：未上传 ${localOnly.size} 个（云端已知 ${cloud.size} 个文件名）")
             } catch (e: Exception) {
                 DiagLog.w(NTAG, "本地资产扫描失败：${e.message}")
             }
@@ -254,7 +264,7 @@ class ImmichViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { ImmichLocalMedia.uploadLocal(context, asset) }
-                _localOnlyAssets.value = _localOnlyAssets.value.filterNot { it.id == asset.id }
+                _rawLocalAssets.value = _rawLocalAssets.value.filterNot { it.id == asset.id }
                 recomputeTimeline()
                 loadTimelinePage(context)
             } catch (e: Exception) {

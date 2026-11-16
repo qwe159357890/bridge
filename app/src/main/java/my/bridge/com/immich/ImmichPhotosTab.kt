@@ -102,17 +102,23 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
         ) {
             val gridState = rememberLazyGridState()
             val scope = rememberCoroutineScope()
+            // 每次进页刷新（refreshSeq 自增）后回到顶部「今天」——修复网格按索引恢复
+            // 滚动位置导致落在旧位置（11月12）的问题
+            val refreshSeq by vm.refreshSeq.collectAsState()
+            LaunchedEffect(refreshSeq) {
+                if (refreshSeq > 0) gridState.scrollToItem(0)
+            }
             // 分组头全局索引表（三级分组：今天/最近一周逐天/按月）
             val headerIndices = remember(groups) { ImmichTimeline.headerIndices(groups) }
             // 分组折叠状态（label → 收起）
             var collapsed by remember { mutableStateOf(setOf<String>()) }
             // 无限滚动：derivedStateOf 读网格自带的 totalItemsCount（权威计数，无 stale 捕获），
-            // 接近底部（剩 30 条内）触发下一页。带日志：触发/跳过原因全部上报 DiagLog。
+            // 接近底部（剩 60 条内）触发下一页。带日志：触发/跳过原因全部上报 DiagLog。
             val nearBottom by remember {
                 derivedStateOf {
                     val li = gridState.layoutInfo
                     val last = li.visibleItemsInfo.lastOrNull()?.index ?: -1
-                    li.totalItemsCount > 0 && last >= li.totalItemsCount - 30
+                    li.totalItemsCount > 0 && last >= li.totalItemsCount - 60
                 }
             }
             LaunchedEffect(nearBottom) {
@@ -192,6 +198,8 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     DiagLog.i(NTAG, "拖动条跳转月份：$label")
                     val gi = groups.indices.firstOrNull { groups[it].monthLabel == label } ?: return@ImmichScrubber
                     scope.launch { gridState.scrollToItem(headerIndices[gi]) }
+                    // 跳到已加载的最后一个月：立即续页（该月通常只加载了一部分）
+                    if (label == monthLabels.lastOrNull()) vm.loadMoreTimeline(context)
                 },
             )
             // 左下角存储指示药丸（原型 .storage）

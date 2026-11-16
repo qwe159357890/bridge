@@ -60,7 +60,7 @@ class ImmichApiClient(private val appContext: Context) {
 
     private fun token(): String = ImmichPrefs.token(appContext)
 
-    /** 构造带令牌头的请求（path 可含 ?query；修复：addPathSegments 会把 query 编码进路径导致 404）。 */
+    /** 构造带令牌头的请求（path 可含 ?query；GET/HEAD 必须传 null body——OkHttp 禁止 GET 携带请求体，否则抛 IllegalArgumentException）。 */
     private fun req(method: String, path: String, body: String? = null): Request {
         val parts = path.trimStart('/').split("?", limit = 2)
         val builder = base().toHttpUrlOrNull()?.newBuilder()
@@ -68,7 +68,9 @@ class ImmichApiClient(private val appContext: Context) {
         builder.addPathSegments(parts[0])
         if (parts.size == 2) builder.query(parts[1])
         val url = builder.build()
-        val b = Request.Builder().url(url).method(method, body?.toRequestBody("application/json".toMediaType()) ?: ByteArray(0).toRequestBody(null))
+        val bodyPart = body?.toRequestBody("application/json".toMediaType())
+            ?: if (method == "GET" || method == "HEAD") null else ByteArray(0).toRequestBody(null)
+        val b = Request.Builder().url(url).method(method, bodyPart)
         if (token().isNotEmpty()) b.header("x-immich-user-token", token())
         return b.build()
     }
@@ -376,7 +378,8 @@ class ImmichApiClient(private val appContext: Context) {
     fun bulkUploadCheck(checksums: List<String>): Set<String> {
         if (checksums.isEmpty()) return emptySet()
         val arr = JSONArray()
-        checksums.forEach { arr.put(JSONObject().put("checksum", it)) }
+        // 服务端 DTO 要求每项同时带 id 与 checksum（缺 id 报 400：assets.0.id should not be empty）
+        checksums.forEach { arr.put(JSONObject().put("id", it).put("checksum", it)) }
         val payload = JSONObject().put("assets", arr)
         val resp = executeJson(req("POST", "/api/assets/bulk-upload-check", payload.toString()))
         val out = mutableSetOf<String>()

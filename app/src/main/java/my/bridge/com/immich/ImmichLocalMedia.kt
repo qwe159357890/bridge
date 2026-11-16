@@ -35,19 +35,18 @@ object ImmichLocalMedia {
     )
 
     /**
-     * 扫描本机媒体，剔除云端已有的（按文件名），返回未上传资产列表（时间降序）。
+     * 扫描本机全部媒体候选（时间降序；不做云端匹配——匹配在每次时间线更新时
+     * 由 ViewModel 按「当前已加载云端文件名」现算，修复扫描早于分页返回导致的竞态误标）。
      *
      * :param context: 任意 Context
-     * :param cloudFileNames: 已加载云端资产的文件名集合
-     * :param windowDays: 本地候选窗口天数（仅取最近 N 天）
-     * :return: 未上传资产列表（ImmichAsset，id 前缀 local:）
+     * :param windowDays: 候选窗口天数（仅取最近 N 天）
+     * :return: 本机媒体资产列表（ImmichAsset，id 前缀 local:）
      */
-    fun scanLocalOnly(context: Context, cloudFileNames: List<String>, windowDays: Int): List<ImmichAsset> {
+    fun scanLocal(context: Context, windowDays: Int): List<ImmichAsset> {
         if (!ImmichBackup.hasMediaPermission(context)) {
             DiagLog.w(NTAG, "无媒体读取权限，本地资产不显示")
             return emptyList()
         }
-        val cloudNames = cloudFileNames.toHashSet()
         val cutoffEpochSec = System.currentTimeMillis() / 1000 - windowDays * 86400L
         val out = mutableListOf<ImmichAsset>()
         mediaUris.forEach { (uri, isVideo) ->
@@ -75,8 +74,6 @@ object ImmichLocalMedia {
                     val durIdx = if (isVideo) cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION) else -1
                     while (cursor.moveToNext()) {
                         val name = cursor.getString(nameIdx) ?: continue
-                        // 云端已有同名文件 → 视为已备份，不出「未上传」块
-                        if (name in cloudNames) continue
                         val dateAdded = cursor.getLong(dateIdx)
                         out.add(
                             ImmichAsset(
@@ -102,7 +99,7 @@ object ImmichLocalMedia {
             }
         }
         val sorted = out.sortedByDescending { it.localDateTime }
-        DiagLog.i(NTAG, "本机扫描完成：候选 ${sorted.size} 个（窗口 ${windowDays} 天，云端同名已剔除）")
+        DiagLog.i(NTAG, "本机扫描完成：候选 ${sorted.size} 个（窗口 ${windowDays} 天，云端匹配交给重组时现算）")
         return sorted
     }
 
