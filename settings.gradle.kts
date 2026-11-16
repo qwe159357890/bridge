@@ -12,11 +12,8 @@
 // 依赖方向：app → feature(未来) → core-*；core-* 之间仅允许向更基础的模块依赖。
 pluginManagement {
     repositories {
-        // 阿里云镜像优先（Maven Central 直连国内不通，实测 coil 2.7.0 拉取超时）；
-        // 镜像未命中时回落官方源，保证冷门包仍可拉取
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
-        maven("https://maven.aliyun.com/repository/gradle-plugin")
+        // 注意：不要把阿里云镜像排在官方源前面——CI（海外 runner）访问 aliyun 5xx 会
+        // 整体解析失败（v0.2.165 实锤 KSP 插件拉不到）；本地已有 Coil 缓存，无需镜像。
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -26,9 +23,6 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        // 阿里云镜像优先（同上，官方源兜底）
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
         google()
         mavenCentral()
     }
