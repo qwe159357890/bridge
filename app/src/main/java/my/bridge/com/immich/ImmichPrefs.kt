@@ -37,6 +37,7 @@ object ImmichPrefs {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_SCRUBBER_COLLAPSED = "scrubber_collapsed"
     private const val KEY_SCRUBBER_SIDE = "scrubber_side"
+    private const val KEY_LEGACY_NOTIF_CLEANED = "legacy_notif_2001_cleaned"
 
     /** 默认服务地址：本机已部署验证的 Immich 服务端（VNT 组网可直达）。 */
     const val DEFAULT_BASE_URL = "http://039039.xyz:15148"
@@ -199,5 +200,23 @@ object ImmichPrefs {
      */
     fun saveScrubberSide(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_SCRUBBER_SIDE, value).apply()
+    }
+
+    /**
+     * 历史残留通知迁移清理是否已执行（v0.2.177 一次性清理误用 ID 2001 的备份通知）。
+     *
+     * :param context: 任意 Context
+     * :return: true = 已清理过，不再触碰 2001
+     */
+    fun legacyNotificationCleaned(context: Context): Boolean =
+        sp(context).getBoolean(KEY_LEGACY_NOTIF_CLEANED, false)
+
+    /**
+     * 标记历史残留通知迁移清理已执行。
+     *
+     * :param context: 任意 Context
+     */
+    fun saveLegacyNotificationCleaned(context: Context) {
+        sp(context).edit().putBoolean(KEY_LEGACY_NOTIF_CLEANED, true).apply()
     }
 }

@@ -34,6 +34,16 @@ private const val CHANNEL_ID = "immich_backup"
 /** 单文件转前台服务的阈值：256MB（调研报告 §5.4，与 Immich 原版口径一致）。 */
 private const val FOREGROUND_THRESHOLD_BYTES = 256L * 1024 * 1024
 
+/**
+ * 上传进度通知 ID：2401。
+ *
+ * ID 分配台账（WechatNotifier.kt 注释记载）：2001=保活/远程、2002=中继、2101=媒体采集、
+ * 2201=更新、2202=管理端、2301=微信。v0.2.173~176 曾误用 2001——每次 Worker 启动
+ * cancel(2001) 把 KeepAliveService 的保活常驻通知删掉，notify(2001) 又把它顶成
+ * 「正在上传（已传 0）」残留，2026-11-17 用户反馈实锤后改用 2401。
+ */
+private const val NOTIFICATION_ID = 2401
+
 /** 单次备份 Worker 最多处理的文件数（防超长运行；余量下次内容触发继续）。 */
 private const val MAX_UPLOADS_PER_RUN = 200
 
@@ -283,8 +293,15 @@ class ImmichUploadWorker(
     override suspend fun doWork(): Result {
         val context = applicationContext
         DiagLog.i(NTAG, "备份 Worker 启动（attempt=$runAttemptCount）")
-        // 先清掉历史残留通知（Worker 被取消/进程被杀时前台通知不会自动消失）
-        runCatching { NotificationManagerCompat.from(context).cancel(2001) }
+        // 一次性迁移清理：v0.2.176 及之前备份通知误用 ID 2001（与保活常驻通知冲突），
+        // 旧版残留的「正在上传（已传 0）」需要清一次；之后永不触碰 2001（保活通知）
+        if (!ImmichPrefs.legacyNotificationCleaned(context)) {
+            runCatching { NotificationManagerCompat.from(context).cancel(2001) }
+            ImmichPrefs.saveLegacyNotificationCleaned(context)
+            DiagLog.i(NTAG, "已一次性清理误用 ID 2001 的历史残留通知")
+        }
+        // 清掉本链路自己的残留通知（Worker 被取消/进程被杀时通知不会自动消失）
+        runCatching { NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID) }
         // 「仅 Wi-Fi」门禁：不再依赖 JobScheduler 网络约束（OnePlus 跟踪故障会卡住不启动），
         // 改为 Worker 内判定；非 Wi-Fi 直接退出，下次内容触发/进相册页再对账
         if (ImmichPrefs.wifiOnly(context) && !ImmichBackup.isUnmeteredNetwork(context)) {
@@ -350,7 +367,7 @@ class ImmichUploadWorker(
                 }
                 val file = File(row.path)
                 try {
-                    updateForeground("正在上传 ${file.name}（已传 $uploaded）")
+                    updateForeground("正在上传 ${file.name}")
                     api.uploadAsset(
                         file = file,
                         isVideo = row.isVideo,
@@ -364,6 +381,8 @@ class ImmichUploadWorker(
                     markSynced(row)
                     maxDateAdded = maxOf(maxDateAdded, row.dateAdded)
                     uploaded++
+                    // 成功后立即更新计数（此前只在上传前更新，单张照片全程卡在「已传 0」）
+                    updateForeground("已备份 $uploaded 张")
                 } catch (e: Exception) {
                     failed++
                     DiagLog.e(NTAG, "上传失败 ${file.name}：${e.message}", e)
@@ -389,6 +408,9 @@ class ImmichUploadWorker(
         } catch (e: Exception) {
             DiagLog.e(NTAG, "备份对账异常：${e.message}", e)
             return Result.retry()
+        } finally {
+            // 无论成功/失败/被系统停止，都撤掉本链路进度通知（防残留挂「已传 0」）
+            runCatching { NotificationManagerCompat.from(applicationContext).cancel(NOTIFICATION_ID) }
         }
     }
 
@@ -511,9 +533,9 @@ class ImmichUploadWorker(
             .setOngoing(true)
             .build()
         return if (Build.VERSION.SDK_INT >= 34) {
-            androidx.work.ForegroundInfo(2001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            androidx.work.ForegroundInfo(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            androidx.work.ForegroundInfo(2001, notification)
+            androidx.work.ForegroundInfo(NOTIFICATION_ID, notification)
         }
     }
 
@@ -524,7 +546,7 @@ class ImmichUploadWorker(
      */
     private fun updateForeground(text: String) {
         runCatching {
-            NotificationManagerCompat.from(applicationContext).notify(2001, createForegroundInfo(text).notification)
+            NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, createForegroundInfo(text).notification)
         }
     }
 }
