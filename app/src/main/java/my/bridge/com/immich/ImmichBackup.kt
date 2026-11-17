@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
@@ -14,7 +16,6 @@ import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -121,16 +122,28 @@ object ImmichBackup {
     }
 
     /**
-     * 上传 Worker 网络约束（仅 Wi-Fi 开关 → UNMETERED / 全网）。
+     * Worker 约束（不设网络约束）。
+     * OnePlus/ColorOS 的 JobScheduler 对网络约束跟踪有故障（网络正常仍判 Unsatisfied、
+     * 入队后不启动、作业从队列消失），故「仅 Wi-Fi」门禁改为 Worker 内代码判定，
+     * Worker 一入队立即启动，不再等系统约束回调。
      *
      * :param context: 任意 Context
-     * :return: 网络约束
+     * :return: 空约束（立即满足）
      */
-    internal fun networkConstraints(context: Context): Constraints = Constraints.Builder()
-        .setRequiredNetworkType(
-            if (ImmichPrefs.wifiOnly(context)) NetworkType.UNMETERED else NetworkType.CONNECTED,
-        )
-        .build()
+    internal fun networkConstraints(context: Context): Constraints = Constraints.Builder().build()
+
+    /**
+     * 当前默认网络是否不按流量计费（Wi-Fi 等）。
+     *
+     * :param context: 应用上下文
+     * :return: true = 不按流量计费；无活动网络返回 false
+     */
+    internal fun isUnmeteredNetwork(context: Context): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
 
     /**
      * 查询本机媒体相册（bucket_display_name 去重，设置页勾选列表用）。
@@ -261,6 +274,14 @@ class ImmichUploadWorker(
     override suspend fun doWork(): Result {
         val context = applicationContext
         DiagLog.i(NTAG, "备份 Worker 启动（attempt=$runAttemptCount）")
+        // 先清掉历史残留通知（Worker 被取消/进程被杀时前台通知不会自动消失）
+        runCatching { NotificationManagerCompat.from(context).cancel(2001) }
+        // 「仅 Wi-Fi」门禁：不再依赖 JobScheduler 网络约束（OnePlus 跟踪故障会卡住不启动），
+        // 改为 Worker 内判定；非 Wi-Fi 直接退出，下次内容触发/进相册页再对账
+        if (ImmichPrefs.wifiOnly(context) && !ImmichBackup.isUnmeteredNetwork(context)) {
+            DiagLog.i(NTAG, "仅 Wi-Fi 备份：当前非 Wi-Fi 网络，本次跳过")
+            return Result.success()
+        }
         // 总闸：开关关闭直接退出（能耗纪律 #7：出厂关闭，开启才生效）
         if (!ImmichPrefs.autoBackup(context)) {
             DiagLog.i(NTAG, "自动备份已关闭，Worker 退出")

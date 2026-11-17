@@ -1,13 +1,14 @@
 {
-  "version": "0.2.174",
-  "versionCode": 374,
-  "url": "/updates/bridge-v0.2.174.apk",
+  "version": "0.2.175",
+  "versionCode": 375,
+  "url": "/updates/bridge-v0.2.175.apk",
   "notes": [
-    "修复：自动备份重复上传根因——bulk-upload-check 的 reject 响应中回显校验值在 id 字段（无 checksum 字段），v0.2.173 误读 checksum 导致去重集合恒为空（「服务端已有 0 个」）而全量重传；现兼容优先读 checksum、缺失时回退 id。",
-    "说明：v0.2.173 起手机算出的 SHA-1 与服务端判重均正确（抓包重放 12/12 判为重复实锤），此前上传均被服务端唯一索引静默去重，未产生重复资产；修复后已备份文件将在预检阶段直接跳过，不再白耗流量。"
+    "修复：拍照后备份 Worker 不启动——OnePlus/ColorOS 的 JobScheduler 对网络约束跟踪有故障（网络正常仍判 Unsatisfied、作业从队列消失），去掉网络约束改为入队即跑，「仅 Wi-Fi」门禁改在 Worker 内代码判定（非 Wi-Fi 直接跳过，下次触发再对账）。",
+    "修复：「正在上传大文件…」通知残留——Worker 每次启动先清理历史残留通知。",
+    "延续 v0.2.174：备份去重解析修复已验证生效（服务端已有 64 个全部正确跳过，不再全量重传）。"
   ],
-  "sha256": "b424ae86c6f2d5113dc2ee4c7764584a2aa93d113f59b9212b3cd8f126d6f3d4",
+  "sha256": "e65c403da5276bb1245b4765c5b74c059f922ba3fd58dd6b63029ec047bedb06",
   "size": 62970095,
-  "released_at": "2026-11-17 13:00",
+  "released_at": "2026-11-17 14:10",
   "min_supported": "0.2.60"
 }
