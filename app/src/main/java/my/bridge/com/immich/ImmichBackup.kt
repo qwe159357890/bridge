@@ -135,6 +135,10 @@ object ImmichBackup {
     /**
      * 当前默认网络是否不按流量计费（Wi-Fi 等）。
      *
+     * OnePlus/ColorOS 上 NET_CAPABILITY_NOT_METERED 偶发缺失（同一 Wi-Fi 下有时
+     * 被误判为计费网络，2026-11-17 实锤），故以传输层判定优先：
+     * Wi-Fi / 以太网直接视为不按流量计费，蜂窝等再回退 NOT_METERED 能力位。
+     *
      * :param context: 应用上下文
      * :return: true = 不按流量计费；无活动网络返回 false
      */
@@ -142,6 +146,11 @@ object ImmichBackup {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return false
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        ) {
+            return true
+        }
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 

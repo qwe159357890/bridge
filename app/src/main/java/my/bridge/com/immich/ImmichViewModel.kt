@@ -81,6 +81,13 @@ class ImmichViewModel : ViewModel() {
 
     private var timelinePage = 0
 
+    // 时间线拉取防重入标志：refreshTick 与首页加载并发触发 loadTimelinePage 时，
+    // 两次请求会把同一页 append 两遍 → LazyVerticalGrid key 重复直接崩溃（2026-11-17 实锤）
+    private var timelineFetchInFlight = false
+
+    // 首页重载待办标志：重载请求到达时若拉取在途，记下待办，在途请求完成后补拉首页
+    private var timelineReloadPending = false
+
     // ============ 相册 / 人物 / 统计 ============
 
     private val _albums = MutableStateFlow<List<ImmichAlbumInfo>>(emptyList())
@@ -179,6 +186,12 @@ class ImmichViewModel : ViewModel() {
      * :param context: 任意 Context
      */
     private fun fetchTimelinePage(context: Context) {
+        // 防重入：已有拉取在途时直接跳过（并发双请求是 key 重复崩溃的根因）
+        if (timelineFetchInFlight) {
+            DiagLog.i(NTAG, "时间线拉取跳过：已有请求在途")
+            return
+        }
+        timelineFetchInFlight = true
         viewModelScope.launch {
             val isFirst = timelinePage == 0
             if (isFirst) _timelineLoading.value = true else _timelineLoadingMore.value = true
@@ -188,7 +201,8 @@ class ImmichViewModel : ViewModel() {
                 val target = timelinePage + 1
                 val page = withContext(Dispatchers.IO) { api.searchAssets(target, pageSize) }
                 timelinePage += 1
-                _timelineAssets.value = _timelineAssets.value + page.items
+                // 兜底去重：即使异常路径出现重叠页，也不让同 id 资产进入网格（key 重复即崩溃）
+                _timelineAssets.value = (_timelineAssets.value + page.items).distinctBy { it.id }
                 recomputeTimeline()
                 _timelineExhausted.value = !page.hasNext
                 // 首页数据到达后通知 UI 复位到顶部（此前复位会因数据未就绪落回旧位置）
@@ -200,6 +214,12 @@ class ImmichViewModel : ViewModel() {
             } finally {
                 _timelineLoading.value = false
                 _timelineLoadingMore.value = false
+                timelineFetchInFlight = false
+                // 在途期间有首页重载请求 → 立即补拉（保证重载不被防重入吞掉）
+                if (timelineReloadPending) {
+                    timelineReloadPending = false
+                    fetchTimelinePage(context)
+                }
             }
         }
     }
@@ -213,6 +233,12 @@ class ImmichViewModel : ViewModel() {
         timelinePage = 0
         _timelineAssets.value = emptyList()
         _timelineExhausted.value = false
+        if (timelineFetchInFlight) {
+            // 拉取在途：记待办，等其完成后补拉首页（直接再发会双请求 → key 重复崩溃）
+            timelineReloadPending = true
+            DiagLog.i(NTAG, "首页加载：已有请求在途，待完成后重拉")
+            return
+        }
         fetchTimelinePage(context)
     }
 
@@ -250,7 +276,8 @@ class ImmichViewModel : ViewModel() {
         // 去重：时间线已含的资产（补丁/本地产物可能与服务端分页重叠）
         val seen = _timelineAssets.value.mapTo(HashSet()) { it.id }
         val extra = (patchAssets + localOnly).filter { it.id !in seen }
-        val merged = ImmichLocalMedia.merge(_timelineAssets.value, extra)
+        // 合并层兜底去重：同 id 资产进入 LazyVerticalGrid 会因 key 重复直接崩溃
+        val merged = ImmichLocalMedia.merge(_timelineAssets.value, extra).distinctBy { it.id }
         _timelineGroups.value = ImmichTimeline.group(merged)
         DiagLog.i(NTAG, "时间线重组：云端 ${_timelineAssets.value.size} / 补丁 ${patchAssets.size} / 本地候选 ${_rawLocalAssets.value.size} → 未上传 ${localOnly.size} → 合并 ${merged.size}")
     }

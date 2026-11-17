@@ -1,14 +1,14 @@
 {
-  "version": "0.2.175",
-  "versionCode": 375,
-  "url": "/updates/bridge-v0.2.175.apk",
+  "version": "0.2.176",
+  "versionCode": 376,
+  "url": "/updates/bridge-v0.2.176.apk",
   "notes": [
-    "修复：拍照后备份 Worker 不启动——OnePlus/ColorOS 的 JobScheduler 对网络约束跟踪有故障（网络正常仍判 Unsatisfied、作业从队列消失），去掉网络约束改为入队即跑，「仅 Wi-Fi」门禁改在 Worker 内代码判定（非 Wi-Fi 直接跳过，下次触发再对账）。",
-    "修复：「正在上传大文件…」通知残留——Worker 每次启动先清理历史残留通知。",
-    "延续 v0.2.174：备份去重解析修复已验证生效（服务端已有 64 个全部正确跳过，不再全量重传）。"
+    "修复：打开相册页偶发崩溃——上传成功触发时间线刷新与首页加载并发执行，同一页资产被 append 两遍，LazyVerticalGrid key 重复直接崩溃；加防重入标志 + append/合并层双保险去重。",
+    "修复：「仅 Wi-Fi」门禁偶发误判——该机型 NET_CAPABILITY_NOT_METERED 偶发缺失（同一 Wi-Fi 下被判为计费网络导致跳过备份），改为传输层判定优先（Wi-Fi/以太网直接放行）。",
+    "延续 v0.2.175：拍照后自动备份已验证生效（新照片 10 秒内自动上传成功）。"
   ],
-  "sha256": "e65c403da5276bb1245b4765c5b74c059f922ba3fd58dd6b63029ec047bedb06",
-  "size": 62970095,
-  "released_at": "2026-11-17 14:10",
+  "sha256": "321823BD9567E9884B04226398831FB25C7E0ED67FAA4E52DF7DB0F0C66614CA",
+  "size": 62970091,
+  "released_at": "2026-11-17 15:05",
   "min_supported": "0.2.60"
 }
