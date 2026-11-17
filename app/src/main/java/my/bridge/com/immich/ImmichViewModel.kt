@@ -289,7 +289,8 @@ class ImmichViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val year = monthKey.take(4).toInt()
-                val month = monthKey.drop(3).toInt()
+                // monthKey 固定 yyyy-MM：年份占 4 位 + 连字符，月份从第 5 位后开始（drop(5)）
+                val month = monthKey.drop(5).toInt()
                 val after = "%04d-%02d-01T00:00:00.000Z".format(year, month)
                 val before = if (month == 12) {
                     "%04d-01-01T00:00:00.000Z".format(year + 1)

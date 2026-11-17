@@ -147,6 +147,14 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     vm.clearMonthJump()
                 }
             }
+            // 浮窗可见性：停在顶部（今天）时隐藏，向上滑离开顶部才显示（用户拍板 2026-11-17）
+            val nearTop by remember {
+                derivedStateOf {
+                    gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+                }
+            }
+            // 浮窗收缩态（跨会话记忆）：收缩 = 右缘箭头，点开展开列表
+            var scrubberCollapsed by remember { mutableStateOf(ImmichPrefs.scrubberCollapsed(context)) }
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 state = gridState,
@@ -198,12 +206,20 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     }
                 }
             }
-            // 右侧月份浮窗：必须在网格**之后**组合（Box 后组合者绘制在上层、点击可达）
+            // 右侧月份浮窗：必须在网格**之后**组合（Box 后组合者绘制在上层、点击可达）；
+            // 顶部隐藏 / 收缩为右缘箭头（记忆状态）
             ImmichScrubber(
                 modifier = Modifier.align(Alignment.CenterEnd),
                 items = scrubItems,
                 currentLabel = currentLabel,
                 loadingKey = monthLoadingKey,
+                visible = !nearTop,
+                collapsed = scrubberCollapsed,
+                onToggleCollapsed = {
+                    scrubberCollapsed = it
+                    ImmichPrefs.saveScrubberCollapsed(context, it)
+                    DiagLog.i(NTAG, "浮窗收缩态：$it")
+                },
                 onSelect = { item ->
                     val gi = item.groupIndex
                     if (gi != null) {
@@ -419,15 +435,19 @@ internal fun ImmichAssetTile(asset: ImmichAsset, onClick: () -> Unit, modifier: 
 }
 
 /**
- * 右侧浮窗：固定全量列表（用户拍板 2026-11-16）——今天 / 一周内逐天（MM-dd）/
- * 已加载月份 + 未加载月份（附资产数），不再随加载动态增减。
- * 点击已加载项 → 跳转该分组头；点击未加载月 → 触发按月加载（拉全该月插入时间线）。
- * 内部可滚动（服务端月份多时列表长，高度限制约屏高 40%）。
+ * 右侧浮窗（用户拍板 2026-11-17 交互）：
+ * - 可见性：停在顶部（今天）隐藏，向上滑离开顶部才显示；
+ * - 收缩态：右缘仅显示「‹」箭头，点击展开列表；状态跨会话记忆；
+ * - 格式：今天 / 一周内逐天（11-15）/ 月份（26-11 紧凑格式），不显示资产数量；
+ * - 点击已加载项 → 跳转该分组头；点击未加载月 → 触发按月加载（拉全该月插入）。
  *
  * :param modifier: 布局参数（调用方传 align 定位）
  * :param items: 浮窗条目（ImmichTimeline.scrubItems 构造）
  * :param currentLabel: 当前滚动位置分组标签（高亮匹配）
  * :param loadingKey: 正在按月加载的月份键（null = 空闲）
+ * :param visible: 是否显示（顶部隐藏）
+ * :param collapsed: 是否收缩态（右缘箭头）
+ * :param onToggleCollapsed: 切换收缩态回调（调用方持久化）
  * :param onSelect: 点选条目回调
  */
 @Composable
@@ -436,42 +456,69 @@ private fun ImmichScrubber(
     items: List<ImmichTimeline.ImmichScrubItem>,
     currentLabel: String,
     loadingKey: String?,
+    visible: Boolean,
+    collapsed: Boolean,
+    onToggleCollapsed: (Boolean) -> Unit,
     onSelect: (ImmichTimeline.ImmichScrubItem) -> Unit,
 ) {
     val p = LocalImmichPalette.current
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .padding(end = 3.dp)
-            .background(p.surface3, RoundedCornerShape(16.dp))
-            .heightIn(max = 340.dp)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 7.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        items.forEach { item ->
-            val isCurrent = item.label == currentLabel
-            val isLoading = item.monthKey == loadingKey
-            val loaded = item.groupIndex != null
+    // 收缩态：右缘一枚「‹」箭头小药丸（点击展开列表）
+    if (collapsed) {
+        androidx.compose.animation.AnimatedVisibility(visible = visible, enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
             Text(
-                text = when {
-                    isLoading -> "${item.label}…"
-                    loaded -> item.label
-                    else -> "${item.label} ${item.count}"
-                },
-                fontSize = if (isCurrent) 12.sp else 10.sp,
-                fontWeight = if (isCurrent) {
-                    androidx.compose.ui.text.font.FontWeight.Bold
-                } else {
-                    androidx.compose.ui.text.font.FontWeight.Normal
-                },
-                color = when {
-                    isCurrent -> p.accent
-                    isLoading -> p.accent
-                    loaded -> p.sub
-                    else -> p.sub.copy(alpha = 0.55f)
-                },
-                modifier = Modifier.clickable { onSelect(item) },
+                "‹",
+                fontSize = 15.sp,
+                color = p.sub,
+                modifier = modifier
+                    .padding(end = 2.dp)
+                    .background(p.surface3, RoundedCornerShape(12.dp))
+                    .clickable { onToggleCollapsed(false) }
+                    .padding(horizontal = 5.dp, vertical = 10.dp),
+            )
+        }
+        return
+    }
+    androidx.compose.animation.AnimatedVisibility(visible = visible, enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = modifier
+                .padding(end = 3.dp)
+                .background(p.surface3, RoundedCornerShape(16.dp))
+                .heightIn(max = 340.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 7.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            items.forEach { item ->
+                val isCurrent = item.label == currentLabel
+                val isLoading = item.monthKey == loadingKey
+                val loaded = item.groupIndex != null
+                Text(
+                    // 只显示标签，不显示资产数量（用户拍板）
+                    text = if (isLoading) "${item.label}…" else item.label,
+                    fontSize = if (isCurrent) 12.sp else 10.sp,
+                    fontWeight = if (isCurrent) {
+                        androidx.compose.ui.text.font.FontWeight.Bold
+                    } else {
+                        androidx.compose.ui.text.font.FontWeight.Normal
+                    },
+                    color = when {
+                        isCurrent -> p.accent
+                        isLoading -> p.accent
+                        loaded -> p.sub
+                        else -> p.sub.copy(alpha = 0.55f)
+                    },
+                    modifier = Modifier.clickable { onSelect(item) },
+                )
+            }
+            // 收缩箭头（列表末尾，「›」点击收起贴边）
+            Text(
+                "›",
+                fontSize = 15.sp,
+                color = p.sub,
+                modifier = Modifier
+                    .clickable { onToggleCollapsed(true) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
             )
         }
     }

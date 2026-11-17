@@ -35,6 +35,7 @@ object ImmichPrefs {
     private const val KEY_LAST_SYNC = "last_sync_date_added"
     private const val KEY_SYNCED_ITEMS = "synced_items"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_SCRUBBER_COLLAPSED = "scrubber_collapsed"
 
     /** 默认服务地址：本机已部署验证的 Immich 服务端（VNT 组网可直达）。 */
     const val DEFAULT_BASE_URL = "http://039039.xyz:15148"
@@ -161,5 +162,23 @@ object ImmichPrefs {
         val fresh = "bridge-${UUID.randomUUID()}"
         sp(context).edit().putString(KEY_DEVICE_ID, fresh).apply()
         return fresh
+    }
+
+    /**
+     * 月份浮窗是否处于收缩态（箭头贴右侧边缘；用户拍板：记忆收缩状态）。
+     *
+     * :param context: 任意 Context
+     * :return: true = 收缩
+     */
+    fun scrubberCollapsed(context: Context): Boolean = sp(context).getBoolean(KEY_SCRUBBER_COLLAPSED, false)
+
+    /**
+     * 保存月份浮窗收缩状态（跨会话记忆）。
+     *
+     * :param context: 任意 Context
+     * :param value: true = 收缩
+     */
+    fun saveScrubberCollapsed(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_SCRUBBER_COLLAPSED, value).apply()
     }
 }

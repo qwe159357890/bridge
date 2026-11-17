@@ -110,9 +110,11 @@ object ImmichBackup {
         val request = OneTimeWorkRequestBuilder<ImmichUploadWorker>()
             .setConstraints(networkConstraints(appContext))
             .build()
+        // REPLACE：被系统取消/受网络约束等待中的旧 Worker 不再阻塞新触发
+        //（KEEP 曾导致「取消后唯一名被占，后续触发全部无效」）
         WorkManager.getInstance(appContext).enqueueUniqueWork(
             UPLOAD_NAME,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             request,
         )
         DiagLog.i(NTAG, "手动触发备份对账")
@@ -213,7 +215,8 @@ class ImmichMediaObserver(
         val wm = WorkManager.getInstance(applicationContext)
         wm.enqueueUniqueWork(
             "immich_upload_worker",
-            ExistingWorkPolicy.KEEP,
+            // REPLACE：与手动触发同策略，避免取消/等待态旧 Worker 阻塞新内容触发
+            ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<ImmichUploadWorker>()
                 .setConstraints(ImmichBackup.networkConstraints(applicationContext))
                 .build(),
@@ -241,6 +244,10 @@ class ImmichUploadWorker(
         val path: String,
         val size: Long,
         val dateAdded: Long,
+        /** 真实拍摄时间（epoch 秒；DATE_TAKEN，无则 0 → 回退 dateAdded） */
+        val dateTaken: Long,
+        /** 文件修改时间（epoch 秒；DATE_MODIFIED，无则 0 → 回退 dateAdded） */
+        val dateModified: Long,
         val bucket: String,
         val isVideo: Boolean,
         val durationMs: Long,
@@ -253,6 +260,7 @@ class ImmichUploadWorker(
      */
     override suspend fun doWork(): Result {
         val context = applicationContext
+        DiagLog.i(NTAG, "备份 Worker 启动（attempt=$runAttemptCount）")
         // 总闸：开关关闭直接退出（能耗纪律 #7：出厂关闭，开启才生效）
         if (!ImmichPrefs.autoBackup(context)) {
             DiagLog.i(NTAG, "自动备份已关闭，Worker 退出")
@@ -306,8 +314,9 @@ class ImmichUploadWorker(
                     api.uploadAsset(
                         file = file,
                         isVideo = row.isVideo,
-                        fileCreatedAt = row.dateAdded * 1000,
-                        fileModifiedAt = row.dateAdded * 1000,
+                        // 拍摄时间优先 DATE_TAKEN（DATE_ADDED 只是入库时间，会导致时间线日期错乱）
+                        fileCreatedAt = (if (row.dateTaken > 0) row.dateTaken else row.dateAdded) * 1000,
+                        fileModifiedAt = (if (row.dateModified > 0) row.dateModified else row.dateAdded) * 1000,
                         deviceAssetId = row.id.toString(),
                         duration = formatDuration(row.durationMs),
                         checksum = checksum,
@@ -333,6 +342,10 @@ class ImmichUploadWorker(
                 ImmichUiState.refreshTick += 1
             }
             return Result.success()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 系统停止 Worker（超时/省电策略）——记录后按取消传播，等待下次触发
+            DiagLog.w(NTAG, "备份 Worker 被系统停止（${e.message}），等待下次触发")
+            throw e
         } catch (e: Exception) {
             DiagLog.e(NTAG, "备份对账异常：${e.message}", e)
             return Result.retry()
@@ -377,6 +390,13 @@ class ImmichUploadWorker(
                     val sizeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
                     val dateIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
                     val bucketIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                    // DATE_TAKEN = 真实拍摄时间（DATE_ADDED 只是入库时间）；旧机型可能无此列
+                    val takenIdx = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        cursor.getColumnIndex(MediaStore.MediaColumns.DATE_TAKEN)
+                    } else {
+                        cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                    }
+                    val modIdx = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
                     val durIdx = if (isVideo) cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION) else -1
                     while (cursor.moveToNext()) {
                         val id = cursor.getLong(idIdx)
@@ -386,12 +406,16 @@ class ImmichUploadWorker(
                         val bucket = cursor.getString(bucketIdx) ?: ""
                         // 勾选相册制：空集合 = 全部相册；非空 = 仅勾选项
                         if (selectedBuckets.isNotEmpty() && bucket !in selectedBuckets) continue
+                        val dateTaken = if (takenIdx >= 0) cursor.getLong(takenIdx) else 0L
+                        val dateModified = if (modIdx >= 0) cursor.getLong(modIdx) else 0L
                         out.add(
                             MediaRow(
                                 id = id,
                                 path = cursor.getString(dataIdx) ?: continue,
                                 size = cursor.getLong(sizeIdx),
                                 dateAdded = dateAdded,
+                                dateTaken = dateTaken,
+                                dateModified = dateModified,
                                 bucket = bucket,
                                 isVideo = isVideo,
                                 durationMs = if (durIdx >= 0) cursor.getLong(durIdx) else 0L,

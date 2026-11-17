@@ -340,10 +340,15 @@ fun MainScreen(modifier: Modifier = Modifier) {
         // 底部导航：销售页沉浸时隐藏（selectedBottom==3 且未点「返回导航」）。
         // 点击任意 Tab 时重置 salesNavVisible，保证再次进入销售页回到沉浸态。
         // v0.2.67：极空页沉浸（主页顶部 Tab 选中「极空」且 JkUiState.immersive）时同样隐藏。
+        // v0.2.171：相册页沉浸（用户拍板，销售页同款语义）——隐藏 APP 底部导航栏
+        //（主页/微信/销售/工具/设置），相册自己的底部导航保持显示。
         val jkImmersive = selectedBottom == 0 &&
             homeTabOrder.getOrElse(homeTab) { 0 } == 6 &&
             JkUiState.immersive
-        if (!((selectedBottom == 1 && !wechatNavVisible) || (selectedBottom == 2 && !salesNavVisible) || jkImmersive)) {
+        val immichImmersive = selectedBottom == 0 &&
+            homeTabOrder.getOrElse(homeTab) { 0 } == 8 &&
+            my.bridge.com.immich.ImmichUiState.immersive
+        if (!((selectedBottom == 1 && !wechatNavVisible) || (selectedBottom == 2 && !salesNavVisible) || jkImmersive || immichImmersive)) {
             BridgeBottomBar(
                 selected = selectedBottom,
                 unreadWechat = my.bridge.com.wechat.WechatState.state.unreadTotal,

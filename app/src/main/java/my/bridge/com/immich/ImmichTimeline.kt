@@ -111,16 +111,16 @@ object ImmichTimeline {
     }
 
     /**
-     * 月份键转显示标签：今年「M月」，往年「yyyy年M月」。
+     * 月份键转显示标签：统一 yy-MM 紧凑格式（用户拍板 2026-11-17，如「26-11」「00-01」）。
      *
      * :param monthKey: 月份键（yyyy-MM）
-     * :param today: 当前日期
+     * :param today: 当前日期（保留参数兼容旧调用）
      * :return: 显示标签
      */
     fun monthDisplayLabel(monthKey: String, today: LocalDate = LocalDate.now()): String {
         val y = monthKey.take(4).toIntOrNull() ?: return monthKey
-        val m = monthKey.drop(3).toIntOrNull() ?: return monthKey
-        return if (y == today.year) "${m}月" else "${y}年${m}月"
+        val m = monthKey.drop(5).toIntOrNull() ?: return monthKey
+        return "%02d-%02d".format(y % 100, m)
     }
 
     /**

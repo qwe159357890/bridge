@@ -257,16 +257,15 @@ fun ImmichPage(onExitToHome: () -> Unit) {
                         )
                     }
                 }
-                // 内部底部导航（原型 .bottomnav：药丸图标 + 文字标签；沉浸式隐藏腾出屏幕）
-                if (!ImmichUiState.immersive) {
-                    ImmichBottomNav(
-                        selected = currentTab,
-                        onSelect = {
-                            DiagLog.i(NTAG, "内部底部导航切换：${immichBottomTabs[it].label}")
-                            currentTab = it
-                        },
-                    )
-                }
+                // 内部底部导航（原型 .bottomnav：药丸图标 + 文字标签）
+                // v0.2.171：沉浸模式不再隐藏相册自己的底部导航（只隐藏 APP 底部导航栏与主页顶部 Tab）
+                ImmichBottomNav(
+                    selected = currentTab,
+                    onSelect = {
+                        DiagLog.i(NTAG, "内部底部导航切换：${immichBottomTabs[it].label}")
+                        currentTab = it
+                    },
+                )
             }
             // 分类结果网格覆盖层（搜索/资料入口 + 人物照片页；盖住主内容与底部导航）
             if (resultsOpen) {
