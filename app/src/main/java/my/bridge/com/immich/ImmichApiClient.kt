@@ -434,11 +434,14 @@ class ImmichApiClient(private val appContext: Context) {
         checksum: String,
     ) {
         val mime = if (isVideo) "video/mp4" else "image/jpeg"
+        // 服务端要求 ISO 日期字符串（探针实锤：毫秒数字 → 400 "fileCreatedAt must be a date string"）
+        val createdAtIso = java.time.Instant.ofEpochMilli(fileCreatedAt).toString()
+        val modifiedAtIso = java.time.Instant.ofEpochMilli(fileModifiedAt).toString()
         val body = MultipartBody.Builder().setType(MultipartBody.FORM).apply {
             addFormDataPart("deviceAssetId", deviceAssetId)
             addFormDataPart("deviceId", ImmichPrefs.deviceId(appContext))
-            addFormDataPart("fileCreatedAt", fileCreatedAt.toString())
-            addFormDataPart("fileModifiedAt", fileModifiedAt.toString())
+            addFormDataPart("fileCreatedAt", createdAtIso)
+            addFormDataPart("fileModifiedAt", modifiedAtIso)
             addFormDataPart("fileType", if (isVideo) "VIDEO" else "IMAGE")
             if (duration.isNotBlank()) addFormDataPart("duration", duration)
             addFormDataPart("filename", file.name)
@@ -456,7 +459,8 @@ class ImmichApiClient(private val appContext: Context) {
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 DiagLog.w(NTAG, "上传失败 ${resp.code} ${file.name} | ${text.take(200)}")
-                throw ImmichException("HTTP ${resp.code}", text)
+                // 异常消息带响应体：DiagLog 上报即含服务端拒绝原因，便于远程定位
+                throw ImmichException("HTTP ${resp.code}：${text.take(160)}", text)
             }
             DiagLog.i(NTAG, "上传成功 ${file.name}（${file.length() / 1024} KB）")
         }

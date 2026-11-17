@@ -72,7 +72,7 @@ data class ImmichViewerContext(
  * - refreshTick：备份成功递增——相册页若在前台则监听后自动刷新时间线。
  */
 object ImmichUiState {
-    /** 是否沉浸式（隐藏两侧导航，照片浏览全屏）。 */
+    /** 是否沉浸式（隐藏主页顶部 Tab 与 APP 底部导航栏；相册内部底导航保持显示）。 */
     var immersive by mutableStateOf(false)
 
     /** 备份成功横幅文案（null = 不显示）。 */
@@ -80,6 +80,15 @@ object ImmichUiState {
 
     /** 备份成功刷新信号（递增计数）。 */
     var refreshTick by mutableStateOf(0)
+
+    /** 照片页月份浮窗收缩态（返回键可收起；持久化在 ImmichPrefs）。 */
+    var scrubberCollapsed by mutableStateOf(false)
+
+    /** 照片页时间线是否停在顶部「今天」（返回键梯子判断）。 */
+    var timelineAtTop by mutableStateOf(true)
+
+    /** 返回键「回到顶部」请求（递增计数；照片页监听后 scrollToItem(0)）。 */
+    var scrollTopTick by mutableStateOf(0)
 }
 
 /** 相册详情上下文：信息 + 本地三级分组结果。 */
@@ -146,6 +155,8 @@ fun ImmichPage(onExitToHome: () -> Unit) {
     // 返回键梯子的「再按一次」状态
     var exitHint by remember { mutableStateOf(false) }
     var lastBackAt by remember { mutableStateOf(0L) }
+    // 提示文案（按梯子层级变化：退出沉浸 / 回到顶部 / 返回主页）
+    var exitHintText by remember { mutableStateOf("") }
     // 冒泡提示 2 秒后自动消失（与监控页同款）
     LaunchedEffect(exitHint) {
         if (exitHint) {
@@ -154,43 +165,54 @@ fun ImmichPage(onExitToHome: () -> Unit) {
         }
     }
 
-    // 返回键梯子（覆盖层由各自 BackHandler 优先接管——后组合先出）
+    // 返回键梯子（覆盖层由各自 BackHandler 优先接管——后组合先出）。
+    // 用户拍板 2026-11-17（照片页新增两级，从高到低）：
+    // 查看器 → 分类结果 → 相册详情 → 非 photos Tab 切回 → 浮窗展开则收起
+    // → 沉浸中双击退出沉浸 → 已滑动（非顶部）双击回顶部 → 顶部双击回主页
     BackHandler {
-        if (ImmichUiState.immersive) {
-            // 沉浸式中：双击返回键退出沉浸（窗口内第 1 次提示、第 2 次退出）
-            val now = System.currentTimeMillis()
-            if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
-                ImmichUiState.immersive = false
-                exitHint = false
-            } else {
-                lastBackAt = now
-                exitHint = true
-            }
-            return@BackHandler
-        }
         if (viewerCtx != null) {
             viewerCtx = null
-            return@BackHandler
-        }
-        if (albumDetail != null) {
-            albumDetail = null
             return@BackHandler
         }
         if (resultsOpen) {
             resultsOpen = false
             return@BackHandler
         }
+        if (albumDetail != null) {
+            albumDetail = null
+            return@BackHandler
+        }
         if (currentTab != 0) {
             currentTab = 0
             return@BackHandler
         }
-        val now = System.currentTimeMillis()
-        if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
-            onExitToHome()
-        } else {
-            lastBackAt = now
-            exitHint = true
+        // 浮窗展开时优先收起浮窗（用户拍板：更高优先级）
+        if (!ImmichUiState.scrubberCollapsed) {
+            ImmichUiState.scrubberCollapsed = true
+            ImmichPrefs.saveScrubberCollapsed(context, true)
+            return@BackHandler
         }
+        // 通用双击判定：窗口内第 1 次按弹提示，第 2 次执行动作
+        fun doubleBack(hint: String, action: () -> Unit) {
+            val now = System.currentTimeMillis()
+            if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
+                action()
+                exitHint = false
+            } else {
+                lastBackAt = now
+                exitHintText = hint
+                exitHint = true
+            }
+        }
+        if (ImmichUiState.immersive) {
+            doubleBack("再按一次退出沉浸模式") { ImmichUiState.immersive = false }
+            return@BackHandler
+        }
+        if (!ImmichUiState.timelineAtTop) {
+            doubleBack("再按一次回到顶部") { ImmichUiState.scrollTopTick += 1 }
+            return@BackHandler
+        }
+        doubleBack("再按一次返回主页") { onExitToHome() }
     }
 
     // 调色板组合局部：所有 Immich 子组件经 LocalImmichPalette 读取
@@ -247,8 +269,7 @@ fun ImmichPage(onExitToHome: () -> Unit) {
                         exit = fadeOut(),
                     ) {
                         Text(
-                            // 沉浸式中提示退出沉浸；平时提示返回主页
-                            if (ImmichUiState.immersive) "再按一次退出沉浸模式" else "再按一次返回主页",
+                            exitHintText.ifBlank { "再按一次返回主页" },
                             color = Color.White,
                             fontSize = 13.sp,
                             modifier = Modifier

@@ -2167,6 +2167,8 @@ fun ImmichSettingsSection() {
     var showBucketDialog by remember { mutableStateOf(false) }
     var autoBackup by remember { mutableStateOf(my.bridge.com.immich.ImmichPrefs.autoBackup(context)) }
     var wifiOnly by remember { mutableStateOf(my.bridge.com.immich.ImmichPrefs.wifiOnly(context)) }
+    // 月份浮窗停靠侧（true = 右缘默认）
+    var scrubberSide by remember { mutableStateOf(my.bridge.com.immich.ImmichPrefs.scrubberSide(context)) }
     var selectedBuckets by remember {
         mutableStateOf(my.bridge.com.immich.ImmichPrefs.selectedBuckets(context))
     }
@@ -2264,6 +2266,15 @@ fun ImmichSettingsSection() {
             ) {
                 showBucketDialog = true
             }
+        }
+        // 月份浮窗停靠侧（用户拍板 2026-11-17：设置页可配左/右；进入相册页生效）
+        SettingValueRow(
+            icon = "🧭",
+            title = "月份浮窗位置",
+            value = if (scrubberSide) "右侧" else "左侧",
+        ) {
+            scrubberSide = !scrubberSide
+            my.bridge.com.immich.ImmichPrefs.saveScrubberSide(context, scrubberSide)
         }
         Text(
             text = "直连 Immich 服务端（默认本机 http://039039.xyz:15148，VNT 组网内可达）。" +

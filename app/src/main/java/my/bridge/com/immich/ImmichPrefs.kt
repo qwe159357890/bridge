@@ -36,6 +36,7 @@ object ImmichPrefs {
     private const val KEY_SYNCED_ITEMS = "synced_items"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_SCRUBBER_COLLAPSED = "scrubber_collapsed"
+    private const val KEY_SCRUBBER_SIDE = "scrubber_side"
 
     /** 默认服务地址：本机已部署验证的 Immich 服务端（VNT 组网可直达）。 */
     const val DEFAULT_BASE_URL = "http://039039.xyz:15148"
@@ -180,5 +181,23 @@ object ImmichPrefs {
      */
     fun saveScrubberCollapsed(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_SCRUBBER_COLLAPSED, value).apply()
+    }
+
+    /**
+     * 月份浮窗停靠侧（用户拍板：设置页可配置左/右）。
+     *
+     * :param context: 任意 Context
+     * :return: true = 右缘（默认），false = 左缘
+     */
+    fun scrubberSide(context: Context): Boolean = sp(context).getBoolean(KEY_SCRUBBER_SIDE, true)
+
+    /**
+     * 保存月份浮窗停靠侧。
+     *
+     * :param context: 任意 Context
+     * :param value: true = 右缘，false = 左缘
+     */
+    fun saveScrubberSide(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_SCRUBBER_SIDE, value).apply()
     }
 }

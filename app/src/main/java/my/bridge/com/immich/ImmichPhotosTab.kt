@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -153,8 +154,35 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
                 }
             }
-            // 浮窗收缩态（跨会话记忆）：收缩 = 右缘箭头，点开展开列表
-            var scrubberCollapsed by remember { mutableStateOf(ImmichPrefs.scrubberCollapsed(context)) }
+            // 顶部状态上报（返回键梯子判断「回顶部 vs 回主页」）
+            LaunchedEffect(nearTop) {
+                ImmichUiState.timelineAtTop = nearTop
+            }
+            // 返回键「回到顶部」请求 → 定位「今天」（梯子第 6 级）
+            LaunchedEffect(ImmichUiState.scrollTopTick) {
+                if (ImmichUiState.scrollTopTick > 0) {
+                    gridState.scrollToItem(0)
+                }
+            }
+            // 沉浸重入：退出沉浸后（无论何种原因退出），用户在时间线上任何滑动
+            // 即自动重新进入沉浸（用户拍板 2026-11-17）
+            LaunchedEffect(Unit) {
+                snapshotFlow { gridState.isScrollInProgress }.collect { scrolling ->
+                    if (scrolling && !ImmichUiState.immersive) {
+                        DiagLog.i(NTAG, "滑动 → 重新进入沉浸模式")
+                        ImmichUiState.immersive = true
+                    }
+                }
+            }
+            // 浮窗收缩态（跨会话记忆；返回键梯子也会收起）
+            LaunchedEffect(Unit) {
+                ImmichUiState.scrubberCollapsed = ImmichPrefs.scrubberCollapsed(context)
+            }
+            LaunchedEffect(ImmichUiState.scrubberCollapsed) {
+                ImmichPrefs.saveScrubberCollapsed(context, ImmichUiState.scrubberCollapsed)
+            }
+            // 浮窗停靠侧（设置页可配 左/右）
+            val scrubberAlign = if (ImmichPrefs.scrubberSide(context)) Alignment.CenterEnd else Alignment.CenterStart
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 state = gridState,
@@ -207,18 +235,17 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                 }
             }
             // 右侧月份浮窗：必须在网格**之后**组合（Box 后组合者绘制在上层、点击可达）；
-            // 顶部隐藏 / 收缩为右缘箭头（记忆状态）
+            // 顶部隐藏 / 收缩为边缘箭头（记忆状态）/ 停靠侧可配置
             ImmichScrubber(
-                modifier = Modifier.align(Alignment.CenterEnd),
+                modifier = Modifier.align(scrubberAlign),
                 items = scrubItems,
                 currentLabel = currentLabel,
                 loadingKey = monthLoadingKey,
                 visible = !nearTop,
-                collapsed = scrubberCollapsed,
-                onToggleCollapsed = {
-                    scrubberCollapsed = it
-                    ImmichPrefs.saveScrubberCollapsed(context, it)
-                    DiagLog.i(NTAG, "浮窗收缩态：$it")
+                collapsed = ImmichUiState.scrubberCollapsed,
+                onToggleCollapsed = { collapsed ->
+                    ImmichUiState.scrubberCollapsed = collapsed
+                    DiagLog.i(NTAG, "浮窗收缩态：$collapsed")
                 },
                 onSelect = { item ->
                     val gi = item.groupIndex
@@ -250,19 +277,7 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }
-        // 沉浸式提示条（底部小字，提示双击退出）
-        if (ImmichUiState.immersive) {
-            Text(
-                "沉浸模式 · 双击返回键退出",
-                fontSize = 11.sp,
-                color = LocalImmichPalette.current.sub,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(bottom = 4.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
-        }
+        // v0.2.172：沉浸提示胶囊已移除（用户拍板：不需要提示文字）
     }
 }
 
@@ -462,15 +477,22 @@ private fun ImmichScrubber(
     onSelect: (ImmichTimeline.ImmichScrubItem) -> Unit,
 ) {
     val p = LocalImmichPalette.current
-    // 收缩态：右缘一枚「‹」箭头小药丸（点击展开列表）
+    // 定位修饰符必须挂在 AnimatedVisibility 本体上（挂在内部内容上会被动画层
+    // 吞掉导致浮窗落到左上角——0.2.170/171 在左侧的根因）
+    // 收缩态：边缘一枚「‹」箭头小药丸（点击展开列表）
     if (collapsed) {
-        androidx.compose.animation.AnimatedVisibility(visible = visible, enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = visible,
+            modifier = modifier,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+        ) {
             Text(
                 "‹",
                 fontSize = 15.sp,
                 color = p.sub,
-                modifier = modifier
-                    .padding(end = 2.dp)
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
                     .background(p.surface3, RoundedCornerShape(12.dp))
                     .clickable { onToggleCollapsed(false) }
                     .padding(horizontal = 5.dp, vertical = 10.dp),
@@ -478,43 +500,58 @@ private fun ImmichScrubber(
         }
         return
     }
-    androidx.compose.animation.AnimatedVisibility(visible = visible, enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut(),
+    ) {
+        // 外层 Column 固定高度；内层滚动列表 + 底部固定「‹ 收起」行
+        //（0.2.171 收起按钮藏在 163 项列表末尾滚不到——用户拍板改固定行）
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = modifier
-                .padding(end = 3.dp)
+            modifier = Modifier
+                .padding(horizontal = 3.dp)
                 .background(p.surface3, RoundedCornerShape(16.dp))
                 .heightIn(max = 340.dp)
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 7.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            items.forEach { item ->
-                val isCurrent = item.label == currentLabel
-                val isLoading = item.monthKey == loadingKey
-                val loaded = item.groupIndex != null
-                Text(
-                    // 只显示标签，不显示资产数量（用户拍板）
-                    text = if (isLoading) "${item.label}…" else item.label,
-                    fontSize = if (isCurrent) 12.sp else 10.sp,
-                    fontWeight = if (isCurrent) {
-                        androidx.compose.ui.text.font.FontWeight.Bold
-                    } else {
-                        androidx.compose.ui.text.font.FontWeight.Normal
-                    },
-                    color = when {
-                        isCurrent -> p.accent
-                        isLoading -> p.accent
-                        loaded -> p.sub
-                        else -> p.sub.copy(alpha = 0.55f)
-                    },
-                    modifier = Modifier.clickable { onSelect(item) },
-                )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(max = 300.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                items.forEach { item ->
+                    val isCurrent = item.label == currentLabel
+                    val isLoading = item.monthKey == loadingKey
+                    val loaded = item.groupIndex != null
+                    Text(
+                        // 只显示标签，不显示资产数量（用户拍板）
+                        text = if (isLoading) "${item.label}…" else item.label,
+                        fontSize = if (isCurrent) 12.sp else 10.sp,
+                        fontWeight = if (isCurrent) {
+                            androidx.compose.ui.text.font.FontWeight.Bold
+                        } else {
+                            androidx.compose.ui.text.font.FontWeight.Normal
+                        },
+                        color = when {
+                            isCurrent -> p.accent
+                            isLoading -> p.accent
+                            loaded -> p.sub
+                            else -> p.sub.copy(alpha = 0.55f)
+                        },
+                        modifier = Modifier.clickable { onSelect(item) },
+                    )
+                }
             }
-            // 收缩箭头（列表末尾，「›」点击收起贴边）
+            // 固定收缩行（不随列表滚动）
             Text(
-                "›",
-                fontSize = 15.sp,
+                "‹ 收起",
+                fontSize = 11.sp,
                 color = p.sub,
                 modifier = Modifier
                     .clickable { onToggleCollapsed(true) }
