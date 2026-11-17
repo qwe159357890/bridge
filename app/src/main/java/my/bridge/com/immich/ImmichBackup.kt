@@ -22,6 +22,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.delay
 
 import my.bridge.com.core.common.DiagLog
 
@@ -481,7 +482,10 @@ class ImmichUploadWorker(
             ImmichPrefs.saveLastSyncDateAdded(context, maxDateAdded)
             DiagLog.i(NTAG, "备份对账完成：上传 $uploaded / 跳过 $skipped / 失败 $failed")
             if (uploaded > 0) {
-                // 成功反馈：顶部横幅（3 秒消失）+ 相册页前台时自动刷新时间线
+                // 成功反馈：顶部横幅（3 秒消失）+ 相册页前台时自动刷新时间线。
+                // 延迟 3 秒递增：Immich 缩略图异步生成（约 2~5 秒），立即刷新会让新照片
+                // 以灰色占位进网格（404），直到手动滑动才恢复。
+                delay(3000)
                 ImmichUiState.banner = "✓ 已备份 $uploaded 张照片到 Immich"
                 ImmichUiState.refreshTick += 1
             }

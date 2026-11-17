@@ -39,10 +39,38 @@ object ImmichImageLoader {
         .okHttpClient {
             OkHttpClient.Builder()
                 .addInterceptor(ImmichTokenInterceptor(appContext))
+                .addInterceptor(ThumbnailRetryInterceptor())
                 .build()
         }
         .crossfade(true)
         .build()
+}
+
+/**
+ * 缩略图 404 重试拦截器：Immich 服务端缩略图为异步生成（上传后数秒内请求 404），
+ * 直接过失败会让网格显示灰色占位、直到用户滑动重新绑定才恢复。
+ * 对 /thumbnail 请求在 404 时等待重试（3.5s × 2 次），缩略图生成完成后自动到位。
+ */
+private class ThumbnailRetryInterceptor : Interceptor {
+
+    /**
+     * 拦截缩略图请求，404 时等待重试。
+     *
+     * :param chain: OkHttp 拦截链
+     * :return: 缩略图响应（重试后仍 404 则原样返回，交由上层错误态）
+     */
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        var response = chain.proceed(request)
+        if (request.url.encodedPath.endsWith("/thumbnail") && response.code == 404) {
+            repeat(2) {
+                response.close()
+                Thread.sleep(3500)
+                response = chain.proceed(request)
+            }
+        }
+        return response
+    }
 }
 
 /**
