@@ -411,9 +411,11 @@ class ImmichApiClient(private val appContext: Context) {
         val results = resp.optJSONArray("results") ?: JSONArray()
         for (i in 0 until results.length()) {
             val o = results.optJSONObject(i) ?: continue
-            // action=reject 且 reason=duplicate 才算已有（reject 只配额拒绝等场景不算重）
+            // action=reject 且 reason=duplicate 才算已有（reject 只配额拒绝等场景不算重）。
+            // ⚠️ 服务端 reject 结果无 checksum 字段，回显值在 id（请求里 id=checksum，v0.2.174 抓包实锤）
             if (o.optString("action") == "reject" && o.optString("reason") == "duplicate") {
-                o.optString("checksum").takeIf { it.isNotBlank() }?.let { out.add(it) }
+                val cs = o.optString("checksum").takeIf { it.isNotBlank() } ?: o.optString("id")
+                cs.takeIf { it.isNotBlank() }?.let { out.add(it) }
             }
         }
         DiagLog.i(NTAG, "去重检查 ${checksums.size} 个 → 服务端已有 ${out.size} 个")
