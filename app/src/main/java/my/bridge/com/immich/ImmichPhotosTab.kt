@@ -90,18 +90,9 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
             ImmichConfigGuide()
             return@Column
         }
-        // 时间线区域：网格 + 悬浮的拖动条 / 存储指示（双击切换沉浸式）
+        // 时间线区域：网格 + 悬浮的拖动条 / 存储指示（沉浸式由进页自动开启，双击返回键退出）
         Box(
-            modifier = Modifier
-                .weight(1f)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onDoubleTap = {
-                            ImmichUiState.immersive = !ImmichUiState.immersive
-                            DiagLog.i(NTAG, "双击切换沉浸式 → ${ImmichUiState.immersive}")
-                        },
-                    )
-                },
+            modifier = Modifier.weight(1f),
         ) {
             val gridState = rememberLazyGridState()
             val scope = rememberCoroutineScope()
@@ -156,22 +147,6 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     vm.clearMonthJump()
                 }
             }
-            ImmichScrubber(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                items = scrubItems,
-                currentLabel = currentLabel,
-                loadingKey = monthLoadingKey,
-                onSelect = { item ->
-                    val gi = item.groupIndex
-                    if (gi != null) {
-                        DiagLog.i(NTAG, "浮窗跳转：${item.label}")
-                        scope.launch { gridState.scrollToItem(headerIndices[gi]) }
-                    } else {
-                        DiagLog.i(NTAG, "浮窗按月加载：${item.monthKey}（${item.count} 个）")
-                        vm.loadMonth(context, item.monthKey)
-                    }
-                },
-            )
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 state = gridState,
@@ -223,6 +198,23 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
                     }
                 }
             }
+            // 右侧月份浮窗：必须在网格**之后**组合（Box 后组合者绘制在上层、点击可达）
+            ImmichScrubber(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                items = scrubItems,
+                currentLabel = currentLabel,
+                loadingKey = monthLoadingKey,
+                onSelect = { item ->
+                    val gi = item.groupIndex
+                    if (gi != null) {
+                        DiagLog.i(NTAG, "浮窗跳转：${item.label}")
+                        scope.launch { gridState.scrollToItem(headerIndices[gi]) }
+                    } else {
+                        DiagLog.i(NTAG, "浮窗按月加载：${item.monthKey}（${item.count} 个）")
+                        vm.loadMonth(context, item.monthKey)
+                    }
+                },
+            )
             // 左下角存储指示药丸（原型 .storage）
             ImmichStoragePill(
                 modifier = Modifier.align(Alignment.BottomStart),
@@ -245,7 +237,7 @@ fun ImmichPhotosTab(vm: ImmichViewModel, onOpenViewer: (List<ImmichAsset>, Int) 
         // 沉浸式提示条（底部小字，提示双击退出）
         if (ImmichUiState.immersive) {
             Text(
-                "沉浸模式 · 双击屏幕退出",
+                "沉浸模式 · 双击返回键退出",
                 fontSize = 11.sp,
                 color = LocalImmichPalette.current.sub,
                 modifier = Modifier

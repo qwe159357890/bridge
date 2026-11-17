@@ -113,8 +113,10 @@ fun ImmichPage(onExitToHome: () -> Unit) {
     val vm = remember { ImmichViewModel() }
     // 深浅色跟随系统（原型顶部「浅色/深色」按钮为演示工具，非应用内交互）
     val palette = if (isSystemInDarkTheme()) ImmichDarkPalette else ImmichLightPalette
-    // 首次进入拉全量基础数据（时间线每次进入都刷新：拍照备份后回相册页能看到新照片）
+    // 首次进入：自动进入沉浸模式（用户拍板 2026-11-17，销售页阅读模式同款——
+    // 隐藏主页顶部 Tab + 相册底部导航，只显示相册界面；双击返回键退出）
     LaunchedEffect(Unit) {
+        ImmichUiState.immersive = true
         vm.loadAll(context)
         // 自动备份兜底：进相册页触发一次对账（调研 §5.4；开关关闭时内部为 no-op）
         ImmichBackup.ensureRegistered(context)
@@ -155,8 +157,15 @@ fun ImmichPage(onExitToHome: () -> Unit) {
     // 返回键梯子（覆盖层由各自 BackHandler 优先接管——后组合先出）
     BackHandler {
         if (ImmichUiState.immersive) {
-            // 沉浸式中按返回：先退出沉浸式
-            ImmichUiState.immersive = false
+            // 沉浸式中：双击返回键退出沉浸（窗口内第 1 次提示、第 2 次退出）
+            val now = System.currentTimeMillis()
+            if (now - lastBackAt < BackPressPrefs.homeWindowMs(context)) {
+                ImmichUiState.immersive = false
+                exitHint = false
+            } else {
+                lastBackAt = now
+                exitHint = true
+            }
             return@BackHandler
         }
         if (viewerCtx != null) {
@@ -238,7 +247,8 @@ fun ImmichPage(onExitToHome: () -> Unit) {
                         exit = fadeOut(),
                     ) {
                         Text(
-                            "再按一次返回主页",
+                            // 沉浸式中提示退出沉浸；平时提示返回主页
+                            if (ImmichUiState.immersive) "再按一次退出沉浸模式" else "再按一次返回主页",
                             color = Color.White,
                             fontSize = 13.sp,
                             modifier = Modifier

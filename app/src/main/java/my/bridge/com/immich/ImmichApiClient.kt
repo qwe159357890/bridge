@@ -442,7 +442,7 @@ class ImmichApiClient(private val appContext: Context) {
             addFormDataPart("fileType", if (isVideo) "VIDEO" else "IMAGE")
             if (duration.isNotBlank()) addFormDataPart("duration", duration)
             addFormDataPart("filename", file.name)
-            addFormDataPart("filedata", file.name, file.asRequestBody(mime.toMediaType()))
+            addFormDataPart("assetData", file.name, file.asRequestBody(mime.toMediaType()))
         }.build()
         val url = base().toHttpUrlOrNull()?.newBuilder()
             ?.addPathSegments("api/assets")
