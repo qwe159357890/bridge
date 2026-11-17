@@ -131,6 +131,20 @@ fun ImmichPage(onExitToHome: () -> Unit) {
         ImmichBackup.ensureRegistered(context)
         ImmichBackup.triggerSyncNow(context)
     }
+    // 相册页每次回到前台都触发对账（v0.2.179）：LaunchedEffect(Unit) 只在首次组合执行，
+    // 页面常驻/切走再切回不会重新触发；OnePlus 内容触发随机丢事件时这是最快的兜底路径
+    //（节流 30s，内部开关 no-op 保护）。
+    DisposableEffect(context) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                ImmichBackup.triggerSyncNow(context)
+            }
+        }
+        (context.findActivity() as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.addObserver(observer)
+        onDispose {
+            (context.findActivity() as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.removeObserver(observer)
+        }
+    }
     // 备份成功信号：相册页在前台时自动刷新时间线（新照片出现在「今天」组）
     LaunchedEffect(ImmichUiState.refreshTick) {
         if (ImmichUiState.refreshTick > 0) {
@@ -395,4 +409,16 @@ private fun ImmichBottomNav(selected: Int, onSelect: (Int) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * 逐层上溯查找宿主 Activity（lifecycle 监听注册用）。
+ *
+ * :param context: 任意 Context
+ * :return: 宿主 Activity；找不到返回 null
+ */
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

@@ -112,7 +112,62 @@ object ImmichBackup {
             androidx.work.ExistingPeriodicWorkPolicy.KEEP,
             periodic,
         )
-        DiagLog.i(NTAG, "内容触发 Observer 已注册（图片+视频 2 URI，去抖 30s/300s）+ 15 分钟周期兜底")
+        // 进程内 ContentObserver（v0.2.179）：JobScheduler 内容触发在 OnePlus 上随机丢失
+        //（15:00:34 拍照后事件未派发，6 分钟后进相册页才传），保活进程常驻故进程内监听可靠；
+        // MediaStore 变更才回调、连拍 5 秒去抖合并，零轮询。
+        ensureInProcessObserver(appContext)
+        DiagLog.i(NTAG, "内容触发 Observer 已注册（图片+视频 2 URI，去抖 30s/300s）+ 15 分钟周期兜底 + 进程内 Observer")
+    }
+
+    /** 进程内 MediaStore 观察者（进程存活期间有效；null = 未注册）。 */
+    private var inProcessObserver: android.database.ContentObserver? = null
+
+    /**
+     * 注册进程内 MediaStore ContentObserver（幂等）。相机/截图/下载等入库变更
+     * 5 秒去抖后直接触发对账 Worker（绕开 JobScheduler，不再受厂商丢事件影响）。
+     *
+     * :param appContext: 应用上下文
+     */
+    private fun ensureInProcessObserver(appContext: Context) {
+        if (inProcessObserver != null) return
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val observer = object : android.database.ContentObserver(handler) {
+            private val trigger = Runnable {
+                DiagLog.i(NTAG, "进程内 MediaStore 变更 → 触发对账")
+                triggerSyncNow(appContext)
+            }
+
+            override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+                // 连拍去抖：5 秒内的多次变更合并成一次对账
+                handler.removeCallbacks(trigger)
+                handler.postDelayed(trigger, 5000)
+            }
+        }
+        appContext.contentResolver.registerContentObserver(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            true,
+            observer,
+        )
+        appContext.contentResolver.registerContentObserver(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            true,
+            observer,
+        )
+        inProcessObserver = observer
+        DiagLog.i(NTAG, "进程内 MediaStore Observer 已注册（去抖 5s）")
+    }
+
+    /**
+     * 注销进程内 ContentObserver（自动备份关闭时调用；Worker 侧监听随 unregister 一并撤）。
+     *
+     * :param appContext: 应用上下文
+     */
+    private fun unregisterInProcessObserver(appContext: Context) {
+        inProcessObserver?.let {
+            runCatching { appContext.contentResolver.unregisterContentObserver(it) }
+            inProcessObserver = null
+            DiagLog.i(NTAG, "进程内 MediaStore Observer 已注销")
+        }
     }
 
     /**
@@ -121,20 +176,33 @@ object ImmichBackup {
      * :param context: 任意 Context
      */
     fun unregister(context: Context) {
-        val wm = WorkManager.getInstance(context.applicationContext)
+        val appContext = context.applicationContext
+        val wm = WorkManager.getInstance(appContext)
         wm.cancelUniqueWork(OBSERVER_NAME)
         wm.cancelUniqueWork(PERIODIC_NAME)
-        DiagLog.i(NTAG, "内容触发 Observer 与周期兜底已注销")
+        unregisterInProcessObserver(appContext)
+        DiagLog.i(NTAG, "内容触发 Observer、周期兜底与进程内 Observer 已注销")
     }
 
+    /** 上次手动/观察者触发对账的时刻（elapsedRealtime 毫秒；30 秒节流防打断运行中 Worker）。 */
+    private var lastTriggerAt = 0L
+
     /**
-     * 手动触发一次全量对账上传（进相册页兜底时机，能耗纪律允许的两个时机之一）。
+     * 手动触发一次全量对账上传（进相册页兜底/进程内 Observer 时机）。
+     * 30 秒节流：相册页每次回前台都会调用，频繁 REPLACE 会打断运行中的上传；
+     * 节流窗口内新拍的照片由同一次对账覆盖（扫描在窗口内必然包含）。
      *
      * :param context: 任意 Context
      */
     fun triggerSyncNow(context: Context) {
         val appContext = context.applicationContext
         if (!ImmichPrefs.autoBackup(appContext)) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastTriggerAt < 30_000L) {
+            DiagLog.i(NTAG, "对账触发节流：30 秒内已触发过，跳过")
+            return
+        }
+        lastTriggerAt = now
         val request = OneTimeWorkRequestBuilder<ImmichUploadWorker>()
             .setConstraints(networkConstraints(appContext))
             .build()
