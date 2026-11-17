@@ -166,9 +166,9 @@ fun ImmichPage(onExitToHome: () -> Unit) {
     }
 
     // 返回键梯子（覆盖层由各自 BackHandler 优先接管——后组合先出）。
-    // 用户拍板 2026-11-17（照片页新增两级，从高到低）：
+    // 用户拍板 2026-11-17（照片页，从高到低）：
     // 查看器 → 分类结果 → 相册详情 → 非 photos Tab 切回 → 浮窗展开则收起
-    // → 沉浸中双击退出沉浸 → 已滑动（非顶部）双击回顶部 → 顶部双击回主页
+    // → 已滑动（非顶部）双击回顶部 → 沉浸中双击退出沉浸 → 顶部双击回主页
     BackHandler {
         if (viewerCtx != null) {
             viewerCtx = null
@@ -204,12 +204,14 @@ fun ImmichPage(onExitToHome: () -> Unit) {
                 exitHint = true
             }
         }
-        if (ImmichUiState.immersive) {
-            doubleBack("再按一次退出沉浸模式") { ImmichUiState.immersive = false }
-            return@BackHandler
-        }
+        // 已滑动（非顶部）优先回顶部——与是否沉浸解耦（用户拍板 2026-11-17 第 2 轮：
+        // 滑动会自动重入沉浸，若沉浸分支在前则「回顶部」永远轮不到）
         if (!ImmichUiState.timelineAtTop) {
             doubleBack("再按一次回到顶部") { ImmichUiState.scrollTopTick += 1 }
+            return@BackHandler
+        }
+        if (ImmichUiState.immersive) {
+            doubleBack("再按一次退出沉浸模式") { ImmichUiState.immersive = false }
             return@BackHandler
         }
         doubleBack("再按一次返回主页") { onExitToHome() }

@@ -393,8 +393,12 @@ class ImmichApiClient(private val appContext: Context) {
     /**
      * 批量去重检查（服务端已有同 checksum 资产的集合，上传前兜底）。
      *
+     * 响应结构（2026-11-17 真机探针实锤）：
+     * `{"results":[{"id","checksum","action":"accept|reject","reason":"duplicate","assetId","isTrashed"}]}`
+     * 判定字段是 action（不是 status——旧实现判 status 恒为空，导致已备份资产全量重传）。
+     *
      * :param checksums: 文件 SHA-1（base64）列表（≤1000/批）
-     * :return: 已存在的 checksum 集合
+     * :return: 服务端已存在（reject=duplicate）的 checksum 集合
      */
     fun bulkUploadCheck(checksums: List<String>): Set<String> {
         if (checksums.isEmpty()) return emptySet()
@@ -407,7 +411,10 @@ class ImmichApiClient(private val appContext: Context) {
         val results = resp.optJSONArray("results") ?: JSONArray()
         for (i in 0 until results.length()) {
             val o = results.optJSONObject(i) ?: continue
-            if (o.optString("status") == "reject") out.add(o.optString("checksum"))
+            // action=reject 且 reason=duplicate 才算已有（reject 只配额拒绝等场景不算重）
+            if (o.optString("action") == "reject" && o.optString("reason") == "duplicate") {
+                o.optString("checksum").takeIf { it.isNotBlank() }?.let { out.add(it) }
+            }
         }
         DiagLog.i(NTAG, "去重检查 ${checksums.size} 个 → 服务端已有 ${out.size} 个")
         return out

@@ -286,30 +286,40 @@ class ImmichUploadWorker(
                 setForeground(createForegroundInfo("正在上传大文件…"))
             }
             val api = ImmichApiClient(context)
+            // 第一步：批量预检（2026-11-17 重构）。旧实现逐文件单查且误判响应字段
+            //（status vs action），导致官方 APP 已备份的资产全量重传一百多个。
+            // 现在一次性算 SHA-1，分批（500/批）bulk-upload-check，已有的全部前置跳过。
+            val hashedList = mutableListOf<Pair<MediaRow, String>>()
+            for (row in candidates) {
+                val file = File(row.path)
+                if (!file.exists() || file.length() == 0L) continue
+                runCatching { hashedList.add(row to api.sha1Base64(file)) }
+                    .onFailure { DiagLog.w(NTAG, "计算校验失败 ${file.name}：${it.message}") }
+            }
+            DiagLog.i(NTAG, "批量预检：可校验候选 ${hashedList.size} 个")
+            val existingChecksums = mutableSetOf<String>()
+            hashedList.map { it.second }.chunked(500).forEach { batch ->
+                existingChecksums.addAll(api.bulkUploadCheck(batch))
+            }
+            DiagLog.i(NTAG, "批量预检完成：服务端已有 ${existingChecksums.size} 个 / 待上传 ${hashedList.count { it.second !in existingChecksums }} 个")
             var uploaded = 0
             var skipped = 0
             var failed = 0
             var maxDateAdded = ImmichPrefs.lastSyncDateAdded(context)
-            for (row in candidates) {
+            for ((row, checksum) in hashedList) {
                 if (uploaded >= MAX_UPLOADS_PER_RUN) {
                     DiagLog.i(NTAG, "单次运行已达上限 $MAX_UPLOADS_PER_RUN，剩余下次继续")
                     break
                 }
-                val file = File(row.path)
-                if (!file.exists() || file.length() == 0L) {
+                // 服务端已有（官方 APP 或此前传过）→ 记账 + 推水位，绝不上传
+                if (checksum in existingChecksums) {
+                    markSynced(row)
+                    maxDateAdded = maxOf(maxDateAdded, row.dateAdded)
                     skipped++
                     continue
                 }
+                val file = File(row.path)
                 try {
-                    val checksum = api.sha1Base64(file)
-                    // 服务端去重兜底（已存在同 checksum → 跳过上传但记账）
-                    val existing = api.bulkUploadCheck(listOf(checksum))
-                    if (checksum in existing) {
-                        markSynced(row)
-                        maxDateAdded = maxOf(maxDateAdded, row.dateAdded)
-                        skipped++
-                        continue
-                    }
                     updateForeground("正在上传 ${file.name}（已传 $uploaded）")
                     api.uploadAsset(
                         file = file,
