@@ -325,8 +325,11 @@ class ImmichApiClient(private val appContext: Context) {
 
     /**
      * 人物列表（搜索页人物区 / 人物照片页入口）。
+     * 排序对齐官方服务端（person.repository getAllForUser）：
+     * isHidden asc → isFavorite desc → faceCount desc → name——照人物出现频率排，
+     * 客户端不重排（v0.2.181 之前误按 name 重排导致顺序与官方不一致）。
      *
-     * :return: 人物列表（隐藏人物已过滤，按名字排序）
+     * :return: 人物列表（隐藏人物已过滤，服务端顺序）
      */
     fun fetchPeople(): List<ImmichPerson> {
         val resp = executeJson(req("GET", "/api/people"))
@@ -337,8 +340,7 @@ class ImmichApiClient(private val appContext: Context) {
             if (o.optBoolean("isHidden")) continue
             out.add(ImmichPerson(id = o.optString("id"), name = o.optString("name").ifBlank { "未命名" }))
         }
-        out.sortBy { it.name }
-        DiagLog.i(NTAG, "人物列表 ${out.size} 个")
+        DiagLog.i(NTAG, "人物列表 ${out.size} 个（服务端排序：faceCount desc 优先）")
         return out
     }
 

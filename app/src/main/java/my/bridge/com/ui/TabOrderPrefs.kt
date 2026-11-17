@@ -33,11 +33,14 @@ object TabOrderPrefs {
     val PAGE_ICONS = listOf("💬", "🔊", "🔌", "📦", "🕸️", "🎥", "🔋", "🛠️", "🖼️")
 
     private const val KEY = "home_tab_order"
-    private const val DEFAULT = "0,1,2,3,4,5,6,7,8"
+
+    // 默认顺序（用户拍板 2026-11-17）：相册（id=8）固定第 4 位，其余按 id 顺延。
+    private val DEFAULT_ORDER = listOf(0, 1, 2, 8, 3, 4, 5, 6, 7)
+    private const val DEFAULT = "0,1,2,8,3,4,5,6,7"
 
     fun load(context: Context): List<Int> {
         val sp = context.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
-        val raw = sp.getString(KEY, null) ?: return PAGE_TITLES.indices.toList()
+        val raw = sp.getString(KEY, null) ?: return DEFAULT_ORDER
         // ★ 版本迁移：旧值页数 < 当前页数时，末尾追加缺失的页 id 并回写，保留用户自定义顺序。
         //   当前形态（9 页）：旧 8 页（v0.2.15x 的 0..7，无「相册」）→ 末尾补 id=8。
         //   更早的极空重排（旧 id=4/5 时代）已被上一版迁移消化，这里不再单独处理。
@@ -69,8 +72,8 @@ object TabOrderPrefs {
 
     private fun parse(raw: String): List<Int> = runCatching {
         val order = raw.split(",").map { it.trim().toInt() }
-        if (isValid(order)) order else PAGE_TITLES.indices.toList()
-    }.getOrDefault(PAGE_TITLES.indices.toList())
+        if (isValid(order)) order else DEFAULT_ORDER
+    }.getOrDefault(DEFAULT_ORDER)
 
     // ---- 自定义名称（v0.2.08）：按页面 id 序存 JSON 数组，空串=用默认名 ----
 

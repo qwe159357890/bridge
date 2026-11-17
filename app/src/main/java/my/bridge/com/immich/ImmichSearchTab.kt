@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -130,7 +131,7 @@ fun ImmichSearchTab(
                 )
             }
         }
-        // 人物区（D8 只读复刻：GET /api/people 真实人物，头像 Coil 人脸缩略图）
+        // 人物区（v0.2.182：横向滑动显示全部 + 人名本地过滤，照官方人物集合页范式）
         if (people.isNotEmpty()) {
             Text(
                 "人物",
@@ -139,18 +140,49 @@ fun ImmichSearchTab(
                 color = p.text,
                 modifier = Modifier.padding(start = 16.dp, top = 18.dp, bottom = 10.dp),
             )
+            // 人物名过滤输入（本地过滤 person.name，官方 people_collection.page 同款做法）
+            var personQuery by remember { mutableStateOf("") }
+            BasicTextField(
+                value = personQuery,
+                onValueChange = { personQuery = it },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = p.text),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(p.accent),
+                decorationBox = { innerTextField ->
+                    Box {
+                        if (personQuery.isEmpty()) {
+                            Text("按人物名过滤…", fontSize = 13.sp, color = p.sub)
+                        }
+                        innerTextField()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .background(p.surface2, RoundedCornerShape(20.dp))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+            )
+            val shownPeople = if (personQuery.isBlank()) {
+                people
+            } else {
+                people.filter { it.name.contains(personQuery.trim(), ignoreCase = true) }
+            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .horizontalScroll(rememberScrollState()),
             ) {
-                people.take(6).forEach { person ->
+                shownPeople.forEach { person ->
                     ImmichPersonAvatar(person = person, onClick = {
                         DiagLog.i(NTAG, "人物照片页：${person.name}")
                         vm.openResults(context, ImmichViewModel.ImmichQuery(personId = person.id, title = person.name))
                         onOpenResults()
                     })
+                }
+                if (shownPeople.isEmpty()) {
+                    Text("无匹配人物", fontSize = 13.sp, color = p.sub)
                 }
             }
         }
