@@ -70,6 +70,9 @@ object ImmichBackup {
     /** 上传 Worker 唯一名。 */
     private const val UPLOAD_NAME = "immich_upload_worker"
 
+    /** 周期兜底 Worker 唯一名。 */
+    private const val PERIODIC_NAME = "immich_backup_periodic"
+
     /**
      * 注册内容触发 Observer（自动备份开启时调用；幂等，重复注册不打断现有链）。
      * 内容触发仅 OneTime 有效（JobScheduler 语义），Observer 跑完自我续期保持监听
@@ -97,7 +100,19 @@ object ImmichBackup {
             ExistingWorkPolicy.KEEP,
             request,
         )
-        DiagLog.i(NTAG, "内容触发 Observer 已注册（图片+视频 2 URI，去抖 30s/300s）")
+        // 周期兜底（v0.2.178）：OnePlus/ColorOS 的 JobScheduler 内容触发不可靠
+        //（2026-11-17 实锤：第二次拍照后「MediaStore 内容变更」事件从未派发，照片一直
+        // 不上传，直到进相册页手动兜底），故加 15 分钟周期对账兜底——增量扫描纯 DB 读、
+        // 无新图秒退（日志「无新增媒体」），配合保活体系的 15 分钟唤醒，代价≈0。
+        val periodic = androidx.work.PeriodicWorkRequestBuilder<ImmichUploadWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(networkConstraints(appContext))
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
+            PERIODIC_NAME,
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            periodic,
+        )
+        DiagLog.i(NTAG, "内容触发 Observer 已注册（图片+视频 2 URI，去抖 30s/300s）+ 15 分钟周期兜底")
     }
 
     /**
@@ -106,8 +121,10 @@ object ImmichBackup {
      * :param context: 任意 Context
      */
     fun unregister(context: Context) {
-        WorkManager.getInstance(context.applicationContext).cancelUniqueWork(OBSERVER_NAME)
-        DiagLog.i(NTAG, "内容触发 Observer 已注销")
+        val wm = WorkManager.getInstance(context.applicationContext)
+        wm.cancelUniqueWork(OBSERVER_NAME)
+        wm.cancelUniqueWork(PERIODIC_NAME)
+        DiagLog.i(NTAG, "内容触发 Observer 与周期兜底已注销")
     }
 
     /**

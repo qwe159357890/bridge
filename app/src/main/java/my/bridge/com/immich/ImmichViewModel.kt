@@ -280,6 +280,13 @@ class ImmichViewModel : ViewModel() {
         val merged = ImmichLocalMedia.merge(_timelineAssets.value, extra).distinctBy { it.id }
         _timelineGroups.value = ImmichTimeline.group(merged)
         DiagLog.i(NTAG, "时间线重组：云端 ${_timelineAssets.value.size} / 补丁 ${patchAssets.size} / 本地候选 ${_rawLocalAssets.value.size} → 未上传 ${localOnly.size} → 合并 ${merged.size}")
+        // 诊断（2026-11-17 用户反馈「新上传照片排最后 + 空白占位」）：未上传清单 + 今天组头部顺序
+        if (localOnly.isNotEmpty()) {
+            DiagLog.i(NTAG, "未上传清单：${localOnly.take(12).joinToString(" | ") { "${it.fileName}@${it.localDateTime}" }}")
+        }
+        _timelineGroups.value.firstOrNull { it.label == "今天" }?.let { today ->
+            DiagLog.i(NTAG, "今天组顺序：${today.assets.take(12).joinToString(" | ") { "${it.fileName}@${it.localDateTime}${if (it.isLocal) "(本地)" else ""}" }}")
+        }
     }
 
     /**
