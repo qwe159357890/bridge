@@ -221,6 +221,54 @@
 
 
 
+## 2026-11-18 · 🔌 VNT 冷启动不组网修复（v0.3.009 / code 3009）
+
+**节点意义**：一处**架构级漏网**的收口。Bridge 各后台模块（极空、蓝牙钥匙、SSH、微信、相册…）在
+进程冷启动后都能自动拉起，唯独 **VNT 组网不拉起**——用户只能在「手动点一下 APP 恢复前台」后才会组网。
+根因是 VNT 当初为规避 Android 12+ 后台前台服务（FGS）启动限制，把自动拉起**只挂在了
+`MainActivity.onStart`** 这一条链上，漏掉了开机/覆盖安装/杀进程重开这条「进程级」冷启动链。
+本版补上一条 `VntBootReceiver` 自启链，与 SSH 同范式，修复闭环（日志实锤 + 真机覆盖安装验证通过）。
+
+**关键架构结论**：
+
+- **「规避 FGS 限制」不能牺牲「冷启动自愈」**：`MainActivity.onStart` 只在 Activity 可见时触发，
+  开机自启 / 覆盖安装（`MY_PACKAGE_REPLACED`）/ 完全杀进程后重开且从未进前台时，`onStart` 永远不跑。
+  而 `BOOT_COMPLETED` / `MY_PACKAGE_REPLACED` 广播启动前台服务属**系统豁免场景**，不撞 FGS 限制——
+  所以正确做法不是「只留 onStart」，而是「onStart 负责前台恢复 + BootReceiver 负责进程冷启动」两条链并存。
+- **自启链的守卫要「纯意愿判定」，与触发点解耦**：`VntAutoStart.tryStart` 的三道守卫（记忆开 +
+  未运行 + VPN 授权有效）本就与「谁触发的」无关，所以新增 BootReceiver 只需原样调 `tryStart`，
+  守卫逻辑零改动、无行为回归。
+
+### 修复记录（v0.3.009）
+
+- **问题定位**：用户真机复现「覆盖安装后 2 分多钟，极空/钥匙广播正常拉起，VNT 主网不拉」。
+  下发 `upload_log` 命令查日志，实锤：`17:20:36` 新进程冷启动（`BridgeApplication 初始化完成` +
+  `MY_PACKAGE_REPLACED` 广播）后，「组网」tag 0 条新日志、`VntVpnService` 0 条日志——VNT 彻底没被触发。
+- **根因**：三模块对比——极空/钥匙走 `Application.onCreate → evaluate()`、SSH 走 `SshBootReceiver`、
+  VNT 只有 `MainActivity.onStart`。唯独 VNT 缺开机/更新自启链。
+- **状态残留排查（定性为「假象」）**：日志里 17:19:14 的「已在运行/启动中/重连中，跳过」发生在
+  旧进程仍存活时（当时 VNT 服务确实还在跑），是正确行为；`VntMeshState` 默认 status 为 `STOPPED`
+  且是单例内存对象，进程被杀即重置——不存在需要单独修的状态残留。
+- **修复**：新增 `VntBootReceiver.kt`（照 `SshBootReceiver` 范式，监听 `BOOT_COMPLETED` /
+  `LOCKED_BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`）+ `AndroidManifest.xml` 注册（exported=true，
+  三 action 同 SSH）。`VntAutoStart.tryStart` 零改动。
+- **验证（日志实锤）**：覆盖安装后 `组网 收到广播：MY_PACKAGE_REPLACED → 自动组网：记忆已开启，
+  冷启动自动开始组网 → VNT 已连接：86.74.128.88/24`，修复生效；通知栏同步出现 VNT 组网通知。
+
+### 关键经验沉淀
+
+1. **「后台服务能自动拉起」不等于「每个后台服务都自动拉起」** —— 同一个 APP 里不同模块的自愈链
+   可能各不相同（onCreate / BootReceiver / onStart / STICKY），排查「某模块没起来」时先**横向对比**
+   其它正常模块走的是哪条链，缺哪条就补哪条，而不是在模块内部找 bug。
+2. **`onStart` 是「前台恢复」入口，不是「冷启动」入口** —— 凡「进程一起来就该跑」的能力，触发点
+   必须放在进程级（`Application.onCreate` 或 `BootReceiver`），`Activity.onStart` 只能做「回前台兜底」。
+3. **排查「是不是状态残留」先看对象默认值** —— 单例内存状态（如 `VntMeshState` 默认 `STOPPED`）会随
+   进程销毁而重置，所谓「残留」往往是「旧进程还没死」的误读；定性前先确认状态对象的默认值与生命周期。
+4. **覆盖安装（`MY_PACKAGE_REPLACED`）与开机（`BOOT_COMPLETED`）是同一条自启链** —— 加 BootReceiver
+   时两类广播一起收，一次补链覆盖两类冷启动场景。
+
+---
+
 ## 2026-11-13~15 · 🎥 监控功能里程碑（NVR 集成，v0.2.140→v0.2.161）
 
 **节点意义**：Bridge APP 在「主页」后新增「监控」Tab，原生（Kotlin+Compose）重做 NVR 8200 统一控制台的
