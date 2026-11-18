@@ -1788,3 +1788,42 @@ CONNECTED（86.74.128.88/24，MTU 1380），但 VNTS 服务器（039039.xyz:3100
 「服务器连接中断 · 等待服务端恢复」（约 15s 后），不再高频闪烁、不再「断线重连中/已连接」来回跳；
 服务器恢复后通知自动改回「已连接」；组网页不再疯狂刷新。
 
+### 8.13 冷启动不组网：VNT 缺开机/更新自启链（2026-11-18，补齐 BootReceiver）
+
+**现象**（用户真机，2026-11-18）：APP 重启（实为覆盖安装 v0.3.008）后 2 分多钟，极空后台服务、
+蓝牙钥匙广播均正常自动拉起，但 **VNT 主网没有拉起**。历史规律：手动点一下 APP 恢复前台 → VNT 自动组网；
+但「重新安装版本 / 完全结束进程后开机自启、从没进过前台」→ 组网不运行。
+
+**根因（架构级差异，非 VNT 组件 bug）**：
+- VNT 的自动拉起**只有 `MainActivity.onStart → VntAutoStart.tryStart` 一条链**；当初为规避
+  Android 12+ 后台 FGS 启动限制，把触发点放在 onStart（Activity 可见时），**没有像 SSH 那样补
+  BootReceiver**。
+- 对比：极空后台服务 / 蓝牙钥匙广播走 `BridgeApplication.onCreate → evaluate()`；SSH 走
+  `SshBootReceiver`（BOOT_COMPLETED / LOCKED_BOOT_COMPLETED / MY_PACKAGE_REPLACED）。唯独 VNT 缺失。
+- 覆盖安装 `MY_PACKAGE_REPLACED` / 开机 `BOOT_COMPLETED` 属系统豁免场景，不撞后台 FGS 限制
+  （`SshBootReceiver` 注释已点明），VNT 完全可用同样方式补齐。
+- 日志实锤：17:20:36 新进程冷启动（`BridgeApplication 初始化完成` + `收到广播 MY_PACKAGE_REPLACED`），
+  此后「组网」tag 0 条新日志、`VntVpnService` 0 条日志 —— VNT 彻底没被触发。
+
+**状态残留排查（定性为「假象」）**：17:19:14 那条「自动组网：已在运行/启动中/重连中，跳过」发生在
+旧进程仍存活时（17:20:36 才真正冷启动），当时 VNT 服务确实还在旧进程跑着，故「跳过」是正确行为。
+`VntMeshState` 默认 status 为 `STOPPED`（`VntMeshState.kt`），且是单例内存对象，进程被杀即重置 ——
+**不存在需要单独修复的状态残留**，唯一根因就是缺自启链。
+
+**新增/改动清单**：
+- 新增 `app/src/main/java/my/bridge/com/vnt/VntBootReceiver.kt`（照 `SshBootReceiver` 范式）：
+  监听 `BOOT_COMPLETED` / `LOCKED_BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`，调
+  `VntAutoStart.tryStart(context)`，业务判断完全复用既有三道守卫（记忆开 + 未运行 + VPN 授权有效）。
+- `app/src/main/AndroidManifest.xml`：注册 `VntBootReceiver`（exported=true，intent-filter 同 SSH 三个 action）。
+- `VntAutoStart.tryStart` 无需改动（守卫已就绪，默认状态 STOPPED 不会误拦）。
+
+**回滚配方**：
+```bash
+git checkout HEAD -- app/src/main/AndroidManifest.xml
+# 新增文件（git 未跟踪前无法 checkout，直接删）：
+rm app/src/main/java/my/bridge/com/vnt/VntBootReceiver.kt
+```
+
+**验证**：`:app:compileDebugKotlin` BUILD SUCCESSFUL。真机验收待做：覆盖安装 / 开机自启后不点前台，
+确认 VNT 自动组网（日志应出现「自动组网：记忆已开启，冷启动自动开始组网」）。
+

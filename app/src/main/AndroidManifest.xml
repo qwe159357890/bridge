@@ -280,6 +280,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- VNT 组网开机 / 更新自启：补齐冷启动（开机/覆盖安装/杀进程重开）不组网。
+             是否真的拉起由 VntAutoStart.tryStart 按三道守卫（记忆开 + 未运行 + VPN 授权有效）决定。 -->
+        <receiver
+            android:name="my.bridge.com.vnt.VntBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Bridge 辅助服务（无障碍）：模拟电源键锁屏（GLOBAL_ACTION_LOCK_SCREEN）
              + 静默截屏（takeScreenshot，需 canTakeScreenshot 能力声明）。
              用户在系统设置 → 无障碍中开启；命令路径见 CommandModule 的降级链。 -->
