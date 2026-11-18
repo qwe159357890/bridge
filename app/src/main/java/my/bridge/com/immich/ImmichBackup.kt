@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.Network
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -14,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
+import androidx.work.NetworkType
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -74,6 +76,9 @@ object ImmichBackup {
     /** 周期兜底 Worker 唯一名。 */
     private const val PERIODIC_NAME = "immich_backup_periodic"
 
+    /** Wi-Fi 恢复等待 Worker 唯一名（仅 Wi-Fi 门禁拦截时挂起的网络约束任务）。 */
+    private const val WIFI_WAIT_NAME = "immich_upload_wifi_wait"
+
     /**
      * 注册内容触发 Observer（自动备份开启时调用；幂等，重复注册不打断现有链）。
      * 内容触发仅 OneTime 有效（JobScheduler 语义），Observer 跑完自我续期保持监听
@@ -117,7 +122,12 @@ object ImmichBackup {
         //（15:00:34 拍照后事件未派发，6 分钟后进相册页才传），保活进程常驻故进程内监听可靠；
         // MediaStore 变更才回调、连拍 5 秒去抖合并，零轮询。
         ensureInProcessObserver(appContext)
-        DiagLog.i(NTAG, "内容触发 Observer 已注册（图片+视频 2 URI，去抖 30s/300s）+ 15 分钟周期兜底 + 进程内 Observer")
+        // 网络恢复监听（v0.3.010）：蜂窝下拍照被「仅 Wi-Fi」门禁拦截后，此前无任何机制在
+        // 切回 Wi-Fi 时唤醒对账（实锤 2026-11-18：18:55 拍照被拦，19:07 恰逢媒体事件才传出，
+        // 空窗 11 分钟），只能靠 15 分钟周期兜底或进相册页手动兜底。进程内 NetworkCallback
+        // 边沿检测「网络恢复为不计费」即时触发，保活进程常驻故可靠，零轮询。
+        ensureNetworkCallback(appContext)
+        DiagLog.i(NTAG, "内容触发 Observer 已注册（图片+视频 2 URI，去抖 30s/300s）+ 15 分钟周期兜底 + 进程内 Observer + 网络恢复监听")
     }
 
     /** 进程内 MediaStore 观察者（进程存活期间有效；null = 未注册）。 */
@@ -171,6 +181,120 @@ object ImmichBackup {
         }
     }
 
+    /** 网络恢复监听回调（进程存活期间有效；null = 未注册）。 */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** 网络回调侧最近一次「不按流量计费」状态（null = 未知；用于边沿检测避免信号波动重复触发）。 */
+    @Volatile
+    private var lastUnmetered: Boolean? = null
+
+    /**
+     * 注册默认网络回调（幂等）。边沿检测「网络从不计费可用 → 恢复」：
+     * 蜂窝/断网状态下拍照被门禁拦截的照片，在切回 Wi-Fi 的瞬间即时触发对账续传。
+     * 回调发生在 binder 线程，触发链（triggerSyncNow → WorkManager 入队）线程安全。
+     *
+     * :param appContext: 应用上下文
+     */
+    private fun ensureNetworkCallback(appContext: Context) {
+        if (networkCallback != null) return
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        if (cm == null) {
+            DiagLog.w(NTAG, "获取 ConnectivityManager 失败，网络恢复监听未注册")
+            return
+        }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            /**
+             * 网络可用回调（含蜂窝/Wi-Fi 切换、断网重连）。
+             *
+             * :param network: 新可用的网络
+             */
+            override fun onAvailable(network: Network) {
+                onNetworkMaybeRestored(appContext)
+            }
+
+            /**
+             * 网络能力变化回调（Wi-Fi 信号波动会高频回调，靠边沿检测去重）。
+             *
+             * :param network: 当前网络
+             * :param networkCapabilities: 最新能力
+             */
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                onNetworkMaybeRestored(appContext)
+            }
+
+            /**
+             * 网络丢失回调：只更新边沿状态，不触发对账（断网时无法上传）。
+             *
+             * :param network: 丢失的网络
+             */
+            override fun onLost(network: Network) {
+                lastUnmetered = ImmichBackup.isUnmeteredNetwork(appContext)
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
+            .onSuccess {
+                networkCallback = callback
+                DiagLog.i(NTAG, "网络恢复监听已注册（切回 Wi-Fi 自动续传）")
+            }
+            .onFailure { DiagLog.w(NTAG, "网络恢复监听注册失败：${it.message}") }
+    }
+
+    /**
+     * 网络变化统一处理：边沿检测「从不按流量计费 → 恢复」时触发对账。
+     * 首次回调（prev=null）即处于 Wi-Fi 时也触发一次——进程冷启动即完成积压对账。
+     *
+     * :param appContext: 应用上下文
+     */
+    private fun onNetworkMaybeRestored(appContext: Context) {
+        val unmetered = ImmichBackup.isUnmeteredNetwork(appContext)
+        val prev = lastUnmetered
+        lastUnmetered = unmetered
+        // 边沿触发：仅「不满足 → 满足」跳变时对账，Wi-Fi 内信号波动（恒满足）不触发
+        if (unmetered && prev != true) {
+            DiagLog.i(NTAG, "网络恢复为 Wi-Fi（不计费）→ 触发对账")
+            triggerSyncNow(appContext)
+        }
+    }
+
+    /**
+     * 注销网络恢复监听（自动备份关闭时调用）。
+     *
+     * :param appContext: 应用上下文
+     */
+    private fun unregisterNetworkCallback(appContext: Context) {
+        networkCallback?.let {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            runCatching { cm?.unregisterNetworkCallback(it) }
+            networkCallback = null
+            lastUnmetered = null
+            DiagLog.i(NTAG, "网络恢复监听已注销")
+        }
+    }
+
+    /**
+     * 入队「Wi-Fi 恢复等待」Worker（仅 Wi-Fi 门禁拦截时调用）。
+     * 带 UNMETERED 网络约束：WorkManager 在网络切回 Wi-Fi 时由系统自动唤醒执行，
+     * 进程被杀后任务仍保留在系统侧；KEEP 策略幂等（已在等待中则忽略重复入队）。
+     * OnePlus 对 WorkManager 网络约束偶发跟踪故障，故此路径为兜底，
+     * 主路径是进程内 NetworkCallback（v0.3.010）+ 15 分钟周期对账。
+     *
+     * :param appContext: 应用上下文
+     */
+    fun enqueueWifiWaitWork(appContext: Context) {
+        val request = OneTimeWorkRequestBuilder<ImmichUploadWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.UNMETERED)
+                    .build(),
+            )
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            WIFI_WAIT_NAME,
+            ExistingWorkPolicy.KEEP,
+            request,
+        )
+    }
+
     /**
      * 注销 Observer（自动备份关闭时调用）。
      *
@@ -181,8 +305,10 @@ object ImmichBackup {
         val wm = WorkManager.getInstance(appContext)
         wm.cancelUniqueWork(OBSERVER_NAME)
         wm.cancelUniqueWork(PERIODIC_NAME)
+        wm.cancelUniqueWork(WIFI_WAIT_NAME)
         unregisterInProcessObserver(appContext)
-        DiagLog.i(NTAG, "内容触发 Observer、周期兜底与进程内 Observer 已注销")
+        unregisterNetworkCallback(appContext)
+        DiagLog.i(NTAG, "内容触发 Observer、周期兜底、Wi-Fi 等待任务、进程内 Observer 与网络恢复监听已注销")
     }
 
     /** 上次手动/观察者触发对账的时刻（elapsedRealtime 毫秒；30 秒节流防打断运行中 Worker）。 */
@@ -389,9 +515,12 @@ class ImmichUploadWorker(
         // 清掉本链路自己的残留通知（Worker 被取消/进程被杀时通知不会自动消失）
         runCatching { NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID) }
         // 「仅 Wi-Fi」门禁：不再依赖 JobScheduler 网络约束（OnePlus 跟踪故障会卡住不启动），
-        // 改为 Worker 内判定；非 Wi-Fi 直接退出，下次内容触发/进相册页再对账
+        // 改为 Worker 内判定。非 Wi-Fi 时挂起一个 UNMETERED 约束的等待 Worker（网络切回
+        // Wi-Fi 由系统自动唤醒；若 OnePlus 约束故障卡住，还有进程内 NetworkCallback 边沿
+        // 触发与 15 分钟周期兜底三层冗余），积压照片不再依赖手动进相册页才续传
         if (ImmichPrefs.wifiOnly(context) && !ImmichBackup.isUnmeteredNetwork(context)) {
-            DiagLog.i(NTAG, "仅 Wi-Fi 备份：当前非 Wi-Fi 网络，本次跳过")
+            DiagLog.i(NTAG, "仅 Wi-Fi 备份：当前非 Wi-Fi 网络，挂起等待 Wi-Fi 恢复自动续传")
+            ImmichBackup.enqueueWifiWaitWork(context)
             return Result.success()
         }
         // 总闸：开关关闭直接退出（能耗纪律 #7：出厂关闭，开启才生效）
