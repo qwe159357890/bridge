@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 蓝牙钥匙通知小图标：单色（系统会按通知栏主题染色），24dp 标准尺寸。
+     形状 = 钥匙（环 + 杆 + 两齿），一眼能和极空/统计等图标区分。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M14.5,2a6.5,6.5 0 0 0 -6.33,8L2,16.17V22h5.83l1.5,-1.5V18.5h2V16.5h2l1.05,-1.05A6.5,6.5 0 1 0 14.5,2zM16,6.5a2,2 0 1 1 -2,2 2,2 0 0 1 2,-2z" />
+</vector>

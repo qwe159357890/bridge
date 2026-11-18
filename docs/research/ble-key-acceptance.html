@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>蓝牙钥匙 · 统一验收单 v0.3.003</title>
+<style>
+  :root{
+    --bg:#F4F6F9; --card:#FFFFFF; --line:#E3E7ED; --ink:#1B2027; --sub:#6B7480;
+    --primary:#1F6FEB; --pass:#12805C; --fail:#C0392B; --skip:#8A6D00;
+    --passbg:#E8F5EF; --failbg:#FBEAE8; --skipbg:#FBF3DC;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  header{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);
+         backdrop-filter:saturate(160%) blur(8px);border-bottom:1px solid var(--line);}
+  .hwrap{max-width:900px;margin:0 auto;padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px}
+  .ver{font-size:11px;color:var(--sub);border:1px solid var(--line);border-radius:20px;padding:1px 8px}
+  .prog{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .bar{width:150px;height:6px;background:#E8ECF2;border-radius:99px;overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;background:var(--pass);transition:width .25s}
+  .cnt{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:9px;
+       padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:#C8D0DA;background:#FAFBFC}
+  .btn.pri{background:var(--primary);border-color:var(--primary);color:#fff}
+  .btn.pri:hover{filter:brightness(1.06)}
+  main{max-width:900px;margin:0 auto;padding:18px}
+  .intro{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+  .intro h2{font-size:14px;margin:0 0 8px}
+  .intro p{margin:6px 0;color:var(--sub);font-size:13px}
+  .intro b{color:var(--ink)}
+  .warn{background:#FFF8F1;border:1px solid #F3DCC4;border-radius:12px;padding:12px 14px;margin:12px 0 0;font-size:13px;color:#7A4A12}
+  .warn ol{margin:6px 0 0 18px;padding:0}
+  .warn li{margin:4px 0}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;overflow:hidden}
+  .shead{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line);background:#FCFDFE}
+  .stag{font-size:11px;font-weight:700;color:var(--primary);background:#EDF3FE;border-radius:6px;padding:2px 7px;letter-spacing:.5px}
+  .shead h3{font-size:14px;margin:0;font-weight:620}
+  .shead .sn{margin-left:auto;font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+  .item{padding:14px 18px;border-bottom:1px solid #F0F3F7}
+  .item:last-child{border-bottom:0}
+  .irow{display:flex;align-items:flex-start;gap:10px}
+  .no{flex:0 0 auto;font-size:11.5px;font-weight:700;color:var(--sub);padding-top:2px;min-width:26px;font-variant-numeric:tabular-nums}
+  .body{flex:1;min-width:0}
+  .title{font-weight:600;font-size:13.5px;margin-bottom:3px}
+  .step{color:var(--sub);font-size:12.5px;margin:2px 0}
+  .exp{font-size:12.5px;color:var(--ink);background:#F7F9FC;border-left:3px solid #D6E0EE;border-radius:0 6px 6px 0;padding:6px 9px;margin:7px 0 0}
+  .exp b{color:var(--primary);font-weight:600}
+  .acts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;align-items:center}
+  .rbtn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:4px 11px;font:inherit;
+        font-size:12px;cursor:pointer;color:var(--sub);transition:.12s}
+  .rbtn:hover{border-color:#C8D0DA}
+  .rbtn[data-on="pass"]{background:var(--passbg);border-color:#B7DECD;color:var(--pass);font-weight:600}
+  .rbtn[data-on="fail"]{background:var(--failbg);border-color:#F0C4BE;color:var(--fail);font-weight:600}
+  .rbtn[data-on="skip"]{background:var(--skipbg);border-color:#E8D8A8;color:var(--skip);font-weight:600}
+  .note{flex:1 1 100%;margin-top:6px}
+  .note input{width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 9px;
+              font:inherit;font-size:12.5px;color:var(--ink);background:#FCFDFE}
+  .note input:focus{outline:none;border-color:#A9C6F5;background:#fff}
+  .foot{max-width:900px;margin:0 auto;padding:0 18px 40px}
+  .summary{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .summary h2{font-size:14px;margin:0 0 10px}
+  .kpi{display:flex;gap:22px;flex-wrap:wrap;margin-bottom:12px}
+  .kpi div{font-size:12px;color:var(--sub)}
+  .kpi b{display:block;font-size:22px;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.3}
+  .kpi .p b{color:var(--pass)} .kpi .f b{color:var(--fail)} .kpi .s b{color:var(--skip)}
+  textarea{width:100%;min-height:150px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+           font:12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--ink);background:#FCFDFE;resize:vertical}
+  textarea:focus{outline:none;border-color:#A9C6F5;background:#fff}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);background:#1B2027;color:#fff;
+         padding:9px 16px;border-radius:10px;font-size:12.5px;opacity:0;pointer-events:none;transition:.22s;z-index:99}
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+  @media(max-width:560px){
+    .hwrap{padding:10px 12px} .prog{width:100%;margin-left:0}
+    .bar{flex:1} main{padding:12px} .item{padding:12px 14px} .shead{padding:11px 14px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="hwrap">
+    <h1>蓝牙钥匙 · 统一验收单</h1>
+    <span class="ver">v0.3.003 / code 3003</span>
+    <div class="prog">
+      <div class="bar"><i id="bar"></i></div>
+      <span class="cnt" id="cnt">0 / 0</span>
+      <button class="btn" id="reset">清空</button>
+      <button class="btn pri" id="copy">复制结果</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="intro">
+    <h2>怎么用这份单子</h2>
+    <p>按 <b>A → I 顺序做</b>，每项做完点「通过 / 不通过 / 跳过」。不通过一定要写备注（看到了什么、通知文案是什么），那是我定位问题的唯一线索。</p>
+    <p>勾选自动存在本机浏览器，关掉再打开不会丢。全部做完点右上「复制结果」发我。</p>
+    <p><b>前置</b>：手机已装 0.3.003；有一辆车（ESP32 已刷 espAutoUnlock v0.7.x）；电脑能接 ESP32 串口。</p>
+    <div class="warn">
+      <b>三条必须先知道的</b>
+      <ol>
+        <li><b>静默时段会停播</b>（默认 21:00–05:00，App 在后台且极空未连时）。夜里到车边不通电是<b>有意的</b>，打开 App 即恢复 —— F 组就是在验这个。</li>
+        <li><b>对端有三个已知未修问题</b>：一把钥匙走远会整体断电（H6 会暴露，要求单第 18 条）、<code>-</code> 占位会互相覆盖（第 7 条）、<b>名字带空格会把命令字段冲散</b>（第 19 条，H7 会暴露）。这三条不通过都不算本 App 的 bug。</li>
+        <li><b>C4 杀进程后要等最多 1 分钟</b>才恢复，不要 5 秒就判失败（靠 60 秒巡检兜底）。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div id="form"></div>
+</main>
+
+<div class="foot">
+  <div class="summary">
+    <h2>汇总</h2>
+    <div class="kpi">
+      <div class="p"><b id="kpiPass">0</b>通过</div>
+      <div class="f"><b id="kpiFail">0</b>不通过</div>
+      <div class="s"><b id="kpiSkip">0</b>跳过</div>
+      <div><b id="kpiRest">0</b>未测</div>
+    </div>
+    <textarea id="out" readonly placeholder="点右上「复制结果」后，这里会生成可粘贴的文本"></textarea>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  var GROUPS = [
+    { id:'A', title:'升级与安装', items:[
+      {id:'A1', t:'升级到 0.3.003', s:'App → 检查更新 → 下载安装', e:'提示版本 <b>0.3.003</b>，安装成功（同版本不会提示，所以必须是 3003）'},
+      {id:'A2', t:'启动无异常', s:'安装后打开 App，来回切几个页面再回首页', e:'不闪退；<b>回首页时停在第 1 页</b>（不会被莫名丢到蓝牙钥匙页）'},
+      {id:'A3', t:'入口可见', s:'设置 → 连接 → 拉到底', e:'看到「<b>蓝牙钥匙（BLE 广播）</b>」卡片，右侧开关，副标题显示当前档位'},
+      {id:'A4', t:'无新增权限弹窗', s:'首次点进卡片', e:'不弹权限框（冷启动已批量申请）；若之前拒绝过蓝牙权限，状态应显示中文原因而非崩溃'}
+    ]},
+    { id:'B', title:'基础广播', items:[
+      {id:'B1', t:'开播成功', s:'编号填 03 → 打开「启用广播」', e:'卡片显示「<b>广播中 · 快速（250ms）</b>」；通知栏出现「<b>钥匙 03 · 广播中</b>」'},
+      {id:'B2', t:'空编号被拦', s:'先清空编号 → 再打开开关', e:'弹「请先填写钥匙编号（00~99）」，<b>开关不打开</b>'},
+      {id:'B3', t:'UUID 正确', s:'进详情页「标识」→ 点「复制 32 位」→ 粘到记事本', e:'内容恰为 <b>62726964676500000000000000000003</b>（32 位，末两位是编号）'},
+      {id:'B4', t:'自检（四档结论）', s:'详情页 → 点「开始自检」，等 5 秒', e:'<b>扫到自己</b>＝「已确认在播（-xx dBm，N 帧）」；<b>扫到别的 iBeacon</b>＝「无结论 · 扫描正常」（本机不上报自发包，正常现象）；<b>未收到任何包</b>＝「无结论」（附近无 BLE 设备时也会这样）。<b>只有「无法自检」才算不通过</b>'},
+      {id:'B5', t:'功率档位可切', s:'发射功率点「高」→ 再看状态', e:'短暂重建后仍为「广播中」，<b>不变成失败</b>；详情页功率文案变成「高（约 +1dBm）」'}
+    ]},
+    { id:'C', title:'生命周期与档位（核心）', items:[
+      {id:'C1', t:'后台降慢速', s:'按 Home 回桌面（别锁屏）→ 等满 5 分钟 → 下拉通知看文案', e:'文案变「<b>后台慢速保底（1000ms）</b>」；详情页档位同步变「慢速保底」'},
+      {id:'C2', t:'回前台立即提速', s:'再次打开 App', e:'<b>3 秒内</b>变回「快速（250ms）」，不需要再等'},
+      {id:'C3', t:'极空连接可提速', s:'回桌面 → 让极空连上（或打开极空页连一次）→ 通知应保持快速', e:'极空已连接时<b>始终快速</b>；断开极空后重新走 5 分钟宽限'},
+      {id:'C4', t:'杀进程自愈', s:'最近任务里划掉 App（或在系统设置里强行停止）→ 等最多 60 秒', e:'通知<b>自动回来</b>（钥匙 NN · 广播中）；不需要手动打开 App'},
+      {id:'C5', t:'蓝牙开关自愈', s:'关闭系统蓝牙 → 再打开', e:'关时通知变「未广播」/ 状态给「蓝牙未开启」；开后<b>自动恢复广播中</b>'},
+      {id:'C6', t:'关开关即停', s:'关掉「启用广播」开关', e:'通知<b>立即消失</b>；状态变「已停止」'},
+      {id:'C7', t:'开机自启（可选）', s:'重启手机 → 开机后打开 App', e:'广播自动恢复；若没恢复，记录是否被系统的「自启动管理」拦了'},
+      {id:'C8', t:'亮屏提速生效', s:'回到桌面（App 在后台）→ 按电源键亮屏 → 2 秒内看通知文案', e:'文案变「<b>亮屏提速（100ms）· 剩 1 分 xx 秒</b>」；详情页档位「广播中 · 亮屏提速（100ms）」'},
+      {id:'C9', t:'灭屏不打断提速', s:'亮屏后立刻灭屏 → 等 30 秒 → 看通知', e:'<b>仍在提速窗口内</b>（文案还在倒计时），不是立刻掉回 1000ms'},
+      {id:'C10', t:'提速到期回落', s:'亮屏后不操作，等满 2 分钟 → 看通知与详情页', e:'自动回落到「快速（250ms）」或「慢速保底（1000ms）」；<b>不会卡在 100ms</b>'}
+    ]},
+    { id:'D', title:'静默失效自愈', items:[
+      {id:'D1', t:'例行重建不破坏计时', s:'服务正常广播时把 App 放后台，静置 5 分钟后再进详情页看「已播时长」', e:'应<b>连续增长</b>（约 5 分钟），<b>不会每 60 秒归零</b>；归零＝例行重建误清了计时（回归）'},
+      {id:'D2', t:'反复抖动不出错', s:'快速开关系统蓝牙 3 次（每次间隔约 3 秒）', e:'每次都能回到「广播中」；已播时长会因蓝牙关而重新计时（正常），<b>不出现「未广播」卡死</b>'},
+      {id:'D3', t:'Doze 后仍存活', s:'手机放着不动 30 分钟（屏幕全黑）→ 唤醒看通知', e:'通知仍在，文案正常；不需要打开 App'}
+    ]},
+    { id:'E', title:'通知交互', items:[
+      {id:'E1', t:'点通知进详情页', s:'蓝牙已开状态下点通知', e:'直接落到「<b>蓝牙钥匙</b>」详情页（不是首页）'},
+      {id:'E2', t:'通知停止按钮', s:'点通知上的「停止」', e:'广播停止 + <b>总开关自动关闭</b> + 通知消失'},
+      {id:'E3', t:'蓝牙关时跳设置', s:'先关系统蓝牙 → 等通知变「未广播」→ 点通知', e:'跳到<b>系统蓝牙设置页</b>，不是 App'},
+      {id:'E4', t:'文案随状态变', s:'分别观察快速/慢速/静默三种状态的通知', e:'三种文案不同，且都带具体原因（不是固定一句）'},
+      {id:'E5', t:'不误跳页（P2 修复点）', s:'让状态变化几次（切前后台）→ 完全退出 App → 从桌面图标打开', e:'落在<b>首页</b>，<b>不会</b>自动弹出蓝牙钥匙页。若自动弹了，说明旧 bug 回来了'}
+    ]},
+    { id:'F', title:'静默时段', items:[
+      {id:'F1', t:'静默前提醒', s:'把静默改成「当前时间 +2 分钟」开始、+10 分钟结束 → 点保存 → 回桌面等', e:'约 2 分钟后收到一条「<b>XX:XX 起暂停后台广播</b>」的提醒（每天最多一次）'},
+      {id:'F2', t:'到点停播', s:'继续等，到开始时刻后（App 在后台、极空未连）', e:'通知变「<b>已暂停（时段静默）</b>」；详情页档位「已暂停 · 时段静默」'},
+      {id:'F3', t:'前台覆盖静默', s:'静默期内打开 App', e:'<b>立即恢复「快速」</b>，证明前台优先于静默'},
+      {id:'F4', t:'极空覆盖静默', s:'回桌面 → 让极空连上', e:'<b>立即恢复快速</b>，证明极空连接也优先于静默'},
+      {id:'F5', t:'关静默即恢复', s:'关掉「启用静默时段」开关（App 在后台状态下）', e:'恢复「后台慢速保底」，不再停播'},
+      {id:'F6', t:'静默结束自动恢复', s:'等到结束时刻（不打开 App）', e:'60 秒内自动恢复「慢速保底」'}
+    ]},
+    { id:'G', title:'界面与其他', items:[
+      {id:'G1', t:'设备名显示', s:'详情页「设备名」卡片', e:'显示当前系统蓝牙名；若无权限/蓝牙关，显示「读取失败」而不是崩溃'},
+      {id:'G2', t:'按编号改名', s:'点「按编号改名」→ 看清提示 → 确认', e:'弹确认框写明「会改手机整体蓝牙名」；确认后名字变成 <b>原名-03</b> 形式'},
+      {id:'G3', t:'取消改名', s:'再点一次 → 这次点取消', e:'名字<b>不变</b>（不能有静默修改）'},
+      {id:'G4', t:'电池白名单状态', s:'详情页「系统限制」', e:'状态与系统实际一致；点按钮能跳到系统电池优化页'},
+      {id:'G5', t:'前缀校验', s:'高级 → 前缀改成 10 个字符 → 点保存', e:'提示「必须是 30 个 hex 字符」，<b>不保存</b>'},
+      {id:'G6', t:'安全提示可见', s:'详情页拉到底', e:'「安全边界」卡片在，文案含「UUID 就是钥匙本体 / 可被复制」'}
+    ]},
+    { id:'H', title:'对端联调（ESP32）', items:[
+      {id:'H1', t:'能扫到', s:'ESP32 上电 10 秒内发 CONFIG → 发 SCAN', e:'列表出现你的 UUID 行，<b>UUID 与手机页面逐字符一致</b>'},
+      {id:'H2', t:'登记成功', s:'Qt 工具里选中该行 → 设为钥匙 → KEY LIST', e:'出现该条目，UUID 完整 32 位，名称 = 手机蓝牙名'},
+      {id:'H3', t:'靠近通电', s:'带手机从 10 米外走近到车边（<b>先按电源键亮屏</b>，再走近）', e:'继电器通电约 <b>1~2 秒</b>（亮屏提速）；若不亮屏直接走近则需 6~10 秒，属预期'},
+      {id:'H4', t:'走远断电', s:'带手机走远（或关机）', e:'约 <b>75 秒</b>后断电（15 秒判远 + 60 秒延时）'},
+      {id:'H5', t:'裤兜实测', s:'手机放裤兜贴车测试', e:'能通电。若不能：功率切「高」再试；仍不能则对端 rssi_on 需要放宽到 -75'},
+      {id:'H6', t:'双钥匙共存', s:'第二台手机（不同编号）也登记 → 拿走其中一台', e:'<b>不断电</b>（另一把还在）。若断电，是对端第 18 条未落地，记备注不算本 App 失败'},
+      {id:'H7', t:'名称完整性核对（空格陷阱）', s:'登记完立刻发 <code>KEY LIST</code>，看你这把的「名称」列', e:'名称与手机详情页「设备名」<b>完全一致</b>。若只剩 <code>OPPO</code> 且地址列是 <code>Reno9</code>，说明名字空格把字段冲散了 → 删掉，用「按编号改名」去空格后重登'},
+      {id:'H8', t:'蓝牙重开后的恢复时长', s:'关蓝牙 → 3 秒 → 开蓝牙 → 立刻灭屏，用 ESP32 串口看多久恢复通电', e:'<b>亮屏状态下 1~3 秒</b>；黑屏（走 1000ms 慢速档）+ 对端 <code>scan_mode=中</code> + <code>hit_frames=3</code> 时 <b>10~30 秒属对端节奏</b>，不是手机没广播（手机侧从蓝牙 ON 到广播启动实测 176ms）'}
+    ]},
+    { id:'I', title:'长时间稳定', items:[
+      {id:'I1', t:'24 小时观察', s:'正常使用，第二天回来看', e:'通知一直在；巡检修复 < 20 次；无「莫名不通电」'},
+      {id:'I2', t:'过夜跨静默', s:'晚上 21:00 后确认停播 → 次日 05:00 后不打开 App 看通知', e:'05:00 后应<b>自动恢复慢速保底</b>（不需要打开 App）'},
+      {id:'I3', t:'耗电', s:'系统设置 → 电池 → 按应用查看 Bridge 一天耗电', e:'蓝牙钥匙相关 ≤ <b>2% / 天</b>（含后台慢速档）'}
+    ]}
+  ];
+
+  var KEY = 'blekey_accept_v1';
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch(e){ state = {}; }
+
+  function get(id){ return state[id] || {r:'', note:''}; }
+  function set(id, patch){
+    var s = get(id); for(var k in patch) s[k] = patch[k];
+    state[id] = s;
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){}
+  }
+
+  var host = document.getElementById('form');
+  var html = '';
+  GROUPS.forEach(function(g){
+    html += '<section data-g="' + g.id + '">';
+    html += '<div class="shead"><span class="stag">' + g.id + '</span><h3>' + g.title + '</h3>'
+         +  '<span class="sn" id="sn-' + g.id + '">0/' + g.items.length + '</span></div>';
+    g.items.forEach(function(it){
+      html += '<div class="item">';
+      html += '  <div class="irow"><span class="no">' + it.id + '</span><div class="body">';
+      html += '    <div class="title">' + it.t + '</div>';
+      html += '    <div class="step">' + it.s + '</div>';
+      html += '    <div class="exp"><b>预期</b> · ' + it.e + '</div>';
+      html += '    <div class="acts">';
+      html += '      <button class="rbtn" data-id="' + it.id + '" data-r="pass">通过</button>';
+      html += '      <button class="rbtn" data-id="' + it.id + '" data-r="fail">不通过</button>';
+      html += '      <button class="rbtn" data-id="' + it.id + '" data-r="skip">跳过</button>';
+      html += '    </div>';
+      html += '    <div class="note"><input type="text" data-note="' + it.id + '" placeholder="备注：看到了什么（不通过必填）"></div>';
+      html += '  </div></div>';
+      html += '</div>';
+    });
+    html += '</section>';
+  });
+  host.innerHTML = html;
+
+  function paint(id){
+    var s = get(id);
+    document.querySelectorAll('.rbtn[data-id="' + id + '"]').forEach(function(b){
+      if(b.getAttribute('data-r') === s.r) b.setAttribute('data-on', s.r);
+      else b.removeAttribute('data-on');
+    });
+    var input = document.querySelector('input[data-note="' + id + '"]');
+    if(input && input.value !== s.note) input.value = s.note || '';
+  }
+
+  function update(){
+    var pass=0, fail=0, skip=0, total=0;
+    GROUPS.forEach(function(g){
+      var gp=0;
+      g.items.forEach(function(it){
+        total++;
+        var r = get(it.id).r;
+        if(r==='pass'){pass++;gp++;}
+        else if(r==='fail') fail++;
+        else if(r==='skip') skip++;
+      });
+      var el = document.getElementById('sn-' + g.id);
+      if(el) el.textContent = gp + '/' + g.items.length;
+    });
+    var done = pass + fail + skip;
+    document.getElementById('cnt').textContent = pass + ' / ' + total;
+    document.getElementById('bar').style.width = total ? (pass / total * 100).toFixed(1) + '%' : '0';
+    document.getElementById('kpiPass').textContent = pass;
+    document.getElementById('kpiFail').textContent = fail;
+    document.getElementById('kpiSkip').textContent = skip;
+    document.getElementById('kpiRest').textContent = total - done;
+  }
+
+  function buildText(){
+    var pass=0, fail=0, skip=0, total=0, fails=[], skips=[];
+    GROUPS.forEach(function(g){
+      g.items.forEach(function(it){
+        total++;
+        var s = get(it.id);
+        if(s.r==='pass') pass++;
+        else if(s.r==='fail'){ fail++; fails.push(it.id + ' ' + it.t + (s.note ? '：' + s.note : '')); }
+        else if(s.r==='skip'){ skip++; skips.push(it.id + ' ' + it.t + (s.note ? '：' + s.note : '')); }
+      });
+    });
+    var lines = [];
+    lines.push('【蓝牙钥匙验收结果】v0.3.003 / code 3003');
+    lines.push('通过 ' + pass + ' / ' + total + '，不通过 ' + fail + '，跳过 ' + skip + '，未测 ' + (total - pass - fail - skip));
+    if(fails.length){ lines.push(''); lines.push('— 不通过 —'); fails.forEach(function(x){ lines.push('· ' + x); }); }
+    if(skips.length){ lines.push(''); lines.push('— 跳过 —'); skips.forEach(function(x){ lines.push('· ' + x); }); }
+    lines.push('');
+    lines.push('时间：' + new Date().toLocaleString('zh-CN'));
+    return lines.join('\n');
+  }
+
+  document.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('.rbtn') : null;
+    if(!b) return;
+    var id = b.getAttribute('data-id'), r = b.getAttribute('data-r');
+    var cur = get(id).r;
+    var next = (cur === r) ? '' : r;   // 再点一次取消
+    set(id, {r: next});
+    paint(id); update();
+    if(next === 'fail'){
+      var input = document.querySelector('input[data-note="' + id + '"]');
+      if(input) input.focus();
+    }
+  });
+
+  document.addEventListener('input', function(e){
+    var el = e.target;
+    if(!el.hasAttribute || !el.hasAttribute('data-note')) return;
+    set(el.getAttribute('data-note'), {note: el.value});
+  });
+
+  document.getElementById('copy').addEventListener('click', function(){
+    var text = buildText();
+    var out = document.getElementById('out');
+    out.value = text;
+    var done = function(){
+      toast('已复制，粘贴给我即可');
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done).catch(function(){
+        out.select(); document.execCommand('copy'); done();
+      });
+    } else {
+      out.select(); document.execCommand('copy'); done();
+    }
+  });
+
+  document.getElementById('reset').addEventListener('click', function(){
+    if(!confirm('清空全部勾选与备注？')) return;
+    state = {};
+    try { localStorage.removeItem(KEY); } catch(e){}
+    document.querySelectorAll('input[data-note]').forEach(function(i){ i.value = ''; });
+    document.querySelectorAll('.rbtn').forEach(function(b){ b.removeAttribute('data-on'); });
+    document.getElementById('out').value = '';
+    update();
+    toast('已清空');
+  });
+
+  var toastTimer = null;
+  function toast(msg){
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.classList.remove('on'); }, 1800);
+  }
+
+  GROUPS.forEach(function(g){ g.items.forEach(function(it){ paint(it.id); }); });
+  update();
+})();
+</script>
+</body>
+</html>

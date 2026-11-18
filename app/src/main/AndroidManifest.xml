@@ -185,6 +185,14 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- 蓝牙钥匙广播前台服务（v0.3.001）：手机作为 peripheral 持续广播 iBeacon 供车上
+             ESP32 扫到当钥匙。connectedDevice 类型同极空四件套；START_STICKY 被杀重建时
+             按当前 Prefs 重新评估（幂等，开关关时自停）。 -->
+        <service
+            android:name="my.bridge.com.blekey.BleKeyBroadcastService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <!-- 保活：开机 / 更新自启 -->
         <receiver
             android:name="my.bridge.com.keepalive.BootReceiver"

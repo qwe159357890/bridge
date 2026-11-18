@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import my.bridge.com.blekey.BleKeyHealth
 import my.bridge.com.core.common.DiagLog
 import my.bridge.com.core.network.api.BridgeApiClient
 import my.bridge.com.core.network.ws.BridgeWebSocketClient
@@ -157,6 +158,10 @@ class ConnectionViewModel @Inject constructor(
             _uploadResult.value = "上传中…"
             val result = try {
                 val id = deviceStore.deviceId()
+                // ★ 蓝牙钥匙运行摘要（v0.3.008）：先把一行 [BleKeySummary] 插进日志流，再 dump。
+                //   上传的日志按时间排序，这行会排在最后（最新），后台按 tag 过滤即可第一眼判读
+                //   「播了多久 / 巡检多少轮 / 失败几次 / 有没有被杀」，不必翻 5000 行。
+                runCatching { BleKeyHealth.appendSummary(context) }
                 val logs = DiagLog.dumpLines().map {
                     my.bridge.com.core.network.api.BridgeApi.LogLine(
                         ts = it.ts, level = it.level, tag = it.tag, message = it.message,

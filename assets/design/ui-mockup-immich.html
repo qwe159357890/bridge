@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>相册功能原型（Immich 复刻 · 照片/搜索/相册/资料 + 大图查看器）</title>
+<!--
+  ═══════════════════════════════════════════════════════════════════
+  Immich 相册集成交互原型（Bridge 客户端嵌入版）
+  ═══════════════════════════════════════════════════════════════════
+  复刻蓝本：Immich 安卓官方 APP v3.4（references/immich/mobile 源码实锤）
+  · 底部导航 4 Tab：照片 / 搜索 / 相册 / 资料（tab_shell.page.dart）
+  · 品牌色：亮 #4150AF / 暗 #ACCBFA（constants/colors.dart）
+  · 时间线：3 列方格 + 2px 间距 + 80px 月份头 + 右侧月份拖动条
+    （timeline/constants.dart：kTimelineColumnCount=3 / kTimelineHeaderExtent=80）
+  · 顶栏：immich logo + 同步/备份角标 + 头像（immich_sliver_app_bar.dart）
+  · 查看器：黑底全屏 + 底部渐变白色动作行（asset_viewer/bottom_bar.widget.dart）
+  ───────────────────────────────────────────────────────────────────
+  Bridge 精简项（对齐调研报告 §5.1，待拍板）：
+  · 搜索页：砍智能搜索/人脸/地图（ML 依赖），仅保留文件名过滤 + 分类入口
+  · 资料页：仅保留 收藏 / 最近添加 / 回收站 / 本机相册
+  · 备份上传（D5 已拍板 2026-11-16）：手动单张上传 + 自动备份纳入
+    （仅 Wi-Fi / 勾选相册制 / >256MB 前台服务；能耗纪律见调研报告 §5.4）
+  · 入口：主页顶部 Tab 末尾追加第 9 页「相册」（同 v0.2.155 管理页迁入方式）
+  · 缩略图：本原型用渐变色块占位；真机实现由 Coil 加载
+    GET /api/assets/{id}/thumbnail?size=thumbnail（webp，带 x-immich-user-token 头）
+  ═══════════════════════════════════════════════════════════════════
+-->
+<style>
+  :root {
+    --bg: #000000;
+    --surface: #0f0f10;
+    --surface2: #1c1c1e;
+    --surface3: #2a2a2d;
+    --text: #e8eaed;
+    --sub: #9aa0a6;
+    --divider: #2a2a2d;
+    --accent: #accbfa;
+    --accent2: #4150af;
+    --outer: #08090c;
+    --navbg: #101012;
+    --danger: #f2b8b5;
+    --heart: #ff6072;
+  }
+  body.light {
+    --bg: #ffffff;
+    --surface: #f5f5f7;
+    --surface2: #ececf0;
+    --surface3: #dcdce2;
+    --text: #1a1b1f;
+    --sub: #5d6672;
+    --divider: #e0e4e9;
+    --accent: #4150af;
+    --accent2: #4150af;
+    --outer: #c9ced6;
+    --navbg: #f2f2f6;
+    --danger: #b3261e;
+    --heart: #e5526a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { background: var(--outer); height: 100%; }
+  body {
+    font-family: 'Roboto', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    padding: 12px 0; flex-direction: column; gap: 10px;
+  }
+  .hint { color: #9aa0a6; font-size: 12px; }
+  .btns { display: flex; gap: 8px; }
+  .tool-btn {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--divider); border-radius: 20px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .phone {
+    width: 390px; height: 844px;
+    background: var(--bg);
+    border: 8px solid #1c1e22;
+    border-radius: 44px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
+    position: relative;
+  }
+  body.light .phone { border-color: #d5d8dd; }
+
+  /* 状态栏 */
+  .statusbar {
+    height: 36px; flex: none;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 22px; font-size: 13px; font-weight: 600; color: var(--text);
+    background: var(--bg);
+  }
+
+  /* 页面容器 */
+  .page { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+  .page.on { display: flex; }
+
+  /* ============ 顶栏（ImmichSliverAppBar） ============ */
+  .appbar {
+    flex: none; display: flex; align-items: center; gap: 6px;
+    padding: 10px 14px 10px 16px; background: var(--bg);
+  }
+  .logo { display: flex; align-items: center; gap: 7px; flex: 1; cursor: pointer; }
+  .logo .mark {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: conic-gradient(from 220deg, var(--accent2), var(--accent) 55%, #e5e9f8 75%, var(--accent2));
+    position: relative;
+  }
+  body.light .logo .mark { background: conic-gradient(from 220deg, #4150af, #7f8ee0 55%, #e5e9f8 75%, #4150af); }
+  .logo .mark::after {
+    content: ''; position: absolute; inset: 7px; border-radius: 50%;
+    background: var(--bg);
+  }
+  .logo .word {
+    font-size: 26px; font-weight: 700; letter-spacing: -0.5px;
+    color: var(--text); font-family: 'Roboto', sans-serif;
+  }
+  .appbar .ico {
+    width: 40px; height: 40px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent); font-size: 19px; cursor: pointer; position: relative;
+  }
+  body.light .appbar .ico { color: var(--accent); }
+  .appbar .ico .badge {
+    position: absolute; right: 7px; bottom: 7px;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: var(--surface3); border: 1px solid var(--divider);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px; color: var(--text);
+  }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--accent2); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600; cursor: pointer; margin-left: 4px;
+    border: 1.5px solid var(--accent);
+  }
+
+  /* ============ 时间线 ============ */
+  .timeline { flex: 1; overflow-y: auto; position: relative; scrollbar-width: none; }
+  .timeline::-webkit-scrollbar { display: none; }
+  .month-head {
+    height: 56px; display: flex; align-items: center; gap: 6px;
+    padding: 0 16px; position: sticky; top: 0; z-index: 5;
+    background: var(--bg);
+  }
+  .month-head .mt { font-size: 16px; font-weight: 700; color: var(--text); }
+  .month-head .mc {
+    font-size: 12px; color: var(--sub);
+    background: var(--surface2); border-radius: 10px; padding: 2px 8px;
+  }
+  .month-head .fold {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent); font-size: 14px; cursor: pointer;
+    background: var(--surface2);
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2px; padding-bottom: 2px; }
+  .tile {
+    position: relative; aspect-ratio: 1/1; cursor: pointer; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; font-size: 34px;
+  }
+  .tile.vid::after {
+    content: '▶'; position: absolute; left: 7px; bottom: 5px;
+    color: #fff; font-size: 11px;
+    text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  }
+  .tile .dur {
+    position: absolute; right: 6px; bottom: 5px;
+    background: rgba(0,0,0,.6); color: #fff;
+    font-size: 10px; padding: 1px 5px; border-radius: 4px;
+  }
+  .tile.sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .tile.sel::before {
+    content: '✓'; position: absolute; top: 5px; right: 5px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #000;
+    font-size: 12px; display: flex; align-items: center; justify-content: center;
+    z-index: 2;
+  }
+  /* 右侧月份拖动条（scrubber） */
+  .scrubber {
+    position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+    z-index: 8; display: flex; flex-direction: column; align-items: center;
+    background: var(--surface3); border-radius: 16px; padding: 8px 7px; gap: 2px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+  }
+  .scrubber .s-m {
+    font-size: 10px; color: var(--sub); line-height: 1.5; cursor: pointer;
+  }
+  .scrubber .s-m.on { color: var(--accent); font-weight: 700; font-size: 12px; }
+  /* 存储指示 */
+  .storage {
+    position: absolute; left: 12px; bottom: 10px; z-index: 6;
+    background: var(--surface2); border: 1px solid var(--divider);
+    border-radius: 14px; padding: 5px 12px; font-size: 11px; color: var(--sub);
+    box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  }
+  .storage b { color: var(--text); font-weight: 600; }
+
+  /* ============ 搜索页 ============ */
+  .search-box {
+    margin: 8px 16px 4px; background: var(--surface2);
+    border-radius: 24px; padding: 11px 16px; font-size: 14px; color: var(--sub);
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .sec-title { font-size: 15px; font-weight: 700; color: var(--text); padding: 18px 16px 10px; }
+  .entry-list { padding: 0 10px; }
+  .entry {
+    display: flex; align-items: center; gap: 14px; padding: 12px 8px;
+    border-radius: 12px; cursor: pointer;
+  }
+  .entry:active { background: var(--surface2); }
+  .entry .e-ico {
+    width: 42px; height: 42px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; background: var(--surface2);
+  }
+  .entry .e-body { flex: 1; }
+  .entry .e-name { font-size: 14.5px; color: var(--text); font-weight: 500; }
+  .entry .e-sub { font-size: 11.5px; color: var(--sub); margin-top: 2px; }
+  .entry .arrow { color: var(--sub); }
+  .note {
+    margin: 14px 16px; font-size: 12px; color: var(--sub); line-height: 1.7;
+    background: var(--surface); border: 1px dashed var(--divider);
+    border-radius: 10px; padding: 10px 12px;
+  }
+
+  /* ============ 相册页 ============ */
+  .albums-head { display: flex; align-items: center; padding: 8px 16px 4px; }
+  .albums-head .t { font-size: 18px; font-weight: 700; color: var(--text); flex: 1; }
+  .albums-head .sort { font-size: 12px; color: var(--sub); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .new-album-row { padding: 10px 16px 4px; display: flex; gap: 8px; }
+  .new-album-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--accent); cursor: pointer;
+    background: var(--surface2); border-radius: 18px; padding: 8px 14px;
+  }
+  .album-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 10px 12px 16px; }
+  .album-card { cursor: pointer; border-radius: 10px; overflow: hidden; }
+  .album-cover {
+    aspect-ratio: 1/1; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 44px; position: relative;
+  }
+  .album-cover.empty {
+    background: var(--surface2);
+    color: var(--sub); font-size: 26px;
+    border: 1px solid var(--divider);
+  }
+  .album-name { font-size: 13.5px; color: var(--text); font-weight: 500; margin-top: 7px; padding: 0 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-count { font-size: 11.5px; color: var(--sub); margin: 2px 0 8px; padding: 0 2px; }
+
+  /* ============ 相册详情 ============ */
+  .sub-appbar {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; background: var(--bg);
+  }
+  .sub-appbar .back { font-size: 22px; color: var(--text); cursor: pointer; padding: 4px 8px; }
+  .sub-appbar .tt { flex: 1; }
+  .sub-appbar .tt .n { font-size: 16px; font-weight: 600; color: var(--text); }
+  .sub-appbar .tt .c { font-size: 11.5px; color: var(--sub); }
+  .sub-appbar .act { font-size: 18px; color: var(--accent); cursor: pointer; padding: 6px 8px; }
+
+  /* ============ 底部导航（NavigationBar 4 Tab） ============ */
+  .bottomnav {
+    flex: none; display: flex; background: var(--navbg);
+    border-top: 1px solid var(--divider); padding: 8px 0 14px;
+  }
+  .bn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    color: var(--sub); font-size: 11px; cursor: pointer;
+  }
+  .bn .pill {
+    width: 56px; height: 28px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .bn.on { color: var(--text); }
+  .bn.on .pill { background: var(--surface2); color: var(--accent); }
+
+  /* ============ 大图查看器 ============ */
+  .viewer {
+    position: absolute; inset: 0; z-index: 30; background: #000;
+    display: none; flex-direction: column;
+  }
+  .viewer.show { display: flex; }
+  .v-top {
+    flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 44px 10px 10px; z-index: 2;
+  }
+  .v-top .v-ico {
+    width: 40px; height: 40px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 18px; cursor: pointer;
+  }
+  .v-top .v-date { flex: 1; color: #fff; font-size: 14px; font-weight: 500; padding-left: 6px; }
+  .v-body {
+    flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .v-img {
+    width: 100%; aspect-ratio: 1/1; max-height: 100%;
+    display: flex; align-items: center; justify-content: center; font-size: 90px;
+    transition: transform .18s ease;
+    transform-origin: center;
+  }
+  .v-bottom {
+    flex: none; position: relative; padding: 18px 10px 26px; z-index: 2;
+    background: linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,.12) 70%, transparent);
+  }
+  .v-actions { display: flex; justify-content: space-around; margin-bottom: 8px; }
+  .v-act {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    color: #fff; font-size: 10.5px; cursor: pointer; width: 56px;
+  }
+  .v-act .a-i { font-size: 20px; }
+  .v-act.on .a-i, .v-act.on { color: var(--heart); }
+  .v-fn { text-align: center; color: rgba(255,255,255,.75); font-size: 11px; }
+  /* EXIF 详情面板 */
+  .detail-panel {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+    background: #1c1c1e; border-radius: 22px 22px 0 0;
+    padding: 18px 18px 30px; max-height: 62%;
+    overflow-y: auto; display: none; color: #fff;
+    box-shadow: 0 -8px 30px rgba(0,0,0,.6);
+  }
+  .detail-panel.show { display: block; }
+  .dp-handle { width: 36px; height: 4px; border-radius: 2px; background: #555; margin: 0 auto 14px; }
+  .dp-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .dp-sub { font-size: 12px; color: #9aa0a6; margin-bottom: 14px; }
+  .dp-row { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid #2a2a2d; }
+  .dp-row .k { width: 34px; text-align: center; font-size: 16px; }
+  .dp-row .v { flex: 1; font-size: 13px; line-height: 1.5; }
+  .dp-row .v small { color: #9aa0a6; font-size: 11px; }
+  .dp-sec { font-size: 12px; color: #9aa0a6; margin: 16px 0 6px; letter-spacing: .5px; }
+
+  /* Toast */
+  .toast {
+    position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%);
+    background: #333338; color: #fff; font-size: 13px;
+    padding: 10px 18px; border-radius: 24px; z-index: 50;
+    display: none; white-space: nowrap;
+  }
+  .toast.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="btns">
+  <button class="tool-btn" onclick="toggleTheme()">浅色 / 深色</button>
+  <button class="tool-btn" onclick="resetAll()">复位演示</button>
+</div>
+<div class="hint">Immich 安卓版复刻原型 · 数据为本机真实服务端（14250 资产 / 19 相册） · 缩略图以色块占位</div>
+
+<div class="phone" id="phone">
+  <div class="statusbar"><span>20:14</span><span style="display:flex;gap:5px;">📶 🔋</span></div>
+
+  <!-- ═══════════ 页1：照片（时间线） ═══════════ -->
+  <div class="page on" id="pg-photos">
+    <div class="appbar">
+      <div class="logo"><div class="mark"></div><div class="word">immich</div></div>
+      <div class="ico" title="备份状态">⇧<span class="badge">✓</span></div>
+      <div class="avatar" title="qwe159357">q</div>
+    </div>
+    <div class="timeline" id="photosScroll"></div>
+    <div class="storage"><b>2.9 GB</b> · 已用 14250 个资产</div>
+    <div class="scrubber" id="scrubber" onmouseleave="hideScrubThumb()"></div>
+  </div>
+
+  <!-- ═══════════ 页2：搜索（精简版） ═══════════ -->
+  <div class="page" id="pg-search">
+    <div class="search-box">🔍 按文件名搜索…</div>
+    <div class="entry-list">
+      <div class="entry" onclick="toast('最近添加：POST /search/metadata 按 fileCreatedAt 倒序')">
+        <div class="e-ico">🕒</div>
+        <div class="e-body">
+          <div class="e-name">最近添加</div>
+          <div class="e-sub">服务端最近入库的资产</div>
+        </div>
+        <span class="arrow">›</span>
+      </div>
+      <div class="entry" onclick="toast('收藏：POST /search/metadata isFavorite=true')">
+        <div class="e-ico">❤️</div>
+        <div class="e-body">
+          <div class="e-name">收藏</div>
+          <div class="e-sub">已标记 ♥ 的照片与视频</div>
+        </div>
+        <span class="arrow">›</span>
+      </div>
+      <div class="entry" onclick="toast('截图相册：CameraX 外的本机 Screenshots 相册过滤')">
+        <div class="e-ico">📱</div>
+        <div class="e-body">
+          <div class="e-name">截图</div>
+          <div class="e-sub">1186 个资产</div>
+        </div>
+        <span class="arrow">›</span>
+      </div>
+      <div class="entry" onclick="toast('视频过滤：POST /search/metadata type=VIDEO')">
+        <div class="e-ico">🎬</div>
+        <div class="e-body">
+          <div class="e-name">视频</div>
+          <div class="e-sub">942 个视频资产</div>
+        </div>
+        <span class="arrow">›</span>
+      </div>
+    </div>
+    <div class="note">
+      ⚠️ Bridge 精简说明：原版搜索页含「智能搜索短语 / 人脸人物 / 地图地点 / 探索」，
+      均依赖服务端 ML 容器 —— 默认砍掉（待拍板 D4）。保留：文件名过滤、最近添加、收藏、截图、视频。
+    </div>
+  </div>
+
+  <!-- ═══════════ 页3：相册 ═══════════ -->
+  <div class="page" id="pg-albums">
+    <div class="albums-head">
+      <div class="t">相册</div>
+      <div class="sort" onclick="toast('排序切换：相册名 / 最近修改（GET /albums?withoutAssets=true）')">⇅ 排序</div>
+    </div>
+    <div class="new-album-row">
+      <span class="new-album-btn" onclick="toast('新建相册：POST /albums')">＋ 新建相册</span>
+    </div>
+    <div class="timeline"><div class="album-grid" id="albumGrid"></div></div>
+  </div>
+
+  <!-- ═══════════ 页4：资料（精简版） ═══════════ -->
+  <div class="page" id="pg-library">
+    <div class="sec-title">收藏与整理</div>
+    <div class="entry-list">
+      <div class="entry" onclick="toast('收藏页：isFavorite=true 资产时间线')">
+        <div class="e-ico">❤️</div><div class="e-body"><div class="e-name">收藏</div><div class="e-sub">标记 ♥ 的资产</div></div><span class="arrow">›</span>
+      </div>
+      <div class="entry" onclick="toast('最近添加：按入库时间倒序')">
+        <div class="e-ico">🕒</div><div class="e-body"><div class="e-name">最近添加</div><div class="e-sub">最新入库的资产</div></div><span class="arrow">›</span>
+      </div>
+      <div class="entry" onclick="toast('回收站：isTrashed=true（GET /trash 端点按部署版本核对）')">
+        <div class="e-ico">🗑️</div><div class="e-body"><div class="e-name">回收站</div><div class="e-sub">已删除待清理</div></div><span class="arrow">›</span>
+      </div>
+      <div class="entry" onclick="toast('归档：isArchived=true，从主时间线隐藏')">
+        <div class="e-ico">📦</div><div class="e-body"><div class="e-name">归档</div><div class="e-sub">主时间线隐藏的资产</div></div><span class="arrow">›</span>
+      </div>
+    </div>
+    <div class="sec-title">本机相册（photo_manager）</div>
+    <div class="entry-list" id="localAlbums"></div>
+    <div class="note">
+      ⚠️ Bridge 精简说明：原版资料页含 人物/地点/锁定文件夹/合作伙伴/共享相册 —— 人物与地点依赖 ML，
+      锁定文件夹与共享多用户场景在本项目无需求，均砍掉（待拍板 D4）。
+    </div>
+  </div>
+
+  <!-- ═══════════ 相册详情（覆盖层） ═══════════ -->
+  <div class="page" id="pg-album-detail" style="position:absolute; inset:36px 0 0 0; z-index:10; background:var(--bg); display:none;">
+    <div class="sub-appbar">
+      <span class="back" onclick="closeAlbumDetail()">‹</span>
+      <div class="tt">
+        <div class="n" id="adName">Camera</div>
+        <div class="c" id="adCount">3871 个资产 · 2022-05-30 ~ 2026-11-08</div>
+      </div>
+      <span class="act" onclick="toast('多选模式：进入批量选择（长按图片同款）')">☑</span>
+      <span class="act" onclick="toast('更多：排序/改名字/添加资产/删除相册（PUT·DELETE /albums/{id}）')">⋮</span>
+    </div>
+    <div class="timeline"><div class="grid" id="adGrid"></div></div>
+  </div>
+
+  <!-- ═══════════ 底部导航 ═══════════ -->
+  <div class="bottomnav">
+    <div class="bn on" data-pg="photos" onclick="switchTab('photos', this)">
+      <div class="pill">🖼️</div>照片
+    </div>
+    <div class="bn" data-pg="search" onclick="switchTab('search', this)">
+      <div class="pill">🔍</div>搜索
+    </div>
+    <div class="bn" data-pg="albums" onclick="switchTab('albums', this)">
+      <div class="pill">📖</div>相册
+    </div>
+    <div class="bn" data-pg="library" onclick="switchTab('library', this)">
+      <div class="pill">🗂️</div>资料
+    </div>
+  </div>
+
+  <!-- ═══════════ 大图查看器 ═══════════ -->
+  <div class="viewer" id="viewer">
+    <div class="v-top">
+      <span class="v-ico" onclick="closeViewer()">‹</span>
+      <span class="v-date" id="vDate">2026年11月12日 07:42</span>
+      <span class="v-ico" id="vHeart" onclick="toggleHeart(this)">♡</span>
+      <span class="v-ico" onclick="toggleDetail()">ⓘ</span>
+      <span class="v-ico" onclick="toast('更多：设为壁纸 / 信息 / 下载原图 GET /assets/{id}/original')">⋮</span>
+    </div>
+    <div class="v-body">
+      <div class="v-img" id="vImg">🏞️</div>
+      <div class="detail-panel" id="detailPanel">
+        <div class="dp-handle" onclick="toggleDetail()"></div>
+        <div class="dp-title">2026年11月12日 07:42</div>
+        <div class="dp-sub">GMT+8 · 本地时间 07:42:55</div>
+        <div class="dp-row"><span class="k">📷</span><span class="v"><b>IMG_2481.HEIC</b><br><small>491.1 KB · 1170×2532 · 4.3 MB 原图</small></span></div>
+        <div class="dp-row"><span class="k">⚙️</span><span class="v"><b>Apple iPhone 7</b><br><small>ISO 32 · ƒ/1.8 · 1/120s · 3.99 MP</small></span></div>
+        <div class="dp-sec">所在相册</div>
+        <div class="dp-row"><span class="k">📖</span><span class="v">Camera · Screenshots<br><small>PUT /albums/{id}/assets 可加入相册</small></span></div>
+        <div class="dp-sec">端点提示</div>
+        <div class="dp-row"><span class="k">🔗</span><span class="v">大图 = GET /api/assets/{id}/thumbnail?size=preview<br><small>原图 = …/original · 视频播放 = …/video/playback（Media3）</small></span></div>
+      </div>
+    </div>
+    <div class="v-bottom">
+      <div class="v-actions">
+        <div class="v-act" onclick="toast('分享：系统分享面板')"><span class="a-i">↗</span>分享</div>
+        <div class="v-act" onclick="toast('上传到服务器：POST /assets（手动单张）')"><span class="a-i">⇧</span>上传</div>
+        <div class="v-act" onclick="toast('编辑：Immich 原版内置编辑器，Bridge 可砍或后置')"><span class="a-i">✏️</span>编辑</div>
+        <div class="v-act" id="vActHeart" onclick="toggleHeart(document.getElementById('vHeart')); this.classList.toggle('on')"><span class="a-i">♥</span>收藏</div>
+        <div class="v-act" onclick="toast('删除：DELETE /assets → 回收站（30天后自动清）')"><span class="a-i">🗑️</span>删除</div>
+      </div>
+      <div class="v-fn" id="vFn">Screenshot_2026-11-13-07-42-54.jpg · 491 KB · 1170×2532</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<div class="hint">交互可点：底部四 Tab · 缩略图进查看器 · ♥ 收藏 · ⓘ EXIF 面板 · 相册卡片进详情 · 右侧拖动条换月份</div>
+
+<script>
+// ══════════ 真实数据（来自本机服务端 039039.xyz:15148 实测） ══════════
+const albums = [
+  {name:'Camera',            count:3871, start:'2022-05-30', end:'2026-11-08', hue:210, emoji:'📷'},
+  {name:'Screenshots',       count:1186, start:'2022-05-18', end:'2026-11-07', hue:280, emoji:'📱'},
+  {name:'WeiXin',            count:1024, start:'2020-02-18', end:'2026-10-04', hue:150, emoji:'💬'},
+  {name:'save_image',        count:139,  start:'2023-03-22', end:'2026-09-28', hue:30,  emoji:'💾'},
+  {name:'Pictures',          count:123,  start:'2022-05-19', end:'2026-09-30', hue:190, emoji:'🖼️'},
+  {name:'chat',              count:117,  start:'2024-10-12', end:'2026-10-23', hue:340, emoji:'💬'},
+  {name:'douyin',            count:80,   start:'2023-02-08', end:'2026-09-11', hue:0,   emoji:'🎵'},
+  {name:'goods',             count:63,   start:'2000-04-11', end:'2026-01-17', hue:60,  emoji:'🛒'},
+  {name:'随身卡包（Card case）', count:47, start:'2019-03-28', end:'2025-03-20', hue:120, emoji:'💳'},
+  {name:'手摇器',            count:37,   start:'2025-04-06', end:'2025-04-08', hue:100, emoji:'🔧'},
+  {name:'QQ',                count:33,   start:'2025-04-08', end:'2026-02-21', hue:220, emoji:'🐧'},
+  {name:'share',             count:15,   start:'2024-05-18', end:'2026-02-07', hue:260, emoji:'🔗'},
+  {name:'Browser',           count:10,   start:'2022-10-24', end:'2025-10-15', hue:170, emoji:'🌐'},
+  {name:'comment',           count:8,    start:'2025-01-13', end:'2026-01-04', hue:310, emoji:'📝'},
+  {name:'Download',          count:4,    start:'2025-02-28', end:'2025-10-03', hue:40,  emoji:'⬇️'},
+  {name:'taobao',            count:4,    start:'2025-05-11', end:'2025-08-27', hue:15,  emoji:'🛍️'},
+  {name:'一刻相册',          count:3,    start:'2019-03-15', end:'2022-05-27', hue:250, emoji:'🌟'},
+  {name:'Immich',            count:2,    start:'2026-04-11', end:'2026-05-16', hue:200, emoji:'🍊'},
+];
+const localAlbums = ['Camera','Screenshots','WeiXin','save_image','Pictures','chat','douyin'];
+const months = [
+  {label:'2026年11月', days:12, hue:210},
+  {label:'2026年10月', days:14, hue:190},
+  {label:'2026年9月',  days:11, hue:160},
+  {label:'2026年8月',  days:13, hue:280},
+  {label:'2026年7月',  days:10, hue:120},
+];
+const vidEmojis = ['🎬','📹','🎥'];
+
+// 色块缩略图（真机实现 = Coil 加载 thumbnail?size=thumbnail webp）
+function tileHtml(i, hue, withVid) {
+  const grad = `linear-gradient(${135 + (i*37)%90}deg, hsl(${hue},45%,${28 + (i*13)%14}%), hsl(${(hue+40)%360},40%,${16 + (i*7)%10}%))`;
+  const emoji = ['🏔️','🌇','🐶','🍜','🚗','🌳','🎂','🐱','🌊','🏠','⚽','🌸','🍕','🚴','🎨','🛠️','📦','🌙','☕','🐧'][i % 20];
+  const vid = withVid && i % 9 === 4;
+  return `<div class="tile ${vid?'vid':''}" onclick="openViewer(${i})" style="background:${grad}">${vid?`<span class="dur">0:${(i%6)+1}${i%10}</span>`:''}${emoji}</div>`;
+}
+
+function renderPhotos() {
+  const el = document.getElementById('photosScroll');
+  let html = '';
+  months.forEach((m, mi) => {
+    html += `<div class="month-head" id="mh-${mi}">
+      <span class="mt">${m.label}</span>
+      <span class="mc">${m.days * 6} 个</span>
+      <span class="fold" onclick="toast('折叠该月：原版点箭头收起月份段')">⌃</span>
+    </div><div class="grid">`;
+    for (let i = 0; i < m.days * 3; i++) html += tileHtml(mi * 40 + i, m.hue, true);
+    html += `</div>`;
+  });
+  el.innerHTML = html;
+  el.onscroll = updateScrubber;
+  updateScrubber();
+}
+
+function updateScrubber() {
+  const el = document.getElementById('photosScroll');
+  const total = el.scrollHeight;
+  const pos = Math.min(months.length - 1, Math.floor(el.scrollTop / total * months.length));
+  const names = ['11月','10月','9月','8月','7月'];
+  document.getElementById('scrubber').innerHTML = names.map((n, i) =>
+    `<span class="s-m ${i === pos ? 'on' : ''}" onclick="jumpMonth(${i})">${n}</span>`).join('');
+}
+function jumpMonth(i) {
+  document.getElementById('mh-' + i).scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function hideScrubThumb() {}
+
+function renderAlbums() {
+  document.getElementById('albumGrid').innerHTML = albums.map(a => {
+    const grad = `linear-gradient(135deg, hsl(${a.hue},45%,32%), hsl(${(a.hue+50)%360},40%,18%))`;
+    return `<div class="album-card" onclick="openAlbum('${a.name.replace(/'/g,"\\'")}', ${a.count}, '${a.start}', '${a.end}', ${a.hue}, '${a.emoji}')">
+      <div class="album-cover" style="background:${grad}">${a.emoji}</div>
+      <div class="album-name">${a.name}</div>
+      <div class="album-count">${a.count} 个资产</div>
+    </div>`;
+  }).join('');
+  document.getElementById('localAlbums').innerHTML = localAlbums.map(n => {
+    const a = albums.find(x => x.name === n);
+    return `<div class="entry" onclick="openAlbum('${a.name}', ${a.count}, '${a.start}', '${a.end}', ${a.hue}, '${a.emoji}')">
+      <div class="e-ico">${a.emoji}</div>
+      <div class="e-body"><div class="e-name">${a.name}</div><div class="e-sub">本机相册 · ${a.count} 个资产</div></div>
+      <span class="arrow">›</span>
+    </div>`;
+  }).join('');
+}
+
+// ══════════ 相册详情 ══════════
+function openAlbum(name, count, start, end, hue, emoji) {
+  document.getElementById('adName').textContent = name;
+  document.getElementById('adCount').textContent = `${count} 个资产 · ${start} ~ ${end}`;
+  document.getElementById('adGrid').innerHTML = Array.from({length: 30}, (_, i) => tileHtml(i, hue, true)).join('');
+  document.getElementById('pg-album-detail').style.display = 'flex';
+}
+function closeAlbumDetail() {
+  document.getElementById('pg-album-detail').style.display = 'none';
+}
+
+// ══════════ 大图查看器 ══════════
+let curHeartOn = false;
+function openViewer(i) {
+  const dates = ['2026年11月12日 07:42', '2026年11月12日 00:17', '2026年11月11日 22:23', '2026年11月10日 18:06', '2026年10月30日 14:52'];
+  document.getElementById('vDate').textContent = dates[i % dates.length];
+  document.getElementById('vImg').style.background =
+    `linear-gradient(135deg, hsl(${200 + i * 23},45%,30%), hsl(${(240 + i * 17) % 360},40%,14%))`;
+  document.getElementById('vFn').textContent = 'IMG_2481.HEIC · 491 KB · 1170×2532';
+  curHeartOn = false;
+  document.getElementById('vHeart').textContent = '♡';
+  document.getElementById('vActHeart').classList.remove('on');
+  document.getElementById('detailPanel').classList.remove('show');
+  document.getElementById('viewer').classList.add('show');
+}
+function closeViewer() { document.getElementById('viewer').classList.remove('show'); }
+function toggleHeart(el) {
+  curHeartOn = !curHeartOn;
+  el.textContent = curHeartOn ? '♥' : '♡';
+  el.style.color = curHeartOn ? 'var(--heart)' : '#fff';
+  document.getElementById('vActHeart').classList.toggle('on', curHeartOn);
+  toast(curHeartOn ? '已收藏（PUT /assets/{id} isFavorite=true）' : '已取消收藏');
+}
+function toggleDetail() { document.getElementById('detailPanel').classList.toggle('show'); }
+
+// ══════════ Tab / 主题 / Toast ══════════
+function switchTab(pg, el) {
+  document.querySelectorAll('.bn').forEach(b => b.classList.remove('on'));
+  el.classList.add('on');
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  document.getElementById('pg-' + pg).style.display = 'flex';
+}
+function toggleTheme() { document.body.classList.toggle('light'); }
+let toastTimer = null;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function resetAll() {
+  closeViewer();
+  closeAlbumDetail();
+  switchTab('photos', document.querySelector('.bn[data-pg="photos"]'));
+}
+
+renderPhotos();
+renderAlbums();
+</script>
+</body>
+</html>

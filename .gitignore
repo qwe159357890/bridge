@@ -76,3 +76,16 @@ tools/dd*.txt
 
 # 本地待办清单（个人跨轮次跟踪，不入库）
 TodoList.md
+
+# ===================== 根目录卫生防护（2026-11-18 v0.3.008 阶段补） =====================
+# 展平垃圾：某次从 references/immich 拷贝时把完整路径当文件名（`\r` 吃掉 r → `eferences`），
+# 在根目录产生 1492 个 pythonWorkappClient_* 文件（49MB）。已移至 build/_root_cleanup_20261118/，
+# 此规则防止同样的工具 bug 再次污染根目录。
+/pythonWorkappClient_*
+# 根目录一次性推送 / 轮询 / 修复脚本（用完即弃，历史版本见 build/_root_cleanup_20261118/）
+/poll_*.py
+/push_*.py
+/sync_*.py
+/deploy_*.py
+/fix_gradlew_*.py
+/sync_diff.json

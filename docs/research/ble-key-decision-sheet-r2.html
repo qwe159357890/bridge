@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>蓝牙钥匙 v0.3.001 · 决策单 第二轮</title>
+<style>
+  :root{
+    --bg:#F4F5F7; --surface:#FFFFFF; --line:#E2E5EA; --line2:#CFD4DB;
+    --tx:#1F2328; --tx2:#5A6069; --tx3:#8A9099;
+    --blue:#1A6EE8; --blue-bg:#EAF2FE; --blue-line:#B7D0F7;
+    --amber:#9A6400; --amber-bg:#FDF6E7; --amber-line:#EFD9A8;
+    --red:#B4232A; --red-bg:#FCEDED; --red-line:#F0C4C4;
+    --green:#1B6B45; --green-bg:#EAF6EF; --green-line:#BFE2CE;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  header.bar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);
+    border-bottom:1px solid var(--line);backdrop-filter:blur(8px);}
+  .bar-in{max-width:960px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .brand{font-size:14px;font-weight:600;letter-spacing:.2px}
+  .ver{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;
+    background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line);font-size:12px;font-weight:500}
+  .meta{margin-left:auto;display:flex;align-items:center;gap:8px}
+  #progress{font-size:12px;color:var(--tx2);font-variant-numeric:tabular-nums}
+  .btn{border:1px solid var(--line2);background:var(--surface);color:var(--tx);
+    padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit}
+  .btn:hover{border-color:var(--blue);color:var(--blue)}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:500}
+  .btn.primary:hover{opacity:.92;color:#fff}
+  .btn.ghost{color:var(--tx2)}
+  main{max-width:960px;margin:0 auto;padding:22px 20px 120px}
+  h1{font-size:19px;line-height:1.4;margin:6px 0 10px;font-weight:600}
+  h2{font-size:15px;margin:0 0 4px;font-weight:600}
+  .lead{color:var(--tx2);margin:0 0 16px}
+  .alert{border-radius:12px;padding:14px 16px;margin:14px 0;border:1px solid}
+  .alert.red{background:var(--red-bg);border-color:var(--red-line)}
+  .alert.amber{background:var(--amber-bg);border-color:var(--amber-line)}
+  .alert.green{background:var(--green-bg);border-color:var(--green-line)}
+  .alert h3{margin:0 0 6px;font-size:14px;font-weight:600}
+  .alert.red h3{color:var(--red)} .alert.amber h3{color:var(--amber)} .alert.green h3{color:var(--green)}
+  .alert p{margin:6px 0} .alert ul,.alert ol{margin:6px 0;padding-left:20px}
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#FAFBFC;font-weight:500;color:var(--tx2);font-size:12px;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.k{color:var(--tx2);white-space:nowrap}
+  .tbd{color:#9A6400;background:#FDF6E7;border:1px solid #EFD9A8;border-radius:5px;padding:0 6px;font-size:11px}
+  .ok{color:#1B6B45;background:#EAF6EF;border:1px solid #BFE2CE;border-radius:5px;padding:0 6px;font-size:11px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+    background:#F2F4F7;border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#2C3440;word-break:break-all}
+  .sec{margin:30px 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sec .letter{width:26px;height:26px;border-radius:8px;background:var(--tx);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+  .sec .st{font-size:14px;font-weight:600}
+  .sec .sc{font-size:12px;color:var(--tx3)}
+  article.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px 12px;margin:12px 0;scroll-margin-top:70px}
+  article.card.done{border-color:var(--blue-line)}
+  .card-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .tag{font-family:ui-monospace,monospace;font-size:11px;padding:1px 7px;border-radius:5px;
+    background:#F2F4F7;border:1px solid var(--line);color:var(--tx2)}
+  .card-h h3{margin:0;font-size:14px;font-weight:600}
+  .star{font-size:11px;color:var(--red);border:1px solid var(--red-line);background:var(--red-bg);
+    border-radius:5px;padding:0 6px}
+  .note{color:var(--tx2);font-size:13px;margin:2px 0 10px}
+  .note p{margin:6px 0}
+  .note ul,.note ol{margin:6px 0;padding-left:20px}
+  .note li{margin:2px 0}
+  .note .from{color:var(--tx3);font-weight:500}
+  .note table{margin:8px 0}
+  .opts{display:flex;flex-direction:column;gap:6px}
+  label.opt{display:flex;gap:9px;align-items:flex-start;padding:8px 11px;border:1px solid var(--line);
+    border-radius:9px;cursor:pointer;background:#FCFDFE;transition:border-color .12s,background .12s}
+  label.opt:hover{border-color:var(--blue-line);background:#F7FAFF}
+  label.opt input{margin:3px 0 0;flex:none;accent-color:var(--blue)}
+  label.opt.sel{border-color:var(--blue);background:var(--blue-bg)}
+  label.opt.explain{border-style:dashed;background:#FFFDF7;border-color:var(--amber-line)}
+  label.opt.explain.sel{background:var(--amber-bg);border-color:var(--amber)}
+  .ol{display:block;font-size:13px}
+  .ol b{display:inline-block;min-width:15px;font-weight:600;color:var(--tx)}
+  label.opt.explain .ol b{color:var(--amber)}
+  .od{display:block;color:var(--tx3);font-size:12px;line-height:1.55;margin-top:2px}
+  .custom{display:flex;gap:10px;align-items:center;margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+  .cl{font-size:12px;color:var(--tx3);white-space:nowrap;flex:none}
+  .custom input{flex:1;font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line2);
+    border-radius:8px;background:#fff;color:var(--tx)}
+  .custom input:focus{outline:none;border-color:var(--blue)}
+  .out{margin-top:26px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .out h2{margin-bottom:8px}
+  .out textarea{width:100%;height:200px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12px;line-height:1.7;padding:10px 12px;border:1px solid var(--line2);border-radius:9px;
+    background:#FBFCFD;color:var(--tx);resize:vertical}
+  .hint{font-size:12px;color:var(--tx3);margin:6px 0 0}
+  .toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
+    background:#1F2328;color:#fff;font-size:13px;padding:9px 16px;border-radius:999px;transition:.18s;z-index:40}
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+  @media (max-width:640px){.bar-in{padding:9px 12px} main{padding:16px 12px 120px} .brand{font-size:13px}}
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="bar-in">
+    <div class="brand">Bridge · 蓝牙钥匙（BLE iBeacon 广播）<span class="ver">v0.3.001 · 第二轮</span></div>
+    <div class="meta">
+      <span id="progress">已答 0 / 7</span>
+      <button class="btn primary" id="btn-copy">复制答复</button>
+      <button class="btn" id="btn-dl">下载 .txt</button>
+      <button class="btn ghost" id="btn-reset">清空</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <h1>第二轮 · 剩 7 项</h1>
+  <p class="lead">上一轮 19 项已全部收口，方案定死了 90%。这一轮只有 7 项：其中 3 项是你的追问没答清（B6 / E1 / G2）、1 项是我上一轮<b>说重了要撤回</b>（G3）、2 项是把你的自定答案固化成精确值（前缀串、设备名规则）、1 项是 D2 的新思路。</p>
+
+  <div class="alert red">
+    <h3>B6 你的担心是对的，而且比你想的更严重：15 分钟巡检救不了行驶中断播</h3>
+    <p>对端的断电链路是这样的（源码实测参数）：</p>
+    <table>
+      <tr><th>阶段</th><th>阈值</th><th>源码</th></tr>
+      <tr><td>收不到钥匙帧 → 判 FAR</td><td>15 秒</td><td><code>loss_timeout_s = 15</code></td></tr>
+      <tr><td>FAR 持续 → 断电</td><td>60 秒</td><td><code>power_off_delay_s = 60</code></td></tr>
+      <tr><td><b>合计：从停播到断电</b></td><td><b>约 75 秒</b></td><td>—</td></tr>
+    </table>
+    <p>所以「第 1 秒失效、第 61 秒断电」这个描述基本准确（实际是 ~75 秒）。这意味着：</p>
+    <ul>
+      <li><b>15 分钟巡检</b>：最坏静默 900 秒 → 早断电了，而且是在行驶中断电 15 分钟。救不了。</li>
+      <li><b>5 分钟巡检</b>：同样救不了。</li>
+      <li><b>只有 ≤60 秒的巡检</b>才可能在断电门前救回来（最坏 60 秒停播 + 重建 1 秒 + 3 帧重新判近约 3 秒 ≈ 64 秒，余量 11 秒）。</li>
+    </ul>
+    <p>所以真正的答案不是"选个周期"，而是<b>两层</b>：① <b>事件驱动即时核对</b>（广播失败回调、蓝牙状态变化、亮/灭屏、极空连接变化、开关切换）——零成本，覆盖绝大多数失效；② <b>周期巡检兜底，且周期必须卡在 75 秒内</b>。B6 我按这个思路重出了选项。</p>
+  </div>
+
+  <div class="alert green">
+    <h3>E1 你的担心不成立：自检按钮不耗电，它只在你点的时候扫 5 秒</h3>
+    <p>你把「自检」想成了"常驻扫描"——那是两回事。区别在于：</p>
+    <table>
+      <tr><th>形态</th><th>占空比</th><th>耗电</th></tr>
+      <tr><td>自检按钮（你点一下才扫 5 秒）</td><td>一次性 5 秒</td><td>≈ 扫一次二维码的量级，日耗电不可测</td></tr>
+      <tr><td>常驻扫描（比如极空 autoConnect 的挂起监听）</td><td>48ms/1280ms ≈ 3.75%</td><td>&lt;0.5%/天，但那是因为它 24 小时不停</td></tr>
+    </table>
+    <p>所以 <b>C2-5 不需要重估</b>，前提是它只在用户点击时执行一次、绝不自动跑。这点我会写进设计（"禁止在开播流程里自动调用自检"）。E1 只需你重选"验收用哪几个工具"。</p>
+  </div>
+
+  <div class="alert amber">
+    <h3>G3 我上一轮说重了，撤回：一次扫描内同一台手机只有一行</h3>
+    <p>你质疑得对。对端 <code>scan_devices(duration_s=10)</code> 是<b>单轮 10 秒扫描 + 按 MAC 去重</b>，而手机的广播地址在一次扫描期间是不变的，所以<b>一次扫描内只会出现一行</b>。</p>
+    <p>只有一种例外：扫描进行中广播被重建（换地址），那一轮才会出现两行——很罕见。</p>
+    <p>真实情况是：手机重开广播后 MAC 变了，<b>下一次</b>扫描里它看起来像"换了一台设备"；但表格每轮重建，用户不会同时看到两行。唯一实际影响是：<b>MAC 列对手机没有意义，别拿它去登记钥匙</b>（该用 UUID）。所以 G3 建议维持不改，我把它列出来只是为了让你确认我撤回对了。</p>
+  </div>
+
+  <h2 style="margin-top:26px">已定方案（终版，上一轮 19 项 + 本轮已收口项）</h2>
+  <table>
+    <tr><th style="width:126px">维度</th><th>结论</th></tr>
+    <tr><td class="k">包与命名</td><td>包 <code>my/bridge/com/blekey/</code>，UI 名「蓝牙钥匙」</td></tr>
+    <tr><td class="k">UUID 形态</td><td>前缀 30 字符 <code>627269646765000000000000000000</code>（"bridge" 的 ASCII hex 打头 + 补零，可配置）+ 2 位编号 00~99 → 32 字符小写 hex <span class="tbd">串长待你确认 → R6</span></td></tr>
+    <tr><td class="k">Major / Minor</td><td><code>0001</code> / 编号（编号在广播里出现两次，日志更好认）</td></tr>
+    <tr><td class="k">Measured Power</td><td><code>0xC5</code>(-59) 固定，对端不使用</td></tr>
+    <tr><td class="k">广播间隔</td><td><b>固定 BALANCED ~250ms</b>，不开放给用户（A4=1）</td></tr>
+    <tr><td class="k">发射功率</td><td>页面可选 4 档，默认 <code>MEDIUM</code>(-7dBm)</td></tr>
+    <tr><td class="k">主包内容</td><td>仅 iBeacon 厂商数据；显式 <code>setLegacyMode(true)</code> + <code>setIncludeDeviceName(false)</code> + <code>setIncludeTxPowerLevel(false)</code></td></tr>
+    <tr><td class="k">设备名</td><td>放 scan response；默认取系统蓝牙名、<b>去空格</b>、超 29 字节按字符边界截断，用户可改 <span class="tbd">撞名问题待确认 → R7</span></td></tr>
+    <tr><td class="k">前台服务类型</td><td><code>connectedDevice</code>（无蓝牙权限时明确失败，不"假装成功"）</td></tr>
+    <tr><td class="k">进程被杀</td><td><code>START_STICKY</code> 自动重建</td></tr>
+    <tr><td class="k">开机/更新自启</td><td><code>Application.onCreate</code> 幂等拉起（开机 + 被杀 + 更新三条路径）</td></tr>
+    <tr><td class="k">上滑清任务</td><td>继续广播</td></tr>
+    <tr><td class="k">蓝牙被关</td><td>只发通知「蓝牙未开启，点击开启」跳系统设置，<b>不自作主张开</b>（Android 13+ 本来也开不了）</td></tr>
+    <tr><td class="k">生命周期</td><td><b>B8=②</b>：前台 或 极空已连接 → 250ms；失去活跃条件后<b>宽限 5 分钟仍 250ms</b>，之后降到 <b>1000ms 慢速保底</b>，永不自动停（只有总开关能停）<span class="tbd">时段限制待定 → R2</span></td></tr>
+    <tr><td class="k">静默失效自愈</td><td>事件驱动即时核对 + 周期巡检兜底 <span class="tbd">周期待定 → R1</span></td></tr>
+    <tr><td class="k">通知</td><td>低优先级 ongoing，点击进本功能页</td></tr>
+    <tr><td class="k">入口</td><td>设置 → 连接 → 「蓝牙钥匙」分区卡片 + 覆盖页（SSH 范式，不占主页 Tab）</td></tr>
+    <tr><td class="k">页面元素</td><td>C2 全 10 项：开关 / 编号 / UUID+复制 / 状态与失败原因 / 自检 / 已播时长 / 电池优化状态 / 安全提示 / 当前生效原因 / 功率档位</td></tr>
+    <tr><td class="k">安全边界</td><td>页面明示「UUID 即钥匙、可被复制、无防伪」；UUID 明文直出</td></tr>
+    <tr><td class="k">地理围栏</td><td>只写文档（步骤见第一轮 D3），本期不实现</td></tr>
+    <tr><td class="k">验收</td><td>原文 8 步 + 我加的 5 条（过夜/极空并存/蓝牙抖动/杀进程重建/重启自愈）+ <b>72 小时长稳</b></td></tr>
+    <tr><td class="k">功耗判据</td><td>净增量 <b>≤2 %/天 可接受</b>（用可用性换）</td></tr>
+    <tr><td class="k">版本</td><td><code>versionName 0.3.001</code> / <code>versionCode 3001</code>（新规律：主*1000+补丁，从此单调递增）</td></tr>
+    <tr><td class="k">对端</td><td>阈值不动（G1）；编号不同步为钥匙名（G4）；KEY ADD 手打规则待定 → R4；扫描去重不改 → R5</td></tr>
+    <tr><td class="k">文档</td><td>新建 <code>docs/research/ble-key-broadcast.md</code>；建 <code>docs/dev/ble-key-change-ledger.md</code>；收尾写 <code>guides/ble-key.md</code></td></tr>
+  </table>
+  <p class="hint">想推翻已定项，写进最后那个「其他补充」框。</p>
+
+  <div id="form"></div>
+
+  <section class="out">
+    <h2>生成答复</h2>
+    <textarea id="out" readonly placeholder="勾选后这里会自动生成答复文本"></textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn primary" id="btn-copy2">复制答复</button>
+      <button class="btn" id="btn-dl2">下载 .txt</button>
+    </div>
+    <p class="hint">回传后我就写 <code>ble-key-broadcast.md</code> 正稿和改前留档台账，代码等你再点头。</p>
+  </section>
+</main>
+
+<div class="toast" id="toast">已复制</div>
+
+<script>
+var DATA = [
+{
+  sec:'R1', st:'静默失效自愈周期', sc:'你追问：15 分钟会怎样',
+  items:[
+  {
+    id:'B6-wd', star:true,
+    title:'巡检周期怎么定（卡在 75 秒断电门内）',
+    note:'<p><span class="from">先把账算清：</span>停播 → 15 秒判 FAR → 60 秒断电，<b>合计约 75 秒</b>。所以巡检周期超过 75 秒就等于"救不回来"，只能等用户重新靠近。</p><table><tr><th>巡检周期</th><th>最坏静默时长</th><th>能否在断电前救回</th></tr><tr><td>15 分钟</td><td>900 秒</td><td>不能（行驶中会断电 15 分钟）</td></tr><tr><td>5 分钟</td><td>300 秒</td><td>不能</td></tr><tr><td>60 秒</td><td>~64 秒</td><td>能，余量 11 秒</td></tr><tr><td>30 秒</td><td>~34 秒</td><td>能，余量 41 秒</td></tr></table><p><span class="from">成本：</span>巡检只是一次标志位比对 + 必要时停启，跑在已有前台服务的 Handler 里，<b>不额外持锁、不额外唤醒</b>。60 秒和 15 分钟的 CPU 差别是"每天多几十次几个毫秒"，对电量不可测。</p><p><span class="from">建议：</span>不论选哪个周期，都要先做<b>事件驱动即时核对</b>（广播失败回调、蓝牙状态变化、亮/灭屏、极空连接变化、开关切换），周期巡检只作兜底。绝大多数失效其实在事件里就抓到了。</p>',
+    type:'single',
+    options:[
+      {k:'1', t:'统一 60 秒巡检', d:'推荐。刚好卡在 75 秒门内，余量 11 秒；成本可忽略'},
+      {k:'2', t:'统一 30 秒巡检', d:'余量 41 秒更稳；电量仍不可测，但每秒多一次判断也没必要'},
+      {k:'3', t:'自适应：活跃态（前台/极空已连接）30 秒，静默态 5 分钟', d:'按需省一点；代价是静默态若停播，要 5 分钟才自愈（此时人离车远，代价小）'},
+      {k:'4', t:'15 分钟（第一轮的选择）', d:'只在"用户不着急"的场景够用；行驶中断播会断电 15 分钟'}
+    ]
+  }
+  ]
+},
+{
+  sec:'R2', st:'时段限制', sc:'你追问：慢速状态下也能限时段吗',
+  items:[
+  {
+    id:'D2-win', title:'时段限制作用在哪一层',
+    note:'<p><span class="from">你的想法成立：</span>B8=② 之后，"后台慢速 1000ms"是 24 小时持续跑的，确实可以只在某个时段跑，更省。</p><p><span class="from">但有个坑：</span>时段限制如果作用到"全部状态"，就会出现——晚上 23 点你到车边、手机在兜里、极空没连上、App 在后台，正好落在静默时段 → 不通电。等于把人锁在车外。</p><p><span class="from">所以正确的切法是分层：</span>时段限制<b>只关"后台慢速保底"这一层</b>；前台、以及极空已连接（说明人在车旁/车上）时一律不受时段影响。<b>这样省的是"整天慢速待机的电"，而不是"你真正要用那一刻的电"。</b></p>',
+    type:'single',
+    options:[
+      {k:'1', t:'只作用于"后台慢速档"，活跃态不受限', d:'推荐。省电到手，又不会把人锁在车外'},
+      {k:'2', t:'作用于全部状态（含前台/极空已连接）', d:'最省；但夜间到车边可能开不了锁，需要用户自己记得调'},
+      {k:'3', t:'不做，保持第一轮结论', d:'最简单；但慢速保底 24 小时跑的这部分电省不掉'}
+    ]
+  }
+  ]
+},
+{
+  sec:'R3', st:'验收工具', sc:'自检耗电已澄清，重选一次',
+  items:[
+  {
+    id:'E1-tool', title:'验收用哪几个工具（多选）',
+    note:'<p><span class="from">重新讲一遍四者各自证明什么：</span></p><ul><li><b>dumpsys bluetooth_manager</b>：在手机里看 Advertising Set 的十六进制内容和状态，<b>不需要第二台设备</b>，证明"蓝牙栈接受了这包数据"。</li><li><b>ESP32 串口 SCAN / KEY LIST</b>：端到端唯一权威，证明"对端真的能认出来"。</li><li><b>nRF Connect</b>：第三只眼，证明"射频上的字节对不对"。要第二台手机，可选。</li><li><b>应用内自检</b>：<b>只在用户点按钮时</b>边播边扫 5 秒找自己的 UUID，证明"本机射频在发且能被收到"。部分芯片不支持播+扫并发，会误报，所以结果只作参考，不当验收判据。</li></ul><p><span class="from">耗电再确认：</span>5 秒一次性扫描 ≈ 扫一次二维码，日耗电不可测。<b>前提是只在用户点击时执行</b>——设计里会明确禁止"开播时自动自检"。</p>',
+    type:'multi',
+    options:[
+      {k:'1', t:'<code>dumpsys bluetooth_manager</code>（开发期）'},
+      {k:'2', t:'ESP32 串口 SCAN / KEY LIST（交付验收唯一权威）'},
+      {k:'3', t:'应用内自检按钮（长期自查，仅手动）'},
+      {k:'4', t:'nRF Connect（可选，第三方复核字节）'}
+    ]
+  }
+  ]
+},
+{
+  sec:'R4', st:'对端 KEY ADD 语法', sc:'你追问：这是指谁的失误',
+  items:[
+  {
+    id:'G2-keyadd', title:'要不要改对端的命令解析',
+    note:'<p><span class="from">直接回答：是的，指的是"你在对端串口手打命令时的失误"，跟 App 无关。</span>App 只负责广播，从不写对端配置。</p><p><span class="from">具体会怎么错：</span>对端 <code>config_mode._handle_cmd</code> 用 <code>parts = cmd.split()</code> 按空格切，位置写死 <code>name=parts[2]</code> / <code>mac=parts[3]</code> / <code>uuid=parts[4]</code>：</p><ul><li>手打成 <code>KEY ADD 手机  0011...03</code>（想跳过 mac，多打了空格）→ split 合并 → <b>uuid 被当成 mac</b>，uuid 位空 → 登记成"按 MAC 匹配"→ 永远匹配不上，<b>而且一句报错都没有</b>。</li><li>名字里带空格 → 后面字段全错位。</li><li>最稳：<code>KEY ADD 手机-小张 - &lt;32位uuid&gt;</code>（<code>-</code> 占位、名字不带空格）。</li></ul><p><span class="from">但主路径根本不用手打：</span>Qt 工具扫到手机那行点「设为钥匙」会自动填正确 MAC + UUID + 自动命名，零坑。手打只是"没带电脑时"的备用路径。</p>',
+    type:'single',
+    options:[
+      {k:'1', t:'不改对端，把手打规则写进 guides', d:'零跨项目改动；代价是这条"静默失效"的坑靠人记住'},
+      {k:'2', t:'改对端支持 <code>uuid=&lt;32位&gt;</code> 键值语法', d:'手打不再可能错位；约 10 行改动，要重刷固件'},
+      {k:'3', t:'两者都做', d:'最稳；固件要升一版'}
+    ]
+  }
+  ]
+},
+{
+  sec:'R5', st:'对端扫描去重', sc:'我上一轮说重了，这里撤回',
+  items:[
+  {
+    id:'G3-dedup', title:'"一台手机多行"到底存不存在（确认我撤回）',
+    note:'<p><span class="from">更正：一次扫描内同一台手机只有一行。</span>对端是一次 10 秒单轮扫描 + 按 MAC 去重，而手机广播地址在这 10 秒内不变。你质疑得对。</p><p><span class="from">唯一例外：</span>扫描进行中广播被重建（换地址）→ 那一轮会短暂出现两行，罕见。</p><p><span class="from">跨扫描的真实现象：</span>手机重开广播后 MAC 变了，下一次扫描看它像"换了台设备"；但表格每轮重建，不会同时显示两行。真正的影响只有一个：<b>MAC 列对手机无意义，登记钥匙必须用 UUID</b>。</p>',
+    type:'single',
+    options:[
+      {k:'1', t:'不改（撤回我的判断）', d:'推荐。确实不是问题，我上一轮说重了'},
+      {k:'2', t:'仍改成 <code>uniq[uuid or mac]</code>', d:'3 行改动；好处只是让"同一 UUID 只留一条"，聊胜于无'}
+    ]
+  }
+  ]
+},
+{
+  sec:'R6', st:'前缀串定稿', sc:'你给的串是 28 字符，要补到 30',
+  items:[
+  {
+    id:'A1a-final', star:true, title:'30 字符前缀最终取哪一串',
+    note:'<p><span class="from">算术：</span>你给的 <code>6272696467650000000000000000</code> 是 <b>28</b> 字符（<code>627269646765</code> = "bridge" 的 ASCII hex，12 字符；<code>0</code>×16 = 16 字符）。UUID 是 32 字符 = <b>前缀 30 + 编号 2</b>，所以要再补 2 个字符。</p><p><span class="from">补完之后长这样：</span>前缀 <code>627269646765000000000000000000</code>，编号 <code>03</code> → 完整 <code>627269646765000000000000000000</code> + <code>03</code>（32 字符）。</p><p><span class="from">我提一个可读性改进：</span>全零打底时后两位编号几乎"糊"在零里，日志里不好认。若把前缀最后两位做成固定分隔符（如 <code>89</code>），编号就紧跟在分隔符后。<b>这只是观感，不影响对端匹配</b>（对端只做全串相等比较）。</p>',
+    type:'single',
+    options:[
+      {k:'1', t:'直接补两个 0：<code>627269646765000000000000000000</code>', d:'最贴合你的原话，改动最小'},
+      {k:'2', t:'补成分隔符：<code>627269646765000000000000000089</code>', d:'编号（如 03）紧跟在 89 之后，日志/串口里一眼能挑出编号'},
+      {k:'3', t:'我再给一串', d:'写在下面输入框'}
+    ]
+  }
+  ]
+},
+{
+  sec:'R7', st:'设备名规则', sc:'系统名可能撞名，要不要加后缀',
+  items:[
+  {
+    id:'A8-final', title:'默认设备名的生成规则',
+    note:'<p><span class="from">你定了：</span>默认取手机系统蓝牙名、有空格就去掉空格、用户可改。规则可行，但有两个要注意的点：</p><ul><li><b>撞名：</b>两台同型号手机的系统名完全相同（比如都是 <code>OPPOReno9</code>）。对端是 name OR uuid 匹配，撞名就意味着"其中一台能被误认成另一台"——虽然仍有 UUID 兜底，但白名单里如果只登记了名字就会出问题。</li><li><b>长度：</b>scan response 正文只有 29 字节，中文占 3 字节 → 约 9 个汉字。超了要按 UTF-8 字符边界截断（不能截半个汉字）。</li></ul><p><span class="from">建议：</span>名字后面自动接上编号（如 <code>OPPOReno9-03</code>），既保留"认得出是哪台手机"，又天然不撞。</p>',
+    type:'single',
+    options:[
+      {k:'1', t:'系统名去空格 + 自动接编号后缀（如 <code>OPPOReno9-03</code>）', d:'推荐。既认得出手机、又不撞名'},
+      {k:'2', t:'就按你说的：系统名去空格，不接后缀', d:'完全照你的原话；同型号两台手机会同名'},
+      {k:'3', t:'系统名去空格 + 超 29 字节截断，且允许用户手动改名', d:'和 ① 的区别只是默认不带后缀（等价于 ② 加截断规则）'}
+    ]
+  }
+  ]
+}
+];
+
+var LABELS = {}; var ORDER = [];
+DATA.forEach(function(s){
+  s.items.forEach(function(it){
+    LABELS[it.id] = s.sec + ' / ' + it.title;
+    it.options = it.options.concat([{k:'X', t:'再具体讲解，下轮选择', d:'我先不拍，让你把这块讲透（人话、代价、你会踩的坑）', explain:true}]);
+    ORDER.push(it);
+  });
+});
+
+var KEY = 'blekey-decision-r2';
+var state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch(e){ state = {}; }
+
+function build(){
+  var host = document.getElementById('form');
+  var html = '';
+  DATA.forEach(function(s){
+    html += '<div class="sec"><span class="letter">' + s.sec + '</span><span class="st">' + s.st + '</span><span class="sc">' + s.sc + '</span></div>';
+    s.items.forEach(function(it){
+      html += '<article class="card" id="i-' + it.id + '">';
+      html += '<div class="card-h"><span class="tag">' + it.id + '</span><h3>' + it.title + '</h3>' + (it.star ? '<span class="star">必答</span>' : '') + '</div>';
+      html += '<div class="note">' + it.note + '</div><div class="opts">';
+      it.options.forEach(function(o){
+        var t = it.type === 'multi' ? 'checkbox' : 'radio';
+        html += '<label class="opt' + (o.explain ? ' explain' : '') + '">';
+        html += '<input type="' + t + '" name="n-' + it.id + '" value="' + o.k + '">';
+        html += '<span class="ol"><b>' + o.k + '</b> ' + o.t + (o.d ? '<span class="od">' + o.d + '</span>' : '') + '</span>';
+        html += '</label>';
+      });
+      html += '</div>';
+      html += '<div class="custom"><span class="cl">自己输入</span><input type="text" data-custom="' + it.id + '" placeholder="直接写你的答案，会覆盖上面的选择"></div>';
+      html += '</article>';
+    });
+  });
+  html += '<div class="sec"><span class="letter">+</span><span class="st">其他补充</span><span class="sc">临时想到的，或要推翻已定项</span></div>';
+  html += '<article class="card" id="i-note"><div class="note">不在这 7 项里的事写这里。</div>';
+  html += '<div class="custom" style="border-top:none;padding-top:0"><span class="cl">补充</span>';
+  html += '<input type="text" data-note="1" placeholder="例如：R1 选 1 但要改成 45 秒"></div></article>';
+  host.innerHTML = html;
+  restore();
+}
+
+function get(id){ if(!state[id]) state[id] = {sel:[], text:''}; return state[id]; }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+
+function restore(){
+  ORDER.forEach(function(it){
+    var st = state[it.id]; if(!st) return;
+    (st.sel||[]).forEach(function(k){
+      var el = document.querySelector('input[name="n-' + it.id + '"][value="' + k + '"]');
+      if(el){ el.checked = true; }
+    });
+    var ci = document.querySelector('input[data-custom="' + it.id + '"]');
+    if(ci && st.text) ci.value = st.text;
+    paint(it.id);
+  });
+  var ni = document.querySelector('input[data-note]');
+  if(ni && state.__note__ && state.__note__.text) ni.value = state.__note__.text;
+  update();
+}
+
+function paint(id){
+  var card = document.getElementById('i-' + id);
+  if(!card) return;
+  var any = false;
+  var inputs = card.querySelectorAll('input[type=radio],input[type=checkbox]');
+  for(var i=0;i<inputs.length;i++){
+    var lb = inputs[i].closest('label');
+    if(lb) lb.classList.toggle('sel', inputs[i].checked);
+    if(inputs[i].checked) any = true;
+  }
+  var ci = card.querySelector('input[data-custom]');
+  if(ci && ci.value.trim()) any = true;
+  card.classList.toggle('done', any);
+}
+
+document.addEventListener('change', function(e){
+  var el = e.target;
+  if(!el.name || el.name.indexOf('n-') !== 0) return;
+  var id = el.name.slice(2);
+  var st = get(id);
+  if(el.type === 'checkbox'){
+    if(el.checked && el.value === 'X'){
+      var all = document.querySelectorAll('input[name="n-' + id + '"]');
+      for(var i=0;i<all.length;i++) all[i].checked = (all[i].value === 'X');
+    } else if(el.checked && el.value !== 'X'){
+      var xb = document.querySelector('input[name="n-' + id + '"][value="X"]');
+      if(xb) xb.checked = false;
+    }
+    var boxes = document.querySelectorAll('input[name="n-' + id + '"]:checked');
+    var sel = [];
+    for(var j=0;j<boxes.length;j++) sel.push(boxes[j].value);
+    st.sel = sel;
+  } else {
+    st.sel = [el.value];
+  }
+  save(); paint(id); update();
+});
+
+document.addEventListener('input', function(e){
+  var el = e.target;
+  if(el.hasAttribute('data-note')){
+    state.__note__ = {sel:[], text: el.value};
+    save(); update(); return;
+  }
+  if(!el.hasAttribute('data-custom')) return;
+  var id = el.getAttribute('data-custom');
+  get(id).text = el.value;
+  save(); paint(id); update();
+});
+
+function answer(it){
+  var st = state[it.id] || {};
+  var text = (st.text || '').trim();
+  if(text) return st.sel && st.sel.length ? '自定:' + text + '（并保留勾选 ' + st.sel.join(',') + '）' : '自定:' + text;
+  if(!st.sel || !st.sel.length) return '';
+  var map = {};
+  it.options.forEach(function(o){ map[o.k] = o.t.replace(/<[^>]+>/g, '').trim(); });
+  return st.sel.map(function(k){ return k + '（' + (map[k]||'') + '）'; }).join(' + ');
+}
+
+function update(){
+  var lines = ['【蓝牙钥匙 v0.3.001 第二轮答复】'];
+  var done = 0;
+  ORDER.forEach(function(it){
+    var a = answer(it);
+    if(a) done++;
+    lines.push(it.id + ' = ' + (a || '（未答）'));
+  });
+  var note = (state.__note__ && state.__note__.text || '').trim();
+  lines.push('');
+  lines.push('— 其他补充 —');
+  lines.push(note || '（无）');
+  document.getElementById('out').value = lines.join('\n');
+  document.getElementById('progress').textContent = '已答 ' + done + ' / ' + ORDER.length;
+}
+
+function toast(msg){
+  var el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('on');
+  setTimeout(function(){ el.classList.remove('on'); }, 1400);
+}
+function copyOut(){
+  var ta = document.getElementById('out');
+  ta.removeAttribute('readonly'); ta.select(); ta.setSelectionRange(0, 999999);
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch(e){ ok = false; }
+  ta.setAttribute('readonly','readonly');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(ta.value).then(function(){ toast('已复制，粘贴回对话即可'); })
+      .catch(function(){ toast(ok ? '已复制' : '复制失败，请手动全选复制'); });
+  } else {
+    toast(ok ? '已复制，粘贴回对话即可' : '复制失败，请手动全选复制');
+  }
+}
+function dl(){
+  var blob = new Blob([document.getElementById('out').value], {type:'text/plain;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'blekey-decision-round2.txt';
+  a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+  toast('已下载');
+}
+
+document.getElementById('btn-copy').addEventListener('click', copyOut);
+document.getElementById('btn-copy2').addEventListener('click', copyOut);
+document.getElementById('btn-dl').addEventListener('click', dl);
+document.getElementById('btn-dl2').addEventListener('click', dl);
+document.getElementById('btn-reset').addEventListener('click', function(){
+  if(!confirm('清空所有已勾选和输入？')) return;
+  state = {}; try{ localStorage.removeItem(KEY); }catch(e){}
+  document.querySelectorAll('#form input').forEach(function(i){
+    if(i.type==='radio'||i.type==='checkbox') i.checked=false; else i.value='';
+  });
+  document.querySelectorAll('#form label.opt').forEach(function(l){ l.classList.remove('sel'); });
+  document.querySelectorAll('article.card').forEach(function(c){ c.classList.remove('done'); });
+  update(); toast('已清空');
+});
+
+build();
+</script>
+</body>
+</html>

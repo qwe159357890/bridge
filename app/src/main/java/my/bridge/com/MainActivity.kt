@@ -93,11 +93,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleWechatDeepLink(intent, "onNewIntent")
+        handleBleKeyIntent(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleWechatDeepLink(intent, "onCreate")
+        handleBleKeyIntent(intent)
         enableEdgeToEdge()
 
         // 全量申请尚未授予的危险权限（任何一条被拒都只记日志，绝不阻断主流程）
@@ -134,6 +136,23 @@ class MainActivity : ComponentActivity() {
             sshAutoStartAttempted = true
             my.bridge.com.ssh.SshAutoStart.tryStart(this)
         }
+        // 蓝牙钥匙：每次回到前台都重算一次档位。
+        // 不加「只试一次」守卫——这里同时兜底「服务被 ROM 杀掉但总开关仍开」，
+        // 且 Activity 已在可见态，startForegroundService 不撞 Android 12+ 后台启动限制。
+        my.bridge.com.blekey.BleKeyBroadcastService.evaluate(this)
+    }
+
+    /**
+     * 蓝牙钥匙通知点击 → 直达详情页。
+     *
+     * 用 extra 而不是「服务里直接置 UI 标志」：构建通知在状态每变一次都会跑，
+     * 那样会在用户毫无操作时把详情页挂起来（v0.3.002 实际存在的 bug）。
+     */
+    private fun handleBleKeyIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(my.bridge.com.ui.BleKeyUiState.EXTRA_OPEN, false) != true) return
+        intent.removeExtra(my.bridge.com.ui.BleKeyUiState.EXTRA_OPEN)
+        my.bridge.com.ui.BleKeyUiState.showPage = true
+        Timber.i("通知跳转 → 蓝牙钥匙详情页")
     }
 
     /** 申请尚未授予的危险权限；若无待申请项则跳过。 */

@@ -1365,6 +1365,12 @@ fun ConnectionSettings() {
         item {
             UiLockSettingsSection()
         }
+
+        // ===== 蓝牙钥匙分区（v0.3.001：手机广播 iBeacon 当车钥匙，P0 验证版）=====
+        item { SectionTitle("蓝牙钥匙") }
+        item {
+            BleKeySettingsSection()
+        }
     }
 
     // 昵称编辑弹窗

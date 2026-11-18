@@ -288,6 +288,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
             if (SshUiState.showPage) {
                 SshServerPage()
             }
+            // 蓝牙钥匙详情页（v0.3.001）：设置→连接分区进入，或点通知直达。
+            if (BleKeyUiState.showPage) {
+                BleKeyPage()
+            }
             // 退出提醒冒泡（内容区底部居中，自动 2 秒消失）。
             // v0.1.57 美化：品牌蓝图标圆徽 + 深色渐变胶囊 + 投影（用户要求美观，
             // 旧版是纯色块白字毫无设计感）

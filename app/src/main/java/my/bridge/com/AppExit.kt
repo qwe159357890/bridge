@@ -43,6 +43,9 @@ object AppExit {
     @Volatile
     private var foregroundCount = 0
 
+    /** 当前是否有 Activity 处于 started（前台）状态。蓝牙钥匙等按需服务用它当档位输入。 */
+    fun isForeground(): Boolean = foregroundCount > 0
+
     /** 杀进程只做一次（后台回调与用户点击可能同时到达）。 */
     @Volatile
     private var killing = false

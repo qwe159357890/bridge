@@ -113,6 +113,12 @@ class BridgeApplication : Application() {
         // （幂等 KEEP 重排；关闭时内部直接跳过，不注册零消耗）
         my.bridge.com.immich.ImmichBackup.ensureRegistered(this)
 
+        // 蓝牙钥匙广播（v0.3.001）：开关开则拉起前台服务。覆盖三条链路：
+        // 用户开开关（页面即时调用）、进程被杀重建（Application 重建走这里）、
+        // 开机（BootReceiver → KeepAliveService → 进程创建 → Application.onCreate）。
+        // evaluate 内部查开关，关时不启动（幂等，无脑调用安全）。
+        my.bridge.com.blekey.BleKeyBroadcastService.evaluate(this)
+
         Timber.i("BridgeApplication 初始化完成")
     }
 }
