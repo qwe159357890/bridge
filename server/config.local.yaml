@@ -1,0 +1,17 @@
+# Bridge Server 本地敏感配置（config.local.yaml）
+#
+# 本文件被 .gitignore 排除，永不入库；加载优先级高于 config.yaml。
+# 密码 / Key 等敏感信息统一放这里。生产部署时随服务器携带本文件，
+# 或改用 BRIDGE_* 环境变量 / BRIDGE_CONFIG 指定文件。
+
+locations:
+  mysql:
+    host: "86.74.128.24"
+    port: 3306
+    user: "root"
+    password: "123456"
+    database: "bridge"
+  amap:
+    key: "d90ed50125f3fec99fa775693ff464ce"
+    security_js_code: "1ff1ac75e17b5740136f931a49238b61"
+    web_key: "173183ffcef8212ba55b26c0222826fa"   # 老 Key，服务端 REST 逆地理编码用（实测可用）

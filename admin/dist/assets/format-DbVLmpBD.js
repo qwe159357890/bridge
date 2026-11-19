@@ -1,0 +1,1 @@
+function e(t){if(t==null||isNaN(t))return"-";const r=Math.max(0,Math.floor(t)),a=Math.floor(r/86400),o=Math.floor(r%86400/3600),n=Math.floor(r%3600/60),f=r%60;return a>0?`${a}天${o}小时`:o>0?`${o}小时${n}分`:n>0?`${n}分${f}秒`:`${f}秒`}function u(t){return t?new Date(t*1e3).toLocaleString("zh-CN"):"-"}export{u as a,e as f};

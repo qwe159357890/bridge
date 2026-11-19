@@ -1,9 +1,9 @@
 {
-  "version": "0.3.009",
-  "versionCode": 3009,
-  "url": "/api/updates/bridge-v0.3.009.apk",
-  "sha256": "639CB29646590F5D738413861B3516DA0A47001E7E6C1303B09EA5637E302401",
+  "version": "0.3.010",
+  "versionCode": 3010,
+  "url": "/api/updates/bridge-v0.3.010.apk",
+  "sha256": "704EBD9A62DF038E0B242896D41614EE1E53488A437ACB3650761FF3C594DE54",
   "size": 63085504,
-  "notes": "0.3.009 修复 VNT 冷启动不组网：\n1. 新增 VntBootReceiver，监听开机(BOOT_COMPLETED/LOCKED_BOOT_COMPLETED)与覆盖安装(MY_PACKAGE_REPLACED)，自动拉起组网\n2. 此前 VNT 只在 MainActivity.onStart 触发，进程冷启动(开机/杀进程重开/覆盖安装)且从没进过前台时不组网；现与 SSH 同范式补齐自启链\n3. 业务判断复用既有守卫(记忆开+未运行+VPN授权有效)，无行为回归",
-  "released_at": "2026-11-18T17:47:00+08:00"
+  "notes": "0.3.010 修复仅Wi-Fi备份蜂窝下拍照后回Wi-Fi不自动续传：\n1. 门禁拦截不再直接跳过：挂起UNMETERED网络约束等待Worker，切回Wi-Fi由系统自动唤醒续传\n2. 新增进程内NetworkCallback网络恢复监听：边沿检测切回不计费网络即时触发对账（秒级），保活进程常驻可靠，规避OnePlus对JobScheduler网络约束的跟踪故障\n3. 与15分钟周期兜底构成三层冗余，积压照片不再需要手动打开APP进相册页才上传",
+  "released_at": "2026-11-18T20:15:00+08:00"
 }

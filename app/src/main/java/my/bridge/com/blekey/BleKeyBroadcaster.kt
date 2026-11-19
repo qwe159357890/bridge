@@ -88,8 +88,8 @@ object BleKeyBroadcaster {
      *
      * @param uuidHex 32 字符小写 hex（由 [BleKeyProtocol.fullUuid] 拼装）
      * @param txPowerLevel `AdvertiseSettings.ADVERTISE_TX_POWER_*` 常量
-     * @param advertiseMode `ADVERTISE_MODE_BALANCED`（250ms，活动态）/
-     *        `ADVERTISE_MODE_LOW_POWER`（1000ms，后台慢速保底）
+     * @param advertiseMode `ADVERTISE_MODE_BALANCED`（250ms，活动态与后台保底共用——
+     *        v0.3.012 息屏断续实验：后台保底原为 LOW_POWER 1000ms，提升为 250ms）
      * @param force 跳过幂等，强制重建会话（巡检 / 蓝牙重新打开时用）
      */
     fun start(

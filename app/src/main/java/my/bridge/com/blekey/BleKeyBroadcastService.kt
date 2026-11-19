@@ -1,5 +1,6 @@
 package my.bridge.com.blekey
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -17,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -37,12 +39,16 @@ import java.util.Locale
  * 1. 持有 `connectedDevice` 前台通知（Android 14+ 后台做 BLE 广播的合规前提）；
  * 2. 生命周期状态机：
  *    - `F` App 前台 或 `K` 极空已连接 → **FAST 250ms**
- *    - 两者都失去 → **宽限 5 分钟**（仍 FAST），之后 → **SLOW 1000ms 保底**
+ *    - 两者都失去 → **宽限 5 分钟**（仍 FAST），之后 → **SLOW 250ms 保底**
+ *      （v0.3.012 息屏断续实验：原 LOW_POWER 1000ms，提升为 BALANCED 250ms，
+ *      验证 ColorOS 息屏周期性启停广播是否与档位相关）
  *    - 静默时段（默认 21:00–05:00）且既非前台也未连极空 → **停播（QUIET）**
  *    - 总开关关 / 未设编号 / 蓝牙未开 / 无权 / 不支持 → 停播并给出中文原因
  * 3. **事件驱动**重算：蓝牙开关、亮灭屏、服务重建、UI 开关、通知按钮；
  * 4. **60 秒巡检**：ROM 会静默停掉广播且不回调，只信 `onStartSuccess` 会被骗。
  *    对端「15 秒判 FAR + 60 秒断电 ≈ 75 秒断电门」，故巡检周期必须 ≤60 秒。
+ *    （v0.3.011 补充：巡检基于 Handler，CPU 深度休眠期间不触发——实测空窗 2 小时；
+ *    另由 10 分钟 AlarmManager 精确闹钟兜底，见 [scheduleAlarm] 与 [BleKeyAlarmReceiver]。）
  *
  * 铁律：`promote()` 失败立即 `stopSelf` 撤销前台义务（照 KeepAlive「义务按次计」）。
  */
@@ -55,6 +61,13 @@ class BleKeyBroadcastService : Service() {
         const val CHANNEL = "blekey_broadcast_channel"
         const val ACTION_STOP = "my.bridge.com.blekey.action.STOP"
 
+        /** 闹钟兜底动作（AlarmManager 精确闹钟触发，见 [scheduleAlarm]）。 */
+        const val ACTION_ALARM = "my.bridge.com.blekey.action.ALARM_TICK"
+
+        /** 上次闹钟触发的墙钟时刻（0 = 尚未触发；用于「距上次闹钟」深睡空窗取证）。 */
+        @Volatile
+        private var lastAlarmAt = 0L
+
         /** 静默前提醒：独立 ID + 独立渠道，避免覆盖常驻通知。 */
         private const val QUIET_NOTICE_ID = 2106
         private const val CHANNEL_QUIET = "blekey_quiet_notice"
@@ -64,6 +77,19 @@ class BleKeyBroadcastService : Service() {
 
         /** 巡检周期：必须 ≤60 秒（对端 75 秒断电门）。 */
         private const val WATCHDOG_MS = 60_000L
+
+        /**
+         * 闹钟兜底周期：10 分钟（v0.3.011）。
+         *
+         * 为什么 60 秒巡检之外还要闹钟：巡检是 Handler 定时，**CPU 深度休眠期间
+         * 不触发**（实测息屏后连续 2 小时零日志）。深睡下若 ROM 顺带停掉广播、或
+         * 服务被杀，Handler 巡检无法自救。setExactAndAllowWhileIdle 即使在 Doze
+         * 深睡也触发（系统限流约 9 分钟一次，故取 10 分钟）：
+         * ① 服务死了 → [BleKeyAlarmReceiver] 拉起；
+         * ② 服务活着但广播被 ROM 停了 → ACTION_ALARM 分支强制重建；
+         * ③ 静默时段结束（05:00）后无人唤醒 → 下一轮闹钟自然恢复常规档。
+         */
+        private const val ALARM_INTERVAL_MS = 10 * 60 * 1000L
 
         /** 从 reason 里抠「剩 N 分」，用于通知去重（倒计时按分钟刷新足够）。 */
         private val COUNTDOWN_MINUTE = Regex("剩 (\\d+) 分")
@@ -116,6 +142,62 @@ class BleKeyBroadcastService : Service() {
         }
 
         fun isRunning(): Boolean = running
+
+        /**
+         * 续排下一轮闹钟兜底（10 分钟后精确唤醒，Doze 深睡可达）。
+         *
+         * 调用点：服务 onCreate、onStartCommand 的 ACTION_ALARM 分支、
+         * [BleKeyAlarmReceiver]（三处用同一个 PendingIntent，幂等不双排）。
+         *
+         * :param context: 任意 Context（内部转 applicationContext）
+         */
+        fun scheduleAlarm(context: Context) {
+            val ctx = context.applicationContext
+            val pi = PendingIntent.getBroadcast(
+                ctx,
+                0,
+                Intent(ctx, BleKeyAlarmReceiver::class.java).setAction(ACTION_ALARM),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val am = ctx.getSystemService(AlarmManager::class.java) ?: return
+            try {
+                // 精确闹钟在 API 31+ 需要用户授予 SCHEDULE_EXACT_ALARM（清单已声明，
+                // 但用户可能在设置里收回）：无授权时退化为 setAndAllowWhileIdle——
+                // Doze 仍可达，只是时刻不精确（系统可能推迟，间隔仍 ≤15 分钟量级）。
+                val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
+                if (exact) {
+                    am.setExactAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + ALARM_INTERVAL_MS,
+                        pi,
+                    )
+                } else {
+                    am.setAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + ALARM_INTERVAL_MS,
+                        pi,
+                    )
+                }
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "续排蓝牙钥匙兜底闹钟失败（已忽略）")
+            }
+        }
+
+        /**
+         * 取消闹钟兜底（仅总开关关闭时调用；服务被系统杀掉时**必须保留**闹钟作为复活锚点）。
+         *
+         * :param context: 任意 Context（内部转 applicationContext）
+         */
+        fun cancelAlarm(context: Context) {
+            val ctx = context.applicationContext
+            val pi = PendingIntent.getBroadcast(
+                ctx,
+                0,
+                Intent(ctx, BleKeyAlarmReceiver::class.java).setAction(ACTION_ALARM),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            runCatching { ctx.getSystemService(AlarmManager::class.java)?.cancel(pi) }
+        }
     }
 
     private var stopRequested = false
@@ -247,6 +329,10 @@ class BleKeyBroadcastService : Service() {
         )
         promote()
         mainHandler.postDelayed(watchdog, WATCHDOG_MS)
+        // 闹钟兜底（v0.3.011）：Handler 巡检在 CPU 深睡时不触发，10 分钟精确闹钟
+        // 是深睡期间唯一能拉活服务/重建广播的通道。onCreate 续排保证链不因进程
+        // 重启而断；服务被系统杀掉时闹钟仍在（复活锚点），仅总开关关闭时取消。
+        scheduleAlarm(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -256,6 +342,8 @@ class BleKeyBroadcastService : Service() {
             BleKeyPrefs.setEnabled(applicationContext, false)
             BleKeyBroadcaster.stop()
             BleKeyRuntime.reset()
+            // 总开关已关：连 10 分钟闹钟兜底一起撤，避免空转唤醒（复活锚点只在开关开着时有意义）
+            cancelAlarm(applicationContext)
             runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             runCatching { stopSelf() }
             return START_NOT_STICKY
@@ -263,6 +351,29 @@ class BleKeyBroadcastService : Service() {
         // START_STICKY 重建时 intent 为 null —— 这是「服务被系统回收后自己活过来」的唯一证据
         if (intent == null) {
             Timber.tag(TAG).i("服务被系统重建（intent=null，START_STICKY 生效）")
+        }
+        if (intent?.action == ACTION_ALARM) {
+            // 闹钟兜底（v0.3.011）：深睡/Doze 下 Handler 巡检不触发，闹钟是唯一能
+            // 穿透深睡的通道。无条件强制重建广播会话（治 ROM 深睡静默停播），并续排
+            // 下一轮（与接收器续排同一个 PendingIntent，幂等）。
+            forceRebuild = true
+            val now = System.currentTimeMillis()
+            val gapSec = if (lastAlarmAt == 0L) -1L else (now - lastAlarmAt) / 1000
+            lastAlarmAt = now
+            // 间隔明显大于 10 分钟 = 系统推迟/深睡限流证据，升 I 级便于事后取证；
+            // 首次触发（-1）与正常间隔记 D 级即可。
+            if (gapSec < 0 || gapSec < ALARM_INTERVAL_MS / 1000 + 120) {
+                Timber.tag(TAG).d(
+                    "闹钟兜底巡检（距上次%s）",
+                    if (gapSec < 0) "首次" else " ${gapSec}秒",
+                )
+            } else {
+                Timber.tag(TAG).i(
+                    "闹钟兜底巡检（距上次 %d 秒，存在深睡推迟/限流）",
+                    gapSec,
+                )
+            }
+            scheduleAlarm(applicationContext)
         }
         if (promoted) promote()
         evaluateNow()
@@ -370,12 +481,17 @@ class BleKeyBroadcastService : Service() {
             }
 
             else -> {
+                // v0.3.012 息屏断续实验：后台保底档从 LOW_POWER(1000ms) 提升为 BALANCED(250ms)。
+                // 背景：台架实测（07:08–07:40，35 分钟息屏）证实 ColorOS 在息屏时会周期性
+                // 启停 BLE 广播（ON 相 30~110 秒 / OFF 相 10~61.6 秒），自恢复、与 60 秒重建
+                // 无关；本实验验证「更快的广播档是否影响 ROM 的启停周期」——若黑窗频率/时长
+                // 与 1000ms 档相同，则说明 ROM 周期与档位无关，此路不通。
                 startAdvertising(
                     BleKeyMode.SLOW,
-                    "后台慢速保底（1000ms）· 打开 App 或连接极空可提速",
+                    "后台保底（250ms · 息屏断续实验）· 打开 App 或连接极空可提速",
                     uuid,
                     txPower,
-                    AdvertiseSettings.ADVERTISE_MODE_LOW_POWER,
+                    AdvertiseSettings.ADVERTISE_MODE_BALANCED,
                 )
             }
         }

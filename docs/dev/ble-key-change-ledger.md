@@ -573,6 +573,77 @@ rm -f app/src/main/java/my/bridge/com/blekey/BleKeyHealth.kt
 
 ---
 
+### 2.12 AlarmManager 精确闹钟兜底巡检（v0.3.011 · 2026-11-18 22:20 新增改动点）
+
+**背景（排查实锤）**：用户反馈「手机息屏一段时间后 ESP 显示钥匙不在」。排查链路：
+
+1. ESP 串口日志（COM8 被动监听）：扫描正常（收包约 5 帧/秒持续增长），只是收不到钥匙广播；
+2. 服务端上传日志 + 手机本地 bridge.log：白天息屏段（如 18:06–18:12、20:24–20:32）巡检全绿「屏幕=灭 广播器=在播」，累计失败=0；21:00 后「钥匙不在」是静默时段 QUIET 的设计行为；
+3. **真正的隐患**：15:20–17:20 两小时日志完全空白——CPU 深度休眠期间 Handler.postDelayed 不触发，60 秒巡检停摆。期间若 ROM 静默停播或杀服务，巡检完全无法自救（当时 ESP 未上电，无法交叉验证，但机制上成立）；
+4. 辅助证据：夜里 21:00–05:00 静默结束后也无人唤醒恢复，需靠亮屏事件；闹钟兜底同时解决此问题。
+
+**改动内容**
+
+| 文件 | 改动 |
+|---|---|
+| `blekey/BleKeyAlarmReceiver.kt`（新增） | manifest 静态接收器：`goAsync` 保持「处理中」4 秒（照 KeepAliveReceiver v0.2.00 崩溃修复同款），`evaluate()` 拉起服务（死了复活/活着触发强制重建），开关开着则续排下一轮 |
+| `blekey/BleKeyBroadcastService.kt`（companion） | 新增 `ACTION_ALARM`、`ALARM_INTERVAL_MS = 10 分钟`、`lastAlarmAt`；新增 `scheduleAlarm()`（setExactAndAllowWhileIdle，API 31+ 无精确闹钟授权时退化 setAndAllowWhileIdle）、`cancelAlarm()` |
+| `blekey/BleKeyBroadcastService.kt`（onCreate） | 末尾续排闹钟（进程重启后链条不断；服务被系统杀掉时闹钟保留作复活锚点） |
+| `blekey/BleKeyBroadcastService.kt`（onStartCommand） | 新增 ACTION_ALARM 分支：`forceRebuild = true` 强制重建 + 续排下一轮；「距上次闹钟 X 秒」，间隔 >12 分钟升 I 级（深睡推迟/限流取证），否则 D 级 |
+| `blekey/BleKeyBroadcastService.kt`（STOP 分支） | 总开关关闭时 `cancelAlarm()`，避免空转唤醒 |
+| `AndroidManifest.xml` | 注册 `<receiver android:name=".blekey.BleKeyAlarmReceiver" android:exported="false" />` |
+| `app/build.gradle.kts` | `3010 / 0.3.010` → `3011 / 0.3.011` |
+
+**为什么周期是 10 分钟**：系统对 setExactAndAllowWhileIdle 在 Doze 深睡下的限流约 9 分钟一次；10 分钟即「限流允许的最快节奏」取整。副作用是深睡下广播若被 ROM 停掉，最长 10 分钟才被拉回（ESP 15 秒判 FAR，期间钥匙不在）——但比起此前「整个深睡期都可能不播」已是质变；且白天实测数据表明 ROM 常态下深睡仍持续广播（芯片层），闹钟只是兜底。
+
+**回滚配方**
+
+```bash
+git checkout -- app/src/main/java/my/bridge/com/blekey/BleKeyBroadcastService.kt \
+  app/src/main/AndroidManifest.xml \
+  app/build.gradle.kts
+rm -f app/src/main/java/my/bridge/com/blekey/BleKeyAlarmReceiver.kt
+```
+
+**触发回滚的信号**：日志出现 `BleKeyAlarmReceiver` 相关崩溃、或待机耗电明显增加（10 分钟一次唤醒的代价，正常应 <1%/天）。
+
+### 2.13 后台保底档 1000ms → 250ms（v0.3.012 · 2026-11-19 息屏断续实验）
+
+**背景（台架实测定论，2026-11-19 07:08–07:40，35 分钟息屏被动观测）**：用户反馈「息屏后 ESP 有时收到信号有时 None，一会又自动恢复，手机一直在 ESP 附近」。双侧日志交叉验证（ESP 串口墙钟观测器 + 手机 logcat/上传日志 + 黑窗瞬间 dumpsys 快照）：
+
+1. **机制实锤**：息屏时 ColorOS/控制器**自行周期性启停 BLE 广播**——ON 相 30~110 秒 / OFF 相 10~61.6 秒，每 1~4 分钟一轮；黑窗内偶发孤立单帧；**自恢复，与客户端 60 秒巡检重建无关**（07:39:45 无重建动作自愈；07:36:56 重建落在黑窗中也没提前恢复）。亮屏时段 0 黑窗，RSSI 全程 -63~-66 dBm 稳定（无射频问题）。
+2. **误断电差 1.6 秒**：07:18:48 黑窗断电计时跑到第 59.3 秒才被单帧取消——真车上（点火通电+息屏）迟早误断电。
+3. **「人走断电」不受影响**：key_matcher 有 rssi_on/rssi_off 迟滞门，走远后的偶发帧信号不够强不会置回 NEAR，断电计时不会被重置。
+4. **客户端重建救不了**（本次实验动机）：黑窗起点与重建周期不对齐、恢复与重建无因果，重建频率再高也只是碰运气；本实验改为验证「广播档位是否影响 ROM 启停周期」。
+5. **系统设置排查结论**：adb 可查的标准策略全部宽松（deviceidle 白名单✓、省电模式关✓、appops WAKE_LOCK/START_FOREGROUND 允许✓），settings 里无暴露的 oplus 蓝牙广播节流开关——节流在厂商 HAL 层，UI 设置大概率也改不动，只能靠实验确认。
+6. **排查工具坑**：该 ROM dumpsys bluetooth_manager 看不到广播注册状态（`0 BLE apps registered` 亮屏/黑窗两态相同，无判别力），bt 栈日志被精简无启停事件——判定只能靠 ESP 收包实况。
+
+**改动内容**
+
+| 文件 | 改动 |
+|---|---|
+| `blekey/BleKeyBroadcastService.kt`（SLOW 分支） | `ADVERTISE_MODE_LOW_POWER` → `ADVERTISE_MODE_BALANCED`，文案改「后台保底（250ms · 息屏断续实验）」，附实验背景注释 |
+| `blekey/BleKeyRuntime.kt`（SLOW 注释） | `1000 ms` → `250 ms`（标注实验版本） |
+| `blekey/BleKeyBroadcaster.kt`（start docstring） | advertiseMode 参数说明同步（FAST 与 SLOW 现共用 BALANCED；FAST↔SLOW 切换因幂等键相同不再重启会话，仅文案/状态更新，行为等价） |
+| `app/build.gradle.kts` | `3011 / 0.3.011` → `3012 / 0.3.012` |
+
+**实验判定标准**：装 0.3.012 后息屏重复同条件观测（≥30 分钟），若黑窗频率/时长分布与 1000ms 档相同 → ROM 周期与档位无关，此路不通；若显著改善 → 保底档可固化为 250ms。
+
+**实验结论（2026-11-19 08:20–09:00，息屏 40 分钟）**：**零黑窗**（距上次恒 0.07~2.0 秒，RSSI -58~-66 稳定）。对照 1000ms 档基线同期（~12 次黑窗、最长 97.4 秒且真实误断电一次），**实验成功，250ms 固化**。定论：ColorOS 的周期性启停节流只针对 LOW_POWER(1000ms) 广播档，BALANCED(250ms) 被豁免。**追加 soak 验证（09:20–10:58，息屏 98 分钟）：同样零黑窗**，累计 2.6 小时息屏零断连（期间跨多个深睡周期；深睡不影响广播已单独验证——蓝牙芯片自主广播，今晨深睡窗口 135/189 行匹配=近）。**问题关闭，ESP 端零改动**。遗留项仅剩静默时段（21:00-05:00）设计行为。
+
+**回滚配方**
+
+```bash
+git checkout -- app/src/main/java/my/bridge/com/blekey/BleKeyBroadcastService.kt \
+  app/src/main/java/my/bridge/com/blekey/BleKeyRuntime.kt \
+  app/src/main/java/my/bridge/com/blekey/BleKeyBroadcaster.kt \
+  app/build.gradle.kts
+```
+
+**触发回滚的信号**：息屏待机耗电显著上升（250ms 广播是 1000ms 的 4 倍发射频次），或实验证明与档位无关后按原参数恢复。
+
+---
+
 ## 四、触发回滚的信号
 
 出现以下任一情况即回滚（删改动 + 保留新增文件不引用）：
@@ -600,7 +671,7 @@ rm -rf app/src/main/java/my/bridge/com/blekey app/src/main/java/my/bridge/com/ui
 
 | 项 | 值 |
 |---|---|
-| 版本 | `versionName 0.3.008` / `versionCode 3008`（P0 0.3.001 → P1 0.3.002 → P2 0.3.003 → 亮屏提速 0.3.004 → 自检修正 0.3.005/0.3.006 → 巡检真自愈 0.3.007 → 运行观测 0.3.008） |
+| 版本 | `versionName 0.3.012` / `versionCode 3012`（P0 0.3.001 → P1 0.3.002 → P2 0.3.003 → 亮屏提速 0.3.004 → 自检修正 0.3.005/0.3.006 → 巡检真自愈 0.3.007 → 运行观测 0.3.008 → 0.3.009/0.3.010（台账外小改）→ 闹钟兜底 0.3.011 → 息屏断续实验 0.3.012） |
 | 现网基线 | `0.2.182` / `382`（**3006 > 382，不会触发降级拒装**） |
 | 发版命令 | `tools/release/release.py`（正式）／调试期走 5.1 的 check_update 通道 |
 | 回退锚点 | 同目录保留 `bridge-v0.3.001`~`bridge-v0.3.005.apk`；`update.json` 改回对应版本即可让手机回退（**但安装器禁止降 versionCode**，回退必须卸载重装或 adb `install -r -d`） |

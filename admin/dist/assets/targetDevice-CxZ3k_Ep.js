@@ -1,0 +1,1 @@
+import{L as t}from"./index-3JAh1pG3.js";const a=t("targetDevice",{state:()=>({deviceId:localStorage.getItem("bridge_target_device")||""}),actions:{set(e){this.deviceId=e||"",e?localStorage.setItem("bridge_target_device",e):localStorage.removeItem("bridge_target_device")}}});export{a as u};
