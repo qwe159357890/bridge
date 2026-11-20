@@ -79,6 +79,9 @@ object ImmichBackup {
     /** Wi-Fi 恢复等待 Worker 唯一名（仅 Wi-Fi 门禁拦截时挂起的网络约束任务）。 */
     private const val WIFI_WAIT_NAME = "immich_upload_wifi_wait"
 
+    /** 节流补跑 Worker 唯一名（30 秒节流窗口结束后自动补一次对账，防触发被丢弃）。 */
+    private const val CATCHUP_NAME = "immich_upload_catchup"
+
     /**
      * 注册内容触发 Observer（自动备份开启时调用；幂等，重复注册不打断现有链）。
      * 内容触发仅 OneTime 有效（JobScheduler 语义），Observer 跑完自我续期保持监听
@@ -306,9 +309,10 @@ object ImmichBackup {
         wm.cancelUniqueWork(OBSERVER_NAME)
         wm.cancelUniqueWork(PERIODIC_NAME)
         wm.cancelUniqueWork(WIFI_WAIT_NAME)
+        wm.cancelUniqueWork(CATCHUP_NAME)
         unregisterInProcessObserver(appContext)
         unregisterNetworkCallback(appContext)
-        DiagLog.i(NTAG, "内容触发 Observer、周期兜底、Wi-Fi 等待任务、进程内 Observer 与网络恢复监听已注销")
+        DiagLog.i(NTAG, "内容触发 Observer、周期兜底、Wi-Fi 等待任务、节流补跑、进程内 Observer 与网络恢复监听已注销")
     }
 
     /** 上次手动/观察者触发对账的时刻（elapsedRealtime 毫秒；30 秒节流防打断运行中 Worker）。 */
@@ -317,7 +321,12 @@ object ImmichBackup {
     /**
      * 手动触发一次全量对账上传（进相册页兜底/进程内 Observer 时机）。
      * 30 秒节流：相册页每次回前台都会调用，频繁 REPLACE 会打断运行中的上传；
-     * 节流窗口内新拍的照片由同一次对账覆盖（扫描在窗口内必然包含）。
+     * Worker 运行中的新照片由本次对账扫描覆盖。
+     * 节流命中不再丢弃触发：Worker 常为秒级完成（网络约束为空，入队即跑），
+     * 其后再拍的照片不在任何一次已执行扫描内，直接 return 会积压到 15 分钟
+     * 周期兜底（2026-11-20 实锤：第 1 张 12:31:33 传完，第 2 张 12:31:58 被
+     * 节流丢弃，空窗 14 分钟才由周期任务传出）——改挂 CATCHUP 补跑 Worker，
+     * setInitialDelay 到窗口结束后强制对账一次（系统级调度，进程冻结/熄屏不丢）。
      *
      * :param context: 任意 Context
      */
@@ -326,7 +335,18 @@ object ImmichBackup {
         if (!ImmichPrefs.autoBackup(appContext)) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastTriggerAt < 30_000L) {
-            DiagLog.i(NTAG, "对账触发节流：30 秒内已触发过，跳过")
+            val remain = 30_000L - (now - lastTriggerAt) + 1_000L
+            val catchup = OneTimeWorkRequestBuilder<ImmichUploadWorker>()
+                .setInitialDelay(remain, TimeUnit.MILLISECONDS)
+                .setConstraints(networkConstraints(appContext))
+                .build()
+            // KEEP：补跑已在等待中则忽略——窗口内连拍多张只需窗口结束后对账一次
+            WorkManager.getInstance(appContext).enqueueUniqueWork(
+                CATCHUP_NAME,
+                ExistingWorkPolicy.KEEP,
+                catchup,
+            )
+            DiagLog.i(NTAG, "对账触发节流：30 秒内已触发过，挂起 ${remain / 1000}s 后补跑对账")
             return
         }
         lastTriggerAt = now
